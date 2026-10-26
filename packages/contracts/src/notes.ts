@@ -27,7 +27,6 @@ const isNoteSegment = (segment: string) =>
   segment.length > 0 &&
   !segment.startsWith(".") &&
   segment.trim() === segment &&
-  // oxlint-disable-next-line no-control-regex -- control characters are what this rejects
   !/[\u0000-\u001f\u007f\\/:]/u.test(segment);
 
 /** Canonical NFC, so two spellings of one name cannot address the same file twice. */

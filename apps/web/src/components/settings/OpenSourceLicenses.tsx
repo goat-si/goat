@@ -1,5 +1,5 @@
 import { ChevronRightIcon, ExternalLinkIcon, SearchIcon } from "~/components/solar";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";

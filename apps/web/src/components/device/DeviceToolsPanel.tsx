@@ -1,7 +1,7 @@
 import type { DeviceHubAccess } from "@goat/client-runtime/state/deviceHubAccess";
 import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@goat/contracts";
 import { ChevronDownIcon as ChevronDown, XIcon as X } from "~/components/solar";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 
 import { Button } from "~/components/ui/button";

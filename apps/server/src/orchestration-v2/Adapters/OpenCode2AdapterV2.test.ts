@@ -49,7 +49,6 @@ import { TestClock } from "effect/testing";
 
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {

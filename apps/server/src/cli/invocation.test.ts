@@ -18,10 +18,11 @@ const joinWindowsPath = (...segments: ReadonlyArray<string>) =>
   segments
     .join("\\")
     .split(/[\\/]+/)
-    .reduce<ReadonlyArray<string>>(
-      (parts, part) => (part === ".." ? parts.slice(0, -1) : [...parts, part]),
-      [],
-    )
+    .reduce<string[]>((parts, part) => {
+      if (part === "..") parts.pop();
+      else parts.push(part);
+      return parts;
+    }, [])
     .join("\\");
 
 it.layer(NodeServices.layer)("root CLI commands", (it) => {

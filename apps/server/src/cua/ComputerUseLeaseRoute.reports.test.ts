@@ -52,7 +52,14 @@ describe("ComputerUseLeaseRoute reports", () => {
         // A batch of what piled up behind the last report (#1488), up to its limit.
         assert.equal(yield* post("control:paused", "good", [one, one]), 204);
         assert.equal(yield* post("control:paused", "good", []), 400);
-        assert.equal(yield* post("control:paused", "good", Array(4097).fill(one)), 400);
+        assert.equal(
+          yield* post(
+            "control:paused",
+            "good",
+            Array.from({ length: 4097 }, () => ({ ...one })),
+          ),
+          400,
+        );
       }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
     }),
   );

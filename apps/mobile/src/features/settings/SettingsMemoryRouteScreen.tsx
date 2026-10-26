@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { RegistryContext, useAtomValue, useAtomSet } from "@effect/atom-react";
 import { useNavigation, useFocusEffect, type StaticScreenProps } from "@react-navigation/native";
 import {
@@ -1583,7 +1584,7 @@ function MemorySource({
 
 function MemoryReport({ report }: { readonly report: Parameters<typeof presentMemoryReport>[0] }) {
   const view = presentMemoryReport(report);
-  const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const target = view.reportTarget;
   const config = useAtomValue(serverEnvironment.configValueAtom(target?.environmentId ?? null));
   const allowed = useEnvironmentScope(target?.environmentId ?? null, AuthOrchestrationReadScope);
@@ -1598,9 +1599,12 @@ function MemoryReport({ report }: { readonly report: Parameters<typeof presentMe
           disabled={!config || !allowed}
           onPress={() => {
             if (readEnvironmentScope(target.environmentId, AuthOrchestrationReadScope))
-              navigation.navigate("Thread", {
-                environmentId: target.environmentId,
-                threadId: target.threadId,
+              selectDetail({
+                name: "Thread",
+                params: {
+                  environmentId: target.environmentId,
+                  threadId: target.threadId,
+                },
               });
           }}
         />

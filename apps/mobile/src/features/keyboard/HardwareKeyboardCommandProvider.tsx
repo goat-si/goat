@@ -134,6 +134,7 @@ export function HardwareKeyboardCommandProvider({
     }
     if (!showLocalWorkspace) commands.delete("review");
     return [...commands];
+    // oxlint-disable-next-line react/memo-dependencies -- Registration changes invalidate the imperative command snapshot.
   }, [activeThreadRef, pathname, registrationVersion, navigation, showLocalWorkspace]);
 
   const onCommand = useCallback(

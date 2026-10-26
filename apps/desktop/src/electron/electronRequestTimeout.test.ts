@@ -45,6 +45,7 @@ function fakeClock() {
   };
   const advance = (ms: number) => {
     now += ms;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Timer callbacks may schedule more timers; execute only timers present when advancing the clock.
     for (const timer of [...timers]) {
       if (timer.at > now) continue;
       timers.delete(timer);

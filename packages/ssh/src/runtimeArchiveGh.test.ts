@@ -414,7 +414,6 @@ describe("SSH archives from locally authenticated gh", () => {
         assert.include(detailOf(result.failure), "authentication failed");
         assert.include(detailOf(result.failure), "[redacted]");
         assert.notInclude(detailOf(result.failure), diagnosticSecret);
-        // eslint-disable-next-line no-control-regex -- Diagnostics must contain no terminal control bytes.
         assert.notMatch(detailOf(result.failure), /[\x00-\x1f\x7f-\x9f]/u);
         const acquisition = result.failure.cause;
         assert.instanceOf(acquisition, SshLaunchError);

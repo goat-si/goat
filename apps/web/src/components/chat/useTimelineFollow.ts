@@ -173,7 +173,6 @@ interface TimelineFollowInput {
 export function useTimelineFollow(input: TimelineFollowInput) {
   const {
     legendListRef,
-    timelineScrollNode,
     composerRef,
     composerTimelineInset,
     routeThreadKey,

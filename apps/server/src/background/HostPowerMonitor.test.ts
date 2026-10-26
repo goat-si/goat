@@ -114,7 +114,6 @@ describe("HostPowerMonitor", () => {
             updatedAt: DateTime.makeUnsafe("2026-06-17T12:00:01.000Z"),
           },
         };
-        const updateApplied = yield* Deferred.make<void>();
         const desktopChanges = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(1);
         const changeApplied = yield* Deferred.make<void>();
         const layerReceiver = DesktopTelemetryReceiver.layerTest({

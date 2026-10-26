@@ -1965,6 +1965,7 @@ const make = Effect.gen(function* () {
   // Timers only schedule real reads. A successful pinned descriptor is the observation;
   // authorization is deliberately never inferred from this public, credential-free read.
   const recoveryLoop: Effect.Effect<void> = Effect.gen(function* () {
+    // oxlint-disable-next-line eslint/no-unmodified-loop-condition -- Service shutdown changes stopped while this fiber yields.
     while (!stopped && recoveries.size) {
       const next = Math.min(...[...recoveries.values()].map((p) => p.due));
       const signal = recoveryChanged;
@@ -2117,6 +2118,7 @@ const make = Effect.gen(function* () {
       );
     background.push(
       yield* Effect.gen(function* () {
+        // oxlint-disable-next-line eslint/no-unmodified-loop-condition -- Service shutdown changes stopped while this fiber yields.
         while (!stopped) {
           const signal = pullRetryChanged;
           const r = yield* route().pipe(Effect.orElseSucceed(() => null));

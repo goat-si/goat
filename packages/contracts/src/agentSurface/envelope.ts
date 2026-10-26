@@ -289,6 +289,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   PullRequestUrlInvalidError: before("invalid_request"),
   PullRequestTargetIncompleteError: before("invalid_request"),
   PullRequestHostRequiredError: before("invalid_request"),
+  PullRequestUrlUnavailableError: before("invalid_request"),
   PullRequestThreadRequiredError: before("invalid_request"),
   PullRequestThreadNotFoundError: before("not_found"),
   PullRequestProjectNotFoundError: before("not_found"),

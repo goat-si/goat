@@ -129,7 +129,8 @@ describe("Linux helper client (#1223)", () => {
     assert.isFalse(await watching);
     assert.isFalse(client.watching());
     // The helper took it after all.
-    const { watchId } = held?.params as { watchId: string };
+    assert.isDefined(held);
+    const { watchId } = held.params as { watchId: string };
     helper.send({ id: held?.id, generation: "gen-1", result: { watchId, watching: [] } });
     assert.isTrue(client.watching());
     const secret = { type: "privateMode", active: true, target: { pid: 7, windowId: 70 } };

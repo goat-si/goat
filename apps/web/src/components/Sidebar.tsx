@@ -1137,7 +1137,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openSubagentEntry = useSidebarOpenSubagent(routeThreadKey);
   const openSubagentOwnerKey = openSubagentEntry?.ownerKey;
   const openSubagent = openSubagentEntry?.thread ?? null;
-  const routeThreadKeyRef = useRef(routeThreadKey);
 
   // A selection made under one scope can hold threads the next scope hides.
   const setProjectScopeKey = (key: string | null) => {

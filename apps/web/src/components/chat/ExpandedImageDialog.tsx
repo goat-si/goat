@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
+import { memo, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, RotateCwIcon, XIcon } from "~/components/solar";
 import { Image as ImageGlyph, Text as TextGlyph } from "~/components/solar/nodes";
 

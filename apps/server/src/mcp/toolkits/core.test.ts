@@ -40,7 +40,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { DispatchModeLimit } from "../../orchestration-v2/DispatchModeLimit.ts";
@@ -189,6 +188,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_attachment_discard",
     "goat_attachment_pending_list",
     "goat_attachment_prepare_upload",
+    "goat_background_wait",
     "goat_cloud_holders",
     "goat_cloud_launch",
     "goat_cloud_machine_create",
@@ -322,7 +322,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(180);
+  expect(names.size).toBe(181);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("t3_thread_start")).toBe(false);
   for (const [tool, questionDelivery] of [
@@ -539,7 +539,11 @@ it.effect("records only failed calls of tools that hand off no work", () => {
     });
   }).pipe(
     Effect.provide(
-      layerThreadToolkit.pipe(
+      layerThreadToolkitWithoutProviders.pipe(
+        // Recording reads the caller's provider, so the registry answers.
+        Layer.provide(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(

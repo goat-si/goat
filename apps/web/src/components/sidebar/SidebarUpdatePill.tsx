@@ -1,6 +1,6 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { TriangleAlertIcon } from "~/components/solar";
-import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
+import { type ComponentProps, useId, useRef, useState } from "react";
 
 import { flushSync } from "react-dom";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";

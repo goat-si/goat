@@ -6,7 +6,6 @@ function publicText(text: string): string {
   let redactResponse = false;
   return (
     text
-      // oxlint-disable-next-line no-control-regex -- terminal escapes can hide credential labels
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
       .replace(
         /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gu,

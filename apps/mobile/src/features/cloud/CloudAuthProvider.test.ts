@@ -1,6 +1,6 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { ClerkProvider, useAuth } from "@clerk/expo";
+import { ClerkProvider } from "@clerk/expo";
 import { managedRelaySessionAtom } from "@goat/client-runtime/relay";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 

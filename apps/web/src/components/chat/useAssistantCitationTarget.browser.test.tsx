@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import { act, render } from "../../../test/render";
@@ -32,13 +33,16 @@ function setup() {
     phase: CitationPhase;
     citation?: AssistantCitationRequest | null;
   }) {
-    result = useAssistantCitationTarget({
+    const current = useAssistantCitationTarget({
       request: citation,
       phase,
       viewport,
       onManualNavigation: manualNavigation,
     });
-    return <button onClick={result.onListLoad}>List loaded</button>;
+    useLayoutEffect(() => {
+      result = current;
+    });
+    return <button onClick={current.onListLoad}>List loaded</button>;
   }
   return { Harness, viewport, manualNavigation, read: () => result };
 }
@@ -59,7 +63,7 @@ it("waits for older history and the mounted list before completing citation posi
   expect(outcome).toEqual({ _tag: "found" });
   await screen.rerender(<Harness phase={ready} />);
   expect(read().target).toBeNull();
-  await screen.getByRole("button", { name: "List loaded" }).click();
+  await act(() => read().onListLoad());
   expect(read().target?.citation.messageId).toBe("source");
   expect(read().alwaysRender?.keys).toContain("source");
   await act(() => read().target?.onComplete());
@@ -84,7 +88,7 @@ it("ends positioning when exhausted history reports the response unavailable", a
 it("waits for a folded turn to expand before exposing the cited response", async () => {
   const { Harness, read } = setup();
   await using screen = await render(<Harness phase={{ _tag: "expanding" }} />);
-  await screen.getByRole("button", { name: "List loaded" }).click();
+  await act(() => read().onListLoad());
   expect(read().target).toBeNull();
   expect(read().positioning).toBe(true);
   await screen.rerender(<Harness phase={ready} />);
@@ -127,7 +131,7 @@ it("ends positioning when a history request fails", async () => {
 it("retires an earlier citation when another activation replaces it", async () => {
   const { Harness, read } = setup();
   await using screen = await render(<Harness phase={ready} />);
-  await screen.getByRole("button", { name: "List loaded" }).click();
+  await act(() => read().onListLoad());
   const earlier = read().target;
   await screen.rerender(<Harness phase={ready} citation={{ ...request, key: "citation-2" }} />);
   expect(earlier?.activationRef.current.dismissed).toBe(true);

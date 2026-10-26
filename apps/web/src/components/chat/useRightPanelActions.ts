@@ -4,7 +4,7 @@ import { formatFilePathForClipboard } from "@goat/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { resolveExplicitDiffOpenOnActivate } from "../ChatView.logic";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import { type ScopedThreadRef, type RunId } from "@goat/contracts";
+import { type ScopedThreadRef } from "@goat/contracts";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { useEffect } from "react";
 import {

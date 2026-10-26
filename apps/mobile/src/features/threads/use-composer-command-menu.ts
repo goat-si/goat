@@ -19,7 +19,7 @@ import {
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
-import { COMPOSER_CONTEXT_MAX_RECORDS, PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS } from "@goat/contracts";
+import { COMPOSER_CONTEXT_MAX_RECORDS } from "@goat/contracts";
 import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { pullRequestComposerContext, threadComposerContext } from "../../lib/composerContext";
 import { uuidv4 } from "../../lib/uuid";
@@ -57,7 +57,6 @@ import { useNavigation } from "@react-navigation/native";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useEnvironmentQuery } from "../../state/query";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import {
   useComposerPathSearch,
@@ -264,9 +263,6 @@ export function useComposerCommandMenu({
     selectedProviderStatus,
     serverSettings,
   );
-  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
-    reportFailure: false,
-  });
   const selectedProviderInstanceId = selectedProviderStatus?.instanceId;
   const refreshWorkspaceSnapshot = useAtomRefresh(
     environmentId && projectCwd && selectedProviderInstanceId

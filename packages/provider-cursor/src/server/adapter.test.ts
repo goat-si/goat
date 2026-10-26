@@ -648,7 +648,7 @@ describe("CursorAdapterV2", () => {
         Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
           assertComplete: Effect.void,
           open: (openInput) =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               opens.push(openInput);
               connections.push("open");
               return {

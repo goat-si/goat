@@ -126,17 +126,21 @@ export default Effect.gen(function* () {
     );
   const delta = (dimension: string, expression: string) =>
     `UPDATE memory_quota_counters SET value=value+(${expression}) WHERE space='${counterSpace}' AND dimension='${dimension}' AND scope_key='';`;
-  const install = (table: string, insert: string, update: string, remove: string) =>
-    Effect.gen(function* () {
-      for (const [action, body] of [
-        ["INSERT", insert],
-        ["UPDATE", update],
-        ["DELETE", remove],
-      ] as const)
-        yield* sql.unsafe(
-          `CREATE TRIGGER ${table}_hub_account_${action.toLowerCase()} AFTER ${action} ON ${table} BEGIN ${body} END`,
-        );
-    });
+  const install = Effect.fn("MemoryHubSync.installQuotaTriggers")(function* (
+    table: string,
+    insert: string,
+    update: string,
+    remove: string,
+  ) {
+    for (const [action, body] of [
+      ["INSERT", insert],
+      ["UPDATE", update],
+      ["DELETE", remove],
+    ] as const)
+      yield* sql.unsafe(
+        `CREATE TRIGGER ${table}_hub_account_${action.toLowerCase()} AFTER ${action} ON ${table} BEGIN ${body} END`,
+      );
+  });
   for (const [table, expression] of privateInventory) {
     const qualify = (prefix: string) =>
       expression.replace(

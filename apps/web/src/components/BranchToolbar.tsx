@@ -75,7 +75,6 @@ import { measureRestingComposerControls } from "./chat/restingComposerControlsMe
 import { resolveRestingComposerControlsNaturalWidth } from "./composerFooterLayout";
 import { cn } from "~/lib/utils";
 import { observeResize } from "~/lib/observeResize";
-import { useStableCallback } from "~/hooks/useStableCallback";
 
 export interface BranchToolbarHandle {
   openBranchPicker: () => void;

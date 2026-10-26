@@ -21,7 +21,6 @@ import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type {
   ChangeRequest,

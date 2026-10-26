@@ -1,4 +1,3 @@
-/* oxlint-disable t3code/no-global-process-runtime -- This bootstrap runs before dependencies are installed. */
 // @effect-diagnostics globalDate:off globalFetch:off - bootstrap has no Effect dependencies.
 // @effect-diagnostics nodeBuiltinImport:off - standalone collector installed outside the checkout.
 import * as NodeCrypto from "node:crypto";
@@ -88,7 +87,8 @@ export function observeSummaries(
   let host =
     env.T3_TASK_CACHE_HOST ||
     (env.GITHUB_ACTIONS === "true"
-      ? `${env.RUNNER_ENVIRONMENT || "github"}/${env.RUNNER_OS || NodeOS.platform()}/${env.RUNNER_ARCH || NodeOS.arch()}`
+      ? // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone bootstrap runs before workspace dependencies are installed.
+        `${env.RUNNER_ENVIRONMENT || "github"}/${env.RUNNER_OS || NodeOS.platform()}/${env.RUNNER_ARCH || NodeOS.arch()}`
       : NodeOS.hostname());
   try {
     host =
@@ -118,7 +118,9 @@ export function observeSummaries(
         id,
         recordedAt: Number(before.mtimeNs / 1_000_000n),
         host: host.slice(0, 256),
+        // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone bootstrap runs before workspace dependencies are installed.
         platform: NodeOS.platform(),
+        // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone bootstrap runs before workspace dependencies are installed.
         arch: NodeOS.arch(),
         ci: env.GITHUB_ACTIONS === "true",
         runId: env.GITHUB_RUN_ID || "",

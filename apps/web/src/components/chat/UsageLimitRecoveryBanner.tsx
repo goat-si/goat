@@ -4,7 +4,7 @@ import {
   type RunId,
 } from "@goat/contracts";
 import { GaugeIcon } from "~/components/solar";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { type TimestampFormat } from "@goat/contracts/settings";
 import { deadlineStore } from "@goat/client-runtime/clock";
 

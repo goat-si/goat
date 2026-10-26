@@ -28,26 +28,22 @@ import {
   desiredSlots,
   fallbackActionId,
   type GoalAction,
-  type GoalObservation,
   MAX_ACTIONS_PER_TICK,
   MAX_GOALS_PER_TICK,
   nextAttempt,
   nextDelayMs,
   planGoal,
   repairWorkers,
-  type PullRequestObservation,
-  type SlotObservation,
 } from "./goalPlan.ts";
 import { makeGoalMoves } from "./GoalMoves.ts";
 import { makeObserve } from "./GoalObserve.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
-import { followedUp, launchSelector, pendingMoves } from "./goalWorkers.ts";
+import { followedUp, launchSelector } from "./goalWorkers.ts";
 import {
   type ClaimRefusal,
   type GoalRecord,
   GoalStore,
   type GoalStoreError,
-  type LaunchClaim,
   NOT_SENT,
   publicWorker,
   type WorkerRecord,

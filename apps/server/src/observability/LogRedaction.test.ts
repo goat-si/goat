@@ -608,7 +608,7 @@ describe("redactedDefects", () => {
 });
 
 describe("forged list lengths", () => {
-  const forgedLength = (length: unknown, onValueOf: () => void) =>
+  const forgedLength = (length: unknown) =>
     new Proxy([], {
       getOwnPropertyDescriptor: (target, key) =>
         key === "length"
@@ -624,16 +624,16 @@ describe("forged list lengths", () => {
         return 1;
       },
     };
-    redactLogMessage({ list: forgedLength(valueOf, () => {}) });
+    redactLogMessage({ list: forgedLength(valueOf) });
     const cause = Cause.fromReasons([]);
-    Object.defineProperty(cause, "reasons", { value: forgedLength(valueOf, () => {}) });
+    Object.defineProperty(cause, "reasons", { value: forgedLength(valueOf) });
     expect(redactedDefects(cause)).toEqual([]);
     expect(calls).toBe(0);
   });
 
   it("ends on a reason list that claims an endless length", () => {
     const cause = Cause.fromReasons([]);
-    Object.defineProperty(cause, "reasons", { value: forgedLength(Infinity, () => {}) });
+    Object.defineProperty(cause, "reasons", { value: forgedLength(Infinity) });
     expect(redactedDefects(cause)).toEqual([]);
   });
 });

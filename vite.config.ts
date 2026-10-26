@@ -3,6 +3,7 @@ import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 import { remoteCacheUrl } from "./infra/task-cache/src/remoteCache.ts";
 import { cachedTestTasks } from "./scripts/lib/cached-tests.ts";
+import lintBacklogs from "./oxlint-plugin-goat/backlogs.json" with { type: "json" };
 
 const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [];
 
@@ -536,6 +537,12 @@ export default defineConfig({
         files: PREFER_EFFECT_FN_BACKLOG,
         rules: { "goat/prefer-effect-fn": "off" },
       },
+      // Cycle 261026 made these errors; files that broke them before stay at warn until fixed.
+      // Remove a file once it passes; never add one.
+      ...Object.entries(lintBacklogs).map(([rule, files]) => ({
+        files,
+        rules: { [rule]: "warn" as const },
+      })),
       {
         files: [
           "**/*.{test,spec,testkit}.{ts,tsx}",

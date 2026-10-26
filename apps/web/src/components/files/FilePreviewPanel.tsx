@@ -90,7 +90,6 @@ import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { AudioPreview } from "./AudioPreview";
 import { isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
-import { PreviewImage } from "./PreviewImage";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { FileViewMenu } from "./FileViewMenu";
@@ -1145,6 +1144,7 @@ export default function FilePreviewPanel({
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
   // Rendered documents and media reload through their URL; text views re-read the file.
   const refreshOpenFile = () => {
+    setFileRefreshRevision((value) => value + 1);
     if (isMedia || renderBrowserFile) setMediaRefreshRequestId((current) => current + 1);
     if (!isMedia && !isPdf) file.refresh();
   };

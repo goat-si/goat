@@ -184,7 +184,6 @@ export function installMethod(
   return installCommand(driver, platform, null)?.method ?? "manual";
 }
 
-// eslint-disable-next-line no-control-regex -- ANSI escapes are control characters.
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu;
 
 /**

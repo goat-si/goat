@@ -10,7 +10,7 @@ import {
 } from "~/components/solar";
 import { CornerUpRight, ListPlus } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
-import { useClientSettings, useEnvironmentIdentificationMode } from "~/hooks/useSettings";
+import { useClientSettings } from "~/hooks/useSettings";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
 import { useShortcutModifierState } from "../../shortcutModifierState";
@@ -128,7 +128,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
-  const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const redesign = useClientSettings((s) => s.redesignEnabled);
   const shortcutModifiers = useShortcutModifierState();
   const isQueuing =

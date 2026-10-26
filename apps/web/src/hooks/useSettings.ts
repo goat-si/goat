@@ -10,7 +10,7 @@ import { migratingStorage } from "@goat/client-runtime/storage-migration";
  * access is intentionally named as such so environment-sensitive consumers
  * cannot silently read the wrong server's settings.
  */
-import { useEffect, useRef, useSyncExternalStore, use } from "react";
+import { useRef, useSyncExternalStore, use } from "react";
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {

@@ -47,7 +47,6 @@ import { copyContextMenuImage } from "./ContextMenuImage.ts";
 
 const MIN_MAIN_WINDOW_WIDTH = 840;
 const MIN_MAIN_WINDOW_HEIGHT = 620;
-const TITLEBAR_HEIGHT = 40;
 
 function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   if (window.isDestroyed() || window.isFullScreen()) return;

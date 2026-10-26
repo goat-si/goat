@@ -19,14 +19,7 @@ import {
   type McpAppReference,
 } from "@goat/shared/mcpApp";
 import { MinimizeIcon as Minimize2Icon } from "~/components/solar";
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type FocusEvent,
-  type ToggleEvent,
-} from "react";
+import { useEffect, useRef, useState, type FocusEvent, type ToggleEvent } from "react";
 
 import { flushSync } from "react-dom";
 

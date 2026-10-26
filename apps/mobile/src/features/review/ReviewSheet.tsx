@@ -434,6 +434,7 @@ type ReviewSheetProps = StaticScreenProps<{
 }>;
 
 export function ReviewSheet(props: ReviewSheetProps) {
+  const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const { environmentId, threadId } = props.route.params;
   const thread = useThreadShell({ environmentId, threadId });
@@ -448,8 +449,8 @@ export function ReviewSheet(props: ReviewSheetProps) {
   useEffect(() => {
     if (showLocalWorkspace) return;
     if (navigation.canGoBack()) navigation.goBack();
-    else navigation.navigate("Thread", { environmentId, threadId });
-  }, [environmentId, navigation, showLocalWorkspace, threadId]);
+    else selectDetail({ name: "Thread", params: { environmentId, threadId } });
+  }, [environmentId, navigation, selectDetail, showLocalWorkspace, threadId]);
   return showLocalWorkspace ? <ReviewSheetContent {...props} /> : null;
 }
 

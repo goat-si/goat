@@ -119,7 +119,6 @@ export function SidebarSectionHeader(props: {
       : props.marker === "snoozed-header"
         ? "snoozed"
         : "settled";
-  const snoozed = shelf === "snoozed";
   const redesign = useClientSettings((s) => s.redesignEnabled);
   const collapsedCount = props.toggle.expanded ? null : props.count;
   const count = redesign ? props.count : collapsedCount;

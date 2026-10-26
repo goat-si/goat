@@ -108,6 +108,7 @@ function LoadedMediaVideo(props: {
     loadedUri.current = uri;
     latestAtLoad.current = props.uri;
     if (restore !== null) {
+      // oxlint-disable-next-line react/immutability -- Expo native players expose writable playback properties for restoring a replaced source.
       player.currentTime = restore.currentTime;
       player.volume = restore.volume;
       player.muted = restore.muted;

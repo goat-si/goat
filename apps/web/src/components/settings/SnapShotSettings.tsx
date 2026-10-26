@@ -7,7 +7,7 @@ import {
   type SnapShotShortcut,
 } from "@goat/contracts";
 import { PlayIcon } from "~/components/solar";
-import { useEffect, useRef, useState, useContext } from "react";
+import { useRef, useState, useContext } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 

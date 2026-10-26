@@ -1,4 +1,3 @@
-/* oxlint-disable t3code/no-global-process-runtime -- Standalone setup must run before workspace dependencies are installed. */
 // @effect-diagnostics nodeBuiltinImport:off - standalone bootstrap also runs before dependencies are installed.
 // @effect-diagnostics globalConsole:off globalFetch:off globalDate:off - interactive setup and endpoint verification.
 import * as NodeCrypto from "node:crypto";
@@ -165,7 +164,9 @@ const response = await fetch(`${endpoint}/telemetry`, {
     id: NodeCrypto.randomBytes(32).toString("hex"),
     recordedAt: Date.now(),
     host: NodeOS.hostname(),
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone bootstrap runs before workspace dependencies are installed.
     platform: NodeOS.platform(),
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone bootstrap runs before workspace dependencies are installed.
     arch: NodeOS.arch(),
     ci: false,
     runId: "setup",

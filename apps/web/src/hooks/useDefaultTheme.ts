@@ -1,6 +1,4 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
-import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useSyncExternalStore } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";

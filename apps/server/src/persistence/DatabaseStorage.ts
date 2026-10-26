@@ -164,8 +164,8 @@ const make = Effect.gen(function* () {
       sliceStarted = yield* Clock.monotonicTimeNanos;
     });
   });
-  const runCompaction = (paced: boolean) =>
-    Effect.gen(function* () {
+  const runCompaction = Effect.fn("DatabaseStorage.runCompaction")(
+    function* (paced: boolean) {
       const before = yield* readHealth;
       yield* Ref.update(compaction, (state) => ({ ...state, since: before.measuredAt }));
       yield* readHealth;
@@ -206,25 +206,25 @@ const make = Effect.gen(function* () {
         needsOfflineCompaction: mode[0]?.auto_vacuum !== 2 && after.reclaimableBytes > 0,
       };
       yield* Ref.update(compaction, (state) => ({ ...state, last }));
-    }).pipe(
-      Effect.ensuring(Ref.update(compaction, (state) => ({ ...state, since: null }))),
-      Effect.andThen(publishStatus),
-      Effect.andThen(Ref.get(healthRef)),
-      Effect.flatMap((health) =>
-        health === null
-          ? Effect.fail(new HostMaintenanceError({ operation: "compact_storage", message: "" }))
-          : Effect.succeed(health),
-      ),
-      Effect.mapError(
-        (cause) =>
-          new HostMaintenanceError({
-            operation: "compact_storage",
-            message:
-              "Could not compact this machine's history" +
-              (cause instanceof Error && cause.message.length > 0 ? ": " + cause.message : "."),
-          }),
-      ),
-    );
+    },
+    Effect.ensuring(Ref.update(compaction, (state) => ({ ...state, since: null }))),
+    Effect.andThen(publishStatus),
+    Effect.andThen(Ref.get(healthRef)),
+    Effect.flatMap((health) =>
+      health === null
+        ? Effect.fail(new HostMaintenanceError({ operation: "compact_storage", message: "" }))
+        : Effect.succeed(health),
+    ),
+    Effect.mapError(
+      (cause) =>
+        new HostMaintenanceError({
+          operation: "compact_storage",
+          message:
+            "Could not compact this machine's history" +
+            (cause instanceof Error && cause.message.length > 0 ? ": " + cause.message : "."),
+        }),
+    ),
+  );
 
   const runShared = (paced: boolean) =>
     Effect.uninterruptibleMask((restore) =>

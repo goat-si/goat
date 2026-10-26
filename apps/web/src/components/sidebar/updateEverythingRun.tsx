@@ -6,7 +6,6 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import { APP_VERSION } from "~/branding";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { desktopUpdateStateAtom } from "~/state/desktopUpdate";
 import { serverEnvironment } from "~/state/server";

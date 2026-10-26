@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../../components/ui/Dialog";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { useOpenPullRequest } from "../../../native/useOpenPullRequest";
@@ -78,6 +79,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
 }
 
 function GitOverviewSheetGuard(props: GitOverviewSheetProps) {
+  const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
@@ -94,8 +96,8 @@ function GitOverviewSheetGuard(props: GitOverviewSheetProps) {
   useEffect(() => {
     if (showLocalWorkspace || isInspector) return;
     if (navigation.canGoBack()) navigation.goBack();
-    else navigation.navigate("Thread", { environmentId, threadId });
-  }, [environmentId, isInspector, navigation, showLocalWorkspace, threadId]);
+    else selectDetail({ name: "Thread", params: { environmentId, threadId } });
+  }, [environmentId, isInspector, navigation, selectDetail, showLocalWorkspace, threadId]);
   return showLocalWorkspace ? <GitOverviewSheetContent {...props} /> : null;
 }
 

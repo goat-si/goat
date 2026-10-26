@@ -158,7 +158,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.
         const agent = yield* Effect.acquireRelease(
           createCursorAgent(true).pipe(
-            Effect.catchIf(cursorSandboxUnsupported, (cause) =>
+            Effect.catchIf(cursorSandboxUnsupported, () =>
               isMemory
                 ? Effect.fail(
                     new TextGenerationError({

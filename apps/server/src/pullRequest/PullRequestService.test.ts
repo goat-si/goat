@@ -1,5 +1,5 @@
 import * as Clock from "effect/Clock";
-import { SourceControlProviderKind, VcsProcessExitError } from "@goat/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, expect, it } from "@effect/vitest";

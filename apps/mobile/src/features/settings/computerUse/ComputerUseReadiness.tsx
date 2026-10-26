@@ -85,8 +85,8 @@ function ComputerUseReadinessDetails({
       {result.linuxSetup ? (
         <View accessibilityLabel="Set up computer use on Linux" className="gap-3">
           <Text textRole="body">Set up on Linux</Text>
-          {result.linuxSetup.steps.map((step, index) => (
-            <View key={`${step.id}:${index}`} className="gap-1">
+          {result.linuxSetup.steps.map((step) => (
+            <View key={step.id} className="gap-1">
               <Text textRole="body">
                 {step.title} · {setupLabels[step.status]}
               </Text>

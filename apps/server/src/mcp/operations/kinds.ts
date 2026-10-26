@@ -126,6 +126,7 @@ const providerSync: OperationKindSpec = {
     nativeId.startsWith(APPROVAL)
       ? {
           handoffId: nativeId.slice(APPROVAL.length),
+          // oxlint-disable-next-line unicorn/no-thenable -- This wire field describes the next diagnostic operation; it is not a promise callback.
           then: {
             tool: "goat_provider_sync_status",
             args: { handoffId: nativeId.slice(APPROVAL.length) },

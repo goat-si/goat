@@ -178,7 +178,7 @@ function ServerSettingsDetail(props: {
   const { focusEnvironmentId } = props;
   useEffect(() => {
     if (focusEnvironmentId !== undefined) focusEnvironment(focusEnvironmentId);
-    // Focus once per link; later filter changes by the user must stick.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Focus once per link; later user filter changes must stick.
   }, [focusEnvironmentId]);
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);

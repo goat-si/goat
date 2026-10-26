@@ -23,26 +23,23 @@ import {
 // A timeout headline and a local proxy diagnosis outrank incidental warnings
 // and OpenSSH's trailing generic closure. Only one sanitized line is public.
 function publicSshDiagnostic(error: { readonly message: string }) {
-  return (
-    sshFailureDiagnostic(
-      error.message,
-      error instanceof SshCommandError ? error.stderr : error.message,
+  return sshFailureDiagnostic(
+    error.message,
+    error instanceof SshCommandError ? error.stderr : error.message,
+  )
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[redacted]@")
+    .replace(
+      /((?:token|password|secret|credential|authorization|api[_-]?key)[\w-]*[\s"']*[:=][\s"']*)[^\s"'&,;]+/giu,
+      "$1[redacted]",
     )
-      // oxlint-disable-next-line no-control-regex -- strips ANSI escape sequences
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-      .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[redacted]@")
-      .replace(
-        /((?:token|password|secret|credential|authorization|api[_-]?key)[\w-]*[\s"']*[:=][\s"']*)[^\s"'&,;]+/giu,
-        "$1[redacted]",
-      )
-      .replace(
-        /((?:--)?(?:token|password|secret|credential|api[_-]?key)[\w-]*\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/giu,
-        "$1[redacted]",
-      )
-      .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
-      .replace(/\b(?:sk-|gh[opusr]_|github_pat_)[A-Za-z0-9_-]+/gu, "[redacted]")
-      .slice(0, 500)
-  );
+    .replace(
+      /((?:--)?(?:token|password|secret|credential|api[_-]?key)[\w-]*\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/giu,
+      "$1[redacted]",
+    )
+    .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
+    .replace(/\b(?:sk-|gh[opusr]_|github_pat_)[A-Za-z0-9_-]+/gu, "[redacted]")
+    .slice(0, 500);
 }
 
 export function runtimeFailureResult(

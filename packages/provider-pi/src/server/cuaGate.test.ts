@@ -19,9 +19,7 @@ it.effect("tells Pi to keep, swap to, or close the driver each turn (#1564)", ()
     const path = yield* openPiCuaGate(fileSystem);
     const gate = { path, key: McpProviderSession.cuaDriverKey(proxy("control:launch")) };
     const session = (cuaDriver?: CuaDriverMcpConfiguration) =>
-      ({
-        ...(cuaDriver === undefined ? {} : { cuaDriver }),
-      }) as McpProviderSession.McpProviderSessionConfig;
+      (cuaDriver === undefined ? {} : { cuaDriver }) as McpProviderSession.McpProviderSessionConfig;
     const turn = (cuaDriver?: CuaDriverMcpConfiguration) =>
       writePiCuaGate(fileSystem, gate, session(cuaDriver)).pipe(
         Effect.andThen(fileSystem.readFileString(path)),

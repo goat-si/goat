@@ -1,5 +1,5 @@
 import { InfoIcon } from "~/components/solar";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { flushSync } from "react-dom";
 

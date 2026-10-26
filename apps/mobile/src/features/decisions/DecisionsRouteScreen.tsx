@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { ScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
@@ -54,6 +55,7 @@ function FocusedDecisionsContent(props: {
     onChangeCustomAnswer,
   } = useDecisionInbox(props.session, props.isFocused);
   const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
   const connection = useSavedRemoteConnection(current?.ref.environmentId ?? null);
   const insets = useSafeAreaInsets();
@@ -98,7 +100,7 @@ function FocusedDecisionsContent(props: {
                   <Button
                     label="Go to thread"
                     tone="secondary"
-                    onPress={() => navigation.navigate("Thread", ref)}
+                    onPress={() => selectDetail({ name: "Thread", params: ref })}
                   />
                 </View>
               ))}
@@ -195,7 +197,7 @@ function FocusedDecisionsContent(props: {
                 <Button
                   label="Go to thread"
                   tone="secondary"
-                  onPress={() => navigation.navigate("Thread", current.ref)}
+                  onPress={() => selectDetail({ name: "Thread", params: current.ref })}
                 />
               </View>
               <Text className="text-xs text-foreground-muted">

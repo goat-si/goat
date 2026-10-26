@@ -679,6 +679,7 @@ const make = Effect.gen(function* () {
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
         let endedAny = false;
+        // oxlint-disable-next-line unicorn/no-useless-spread -- Grant lookups yield while controls can change; inspect only controls present at the start of this pass.
         for (const record of [...controls.values()]) {
           if (record.ended !== undefined || record.handoffId === undefined) continue;
           const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);

@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { ChildProcess } from "effect/process";
 import { ReleaseVerificationError, runReleaseCommand } from "./release-verify.ts";
 
 /**

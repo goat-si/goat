@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 
 import {
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type PreviewAutomationClickInput,
   type PreviewAutomationConsoleEntry,
   type PreviewAutomationDragInput,
@@ -15,7 +14,6 @@ import {
   type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationTypeInput,
-  type PreviewAutomationUploadInput,
   type PreviewAutomationWaitForInput,
 } from "@goat/contracts";
 import { constVoid } from "effect/Function";
@@ -296,8 +294,6 @@ const withoutTreeDataPayloads = (tree: string) =>
     .join("\n");
 // How long a frame in another process gets to answer; one that crashed never does.
 
-// The broker waits 15s for the host; a snapshot, retry included, answers well before.
-const SNAPSHOT_TIMEOUT_MS = 10_000;
 const FRAME_ANSWER_MS = 1_000;
 
 // Include password and CSS-masked text in open shadow roots, normalized like accessible text.
