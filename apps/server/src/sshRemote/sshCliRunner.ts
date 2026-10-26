@@ -12,36 +12,35 @@ import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
  * answers idle. Replacement only happens through the server's own drain, so
  * another client attached to it is never cut off mid-turn.
  */
-export const resolveSshCliRunner = (baseDir: string) =>
-  Effect.gen(function* () {
-    const archiveDirectory = yield* Config.String("GOAT_SSH_RUNTIME_ARCHIVE_DIR").pipe(
-      Config.withDefault(baseDir + "/runtime/archives"),
-    );
-    const bundledArchiveDirectory = yield* Config.String(
-      "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR",
-    ).pipe(
-      Config.withDefault(""),
-      Effect.map((value) => value.trim() || undefined),
-    );
-    const releaseBaseUrl = yield* Config.String("GOAT_RELEASE_BASE_URL").pipe(
-      Config.withDefault(""),
-      Effect.map((value) => value.trim() || undefined),
-    );
-    const nodeScriptPath = yield* Config.String("GOAT_DEV_REMOTE_SERVER_ENTRY_PATH").pipe(
-      Config.withDefault(""),
-    );
-    return {
-      ...(nodeScriptPath.trim()
-        ? { nodeScriptPath: nodeScriptPath.trim(), nodeEngineRange: packageJson.engines.node }
-        : {}),
-      archiveVersion: packageJson.version,
-      ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
-      archiveDirectory,
-      ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
-      ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
-      hostDownload: true,
-      publishedFallback: true,
-      attachAppServer: true,
-      refreshOwnedRuntimeOnFirstConnection: true,
-    } satisfies SshTunnel.RemoteGoatRunnerOptions;
-  });
+export const resolveSshCliRunner = Effect.fn("SshRemoteDispatch.resolveSshCliRunner")(function* (
+  baseDir: string,
+) {
+  const archiveDirectory = yield* Config.String("GOAT_SSH_RUNTIME_ARCHIVE_DIR").pipe(
+    Config.withDefault(baseDir + "/runtime/archives"),
+  );
+  const bundledArchiveDirectory = yield* Config.String("GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR").pipe(
+    Config.withDefault(""),
+    Effect.map((value) => value.trim() || undefined),
+  );
+  const releaseBaseUrl = yield* Config.String("GOAT_RELEASE_BASE_URL").pipe(
+    Config.withDefault(""),
+    Effect.map((value) => value.trim() || undefined),
+  );
+  const nodeScriptPath = yield* Config.String("GOAT_DEV_REMOTE_SERVER_ENTRY_PATH").pipe(
+    Config.withDefault(""),
+  );
+  return {
+    ...(nodeScriptPath.trim()
+      ? { nodeScriptPath: nodeScriptPath.trim(), nodeEngineRange: packageJson.engines.node }
+      : {}),
+    archiveVersion: packageJson.version,
+    ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
+    archiveDirectory,
+    ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
+    ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
+    hostDownload: true,
+    publishedFallback: true,
+    attachAppServer: true,
+    refreshOwnedRuntimeOnFirstConnection: true,
+  } satisfies SshTunnel.RemoteGoatRunnerOptions;
+});
