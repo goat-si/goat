@@ -76,7 +76,8 @@ origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"
 case "$pid:$port" in *[!0-9:]* | :* | *:) fail unusable ;; esac
 [ "$pid" -gt 0 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail unusable
 [ "$origin" = "http://127.0.0.1:$port" ] || fail unusable
-kill -0 "$pid" 2>/dev/null || fail absent
+# A stopped recorded server may own a legacy watch; its database is not disproven.
+kill -0 "$pid" 2>/dev/null || fail unusable
 command -v curl >/dev/null 2>&1 || fail unusable
 descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || fail unusable
 printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"

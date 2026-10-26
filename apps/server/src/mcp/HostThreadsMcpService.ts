@@ -49,6 +49,7 @@ import { type LaunchWatch, replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { rearmAfterRetry, rearmAfterSend, watchKeyOf } from "./launchWatchRearm.ts";
+import { routePendingRead } from "./pendingRequestHostRoute.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
@@ -215,10 +216,6 @@ export interface HostThreadsMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadRetryInput,
   ) => Effect.Effect<OrchestratorMcpThreadRetryResult, OrchestratorMcpFailure>;
-  /**
-   * Calls one of a host's own read-only tools, such as goat_project_list, and
-   * decodes the answer as `decode` reads that tool's result, tagged with the host.
-   */
   readonly readOnHost: <A extends object, E>(
     scope: McpInvocationScope,
     input: {
@@ -947,7 +944,11 @@ const make = Effect.gen(function* () {
             decodeRetry,
           )
       ).pipe(Effect.tap((result) => rearmAfterRetry(launchWatches, input, result))),
-    readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
+    readOnHost: (scope, input, decode) =>
+      routePendingRead(launchWatches, scope, input).pipe(
+        Effect.mapError(storeFailure),
+        Effect.flatMap((route) => onHost(scope, { ...route, writes: false }, decode)),
+      ),
     reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),
     configureReplication: (scope, input) =>
       replicas.configureHost(

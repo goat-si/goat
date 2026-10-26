@@ -41,7 +41,9 @@ export interface ExistingServerRouteShape {
     target: DesktopSshEnvironmentTarget,
     currentEnvironmentId: EnvironmentId | null,
   ) => Effect.Effect<
-    { readonly environmentId: EnvironmentId } | null,
+    | { readonly kind: "live"; readonly environmentId: EnvironmentId }
+    | { readonly kind: "absent" }
+    | { readonly kind: "unavailable" },
     never,
     SshEnvironmentEffectContext
   >;
@@ -117,7 +119,7 @@ export function makeExistingServerRoutes(input: {
     target: DesktopSshEnvironmentTarget,
     currentEnvironmentId: EnvironmentId | null,
   ) {
-    if (currentEnvironmentId === null) return null;
+    if (currentEnvironmentId === null) return { kind: "unavailable" as const };
     const known = input.resolvedTargets.get(targetConnectionKey(target)) ?? target;
     const auth = input.authFor(targetConnectionKey(known));
     const app = yield* probeExistingServer(known, "app", auth);
@@ -125,7 +127,13 @@ export function makeExistingServerRoutes(input: {
     const other = [app, managed].find(
       (probe) => probe.kind === "live" && probe.environmentId !== currentEnvironmentId,
     );
-    return other?.kind === "live" ? { environmentId: other.environmentId } : null;
+    if (other?.kind === "live")
+      return { kind: "live" as const, environmentId: other.environmentId };
+    return app.kind === "absent" && managed.kind === "absent"
+      ? { kind: "absent" as const }
+      : app.kind === "unusable" || managed.kind === "unusable"
+        ? { kind: "unavailable" as const }
+        : { kind: "absent" as const };
   });
 
   const existingEnvironment = Effect.fn("ssh/tunnel.existingEnvironment")(function* (

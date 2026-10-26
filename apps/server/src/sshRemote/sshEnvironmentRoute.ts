@@ -58,6 +58,7 @@ export const shouldRetryOtherDatabase = (
     "goat_thread_wait",
     "goat_thread_status",
     "goat_pending_request_list",
+    "goat_pending_request_read",
   ].includes(call.tool);
 
 export function pendingRuntimeMessage(alias: string, pending: SshRuntimePendingReplacement) {

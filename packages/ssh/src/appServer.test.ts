@@ -152,6 +152,10 @@ describe("GOAT app server attachment", () => {
       const host = yield* makeHost({ pid: process.pid, port: app.port });
       const fs = yield* FileSystem.FileSystem;
       const managedHome = `${host.home}/.goat/userdata`;
+      expect(
+        (yield* probeExistingServer(uploadTarget, "managed").pipe(Effect.provide(host.spawner)))
+          .kind,
+      ).toBe("absent");
       yield* fs.makeDirectory(managedHome, { recursive: true });
       yield* fs.writeFileString(`${host.home}/.goat/desktop/userdata/environment-id`, `${appId}\n`);
       yield* fs.writeFileString(`${managedHome}/environment-id`, `${managedId}\n`);
@@ -204,7 +208,7 @@ describe("GOAT app server attachment", () => {
           origin: `http://127.0.0.1:${managed.port}`,
         }),
       );
-      expect((yield* probe("managed")).kind).toBe("absent");
+      expect((yield* probe("managed")).kind).toBe("unusable");
       expect(
         parseExistingServerProbe(
           `GOAT_EXISTING=live ${managed.port} ${managedId}\n${JSON.stringify({

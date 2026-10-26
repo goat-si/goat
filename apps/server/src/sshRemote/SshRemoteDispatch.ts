@@ -2147,10 +2147,13 @@ const make = Effect.gen(function* () {
       );
       const other = yield* withRuntime(
         manager.existingEnvironmentOther?.(target, activeIdentity?.environmentId ?? null) ??
-          Effect.succeed(null),
-      ).pipe(Effect.orElseSucceed(() => null));
-      if (other === null) return yield* Effect.fail(error);
-      if (manager.existingEnvironment === undefined) return yield* Effect.fail(error);
+          Effect.succeed({ kind: "absent" as const }),
+      ).pipe(Effect.orElseSucceed(() => ({ kind: "unavailable" as const })));
+      if (other.kind === "absent") return yield* Effect.fail(error);
+      if (other.kind === "unavailable" || manager.existingEnvironment === undefined)
+        return yield* Effect.fail(
+          failure("host_unavailable", `The other GOAT server on ${target.alias} is unavailable.`),
+        );
       routeBootstrap = yield* withRuntime(
         manager.existingEnvironment(target, other.environmentId),
       ).pipe(unavailable(target.alias));

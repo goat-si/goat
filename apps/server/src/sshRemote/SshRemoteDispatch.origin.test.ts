@@ -106,8 +106,8 @@ describe("SSH dispatch origin routing", () => {
           existingEnvironmentOther: (_target, current) =>
             Effect.succeed(
               current === EnvironmentId.make("app-owner")
-                ? { environmentId: EnvironmentId.make("managed-owner") }
-                : null,
+                ? { kind: "live", environmentId: EnvironmentId.make("managed-owner") }
+                : { kind: "absent" },
             ),
           existingEnvironment: () =>
             Effect.succeed({ httpBaseUrl: "http://127.0.0.1:42000/", remoteServerVersion: "test" }),
@@ -203,7 +203,7 @@ describe("SSH dispatch origin routing", () => {
           {
             existingEnvironmentOther: () => {
               alternateCalls++;
-              return Effect.succeed({ environmentId: EnvironmentId.make("other") });
+              return Effect.succeed({ kind: "live", environmentId: EnvironmentId.make("other") });
             },
           },
           {
