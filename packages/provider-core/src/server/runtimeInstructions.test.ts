@@ -7,7 +7,7 @@ describe("GOAT pull request instructions", () => {
     const instructions = GOAT_ORCHESTRATION_INSTRUCTIONS;
 
     assert.include(instructions, "Link each PR you create, take over, or push to");
-    assert.include(instructions, "one goat_pull_request_link per PR");
+    assert.include(instructions, "goat_pull_request_link (full URL, each stack layer)");
     assert.include(instructions, "Skip PRs you only read or review");
     assert.include(instructions, "If linking fails, say so.");
     assert.notInclude(instructions, "git log -1");
@@ -25,17 +25,17 @@ describe("GOAT pull request instructions", () => {
     assert.notInclude(instructions, "On a wake");
     assert.include(
       instructions,
-      "Call goat_pull_request_watch when asked to monitor or babysit, or when work you were asked to do, such as a merge, still waits on checks or reviews, even after an earlier unwatch",
+      "Call goat_pull_request_watch when asked to monitor, or when your work (a merge) waits on checks or reviews",
     );
     assert.notInclude(instructions, "merge it now");
     assert.include(instructions, "Otherwise act now or hand back.");
     assert.include(instructions, "then watch and end your turn");
-    assert.include(instructions, "never watch, even if the brief says babysit");
+    assert.include(instructions, "Children never watch, even if told to");
     assert.include(
       instructions,
-      "After PR work, a child's last line is: PR <full URL>, head <SHA>, checks and reviews <state>.",
+      "their last line: PR <full URL>, head <SHA>, checks and reviews <state>.",
     );
-    assert.include(instructions, "Never wait with sleep");
+    assert.include(instructions, "Never poll or sleep.");
     assert.include(instructions, "call goat_pull_request_unwatch");
   });
 });

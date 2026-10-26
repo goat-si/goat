@@ -183,7 +183,10 @@ import {
 } from "../../provider/claudeUsageLimits.ts";
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
-import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import {
+  GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS,
+  GOAT_ORCHESTRATION_INSTRUCTIONS,
+} from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
@@ -1424,15 +1427,6 @@ function parseClaudeInteger(text: string): number {
   return Number.parseInt(value, 10);
 }
 
-// Claude Code defers MCP tools behind ToolSearch, so the agent only finds
-// goat_background_wait when the system prompt says when to reach for it.
-const CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
-
-### Background work you wait on
-
-To wait for a background command or Monitor you started (tests, a build), call \`goat_background_wait\` with its task ID before you end your turn. Do not mark work you leave running, or PRs. GOAT MCP tools are deferred: load one with ToolSearch before you call it.
-`;
-
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1571,7 +1565,7 @@ export function makeClaudeQueryOptions(input: {
           GOAT_DEVELOPMENT_INSTRUCTIONS +
           (input.mcpServers === undefined
             ? ""
-            : GOAT_ORCHESTRATION_INSTRUCTIONS + CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS),
+            : GOAT_ORCHESTRATION_INSTRUCTIONS + GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },

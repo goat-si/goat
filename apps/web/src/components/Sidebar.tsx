@@ -3228,6 +3228,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 closeDelay={0}
                 timeout={400}
               >
+                <ul role="presentation">
+                  <DecisionInboxSidebarRow />
+                </ul>
                 <ul
                   id="sidebar-thread-search-results"
                   role="listbox"
@@ -3298,6 +3301,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               </TooltipProvider>
             ) : (
               <>
+                <ul role="presentation">
+                  <DecisionInboxSidebarRow />
+                </ul>
                 <p
                   role="status"
                   className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"

@@ -13066,8 +13066,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
     const serializesOnParent =
       command.type === "thread.promote" ||
-      (command.type === "message.dispatch" &&
-        (command.createdBy === "user" || command.creationSource === "mcp"));
+      (command.type === "message.dispatch" && mayStartSubagentFollowup(command));
     if (!serializesOnParent) return yield* dispatch;
     const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
       Effect.mapError(

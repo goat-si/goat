@@ -6,7 +6,7 @@ import { builtInSkillSections } from "./builtinSkills/registry.ts";
  */
 export const GOAT_PULL_REQUEST_INSTRUCTIONS = `## GOAT pull requests
 
-Link each PR you create, take over, or push to: one goat_pull_request_link per PR, full URL, every stack layer, as your next call. CLIs do not link for you. If linking fails, say so. Skip PRs you only read or review, or background PRs. Call goat_pull_request_watch when asked to monitor or babysit, or when work you were asked to do, such as a merge, still waits on checks or reviews, even after an earlier unwatch. Update and push the branch first, then watch and end your turn. Otherwise act now or hand back. Delegated children never watch, even if the brief says babysit. After PR work, a child's last line is: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. Never wait with sleep, loops, or gh --watch. At handback, call goat_pull_request_unwatch for watched PRs.`;
+Link each PR you create, take over, or push to with goat_pull_request_link (full URL, each stack layer). If linking fails, say so. Skip PRs you only read or review. Call goat_pull_request_watch when asked to monitor, or when your work (a merge) waits on checks or reviews: push, then watch and end your turn. Otherwise act now or hand back. Children never watch, even if told to; their last line: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. Never poll or sleep. At handback, call goat_pull_request_unwatch.`;
 
 /**
  * GOAT's built-in computer use skill for this host, attached only when the turn actually has the
