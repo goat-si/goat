@@ -35,7 +35,7 @@ import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
-import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
+import { isLoopbackEntry, loopbackBudget, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -896,7 +896,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
       yield* Ref.set(probeUnanswered, true);
       const probe = yield* Effect.forkChild(lease.session.probe);
-      let deadline = (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(probeTimeout);
+      let deadline =
+        (yield* Clock.monotonicTimeNanos) +
+        Duration.toNanosUnsafe(loopbackBudget(loopback, probeTimeout));
       for (;;) {
         const remaining = deadline - (yield* Clock.monotonicTimeNanos);
         const probeEvent = yield* Effect.raceAllFirst([
@@ -930,7 +932,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         const signalTimeout = probeTimeoutFor(probeEvent.signal);
         if (signalTimeout !== undefined) {
           const signalDeadline =
-            (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(signalTimeout);
+            (yield* Clock.monotonicTimeNanos) +
+            Duration.toNanosUnsafe(loopbackBudget(loopback, signalTimeout));
           if (signalDeadline < deadline) deadline = signalDeadline;
         }
       }
