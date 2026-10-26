@@ -2,7 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
-import type { HostCapacitySnapshot } from "@goat/contracts";
+import type { HostCapacitySnapshot, HostDiskUsage } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -12,11 +12,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as ServerConfig from "../config.ts";
 import { readHostCapacityExtras } from "./hostCapacity.ts";
 
 export class HostResources extends Context.Service<
   HostResources,
-  { readonly read: Effect.Effect<HostCapacitySnapshot> }
+  {
+    readonly read: Effect.Effect<HostCapacitySnapshot>;
+    /** Free space of the volume holding a folder; null when it cannot be read. */
+    readonly diskAt: (folder: string) => Effect.Effect<HostDiskUsage | null>;
+  }
 >()("goat/resourceTelemetry/HostResources") {}
 
 function readCpu() {
@@ -46,7 +51,7 @@ function darwinAvailableMemory(output: string): number | null {
 const make = Effect.fn("makeHostResources")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
-  const home = yield* HostProcess.HomeDirectory;
+  const { baseDir } = yield* ServerConfig.ServerConfig;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const sample = Effect.fn("HostResources.sample")(function* () {
@@ -59,7 +64,7 @@ const make = Effect.fn("makeHostResources")(function* () {
         Effect.sleep("200 millis"),
         readHostCapacityExtras({
           platform,
-          home,
+          dataDir: baseDir,
           loadavg: NodeOS.loadavg(),
           statfs: (path) => NodeFSP.statfs(path, { bigint: true }),
         }),
@@ -107,7 +112,14 @@ const make = Effect.fn("makeHostResources")(function* () {
     lookup: (_key: "host") => sample(),
     timeToLive: "5 seconds",
   });
-  return HostResources.of({ read: Cache.get(cache, "host") });
+  const statfs = (path: string) => NodeFSP.statfs(path, { bigint: true });
+  return HostResources.of({
+    read: Cache.get(cache, "host"),
+    diskAt: (folder) =>
+      readHostCapacityExtras({ platform, dataDir: folder, loadavg: [], statfs }).pipe(
+        Effect.map((extras) => extras.disk),
+      ),
+  });
 });
 
 export const layer = Layer.effect(HostResources, make());

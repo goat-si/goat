@@ -173,6 +173,10 @@ and level at most once per cooldown. It reads remote hosts only while a launch w
 has runs to report. Launch tools return `pressure` advice from readings already held, and goal
 placement refuses a critical host. Settings: `fleet.pressure` in
 `packages/contracts/src/hostPressure.ts`.
+A disk level needs free space under both its percent and its GiB limit. The server also holds a
+disk-only level and streams it with free space (`server.subscribeDiskPressure`) for client
+warnings; `apps/server/src/storage/` scans GOAT's folders and deletes only person-approved items
+whose identity is unchanged, checking every local GOAT server's bindings first.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-host-pressure.md)
 

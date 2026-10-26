@@ -33,6 +33,27 @@ const error = (fields: Partial<Extract<AgentSurfaceResult, { status: "error" }>[
   }) as AgentSurfaceResult;
 
 describe("exit codes", () => {
+  it("goat storage previews by default selection and deletes only with --clean", () => {
+    expect(invoke("storage", "--dry-run")).toMatchObject({
+      kind: "call",
+      path: "storage.clean",
+      args: { dryRun: true },
+    });
+    expect(invoke("storage", "--clean", "--approval", "handoff:1", "--json")).toMatchObject({
+      kind: "call",
+      path: "storage.clean",
+      args: { dryRun: false, approvalId: "handoff:1" },
+      json: true,
+    });
+    for (const argv of [
+      ["storage", "--clean", "--dry-run"],
+      ["storage", "--dry-run", "--approval", "x"],
+      ["storage", "--clean", "--approval"],
+      ["storage", "--clean", "--force"],
+    ])
+      expect(invoke(...argv)?.kind, argv.join(" ")).toBe("usage");
+  });
+
   it("map every envelope outcome to the documented code", () => {
     const cases: ReadonlyArray<readonly [AgentSurfaceResult, number]> = [
       [{ status: "ok", value: null }, 0],

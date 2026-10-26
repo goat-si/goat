@@ -18,6 +18,12 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
   },
   {
+    id: "hub-cloud-auto-join",
+    title: "Join new cloud machines",
+    to: "/settings/hub",
+    searchTerms: ["cloud machine boat opencodex child bootstrap automatic join auto-join"],
+  },
+  {
     id: "hub-permission-profiles",
     title: "Permission profiles",
     to: "/settings/hub",

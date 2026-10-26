@@ -1,4 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { cloudAutoJoinSaveError } from "@goat/client-runtime/hub-devices";
 import { hubSnapshot, type HubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import {
   AuthOrchestrationOperateScope,
@@ -128,17 +129,22 @@ function useHubSettings(environmentId: EnvironmentId) {
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const savePatch = async (
     patch:
       | { readonly hub: Partial<HubSettingsValue> }
       | { readonly goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">> },
   ) => {
-    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return;
+    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return null;
     setSaving(true);
     setError(null);
     const result = await update({ environmentId, input: { patch } });
     setSaving(false);
-    if (result._tag === "Failure") setError("Could not save the setting. Try again.");
+    if (result._tag === "Failure") {
+      setError("Could not save the setting. Try again.");
+      return null;
+    }
+    return result.value;
   };
   return {
     settings,
@@ -146,7 +152,17 @@ function useHubSettings(environmentId: EnvironmentId) {
     canConfigure,
     saving,
     error,
+    joinError,
     save: (hub: Partial<HubSettingsValue>) => savePatch({ hub }),
+    /** An older hub drops the field and answers on, since it always joins its cloud machines. */
+    saveCloudAutoJoin: async (autoJoinCloudMachines: boolean) => {
+      setJoinError(null);
+      const saved = await savePatch({ hub: { autoJoinCloudMachines } });
+      if (saved !== null)
+        setJoinError(
+          cloudAutoJoinSaveError(autoJoinCloudMachines, saved.hub.autoJoinCloudMachines),
+        );
+    },
     saveGoatclaw: (goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">>) =>
       savePatch({ goatclaw }),
   };
@@ -235,6 +251,27 @@ function HubControls({
                 ))}
               </SelectPopup>
             </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("hub-cloud-auto-join")}
+          serverScoped
+          settingKeys={["hub"]}
+          description="A cloud machine this hub creates gets its OpenCodex and joins as a Child the first time it is used. Off: new machines stay standalone, and linked ones stay linked."
+          status={
+            hub.joinError ? (
+              <span role="alert" className="text-destructive">
+                {hub.joinError}
+              </span>
+            ) : undefined
+          }
+          control={
+            <Switch
+              aria-label="Join new cloud machines"
+              checked={hub.settings.autoJoinCloudMachines}
+              disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
+              onCheckedChange={(checked) => void hub.saveCloudAutoJoin(checked)}
+            />
           }
         />
         <SettingsRow

@@ -124,6 +124,10 @@ import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
+import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as StorageConsent from "./storage/StorageConsent.ts";
+import * as LocalGoatServers from "./storage/localGoatServers.ts";
+import * as WorktreeInventoryService from "./mcp/WorktreeInventoryService.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -748,6 +752,19 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
   StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
+  StorageConsent.layer,
+  StorageReclaim.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        WorktreeInventoryService.layer,
+        LocalGoatServers.layer.pipe(Layer.provide(ProcessRunner.layer)),
+        ProcessRunner.layer,
+        HostResources.layer,
+        ThreadHistoryArchive.layer,
+      ),
+    ),
+  ),
+  HostPressureMonitor.layer,
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(

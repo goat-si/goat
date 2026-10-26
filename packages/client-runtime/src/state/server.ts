@@ -51,6 +51,7 @@ import {
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
+import { createStorageEnvironmentAtoms } from "./storage.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -1093,6 +1094,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCleanUpStrayProcesses,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    ...createStorageEnvironmentAtoms(runtime),
     databaseStorage,
     databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
@@ -1258,6 +1260,11 @@ export function createServerEnvironmentAtoms<R, E>(
     repairHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-repair",
       tag: WS_METHODS.hubDeviceRepair,
+    }),
+    /** A person's standing consent to join an SSH host as the hub's OpenCodex Child. */
+    setHubDeviceChildOptIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-child-opt-in",
+      tag: WS_METHODS.hubDeviceChildOptIn,
     }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",
