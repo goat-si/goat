@@ -1,11 +1,38 @@
-import type { PreviewTabContextRecord } from "@goat/contracts";
+import {
+  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+  type EnvironmentId,
+  type PreviewTabContextRecord,
+} from "@goat/contracts";
+import {
+  sanitizeComposerContextLabel,
+  toKindScopedComposerContextId,
+} from "@goat/shared/composerContextReferences";
 import type { ComposerThreadDraftState } from "~/composerDraftStore";
 import {
   ensureInlineContextReferences,
   removeInlineContextReference,
 } from "./composerContextReferences";
+import { randomUUID } from "./utils";
 
 type DraftState = { draftsByThreadKey: Record<string, ComposerThreadDraftState> };
+
+/** The typed record the composer inserts for a live server browser tab. */
+export function previewTabRecordForServerTab(
+  environmentId: EnvironmentId,
+  tab: { readonly tabId: string; readonly title: string; readonly url: string },
+): PreviewTabContextRecord {
+  return {
+    version: 1,
+    kind: "preview-tab",
+    contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
+    label: sanitizeComposerContextLabel(tab.title || tab.url, "browser tab"),
+    environmentId,
+    browserInstanceId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+    tabId: tab.tabId,
+    title: sanitizeComposerContextLabel(tab.title, "browser tab"),
+    url: tab.url,
+  };
+}
 
 export function addPreviewTabsToDraftState<S extends DraftState>(
   state: S,

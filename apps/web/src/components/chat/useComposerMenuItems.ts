@@ -25,11 +25,7 @@ import {
   filterComposerPullRequestMatches,
 } from "@goat/shared/composerPullRequestMatches";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
-import {
-  sanitizeComposerContextLabel,
-  toKindScopedComposerContextId,
-} from "@goat/shared/composerContextReferences";
-import { randomUUID } from "~/lib/utils";
+import { previewTabRecordForServerTab } from "~/lib/previewTabDraft";
 
 import type { ComposerTrigger } from "../../composer-logic";
 import { basenameOfPath } from "../../pierre-icons";
@@ -47,7 +43,6 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { previewEnvironment } from "~/state/preview";
-import { SERVER_BROWSER_AUTOMATION_CLIENT_ID } from "@goat/contracts";
 import { useComposerPathSearch, useDebouncedValue, useThreadSearch } from "~/state/queries";
 import {
   matchesPullRequestQuery,
@@ -257,17 +252,11 @@ export function useComposerMenuItems({
             {
               id: `preview-tab:${session.tabId}`,
               type: "preview-tab" as const,
-              record: {
-                version: 1 as const,
-                kind: "preview-tab" as const,
-                contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
-                label: sanitizeComposerContextLabel(title || url, "browser tab"),
-                environmentId,
-                browserInstanceId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+              record: previewTabRecordForServerTab(environmentId, {
                 tabId: session.tabId,
-                title: sanitizeComposerContextLabel(title, "browser tab"),
+                title,
                 url,
-              },
+              }),
               label: title || url,
               description: url,
             },

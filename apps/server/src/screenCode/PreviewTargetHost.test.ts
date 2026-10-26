@@ -196,7 +196,7 @@ it.effect("requested image metadata matches its observation while bytes remain h
   }),
 );
 
-it.effect("binds only the exact mentioned browser instance and tab", () =>
+it.effect("binds the exact mentioned browser instance and tab, not its title", () =>
   Effect.gen(function* () {
     const first = {
       environmentId: "env",
@@ -245,9 +245,14 @@ it.effect("binds only the exact mentioned browser instance and tab", () =>
       tabId: "tab-a",
     });
     tabs = [{ ...first, title: "Changed" }, second];
-    const changed = yield* host
+    const retitled = yield* host
       .dispatch(call("select_tab", 2, { mentionId: "mention" }), context)
       .pipe(Effect.result);
-    expect(changed._tag).toBe("Failure");
+    expect(retitled._tag).toBe("Success");
+    tabs = [{ ...first, browserInstanceId: "replaced-browser" }, second];
+    const replaced = yield* host
+      .dispatch(call("select_tab", 3, { mentionId: "mention" }), context)
+      .pipe(Effect.result);
+    expect(replaced._tag).toBe("Failure");
   }),
 );

@@ -211,12 +211,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           (tab) =>
             (tabId === undefined || tab.tabId === tabId) &&
             (url === undefined || tab.url === url) &&
+            // A mention binds by identity; the page may have loaded or navigated since it was made.
             (!hint ||
               (tab.environmentId === hint.environmentId &&
                 tab.browserInstanceId === hint.browserInstanceId &&
-                tab.tabId === hint.tabId &&
-                tab.title === hint.titleAtMention &&
-                tab.url === hint.urlAtMention)),
+                tab.tabId === hint.tabId)),
         );
         if ((!tabId && !url && !mentionId) || candidates.length !== 1)
           return yield* Effect.fail(
