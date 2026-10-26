@@ -7,12 +7,13 @@ import {
   RuntimeMode,
   type RuntimeSessionRequest,
 } from "@goat/contracts";
-import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { GOAT_ACTIVITY_PATH, GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeProtocols, ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -20,7 +21,12 @@ import type * as Path from "effect/Path";
 import type * as SshAuth from "./auth.ts";
 import { runSshCommand } from "./command.ts";
 import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./errors.ts";
-import { applyScriptPlaceholders, shellSingleQuote, sshTargetLogFields } from "./remoteRuntime.ts";
+import {
+  applyScriptPlaceholders,
+  type PreparedRemoteRuntime,
+  shellSingleQuote,
+  sshTargetLogFields,
+} from "./remoteRuntime.ts";
 
 // The packaged GOAT app runs its own server on ~/.goat/desktop (resolveDesktopBaseDir), beside the
 // server SSH clients start on ~/.goat. A host user should have one server their remote hubs reach,
@@ -145,8 +151,8 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
   return probe;
 });
 
-/** The script that asks the app server on `port` for a credential. Exported for tests. */
-export const buildAppServerCredentialScript = (port: number, request: RuntimeSessionRequest) =>
+/** The script that asks the app server on `port` for a credential. */
+const buildAppServerCredentialScript = (port: number, request: RuntimeSessionRequest) =>
   applyScriptPlaceholders(APP_SERVER_SESSION_SCRIPT, {
     GOAT_PORT: String(port),
     GOAT_HEADER: GOAT_RUNTIME_CONTROL_HEADER,
@@ -213,3 +219,38 @@ export const appServerSessionRequest = (input: {
     ...(ceiling === undefined ? {} : { runtimeModeCeiling: ceiling }),
   });
 };
+
+const decodeActivity = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ activity: Schema.Literals(["idle", "busy"]) })),
+);
+
+/**
+ * Whether an attachment to the managed server should move to the host's GOAT app server, which
+ * the managed server reports as `appServerLive` in its descriptor. Only an idle managed server is
+ * left, so threads already running there finish where they started and their watchers can still
+ * read them. An attachment whose launch found the app server unusable stays, and so does one that
+ * cannot learn the managed server's activity.
+ */
+export const shouldMoveToAppServer = (input: {
+  readonly descriptor: { readonly appServerLive?: boolean } | undefined;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
+  readonly selection: Pick<PreparedRemoteRuntime, "appServerDeclined">;
+  readonly httpBaseUrl: string;
+  readonly timeoutMs: number;
+}): Effect.Effect<boolean, never, HttpClient.HttpClient> =>
+  input.descriptor?.appServerLive !== true ||
+  input.remoteServerKind === "app" ||
+  input.selection.appServerDeclined === true
+    ? Effect.succeed(false)
+    : Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        const response = yield* client.get(
+          new URL(GOAT_ACTIVITY_PATH, input.httpBaseUrl).toString(),
+        );
+        if (response.status !== 200) return false;
+        return (yield* decodeActivity(yield* response.text)).activity === "idle";
+      }).pipe(
+        Effect.timeoutOption(`${input.timeoutMs} millis`),
+        Effect.map((idle) => Option.isSome(idle) && idle.value),
+        Effect.orElseSucceed(() => false),
+      );

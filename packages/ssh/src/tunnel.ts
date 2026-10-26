@@ -1,5 +1,4 @@
 import {
-  GOAT_ACTIVITY_PATH,
   LEGACY_SSH_ARCHIVE_VERSION_KEY,
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
 } from "@goat/contracts/legacyT3Names";
@@ -59,7 +58,7 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
-import { issueAppServerCredential, probeAppServer } from "./appServer.ts";
+import { issueAppServerCredential, probeAppServer, shouldMoveToAppServer } from "./appServer.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -2165,10 +2164,6 @@ const decodeForwardDescriptor = Schema.decodeUnknownEffect(
     }),
   ),
 );
-const decodeForwardActivity = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ activity: Schema.Literals(["idle", "busy"]) })),
-);
-
 /**
  * What the server behind an open forward reports now. A server replaced on the same port
  * (another client's update, a self-update, a manual restart) still answers the forward, so
@@ -2188,32 +2183,6 @@ const readForwardDescriptor = (entry: SshTunnelEntry) =>
     Effect.map((descriptor) => (descriptor._tag === "Some" ? descriptor.value : undefined)),
     Effect.orElseSucceed(() => undefined),
   );
-
-/**
- * Whether a managed attachment should move to the host's GOAT app server. Only an idle managed
- * server is left, so threads already running there finish where they started and their watchers
- * can still read them. An attachment whose launch found the app server unusable stays.
- */
-const shouldMoveToAppServer = (
-  entry: SshTunnelEntry,
-  descriptor: { readonly appServerLive?: boolean } | undefined,
-) =>
-  descriptor?.appServerLive !== true ||
-  entry.remoteServerKind === "app" ||
-  entry.selectedRuntime.appServerDeclined === true
-    ? Effect.succeed(false)
-    : Effect.gen(function* () {
-        const client = yield* HttpClient.HttpClient;
-        const response = yield* client.get(
-          new URL(GOAT_ACTIVITY_PATH, entry.httpBaseUrl).toString(),
-        );
-        if (response.status !== 200) return false;
-        return (yield* decodeForwardActivity(yield* response.text)).activity === "idle";
-      }).pipe(
-        Effect.timeoutOption(`${entry.readiness.probeTimeoutMs} millis`),
-        Effect.map((idle) => idle._tag === "Some" && idle.value),
-        Effect.orElseSucceed(() => false),
-      );
 
 const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
@@ -3497,7 +3466,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const liveVersion = descriptor?.serverVersion;
         const moveToAppServer =
           (liveVersion === undefined || liveVersion === selectedVersion) &&
-          (yield* shouldMoveToAppServer(entry, descriptor));
+          (yield* shouldMoveToAppServer({
+            descriptor,
+            remoteServerKind: entry.remoteServerKind,
+            selection: entry.selectedRuntime,
+            httpBaseUrl: entry.httpBaseUrl,
+            timeoutMs: entry.readiness.probeTimeoutMs,
+          }));
         if ((liveVersion === undefined || liveVersion === selectedVersion) && !moveToAppServer) {
           yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
           return true;
