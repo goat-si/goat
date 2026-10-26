@@ -25,6 +25,11 @@
   whatever started it, whatever `cuaFullAccessAutoAdmit` says. This replaces #1396's
   off-by-default behavior. The Readiness and approvals bullet below states the decision; #1649
   implements it.
+- Amended 2026-10-26, D17 (owner decision, Jun, 2026-10-26; recorded before implementation on
+  branch `codex/unified-cua-runtime`): agents get one screen code tool that runs a bounded
+  JavaScript cell against built-in browser tabs and desktop apps. The agent-surface D8
+  measurement gate for a general `goat_eval` does not apply to it; its measurement protocol
+  becomes a post-ship regression check. The Screen code mode bullet below states the decision.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -192,6 +197,20 @@
     that #1426 had closed by turning off the human-input advertisement. Human-input detection
     (#1426, #1477, #1504, #1512) remains for input arbitration and reports; it is neither an
     admission gate nor a pause condition. Owner decision (Jun, 2026-10-25), #1550.
+  - **Screen code mode (D17).** One agent tool runs a short JavaScript cell in a QuickJS
+    WebAssembly guest, in a child process the GOAT server starts per active turn, with no file,
+    network, process or credential access. The cell reaches browser tabs and desktop apps only
+    through host calls, and every call passes the same check a direct call passes: preview owner,
+    generation and private mode for a tab, and the lease proxy's scope, reservation and quarantine
+    for an app. Cua Driver is not changed and its `run_script`, `run_steps` and browser tools stay
+    excluded. Stop, pause, private mode and turn end fence new calls and kill the guest; a call that
+    may already have reached an app is reported as an unknown outcome and never replayed. A person's
+    input still does not pause approved control (D7); a code-mode-only refusal of desktop input to
+    browser windows is not added, so the cell keeps parity with direct calls, and an origin-aware
+    rule shared by both is a follow-up. The agent cursor may show a short "thinking" motion while a
+    cell is live; it restarts on each call or action, stops by itself within five seconds, stops at
+    idle hide or turn end, is off under reduced motion, and is hidden before every capture. Native
+    cursor motion on Windows and Linux is a follow-up. Owner decision (Jun, 2026-10-26).
   - **Parity.** Every platform implements every protocol method or returns a typed `unsupported`;
     tests enforce the matrix in the design doc.
   - **Packaging and updates.** Inner executables are signed first, then the helper, then GOAT.app,
