@@ -5,6 +5,7 @@ import type { DesktopUpdateState } from "@goat/contracts";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateIdleTooltip,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
   resolveDesktopUpdateButtonAction,
@@ -34,6 +35,38 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button state", () => {
+  it("shows why the last update check failed and lets the user check again", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "error",
+      message: "Could not check for updates: the update server did not answer within 2 minutes.",
+      errorContext: "check",
+      canRetry: true,
+    };
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
+    expect(canCheckForUpdate(state)).toBe(true);
+    expect(getDesktopUpdateIdleTooltip(state)).toEqual({
+      title: "Update check failed",
+      detail: `${state.message} Click to check again.`,
+    });
+    expect(getDesktopUpdateStatusText(state)).toBe(state.message);
+  });
+
+  it("offers restart for a downloaded update that waits for busy backends and says quitting installs it", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+      pendingRestartReason: "busy",
+      canRetry: true,
+    };
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(
+      "Update 1.1.0 downloaded. Click to restart and install. It also installs when you quit GOAT.",
+    );
+  });
+
   it("keeps retry action available after a download error", () => {
     const state: DesktopUpdateState = {
       ...baseState,

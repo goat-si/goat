@@ -2,8 +2,9 @@
  * ChannelRuntime - runs the channel workers in the one process that owns them.
  *
  * The owner holds the ledger's worker row (refreshed every few seconds) and runs one pass of
- * work whenever a writer signals or a short interval passes: answer new inputs (up to four at
- * once, each on its own fiber), dispatch received tasks, forward answers, word task updates,
+ * work whenever a writer signals or a short interval passes: answer new inputs (one at a time
+ * per conversation, in arrival order, and up to four conversations at once, each on its own
+ * fiber), dispatch received tasks, forward answers, word task updates,
  * bring running tasks in line with their worker threads, and deliver due outbox rows. Run
  * events from worker threads only wake the loop; every pass decides from the ledger and the
  * thread projections, so restarts and missed signals change only timing.
@@ -24,10 +25,13 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -63,6 +67,8 @@ const make = Effect.gen(function* () {
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const childWork = yield* ChannelChildWork.ChannelChildWork;
+  const sql = yield* SqlClient.SqlClient;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
@@ -118,7 +124,9 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.as(0)),
       ),
     );
-    for (const inputId of yield* ledger.listPendingInputs(100)) {
+    // Only each conversation's oldest input is offered, so a conversation is read in order while
+    // others proceed; at most one fiber per conversation waits for a reception slot.
+    for (const inputId of yield* ledger.listReceivableInputs(100)) {
       if (yield* startReception(inputId)) started += 1;
     }
     // Oldest request first, so work held back by the per-person cap starts in arrival order.
@@ -126,6 +134,13 @@ const make = Effect.gen(function* () {
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
     for (const stored of waiting) {
+      // The acknowledgement goes out before the work starts: while its delivery could still
+      // reach the person, the task waits at received until that delivery settles.
+      if (
+        stored.task.status === "received" &&
+        (yield* hasUnsettledChannelDelivery(sql, stored.task.originInputId))
+      )
+        continue;
       yield* dispatcher.dispatch(stored.task.taskId, owner);
       started += 1;
     }
@@ -139,6 +154,13 @@ const make = Effect.gen(function* () {
     }
     started += yield* reports.reconcile(owner);
     started += yield* reviews.reconcile(owner);
+    // Child-work records settle against their destinations in the same pass, so capacity freed
+    // by a finished child is visible before the next admission.
+    started += yield* childWork.reconcile.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel child-work reconcile failed", { cause }).pipe(Effect.as(0)),
+      ),
+    );
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* delivery.deliverDue(owner);

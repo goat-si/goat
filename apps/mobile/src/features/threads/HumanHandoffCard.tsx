@@ -1,4 +1,8 @@
-import { codexRouteErrorMessage } from "@goat/client-runtime/state/provider-instance-display";
+import {
+  codexRouteErrorMessage,
+  handoffExpiryLabel,
+  handoffRespondErrorMessage,
+} from "@goat/client-runtime/state/provider-instance-display";
 import { computerUseGrantLabel } from "@goat/client-runtime/computerUseGrant";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import * as DateTime from "effect/DateTime";
@@ -197,7 +201,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
           setError(
             isProviderHome
               ? codexRouteErrorMessage(squashAtomCommandFailure(result))
-              : "Could not update this handoff. It may already be resolved or expired.",
+              : handoffRespondErrorMessage(squashAtomCommandFailure(result)),
           );
       }
     } finally {
@@ -227,7 +231,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
       {isSsh || isProvider ? (
         pending && handoff.expiresAt ? (
           <Text className="font-sans text-xs text-foreground-muted">
-            Expires {DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}
+            {handoffExpiryLabel(handoff.expiresAt)}
           </Text>
         ) : null
       ) : (

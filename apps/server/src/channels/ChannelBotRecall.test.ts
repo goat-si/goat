@@ -195,7 +195,7 @@ describe("GOAT Bot journal", () => {
     );
     const journal = journalFor(many);
     assert.isAtMost(journal.length, JOURNAL_CHARS);
-    assert.isTrue(journal.startsWith("- 2026-10-12 00:39 [completed] Task 39 (for Bob) — "));
+    assert.isTrue(journal.startsWith("- 2026-10-12 00:39 [completed] Task 39 (for Bob): "));
     assert.notInclude(journal, "Task 0 ");
     const withPr = journalFor([
       task({

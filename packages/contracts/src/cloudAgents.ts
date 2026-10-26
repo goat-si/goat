@@ -1,7 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { SshHostAlias, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  ProjectId,
+  SshHostAlias,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { OrchestrationV2CloudTask } from "./orchestrationV2.ts";
+import { needsHumanFields } from "./humanStepResult.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
@@ -14,6 +21,37 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const CloudAgentProvider = Schema.Literals(["claudeCloud", "cursorCloud", "devinCloud"]);
 export type CloudAgentProvider = typeof CloudAgentProvider.Type;
+
+/**
+ * Claude Cloud starts from a project folder, and Claude Code asks once per folder whether to
+ * trust it. GOAT answers that prompt itself for its own projects; this is what a person sees.
+ *
+ * Deprecated since GOAT 0.1.2, which trusts folders on its own and no longer shows them. Kept for
+ * Fleet in older clients; remove with the folder trust RPCs in GOAT 0.2.0.
+ */
+export const CloudFolderTrust = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  title: Schema.String,
+  path: Schema.String,
+  /** What Claude Code's own config says; null when it cannot be read. */
+  trusted: Schema.NullOr(Schema.Boolean),
+  /** The last time GOAT accepted this folder's trust prompt. */
+  acceptedByGoatAt: Schema.NullOr(IsoDateTime),
+});
+export type CloudFolderTrust = typeof CloudFolderTrust.Type;
+
+export const CloudFolderTrustListInput = Schema.Struct({});
+export const CloudFolderTrustListResult = Schema.Struct({
+  folders: Schema.Array(CloudFolderTrust),
+});
+export type CloudFolderTrustListResult = typeof CloudFolderTrustListResult.Type;
+
+export const CloudFolderTrustAcceptInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+});
+export type CloudFolderTrustAcceptInput = typeof CloudFolderTrustAcceptInput.Type;
 export const CLOUD_AGENT_PROVIDERS: ReadonlyArray<CloudAgentProvider> = [
   "claudeCloud",
   "cursorCloud",
@@ -97,7 +135,7 @@ export const CloudLaunchInput = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
   holder: Schema.optional(CloudHolderName).annotate({
     description:
-      'Run on this holder: "local" or an SSH host alias from goat_cloud_holders. Omit to pick a ready holder.',
+      'Run on this holder: "local" or an SSH host alias from goat_cloud_agent_holders. Omit to pick a ready holder.',
   }),
   dryRun: Schema.optional(Schema.Boolean).annotate({
     description: "Only say which holder would launch it. Starts nothing.",
@@ -107,7 +145,11 @@ export const CloudLaunchInput = Schema.Struct({
   }),
   decisionId: Schema.optional(TrimmedNonEmptyString).annotate({
     description:
-      'With goatclaw on, a launch the person did not ask for in this turn needs their approval: open a decision with goat_decision_request offering an option with id "approve", and pass its id once a person chose it. Each approval starts one launch.',
+      "Outside a thread only: with goatclaw on, a refused launch names a decision GOAT filed for exactly this launch; pass its id once a person approved it. Each approval starts one launch. From a thread, use handoffId.",
+  }),
+  handoffId: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "From a thread: with goatclaw on, a launch the person did not start in this turn returns needs_human with a handoff. Once a person approves it, call again with the same arguments and this id. A different launch needs a new approval.",
   }),
 });
 export type CloudLaunchInput = typeof CloudLaunchInput.Type;
@@ -123,6 +165,17 @@ export const CloudLaunchResult = Schema.Struct({
   note: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
 });
 export type CloudLaunchResult = typeof CloudLaunchResult.Type;
+/** What goat_cloud_launch returns: a launch, or a handoff asking a person to allow it. */
+export const CloudLaunchMcpResult = Schema.Union([
+  Schema.Struct({
+    ...needsHumanFields("approval", "goat_cloud_launch"),
+    holder: CloudHolder,
+    dryRun: Schema.Literal(false),
+    note: Schema.String.check(Schema.isMaxLength(1000)),
+  }),
+  CloudLaunchResult,
+]);
+export type CloudLaunchMcpResult = typeof CloudLaunchMcpResult.Type;
 
 export const CloudRunRegisterInput = Schema.Struct({
   provider: CloudAgentProvider,
@@ -187,10 +240,20 @@ export type CloudRunSummary = typeof CloudRunSummary.Type;
 export const CloudRunListInput = Schema.Struct({
   provider: Schema.optional(CloudAgentProvider),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  cursor: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(512)).annotate({
+      description: "nextCursor from the previous page, with the same provider.",
+    }),
+  ),
 });
 export type CloudRunListInput = typeof CloudRunListInput.Type;
 
-export const CloudRunListResult = Schema.Struct({ runs: Schema.Array(CloudRunSummary) });
+export const CloudRunListResult = Schema.Struct({
+  runs: Schema.Array(CloudRunSummary),
+  /** More runs match than this page holds. Older servers omit it. */
+  truncated: Schema.optionalKey(Schema.Boolean),
+  nextCursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+});
 export type CloudRunListResult = typeof CloudRunListResult.Type;
 
 export const CloudRunForgetInput = Schema.Struct({

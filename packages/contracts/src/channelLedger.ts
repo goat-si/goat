@@ -366,7 +366,11 @@ export const ChannelTaskEvent = Schema.Union([
   }),
   taskEvent("task.brief.frozen", { brief: ChannelTaskBrief }),
   taskEvent("task.worker.bound", { worker: ChannelWorkerAssignment }),
-  taskEvent("task.progress", { generation: PositiveInt, summary: TrimmedNonEmptyString }),
+  taskEvent("task.progress", {
+    generation: PositiveInt,
+    summary: TrimmedNonEmptyString,
+    milestone: Schema.optional(Schema.Boolean),
+  }),
   taskEvent("task.question.opened", { question: ChannelOpenQuestion }),
   taskEvent("task.question.answered", {
     questionId: ChannelQuestionId,

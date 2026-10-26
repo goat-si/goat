@@ -35,6 +35,7 @@ import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import { isLoopbackEntry, loopbackBudget, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -45,8 +46,6 @@ import {
 
 let supervisorInstanceSequence = 0;
 
-const RETRY_BASE_DELAY_MS = 1_000;
-const RETRY_MAX_DELAY_MS = 300_000;
 const SETUP_TIMEOUT_FLOOR_MS = 15_000;
 const SETUP_TIMEOUT_CAP_MS = 45_000;
 const SSH_PREPARATION_TIMEOUT_MS = 900_000;
@@ -161,17 +160,7 @@ export interface EnvironmentSupervisorOptions {
   }) => Effect.Effect<Option.Option<ConnectionCatalogEntry>>;
 }
 
-export function retryDelayMs(failureCount: number, random: number): number {
-  const step =
-    Number.isNaN(failureCount) || failureCount <= 0
-      ? 0
-      : failureCount >= 9
-        ? 9
-        : Math.trunc(failureCount);
-  const clampedRandom = Number.isNaN(random) ? 0 : Math.min(1, Math.max(0, random));
-  const ceiling = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (step + 1));
-  return Math.round(ceiling / 2 + (ceiling / 2) * clampedRandom);
-}
+export { retryDelayMs };
 
 function annotateTarget(target: ConnectionTarget) {
   return Effect.annotateCurrentSpan({
@@ -291,6 +280,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   | ConnectionWakeups.ConnectionWakeups
 > {
   const target = entry.target;
+  const loopback = isLoopbackEntry(entry);
   const usesRelay = connectionRoutes(entry).some(
     (route) => route.target._tag === "RelayConnectionTarget",
   );
@@ -839,7 +829,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       // out, so a long background resume replaces the session at once.
       return "reset" as const;
     }
-    // Only a session over T3 Connect holds the old account's credential.
+    // Only a session over GOAT Connect holds the old account's credential.
     if (next.reason === "credentials-changed" && isRelayLease(lease)) {
       yield* logManagedRelayAccountChange;
       return "end" as const;
@@ -906,7 +896,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
       yield* Ref.set(probeUnanswered, true);
       const probe = yield* Effect.forkChild(lease.session.probe);
-      let deadline = (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(probeTimeout);
+      let deadline =
+        (yield* Clock.monotonicTimeNanos) +
+        Duration.toNanosUnsafe(loopbackBudget(loopback, probeTimeout));
       for (;;) {
         const remaining = deadline - (yield* Clock.monotonicTimeNanos);
         const probeEvent = yield* Effect.raceAllFirst([
@@ -940,7 +932,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         const signalTimeout = probeTimeoutFor(probeEvent.signal);
         if (signalTimeout !== undefined) {
           const signalDeadline =
-            (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(signalTimeout);
+            (yield* Clock.monotonicTimeNanos) +
+            Duration.toNanosUnsafe(loopbackBudget(loopback, signalTimeout));
           if (signalDeadline < deadline) deadline = signalDeadline;
         }
       }
@@ -1018,8 +1011,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         while (true) {
           const progress = yield* Ref.get(establishmentProgress);
           // Slow successes say nothing about an attempt whose host has not answered yet.
-          const budgetMs = progress.hostAnswered ? setupBudgetMs : SETUP_TIMEOUT_FLOOR_MS;
-          const setup = Duration.toNanosUnsafe(Duration.millis(budgetMs * routeCount));
+          const answered = progress.hostAnswered ? setupBudgetMs : SETUP_TIMEOUT_FLOOR_MS;
+          const setup = Duration.toNanosUnsafe(
+            Duration.millis(loopbackBudgetMs(loopback, answered) * routeCount),
+          );
           const synchronized = BigInt(progress.synchronizedRoutes);
           const active = progress.sshPreparation;
           const preparing = active !== null && active.hostAnswered && active.phase !== "connecting";
@@ -1410,7 +1405,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       const inWakeWindow = (yield* Clock.monotonicTimeNanos) < (yield* Ref.get(wakeRetryUntil));
       const delayMs = inWakeWindow
         ? WAKE_RETRY_DELAY_MS
-        : retryDelayMs(failureCount, yield* Random.next);
+        : retryDelayMs(failureCount, yield* Random.next, loopback);
       if (!inWakeWindow) failureCount += 1;
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({
         previousAttempt,

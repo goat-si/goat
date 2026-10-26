@@ -2,8 +2,6 @@ import * as M from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  MEMORY_FORGET_NOTICE,
-  MEMORY_REVOCATION_NOTICE,
   memoryReportTarget,
   memoryLocalSpace,
   isMemoryReportRetryCandidate,
@@ -141,14 +139,6 @@ describe("memory presentation boundaries", () => {
     expect(
       memoryLocalSpace({ ...status, state: "online", memorySpaceId: resolution.memorySpaceId }),
     ).toBe(resolution.memorySpaceId);
-  });
-  it("explains removal and forgetting in the app language", () => {
-    expect(MEMORY_REVOCATION_NOTICE).toBe(
-      "Removing a device applies to later requests and to results still on the hub.",
-    );
-    expect(MEMORY_FORGET_NOTICE).toBe(
-      "The provider's original conversation stays, but forgotten content is never imported again.",
-    );
   });
   it("keeps propagation separate from usable memory", () => {
     expect(presentMemoryItem(item)).toMatchObject({

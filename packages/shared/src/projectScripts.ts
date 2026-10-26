@@ -1,4 +1,4 @@
-import type { ProjectId, ProjectScript, ServerSettings } from "@goat/contracts";
+import type { GoatProjectFile, ProjectId, ProjectScript, ServerSettings } from "@goat/contracts";
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 type ProjectScriptSettings = Pick<
@@ -13,12 +13,55 @@ export function resolveProjectScripts(
   settings: ProjectScriptSettings,
   project: { id: ProjectId; scripts: readonly ProjectScript[] },
 ): readonly ProjectScript[] {
+  return resolveProjectScriptConfiguration(settings, project).scripts;
+}
+
+export function resolveProjectScriptConfiguration(
+  settings: ProjectScriptSettings,
+  project: { id: ProjectId; scripts: readonly ProjectScript[] },
+) {
   const override = settings.projectSettingsOverrides[project.id]?.defaultProjectScripts;
-  if (override !== undefined) return override;
-  if (settings.projectSettingsFolded) return settings.defaultProjectScripts;
-  const legacy = settings.projectScriptOverrides[project.id];
-  if (legacy === null) return settings.defaultProjectScripts;
-  return legacy ?? (project.scripts.length > 0 ? project.scripts : settings.defaultProjectScripts);
+  if (override !== undefined) return { scripts: override, source: "project-override" } as const;
+  // Ignoring retired legacy sources prevents a reset from reviving old DB scripts.
+  if (!settings.projectSettingsFolded) {
+    const legacy = settings.projectScriptOverrides[project.id];
+    if (legacy !== undefined)
+      return {
+        scripts: legacy ?? settings.defaultProjectScripts,
+        source: "legacy-override",
+      } as const;
+    if (project.scripts.length > 0) return { scripts: project.scripts, source: "stored" } as const;
+  }
+  return {
+    scripts: settings.defaultProjectScripts,
+    source: settings.defaultProjectScripts.length > 0 ? "defaults" : "unconfigured",
+  } as const;
+}
+
+/** The setup fallback is separate from persisted actions so edits never import repository commands. */
+export function resolveProjectSetupScriptConfiguration(
+  configuration: ReturnType<typeof resolveProjectScriptConfiguration>,
+  file: GoatProjectFile | null,
+) {
+  if (configuration.source !== "unconfigured") return configuration;
+  const declared = file?.scripts?.find((script) => script.runOnWorktreeCreate);
+  if (declared === undefined) return configuration;
+  let id = "goat-file-setup";
+  for (let suffix = 2; configuration.scripts.some((script) => script.id === id); suffix++) {
+    id = `goat-file-setup-${suffix}`;
+  }
+  return {
+    source: "project-file",
+    scripts: [
+      ...configuration.scripts,
+      {
+        ...declared,
+        id,
+        icon: declared.icon ?? "play",
+        runOnWorktreeCreate: true,
+      } satisfies ProjectScript,
+    ],
+  } as const;
 }
 
 export function projectScriptsInheritDefaults(

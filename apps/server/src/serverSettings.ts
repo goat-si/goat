@@ -7,8 +7,6 @@ import {
   isProviderDriverKind,
   matchesMemorySourceReadRevokeAck,
   MEMORY_HUB_MAX_MEMBERS,
-  type MemoryHubDisableInput,
-  type MemoryHubDisableResult,
   MemoryHubError,
   type MemoryHubForbiddenError,
   MemoryHubSettings,
@@ -56,6 +54,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -80,6 +79,7 @@ import {
 } from "./sourceControl/sourceControlHostSecrets.ts";
 
 import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
+import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -123,7 +123,6 @@ const decodeMemoryHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 /**
  * Old settings files can hold both flags with conflicting values; an explicit false on either
@@ -388,17 +387,6 @@ const makeMemoryProviderPolicy = Effect.gen(function* () {
   } satisfies MemoryProviderCommittedPolicy["Service"];
   return { publish, service };
 });
-
-/** Disable-only administration seam. Credential installation remains in Sync's existing service. */
-export class MemoryHubAdministration extends Context.Service<
-  MemoryHubAdministration,
-  {
-    readonly disableHub: (
-      input: MemoryHubDisableInput,
-      permit: import("./memory/MemoryAccess.ts").MemoryPermit,
-    ) => Effect.Effect<MemoryHubDisableResult, MemoryRpcError>;
-  }
->()("goat/serverSettings/MemoryHubAdministration") {}
 
 export interface MemoryOwnerSourceReadCommitted {
   readonly policy: MemoryOwnerSourceReadPolicy;
@@ -803,6 +791,8 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
+    readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
 
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -1071,6 +1061,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         (authorizeAtCommit ?? Effect.void).pipe(
@@ -1092,9 +1083,10 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           );
         }),
       ),
-    updateProviderInstance: (mutation, patch = {}) =>
+    updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
           yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
           const patched = applyServerSettingsPatch(currentSettings, patch);
@@ -1811,6 +1803,7 @@ const make = Effect.gen(function* () {
       FROM provider_session_runtime
       WHERE provider_name IN ('cursor', 'grok', 'opencode')
     `.pipe(
+      NodeSqliteClient.readOnly,
       Effect.mapError(
         (cause) =>
           new ServerSettingsError({
@@ -1834,6 +1827,7 @@ const make = Effect.gen(function* () {
           FROM projection_projects
           WHERE deleted_at IS NULL
         `.pipe(
+            NodeSqliteClient.readOnly,
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({
@@ -1906,41 +1900,7 @@ const make = Effect.gen(function* () {
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
   );
 
-  const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
-    function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
-      const storedSecrets = new Map<string, string>();
-      const pending = new Map<string, SettingsSecret>();
-      mapSettingsSecrets(settings, (secret) => {
-        if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
-        return secret;
-      });
-      for (const secret of pending.values()) {
-        const value = yield* secretStore.get(secret.secretName).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "read-secret",
-                providerInstanceId: secret.providerInstanceId,
-                environmentVariable: secret.environmentVariable,
-                cause,
-              }),
-          ),
-        );
-        storedSecrets.set(
-          secret.secretName,
-          Option.isSome(value) ? textDecoder.decode(value.value) : "",
-        );
-      }
-      return mapSettingsSecrets(settings, (secret) => ({
-        value:
-          secret.sensitive && secret.redacted
-            ? (storedSecrets.get(secret.secretName) ?? "")
-            : secret.value,
-        redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
-      }));
-    },
-  );
+  const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
@@ -2357,6 +2317,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
+    committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateAndPersistSettings(
         (current) =>

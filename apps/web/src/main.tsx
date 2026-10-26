@@ -7,6 +7,9 @@ import "./index.css";
 import { prepareProviderAuthDelivery } from "./providerAuthDelivery";
 import { isElectron } from "./env";
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
+import { isHostedStaticApp } from "./hostedPairing";
+import { openLaunchRoute } from "./launchRoute";
+import { isLocalEnvironmentDisabled } from "./localEnvironment";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
@@ -19,6 +22,9 @@ prepareProviderAuthDelivery();
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
+openLaunchRoute(history, {
+  hostedStatic: isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href)),
+});
 
 const router = getRouter(history);
 

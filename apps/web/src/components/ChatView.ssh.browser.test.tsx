@@ -1,34 +1,40 @@
-import { fakeTimers } from "../../test/render";
-import { act, type ComponentProps } from "react";
-import { flushSync } from "react-dom";
-import { createRoot } from "react-dom/client";
-import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  state,
+  setupSshComposer,
+  local,
+  remote,
+  destination,
+  entry,
+  id,
+  store,
+  result,
+  deferred,
+} from "~/test/sshComposerFixture";
+import { act, fakeTimers, stubGlobal } from "../../test/render";
+import type { ComponentProps } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import * as Option from "effect/Option";
 import * as Cause from "effect/Cause";
 import {
-  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
-  ProjectId,
   ThreadId,
-  ProviderInstanceId,
   ComposerContextId,
   SshWorkspaceError,
-  type SshWorkspaceLaunchResult,
   type SshHostStatus,
 } from "@goat/contracts";
-import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
-import { createModelSelection } from "@goat/shared/model";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import {
   AVAILABLE_CONNECTION_STATE,
   ConnectionTransientError,
-  SshConnectionProfile,
-  SshConnectionTarget,
   type EnvironmentConnectionPresentation,
 } from "@goat/client-runtime/connection";
 import { createEnvironmentPresentationAtoms } from "@goat/client-runtime/state/presentation";
+import { DraftId, useComposerDraftStore } from "../composerDraftStore";
+import type { LegendListRef } from "@legendapp/list/react";
+import type { MessagesTimeline } from "./chat/MessagesTimeline";
+import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
+import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
+import ChatView from "./ChatView";
 import * as chatViewLogic from "./ChatView.logic";
 // Browser module namespaces cannot be spied on, so expose the scheduler as a mock that keeps its real behavior.
 vi.mock("./ChatView.logic", async (original) => {
@@ -38,147 +44,6 @@ vi.mock("./ChatView.logic", async (original) => {
     scheduleEnvironmentReconnectWarning: vi.fn(actual.scheduleEnvironmentReconnectWarning),
   };
 });
-import { DraftId, useComposerDraftStore } from "../composerDraftStore";
-import type { LegendListRef } from "@legendapp/list/react";
-import type { MessagesTimeline } from "./chat/MessagesTimeline";
-import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
-const state = vi.hoisted(() => ({
-  registry: null as import("effect/reactivity").AtomRegistry.AtomRegistry | null,
-  primaryConnection: null as EnvironmentConnectionPresentation | null,
-  launch: vi.fn(),
-  navigate: vi.fn(),
-  retry: vi.fn(),
-  normal: vi.fn(),
-  uploads: vi.fn(),
-  toast: vi.fn(),
-  shell: vi.fn(),
-  composer: null as ComponentProps<typeof ChatComposer> | null,
-  timeline: null as ComponentProps<typeof MessagesTimeline> | null,
-  mountTimeline: null as (() => void) | null,
-  replaceTimeline: null as (() => void) | null,
-  scrollNode: null as HTMLDivElement | null,
-  list: null as LegendListRef | null,
-  contentLength: 1000,
-  scrollToEnd: vi.fn(),
-  // Stable like the real store selectors; a fresh array per render loops the timeline.
-  empty: [] as never[],
-}));
-vi.mock("./ui/toast", () => ({
-  toastManager: { add: state.toast },
-  stackedThreadToast: (v: unknown) => v,
-}));
-vi.mock("@tanstack/react-router", async (original) => ({
-  ...(await original<typeof import("@tanstack/react-router")>()),
-  useRouter: () => ({ latestLocation: { pathname: "/", state: {} } }),
-  useNavigate: () => state.navigate,
-  useLocation: ({ select }: { select: (v: unknown) => unknown }) =>
-    select({ href: "/", state: {} }),
-  useParams: () => ({}),
-}));
-vi.mock("../hooks/useSettings", async (original) => ({
-  ...(await original<typeof import("../hooks/useSettings")>()),
-  useEnvironmentSettings: () => ({ ...DEFAULT_SERVER_SETTINGS, ...DEFAULT_CLIENT_SETTINGS }),
-  useClientSettings: (select?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
-    select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS,
-  useClientSettingsHydrated: () => true,
-}));
-vi.mock("../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
-vi.mock("../hooks/useTheme", () => ({
-  useTheme: () => ({ resolvedTheme: "light" }),
-  useRenderedAppearance: () => "light",
-}));
-vi.mock("../hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
-vi.mock("../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
-vi.mock("../hooks/useThreadActions", async (original) => ({
-  ...(await original<typeof import("../hooks/useThreadActions")>()),
-  useThreadActions: () => ({}),
-  useAcknowledgeThreadWoke: () => vi.fn(),
-}));
-vi.mock("../state/session", async (original) => ({
-  ...(await original<typeof import("../state/session")>()),
-  useEnvironmentScope: () => true,
-  readEnvironmentScope: () => true,
-  readPreparedConnection: () => Option.none(),
-}));
-vi.mock("../state/query", async (original) => ({
-  ...(await original<typeof import("../state/query")>()),
-  useEnvironmentQuery: () => ({
-    data: null,
-    isPending: false,
-    isSuccess: true,
-    error: null,
-    refresh: () => {},
-  }),
-}));
-vi.mock("../state/use-orchestration-command", () => ({
-  useOrchestrationCommand: () => state.normal,
-}));
-vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.uploads }));
-vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: (command: unknown) =>
-    command === vcsEnvironment.sshWorkspaceLaunch
-      ? state.launch
-      : command === environmentCatalog.retryNow
-        ? state.retry
-        : vi.fn(),
-}));
-vi.mock("../state/terminalSessions", async (original) => ({
-  ...(await original<typeof import("../state/terminalSessions")>()),
-  useKnownTerminalSessions: () => null,
-  useThreadRunningTerminalIds: () => [],
-}));
-vi.mock("../state/projectClones", async (original) => ({
-  ...(await original<typeof import("../state/projectClones")>()),
-  useProjectClone: () => null,
-}));
-vi.mock("../state/device", async (original) => ({
-  ...(await original<typeof import("../state/device")>()),
-  useDeviceState: () => ({
-    state: { onboardingCompleted: false, hosts: [], sessions: {} },
-    isReady: true,
-  }),
-}));
-vi.mock("../state/environments", async (original) => ({
-  ...(await original<typeof import("../state/environments")>()),
-  useEnvironments: () => ({
-    environments: [
-      state.primaryConnection ? { ...primary, connection: state.primaryConnection } : primary,
-    ],
-  }),
-  usePrimaryEnvironment: () => primary,
-}));
-vi.mock("../state/entities", async (original) => ({
-  ...(await original<typeof import("../state/entities")>()),
-  useProject: () => project,
-  useProjects: () => [project],
-  useThreadShell: () => null,
-  useThreadProjection: () => null,
-  useThreadStatus: () => null,
-  useThreadHistory: () => ({ hasMoreHistory: false }),
-  useThreadVisibleTurnItems: () => state.empty,
-  useThreadCheckpointSummaries: () => state.empty,
-  useThreadRefs: () => state.empty,
-  useEnvironmentThreadRefs: () => state.empty,
-  useChildThreadInputs: () => state.empty,
-  useEnvironmentSupportsServerBrowser: () => false,
-  resolveThreadDetailRef: () => null,
-  waitForThreadShell: state.shell,
-}));
-vi.mock("../hooks/useLoadBalancedEnvironment", () => ({
-  useLoadBalancedEnvironment: () => ({ refresh: () => {}, pending: false, environmentId: null }),
-}));
-vi.mock("../hooks/useScratchProject", () => ({
-  useScratchProject: () => ({ scratchWorkspaceRootFor: () => null, openScratchProject: vi.fn() }),
-}));
-vi.mock("../remoteOpen", async (original) => ({
-  ...(await original<typeof import("../remoteOpen")>()),
-  useRemoteOpenState: () => ({}),
-}));
-vi.mock("./chat/useAutoBalanceUpdateBanner", () => ({ useAutoBalanceUpdateBanner: () => null }));
-vi.mock("./ThreadStatusIndicators", () => ({ useLinkedThreadPullRequest: () => null }));
-vi.mock("./chat/ChatHeader", () => ({ ChatHeader: () => null }));
-vi.mock("./BranchToolbar", () => ({ BranchToolbar: () => null }));
-vi.mock("./chat/ThreadDetailsPanel", () => ({ ThreadDetailsPanel: () => null }));
 // Keep the real ChatView controller and DOM events; replace only the virtualizer boundary.
 vi.mock("./chat/MessagesTimeline", async () => {
   const React = await import("react");
@@ -236,18 +101,6 @@ vi.mock("./chat/MessagesTimeline", async () => {
     },
   };
 });
-vi.mock("./chat/DraftHeroHeadline", () => ({ DraftHeroHeadline: () => null }));
-vi.mock("./chat/ExpandedImageDialog", () => ({
-  ExpandedImageDialog: () => null,
-  ExpandedImageDialogHost: () => null,
-  openExpandedImagePreview: () => {},
-}));
-vi.mock("./PullRequestThreadDialog", () => ({ PullRequestThreadDialog: () => null }));
-vi.mock("./ThreadTerminalDrawer", () => ({ default: () => null }));
-vi.mock("./ui/sidebar", () => ({
-  useSidebar: () => ({ state: "expanded", isMobile: false }),
-  SidebarInset: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
 vi.mock("./chat/ChatComposer", async () => {
   const React = await import("react");
   return {
@@ -265,7 +118,7 @@ vi.mock("./chat/ChatComposer", async () => {
               selectedModel: "model",
               selectedProviderModels: [],
               selectedPromptEffort: null,
-              selectedModelSelection: selection,
+              selectedModelSelection: state.data!.selection,
               interactionMode: "default",
               interactionModeEnabled: true,
             }),
@@ -292,182 +145,13 @@ vi.mock("./chat/ChatComposer", async () => {
     },
   };
 });
-// Browser mocks snapshot exports; forward method reads to the registry under test.
-vi.mock("../rpc/atomRegistry", async (original) => {
-  const actual = await original<typeof import("../rpc/atomRegistry")>();
-  state.registry = actual.appAtomRegistry;
-  return {
-    ...actual,
-    appAtomRegistry: new Proxy(actual.appAtomRegistry, {
-      get: (_target, key) => {
-        const value = Reflect.get(state.registry!, key);
-        return typeof value === "function" ? value.bind(state.registry) : value;
-      },
-    }),
-  };
-});
-import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { environmentCatalog } from "../connection/catalog";
-import { vcsEnvironment } from "../state/vcs";
-import {
-  primaryServerAvailableEditorsAtom,
-  primaryServerKeybindingsAtom,
-  environmentServerConfigsAtom,
-} from "../state/server";
-vi.mock("@effect/atom-react", async (original) => {
-  const actual = await original<typeof import("@effect/atom-react")>();
-  return {
-    ...actual,
-    useAtomValue: (atom: Atom.Atom<unknown>) => {
-      if (atom === environmentCatalog.catalogValueAtom) return catalog;
-      if (atom === primaryServerAvailableEditorsAtom) return [];
-      if (atom === primaryServerKeybindingsAtom) return DEFAULT_RESOLVED_KEYBINDINGS;
-      if (atom === environmentServerConfigsAtom) return new Map();
-      if (atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)) return true;
-      return actual.useAtomValue(atom);
-    },
-  };
-});
-import { ThreadRouteView } from "./ThreadRouteView";
-import ChatView from "./ChatView";
-const local = EnvironmentId.make("local"),
-  remote = EnvironmentId.make("remote");
-const selection = createModelSelection(ProviderInstanceId.make("codex"), "model");
-const project = {
-  id: ProjectId.make("project"),
-  environmentId: local,
-  workspaceRoot: "/tmp/project",
-  name: "Project",
-  scripts: [],
-  defaultModelSelection: selection,
-  defaultThreadEnvMode: "local",
-  createdAt: "2026-01-01T00:00:00Z",
-};
-const primary = {
-  environmentId: local,
-  label: "Local",
-  entry: { target: { _tag: "PrimaryConnectionTarget" } },
-  connection: { phase: "connected" },
-  serverConfig: null,
-};
-const destination = { connectionId: "saved", environmentId: remote };
-const entry = {
-  target: new SshConnectionTarget({ environmentId: remote, connectionId: "saved", label: "Build" }),
-  profile: Option.some(
-    new SshConnectionProfile({
-      environmentId: remote,
-      connectionId: "saved",
-      label: "Build",
-      target: { alias: "build", hostname: "build", username: null, port: null },
-    }),
-  ),
-  enabled: true,
-};
-const catalog = { isReady: true, entries: new Map([[remote, entry]]) };
-const id = DraftId.make("A");
-const store = () => useComposerDraftStore.getState();
-const result: SshWorkspaceLaunchResult = {
-  operationId: "12345678",
-  snapshotRef: "ref",
-  snapshotOid: "oid",
-  remoteEnvironmentId: remote,
-  remoteProjectId: ProjectId.make("remote-project"),
-  remoteThreadId: ThreadId.make("remote-thread"),
-  remoteRepoPath: "/remote",
-  branch: "branch",
-};
-function deferred<T>() {
-  let resolve!: (v: T) => void;
-  let reject!: (v: unknown) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
-let root: ReturnType<typeof createRoot>;
-let container: HTMLDivElement;
-async function mount(draftId = id) {
-  await act(async () =>
-    root.render(
-      <AppAtomRegistryProvider>
-        <ThreadRouteView target={{ kind: "draft", draftId }} />
-      </AppAtomRegistryProvider>,
-    ),
-  );
-}
-beforeEach(() => {
+async function setup() {
   vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockReset();
-  state.primaryConnection = null;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("matchMedia", () => ({
-    matches: false,
-    addEventListener() {},
-    removeEventListener() {},
-  }));
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  Object.defineProperty(window, "desktopBridge", {
-    configurable: true,
-    value: { onMenuAction: () => () => {} },
-  });
-  Object.defineProperty(document, "fonts", { configurable: true, value: new EventTarget() });
-  state.composer?.onMultipleModelSelectionsChange(null);
-  useComposerDraftStore.setState({
-    draftsByThreadKey: {},
-    draftThreadsByThreadKey: {},
-    logicalProjectDraftThreadKeyByLogicalProjectKey: {},
-    rewindingThreadKeys: new Set(),
-  });
-  store().setLogicalProjectDraftThreadId("source", scopeProjectRef(local, project.id), id, {
-    threadId: ThreadId.make("A"),
-    envMode: "worktree",
-    sshDestination: destination,
-  });
-  store().setPrompt(id, "Text");
-  store().setModelSelection(id, selection);
-  state.timeline = null;
-  state.mountTimeline = null;
-  state.replaceTimeline = null;
-  state.scrollNode = null;
-  state.list = null;
-  state.contentLength = 1000;
-  state.scrollToEnd.mockReset();
-  state.launch.mockReset().mockResolvedValue({ _tag: "Success", value: result });
-  state.navigate.mockReset().mockImplementation(async (request) => {
-    if (request.to === "/$environmentId/$threadId")
-      flushSync(() => root.render(<div data-remote-thread={request.params.threadId} />));
-  });
-  state.shell.mockReset().mockResolvedValue(true);
-  state.retry.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
-  state.normal.mockReset();
-  state.uploads.mockReset();
-  state.toast.mockReset();
-  const registry = state.registry!;
-  const get = registry.get.bind(registry);
-  vi.spyOn(registry, "get").mockImplementation(((atom: Atom.Atom<unknown>) =>
-    atom === environmentCatalog.catalogValueAtom
-      ? catalog
-      : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
-        ? true
-        : get(atom)) as typeof registry.get);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+  return setupSshComposer();
+}
 it("never calls normal launch or uploads for SSH send", async () => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   await mount();
   await act(async () => {
     await state.composer!.onSend();
@@ -478,6 +162,8 @@ it("never calls normal launch or uploads for SSH send", async () => {
 });
 
 it("deletes an unchanged submitted draft only after remote navigation succeeds", async () => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   const launch = deferred<Awaited<ReturnType<typeof state.launch>>>(),
     shell = deferred<boolean>(),
     nav = deferred<void>();
@@ -491,7 +177,7 @@ it("deletes an unchanged submitted draft only after remote navigation succeeds",
   state.navigate.mockImplementation(async (request) => {
     navEntered.resolve();
     await nav.promise;
-    flushSync(() => root.render(<div data-remote-thread={request.params.threadId} />));
+    await fixture.rerender(<div data-remote-thread={request.params.threadId} />);
   });
   await mount();
   let sending: unknown;
@@ -529,6 +215,8 @@ it("deletes an unchanged submitted draft only after remote navigation succeeds",
 it.each([true, false])(
   "preserves content added during launch by simulated desktop capture (open=%s)",
   async (opens) => {
+    await using fixture = await setup();
+    const { mount } = fixture;
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
     state.shell.mockResolvedValue(opens);
@@ -567,6 +255,8 @@ it.each([true, false])(
   },
 );
 it.each(["shell", "navigation"])("preserves text and contexts added during %s", async (stage) => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   const wait = deferred<boolean>(),
     nav = deferred<void>(),
     entered = deferred<void>();
@@ -577,7 +267,7 @@ it.each(["shell", "navigation"])("preserves text and contexts added during %s", 
   state.navigate.mockImplementation(async () => {
     entered.resolve();
     await nav.promise;
-    flushSync(() => root.render(<div />));
+    await fixture.rerender(<div />);
   });
   await mount();
   let sending: unknown;
@@ -610,6 +300,8 @@ it.each(["shell", "navigation"])("preserves text and contexts added during %s", 
 it.each(["validate", "preflight", "snapshot", "remote_init", "push", "launch"] as const)(
   "keeps the entire current draft when launch fails at %s",
   async (stage) => {
+    await using fixture = await setup();
+    const { mount } = fixture;
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
     await mount();
@@ -641,6 +333,8 @@ it.each([
   { launchMayHaveStarted: true },
   new Error("transport interrupted"),
 ])("reports an uncertain launch without automatic retry %j", async (error) => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   const launch = deferred<unknown>();
   state.launch.mockImplementation(() => launch.promise);
   await mount();
@@ -667,6 +361,8 @@ it.each([
 it.each([false, true])(
   "shows Open thread after navigation timeout (changed=%s)",
   async (changed) => {
+    await using fixture = await setup();
+    const { mount } = fixture;
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
     state.shell.mockResolvedValue(false);
@@ -700,6 +396,8 @@ it.each([false, true])(
 it.each([false, true])(
   "keeps the ordinary session and Open action when opening keeps failing (changed=%s)",
   async (changed) => {
+    await using fixture = await setup();
+    const { mount, catalog } = fixture;
     state.shell.mockRejectedValue(new Error("shell failed"));
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
@@ -726,6 +424,8 @@ it.each([false, true])(
   },
 );
 it("reports started-not-opened for a mismatched saved environment", async () => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   state.launch.mockResolvedValue({
     _tag: "Success",
     value: { ...result, remoteEnvironmentId: EnvironmentId.make("wrong") },
@@ -747,6 +447,8 @@ it("reports started-not-opened for a mismatched saved environment", async () => 
 it.each([false, true])(
   "keeps a newer draft untouched after navigation away (A changed=%s)",
   async (changed) => {
+    await using fixture = await setup();
+    const { mount, project } = fixture;
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
     await mount();
@@ -776,6 +478,8 @@ it.each([false, true])(
 it.each(["success", "failure", "uncertain"])(
   "preserves content added on A after A→B→A during a deferred %s",
   async (outcome) => {
+    await using fixture = await setup();
+    const { mount, project } = fixture;
     const launch = deferred<unknown>();
     state.launch.mockImplementation(() => launch.promise);
     await mount();
@@ -812,6 +516,8 @@ it.each(["success", "failure", "uncertain"])(
   },
 );
 it("serializes duplicate send activation in the mounted instance", async () => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   const launch = deferred<unknown>();
   state.launch.mockImplementation(() => launch.promise);
   await mount();
@@ -829,6 +535,8 @@ it("serializes duplicate send activation in the mounted instance", async () => {
 it.each(["image", "file", "hydration", "context", "fanout"])(
   "rejects %s before command dispatch",
   async (kind) => {
+    await using fixture = await setup();
+    const { mount } = fixture;
     await mount();
     await act(async () => {
       if (kind === "image")
@@ -886,6 +594,8 @@ it.each(["image", "file", "hydration", "context", "fanout"])(
   },
 );
 it("requires a new explicit send after a definitive prelaunch failure", async () => {
+  await using fixture = await setup();
+  const { mount } = fixture;
   state.launch.mockRejectedValueOnce(
     new SshWorkspaceError({ code: "host_unavailable", stage: "preflight" }),
   );
@@ -903,72 +613,91 @@ it("requires a new explicit send after a definitive prelaunch failure", async ()
 
 // Reuse this ChatView integration harness for scroll behavior as well as SSH sends.
 describe("timeline follow navigation", () => {
-  let frames: Map<number, FrameRequestCallback>;
-  let nextFrame: number;
-
-  beforeEach(() => {
-    fakeTimers();
-    frames = new Map();
-    nextFrame = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
-  });
-  afterEach(() => vi.useRealTimers());
-
-  // Server-thread routes reuse ChatView; exercise that lifetime without a keyed remount.
-  async function mountReusedView(draftId = id) {
-    const session = store().getDraftSession(draftId)!;
-    await act(() =>
-      root.render(
-        <AppAtomRegistryProvider>
-          <ChatView
-            routeKind="draft"
-            draftId={draftId}
-            environmentId={session.environmentId}
-            threadId={session.threadId}
-          />
-        </AppAtomRegistryProvider>,
-      ),
+  async function setupTimeline() {
+    await using stack = new AsyncDisposableStack();
+    const fixture = stack.use(await setup());
+    const { container } = fixture;
+    stack.use(fakeTimers());
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    // Acquired after the fixture, so the stubs restore before it unmounts.
+    stack.use(
+      stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      }),
     );
-  }
-  async function flushFrame() {
-    const pending = [...frames.values()];
-    frames.clear();
-    await act(() => pending.forEach((callback) => callback(0)));
-  }
-  async function mountList() {
-    await act(() => state.mountTimeline!());
-    state.scrollNode!.scrollTop = 600;
-    await flushFrame();
-  }
-  async function wheel(deltaY: number, offset: number) {
-    await act(() => {
-      state.scrollNode!.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
-      state.scrollNode!.scrollTop = offset;
-      state.scrollNode!.dispatchEvent(new Event("scroll", { bubbles: true }));
-    });
-  }
-  // Simulate the virtualizer's observable append behavior at its public follow boundary.
-  async function append(growth = 100) {
-    state.contentLength += growth;
-    (state.scrollNode!.firstElementChild as HTMLElement).style.height = `${state.contentLength}px`;
-    if (state.timeline!.liveFollowEnabled) {
-      state.scrollNode!.scrollTop = state.contentLength - 400;
+    stack.use(stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id)));
+    // Server-thread routes reuse ChatView; exercise that lifetime without a keyed remount.
+    async function mountReusedView(draftId = id) {
+      const session = store().getDraftSession(draftId)!;
+      await act(() =>
+        fixture.rerender(
+          <AppAtomRegistryProvider>
+            <ChatView
+              routeKind="draft"
+              draftId={draftId}
+              environmentId={session.environmentId}
+              threadId={session.threadId}
+            />
+          </AppAtomRegistryProvider>,
+        ),
+      );
     }
-    await act(() => state.scrollNode!.dispatchEvent(new Event("scroll", { bubbles: true })));
-  }
-  async function clickScrollToEnd() {
-    await wheel(-400, 200);
-    await act(() => vi.advanceTimersByTime(150));
-    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Scroll to end"]');
-    expect(button).not.toBeNull();
-    await act(() => button!.click());
+    async function flushFrame() {
+      const pending = [...frames.values()];
+      frames.clear();
+      await act(() => pending.forEach((callback) => callback(0)));
+    }
+    async function mountList() {
+      await act(() => state.mountTimeline!());
+      state.scrollNode!.scrollTop = 600;
+      await flushFrame();
+    }
+    async function wheel(deltaY: number, offset: number) {
+      await act(() => {
+        state.scrollNode!.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+        state.scrollNode!.scrollTop = offset;
+        state.scrollNode!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+    }
+    // Simulate the virtualizer's observable append behavior at its public follow boundary.
+    async function append(growth = 100) {
+      state.contentLength += growth;
+      (state.scrollNode!.firstElementChild as HTMLElement).style.height =
+        `${state.contentLength}px`;
+      if (state.timeline!.liveFollowEnabled) {
+        state.scrollNode!.scrollTop = state.contentLength - 400;
+      }
+      await act(() => state.scrollNode!.dispatchEvent(new Event("scroll", { bubbles: true })));
+    }
+    async function clickScrollToEnd() {
+      await wheel(-400, 200);
+      await act(() => vi.advanceTimersByTime(150));
+      const button = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Scroll to end"]',
+      );
+      expect(button).not.toBeNull();
+      await act(() => button!.click());
+    }
+
+    const owned = stack.move();
+    return {
+      ...fixture,
+      mountReusedView,
+      flushFrame,
+      mountList,
+      wheel,
+      append,
+      clickScrollToEnd,
+      pendingFrame: () => frames.get(nextFrame)!,
+      [Symbol.asyncDispose]: () => owned.disposeAsync(),
+    };
   }
 
   it("keeps manual reading position after a timeline mounts later than thirteen frames", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, flushFrame, mountList, wheel, append } = fixture;
     await mount();
     for (let frame = 0; frame < 20; frame++) await flushFrame();
     await mountList();
@@ -978,6 +707,8 @@ describe("timeline follow navigation", () => {
   });
 
   it("resumes following after a twenty-pixel upward scroll and return to the end", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, mountList, wheel, append } = fixture;
     await mount();
     await mountList();
     await wheel(-20, 580);
@@ -990,6 +721,8 @@ describe("timeline follow navigation", () => {
   });
 
   it("does not resume following on another upward scroll within the end band", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, mountList, wheel, append } = fixture;
     await mount();
     await mountList();
     await wheel(-20, 580);
@@ -999,10 +732,12 @@ describe("timeline follow navigation", () => {
   });
 
   it("cancels a scheduled scroll to end when later manual navigation wins", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, flushFrame, mountList, wheel, clickScrollToEnd } = fixture;
     await mount();
     await mountList();
     await clickScrollToEnd();
-    const pending = frames.get(nextFrame)!;
+    const pending = fixture.pendingFrame();
     await wheel(-20, 180);
     await flushFrame();
     // Even a callback already dispatched by the browser must respect the generation fence.
@@ -1012,6 +747,8 @@ describe("timeline follow navigation", () => {
   });
 
   it("does not scroll a replacement list from a previously scheduled request", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, flushFrame, mountList, clickScrollToEnd } = fixture;
     await mount();
     await mountList();
     await clickScrollToEnd();
@@ -1023,10 +760,12 @@ describe("timeline follow navigation", () => {
   });
 
   it("cancels a scheduled scroll to end on thread switch", async () => {
+    await using fixture = await setupTimeline();
+    const { mountReusedView, flushFrame, mountList, clickScrollToEnd, project } = fixture;
     await mountReusedView();
     await mountList();
     await clickScrollToEnd();
-    const pending = frames.get(nextFrame)!;
+    const pending = fixture.pendingFrame();
     const other = DraftId.make("B");
     await act(() =>
       store().setLogicalProjectDraftThreadId("other", scopeProjectRef(local, project.id), other, {
@@ -1044,6 +783,8 @@ describe("timeline follow navigation", () => {
   });
 
   it("scrolls to end on the next frame when no later navigation intervenes", async () => {
+    await using fixture = await setupTimeline();
+    const { mount, flushFrame, mountList, clickScrollToEnd } = fixture;
     await mount();
     await mountList();
     await clickScrollToEnd();
@@ -1055,6 +796,8 @@ describe("timeline follow navigation", () => {
 });
 
 it("uses reconciled SSH presentation in the chat banner while keeping fresh failures visible", async () => {
+  await using fixture = await setup();
+  const { mount, container } = fixture;
   vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockImplementation((show) => {
     show();
     return () => {};
@@ -1096,7 +839,7 @@ it("uses reconciled SSH presentation in the chat banner while keeping fresh fail
         setupTimeout: reason === "timeout",
       },
     };
-    await act(async () => root.render(<div />));
+    await fixture.rerender(<div />);
     await mount();
     expect(banner()?.textContent).toContain("FRESH FAILURE");
   }
@@ -1109,15 +852,17 @@ it("uses reconciled SSH presentation in the chat banner while keeping fresh fail
       hostAnswered: true,
     },
   };
-  await act(async () => root.render(<div />));
+  await fixture.rerender(<div />);
   await mount();
   expect(banner()?.textContent).toContain(
-    "Installing GOAT runtime — first setup can take a few minutes",
+    "Installing GOAT runtime. First setup can take a few minutes",
   );
   expect(banner()?.textContent).not.toContain("OLD SETUP TIMEOUT");
 });
 
 it("removes runtime ready from chat after a shared owner invalidation", async () => {
+  await using fixture = await setup();
+  const { mount, container } = fixture;
   vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockImplementation((show) => {
     show();
     return () => {};
@@ -1158,7 +903,7 @@ it("removes runtime ready from chat after a shared owner invalidation", async ()
   const stop = registry.subscribe(atom, () => {});
   const draw = async () => {
     state.primaryConnection = registry.get(atom)!.connection;
-    await act(async () => root.render(<div />));
+    await fixture.rerender(<div />);
     await mount();
   };
   const banner = () => container.querySelector('[data-banner^="environment-unavailable:"]');

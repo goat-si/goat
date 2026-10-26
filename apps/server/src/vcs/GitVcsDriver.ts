@@ -345,6 +345,8 @@ export interface GitResolveRemoteTrackingCommitResult {
 export interface GitFetchWorktreeBaseCommitInput {
   cwd: string;
   refName: string;
+  /** Each line the fetch prints, progress included, for a launch's preparation log. */
+  onOutputLine?: ((line: string) => Effect.Effect<void, never>) | undefined;
 }
 
 export interface GitSetBranchUpstreamInput {
@@ -591,39 +593,41 @@ function parseGitRemoteVerboseOutput(
   return remotes;
 }
 
-const gitCommand = (
-  process: VcsProcess.VcsProcess["Service"],
-  operation: string,
-  cwd: string,
-  args: ReadonlyArray<string>,
-  options?: {
-    readonly stdin?: string;
-    readonly env?: NodeJS.ProcessEnv;
-    readonly allowNonZeroExit?: boolean;
-    readonly timeoutMs?: number;
-    readonly maxOutputBytes?: number;
-    readonly outputMode?: VcsProcess.VcsProcessInput["outputMode"];
-    readonly appendTruncationMarker?: boolean;
-  },
-) =>
-  process.run({
-    operation,
-    command: "git",
-    args: ["-C", cwd, ...args],
-    cwd,
-    spawnCwd: globalThis.process.cwd(),
-    ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
-    ...(options?.env !== undefined ? { env: options.env } : {}),
-    ...(options?.allowNonZeroExit !== undefined
-      ? { allowNonZeroExit: options.allowNonZeroExit }
-      : {}),
-    ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
-    ...(options?.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
-    ...(options?.appendTruncationMarker !== undefined
-      ? { appendTruncationMarker: options.appendTruncationMarker }
-      : {}),
-  });
+const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
+  (
+    process: VcsProcess.VcsProcess["Service"],
+    operation: string,
+    cwd: string,
+    args: ReadonlyArray<string>,
+    options?: {
+      readonly stdin?: string;
+      readonly env?: NodeJS.ProcessEnv;
+      readonly allowNonZeroExit?: boolean;
+      readonly timeoutMs?: number;
+      readonly maxOutputBytes?: number;
+      readonly outputMode?: VcsProcess.VcsProcessInput["outputMode"];
+      readonly appendTruncationMarker?: boolean;
+    },
+  ) =>
+    process.run({
+      operation,
+      command: "git",
+      args: ["-C", cwd, ...args],
+      cwd,
+      spawnCwd: globalThis.process.cwd(),
+      ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+      ...(options?.env !== undefined ? { env: options.env } : {}),
+      ...(options?.allowNonZeroExit !== undefined
+        ? { allowNonZeroExit: options.allowNonZeroExit }
+        : {}),
+      ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options?.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
+      ...(options?.outputMode !== undefined ? { outputMode: options.outputMode } : {}),
+      ...(options?.appendTruncationMarker !== undefined
+        ? { appendTruncationMarker: options.appendTruncationMarker }
+        : {}),
+    }),
+);
 
 export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -952,10 +956,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const commitEnv: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_INDEX_FILE: tempIndexPath,
-      GIT_AUTHOR_NAME: "T3 Code",
-      GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
-      GIT_COMMITTER_NAME: "T3 Code",
-      GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+      GIT_AUTHOR_NAME: "GOAT",
+      GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
+      GIT_COMMITTER_NAME: "GOAT",
+      GIT_COMMITTER_EMAIL: "checkpoint@goat.invalid",
     };
 
     // Forced process termination can leave Git's private index lock behind.
@@ -1361,8 +1365,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         !treeEntries.stdoutTruncated &&
         !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
-        ? `t3 snapshot ref=${input.ref}`
-        : `t3 checkpoint ref=${input.ref}`;
+        ? `goat snapshot ref=${input.ref}`
+        : `goat checkpoint ref=${input.ref}`;
       // HEAD is the parent so listAuthoredPaths can see how HEAD moved between checkpoints.
       const commitTreeResult = yield* execute({
         operation,

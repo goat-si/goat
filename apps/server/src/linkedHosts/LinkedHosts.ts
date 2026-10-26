@@ -4,6 +4,7 @@ import {
   AuthMcpRegisteredClient,
   AuthMcpTokenResult,
   ExecutionEnvironmentDescriptor,
+  type LinkedHostFailureReason,
   type RuntimeMode,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -30,7 +31,7 @@ import { base64UrlEncode } from "../auth/utils.ts";
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
  * instead of SSH: a headless `goat serve` behind Tailscale, a LAN address or
- * T3 Connect. Linking spends a one-time pairing code from that host through
+ * GOAT Connect. Linking spends a one-time pairing code from that host through
  * its own MCP OAuth endpoints, exactly as an outside agent signs in, and keeps
  * the resulting `mcp-client` session. The host decides what that session may
  * do; nothing on the host changes. `SshRemoteDispatch` routes a linked name
@@ -53,7 +54,7 @@ export class LinkedHostError extends Data.TaggedError("LinkedHostError")<{
    * host_unavailable: the host could not be reached or answered nonsense.
    * storage_failed: this machine could not read or write its links.
    */
-  readonly reason: "invalid_request" | "link_refused" | "host_unavailable" | "storage_failed";
+  readonly reason: LinkedHostFailureReason;
   readonly message: string;
 }> {}
 

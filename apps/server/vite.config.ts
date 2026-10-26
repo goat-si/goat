@@ -6,6 +6,7 @@ import { defineConfig, mergeConfig } from "vite-plus";
 import baseConfig from "../../vite.config.ts";
 import { resolveBuildCommit, resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
 
@@ -39,7 +40,6 @@ const buildCommitTime = resolveBuildCommitTime(import.meta.dirname);
 // executable needs a host Node that supports `--build-sea` (25.7+), so this is
 // a separate mode rather than a second entry in the default build.
 const packExecutable = process.env.GOAT_PACK_EXE === "1";
-const SEA_NODE_VERSION = "26.8.2";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
   "darwin-x64": { platform: "darwin", arch: "x64" },
@@ -58,7 +58,8 @@ const packExecutableTargets = packExecutableTarget
   ? [
       {
         ...SEA_TARGETS[packExecutableTarget as keyof typeof SEA_TARGETS],
-        nodeVersion: SEA_NODE_VERSION,
+        // Exact pin: cross-target builds download this version's binary from nodejs.org.
+        nodeVersion: rootPackageJson.engines.node,
       },
     ]
   : undefined;

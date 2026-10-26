@@ -56,13 +56,13 @@ export const layer = McpToolAccess.toLayer(FleetToolkit, {
       return { policy: yield* sync.value.receive(policy) };
     }),
   ),
+  // A goal acts as its owner, a GOAT thread or an outside client; GoalService keeps each owner's
+  // goals to that owner, and `writes` holds a write to the caller's approved access.
   goat_goal_apply: McpToolAccess.writes((input) =>
     withGoals((goals, scope) => goals.apply(scope, input)),
   ),
-  goat_goal_get: McpToolAccess.readsAsCaller(({ id }) =>
-    withGoals((goals, scope) => goals.get(scope, id)),
-  ),
-  goat_goal_list: McpToolAccess.readsAsCaller((input) =>
+  goat_goal_get: McpToolAccess.reads(({ id }) => withGoals((goals, scope) => goals.get(scope, id))),
+  goat_goal_list: McpToolAccess.reads((input) =>
     withGoals((goals, scope) => goals.list(scope, input)),
   ),
   goat_goal_pause: McpToolAccess.writes(({ id }) =>

@@ -109,7 +109,7 @@ const PREFER_EFFECT_FN_BACKLOG: Array<string> = [
   "apps/server/src/orchestration-v2/QuestionEscalationService.ts",
   "apps/server/src/orchestration-v2/RunExecutionService.ts",
   "apps/server/src/orchestration-v2/ThreadManagementService.ts",
-  "apps/server/src/persistence/Migrations/077_MemoryHubSync.ts",
+  "apps/server/src/persistence/Migrations/078_MemoryHubSync.ts",
   "apps/server/src/project/ManagedProjectFolders.ts",
   "apps/server/src/provider/CodexHomeRequests.ts",
   "apps/server/src/provider/CodexRouteService.ts",
@@ -328,6 +328,15 @@ export default defineConfig({
       NodeURL.fileURLToPath(
         new URL("./packages/shared/src/testing/providerEnv.ts", import.meta.url),
       ),
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/gitEnv.setup.ts", import.meta.url),
+      ),
+    ],
+    globalSetup: [
+      NodeURL.fileURLToPath(new URL("./scripts/lib/node-runtime.ts", import.meta.url)),
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/gitConfigGuard.ts", import.meta.url),
+      ),
     ],
     ...(isRepoRootTestRun
       ? {
@@ -442,12 +451,15 @@ export default defineConfig({
         { paths: [...RESTRICTED_IMPORT_PATHS, RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS] },
       ],
       "goat/no-global-process-runtime": "error",
+      // Files over 1000 lines, non-null assertions, and casts to any only shrink;
+      // oxlint-plugin-goat/code-budgets.json records what exists. docs/operations/code-quality.md
+      "goat/code-budget": "error",
       "goat/no-inline-schema-compile": "warn",
       "goat/no-low-value-comments": "error",
       "goat/no-manual-effect-runtime-in-tests": "error",
       "goat/no-native-title-tooltip": "error",
-      // Test files only (the rule checks the filename). Becomes an error once existing polls are converted.
-      "goat/no-polling-loop-in-tests": "warn",
+      // Test files only (the rule checks the filename).
+      "goat/no-polling-loop-in-tests": "error",
       "goat/no-raw-mcp-registration": "error",
       "goat/no-real-time-wait-in-tests": "error",
       "goat/no-test-in-loop": "error",
@@ -484,8 +496,26 @@ export default defineConfig({
         rules: { "goat/no-frame-waits-in-browser-tests": "error" },
       },
       {
-        files: ["**/*.browser.test.*"],
-        rules: { "goat/no-real-time-wait-in-tests": "off" },
+        // Burn-down list: these files still have polling loops, so they stay at "warn".
+        // Remove a file when you convert its loops. New polling loops in all other
+        // test files fail lint. Do not add new files to this list.
+        files: [
+          "apps/mobile/src/features/agent-awareness/remoteRegistration.test.ts",
+          "apps/server/src/background/HostPowerMonitor.test.ts",
+          "apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts",
+          "apps/server/src/orchestration-v2/FoundationPersistence.test.ts",
+          "apps/server/src/project/ProjectEnrichmentService.test.ts",
+          "apps/server/src/project/ProjectService.test.ts",
+          "apps/server/src/scheduledTasks/ScheduledTaskService.webhook.test.ts",
+          "apps/server/src/usage/UsageService.test.ts",
+          "packages/client-runtime/src/connection/supervisor.test.ts",
+          "packages/client-runtime/src/rpc/client.test.ts",
+          "packages/client-runtime/src/rpc/session.test.ts",
+          "packages/client-runtime/src/state/shell-sync.test.ts",
+          "packages/client-runtime/src/state/threads-sync.test.ts",
+          "packages/shared/src/atomicWrite.test.ts",
+        ],
+        rules: { "goat/no-polling-loop-in-tests": "warn" },
       },
       {
         files: ["apps/**/src/**", "packages/**/src/**"],
@@ -603,6 +633,15 @@ export default defineConfig({
         rules: { "goat/no-outset-state-indicators": "error" },
       },
       {
+        files: ["apps/*/src/**", "packages/*/src/**"],
+        excludeFiles: [
+          "**/*.{test,spec}.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",
+          "**/testkit/**",
+          "**/_generated/**",
+        ],
+        rules: { "goat/no-em-dash-copy": "error" },
+      },
+      {
         files: ["apps/web/src/**"],
         rules: { "shadcn/no-raw-colors": "error" },
       },
@@ -686,7 +725,7 @@ export default defineConfig({
         },
       },
       {
-        // The sign-in masthead is T3 brand artwork: fixed gradients, not theme surfaces.
+        // The sign-in masthead is GOAT brand artwork: fixed gradients, not theme surfaces.
         files: ["apps/web/src/components/auth/AuthSurfaceShell.tsx"],
         rules: { "shadcn/no-arbitrary-values": "off" },
       },
@@ -745,6 +784,7 @@ export default defineConfig({
           "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
           "apps/mobile/src/native/T3ComposerEditor.native.tsx",
           "apps/mobile/src/native/SelectableMarkdownText.tsx",
+          "apps/mobile/src/native/useEnrichedLinkVariants.ts",
         ],
         rules: {
           "goat/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],

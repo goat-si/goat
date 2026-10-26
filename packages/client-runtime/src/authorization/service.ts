@@ -42,6 +42,7 @@ import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
+import { directRequestTimeout } from "../connection/loopbackHost.ts";
 
 import {
   DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS,
@@ -102,6 +103,7 @@ const connectDisabled = () =>
 
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
+
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
@@ -116,9 +118,10 @@ const fetchDescriptor = Effect.fn("clientRuntime.connection.remote.fetchDescript
   httpBaseUrl: string,
   connectionMethod: ClientConnectionMethod,
 ) {
-  return yield* fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
-    Effect.mapError((error) => mapRemoteEnvironmentError(error, connectionMethod)),
-  );
+  return yield* fetchRemoteEnvironmentDescriptor({
+    httpBaseUrl,
+    ...directRequestTimeout(httpBaseUrl, connectionMethod),
+  }).pipe(Effect.mapError((error) => mapRemoteEnvironmentError(error, connectionMethod)));
 });
 
 export const make = Effect.gen(function* () {
@@ -235,6 +238,7 @@ export const make = Effect.gen(function* () {
       bearerToken: input.bearerToken,
       clientMetadata: presentation.metadata,
       connectionMethod: input.connectionMethod,
+      ...directRequestTimeout(input.httpBaseUrl, input.connectionMethod),
     }).pipe(
       Effect.mapError(mapRemoteEnvironmentError),
       Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -299,7 +303,7 @@ export const make = Effect.gen(function* () {
   const sessionPending = () =>
     new ConnectionTransientError({
       reason: "session-pending",
-      detail: "Waiting for the T3 Connect sign-in to load.",
+      detail: "Waiting for the GOAT Connect sign-in to load.",
     });
 
   const assertSession = Effect.fnUntraced(function* (
@@ -567,7 +571,7 @@ export const make = Effect.gen(function* () {
         return yield* mapDpopSocketError(cachedSocket.failure);
       }
       // An unreachable direct address says nothing about the token, so keep
-      // it for the T3 Connect route rather than forcing a relay round trip.
+      // it for the GOAT Connect route rather than forcing a relay round trip.
       if (endpoint !== undefined && cachedSocket.failure._tag !== "EnvironmentAuthInvalidError") {
         return yield* mapDpopSocketError(cachedSocket.failure);
       }

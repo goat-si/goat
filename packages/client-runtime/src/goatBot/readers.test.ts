@@ -42,7 +42,7 @@ describe("presentTaskChip", () => {
       title: "Re-verify the Opus 5.5 call",
       statusLabel: "Working",
       tone: "active",
-      sourceLabel: "Jun",
+      sourceLabel: null,
       continuationLabel: null,
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
@@ -149,7 +149,7 @@ describe("presentTaskChip", () => {
         status: "dispatching",
         placementReason: "Codex (work) · 12% weekly used",
       }).sourceLabel,
-    ).toBe("Jun · Codex (work) · 12% weekly used");
+    ).toBe("Codex (work) · 12% weekly used");
     const worker = {
       environmentId: EnvironmentId.make("remote-env"),
       threadId: ThreadId.make("worker"),
@@ -163,14 +163,59 @@ describe("presentTaskChip", () => {
     expect(
       presentTaskChip(chip({ worker, placementReason: "mac-studio · Codex · 20% weekly used" }))
         .sourceLabel,
-    ).toBe("Jun · on mac-studio · Codex · 20% weekly used");
+    ).toBe("on mac-studio · Codex · 20% weekly used");
     expect(
       presentTaskChip({
         ...noWorker,
         status: "dispatching",
         placementReason: "mac-studio · Codex · 20% weekly used",
       }).sourceLabel,
-    ).toBe("Jun · mac-studio · Codex · 20% weekly used");
+    ).toBe("mac-studio · Codex · 20% weekly used");
+  });
+
+  it("shows an answer without the agent's report trailers or empty checks", () => {
+    const card = presentTaskChip(
+      chip({
+        status: "completed",
+        completionReport: "present",
+        summary:
+          "OpenCodex has 17.8k stars: https://github.com/example/opencodex\nNOT RUN: separate tests.",
+        observed: {
+          pullRequests: [],
+          needsYou: [],
+          result: { runId: RunId.make("run-answer"), observedCheckPending: false },
+        },
+      }),
+    );
+    expect(card.summary).toBe("OpenCodex has 17.8k stars: https://github.com/example/opencodex");
+    expect(card.evidenceLabels).toEqual([]);
+    expect(card.sourceLabel).toBeNull();
+  });
+
+  it("keeps code work's checks and what it did not run", () => {
+    const codeChip = (summary: string) =>
+      chip({
+        status: "completed",
+        summary,
+        observed: {
+          pullRequests: [],
+          needsYou: [],
+          result: {
+            runId: RunId.make("run-code"),
+            tests: { ok: true },
+            observedCheckPending: false,
+          },
+        },
+      });
+    expect(presentTaskChip(codeChip("Fixed it.\nNOT RUN: browser tests")).evidenceLabels).toEqual([
+      "Reported tests: passed",
+      "GOAT check: not run",
+      "Not run: browser tests",
+    ]);
+    expect(presentTaskChip(codeChip("Fixed it.\nNOT RUN: none")).evidenceLabels).toEqual([
+      "Reported tests: passed",
+      "GOAT check: not run",
+    ]);
   });
 
   it("counts open questions and drops an empty summary", () => {

@@ -1,23 +1,15 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { useContext, useEffect, useEffectEvent, useState } from "react";
+import { useContext, useEffect, useEffectEvent } from "react";
 
 import { isElectron } from "../../env";
-import { readLocalApi } from "../../localApi";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { usePermissionStatus } from "../permissions/usePermissionStatus";
-import { Button } from "../ui/button";
-import { Switch } from "../ui/switch";
+import { ComputerUsePanel, type ComputerUseSettingsPatch } from "./ComputerUsePanel";
 import { CuaSetupDialog } from "./CuaSetupDialog";
-import {
-  CUA_PERMISSIONS,
-  computerUseStatusText,
-  computerUseUnavailable,
-  type CuaPermission,
-} from "./CuaSetupDialog.logic";
+import { readCuaGrants, type CuaPermission } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -26,6 +18,11 @@ import { useSettingsScope } from "./SettingsScopeContext";
 export function useComputerUseHost(environmentId: EnvironmentId, local: boolean) {
   const registry = useContext(RegistryContext);
   const enabled = useEnvironmentSettings(environmentId, (settings) => settings.enableCua);
+  const disabledSkills = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.disabledBuiltInSkills,
+  );
+  const movePointer = useEnvironmentSettings(environmentId, (settings) => settings.cuaMovePointer);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -50,20 +47,32 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     bridge?.getClientPlatform?.() === "darwin" &&
     typeof bridge.checkSystemPermission === "function" &&
     typeof bridge.verifyCuaDriver === "function";
+  // The desktop that runs the environment can also restart and prove its helper on Windows,
+  // which has no grants to read (#1520).
+  const localCheck =
+    localMac ||
+    (isElectron &&
+      local &&
+      query.data?.platform === "win32" &&
+      bridge?.getClientPlatform?.() === "win32" &&
+      typeof bridge.verifyCuaDriver === "function");
 
-  const save = async (enableCua: boolean): Promise<string | null> => {
+  const save = async (patch: ComputerUseSettingsPatch): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
       return "This connection cannot change settings on this host.";
-    const result = await update({ environmentId, input: { patch: { enableCua } } });
+    const result = await update({ environmentId, input: { patch } });
     query.refresh();
     return result._tag === "Success" ? null : "Could not save the setting. Try again.";
   };
   return {
     enabled,
+    disabledSkills,
+    movePointer,
     canConfigure,
     status: query.data,
     error: query.error,
     localMac,
+    localCheck,
     save,
     refresh: query.refresh,
   };
@@ -71,8 +80,12 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
 
 export type ComputerUseHost = ReturnType<typeof useComputerUseHost>;
 
-const checkPermission = (permission: CuaPermission) =>
-  window.desktopBridge?.checkSystemPermission?.(permission) ?? Promise.resolve(false);
+const checkGrants = () => readCuaGrants(window.desktopBridge);
+
+const openGuide = async (permission: CuaPermission) => {
+  const guide = window.desktopBridge?.openCuaPermissionGuide;
+  if (!guide || !(await guide(permission))) throw new Error("Unable to open System Settings.");
+};
 
 export function ComputerUseSetup({
   host,
@@ -90,13 +103,12 @@ export function ComputerUseSetup({
       hostLabel={hostLabel}
       status={host.status}
       localMac={host.localMac}
-      onCheck={checkPermission}
-      onAllow={async (permission) => {
-        const api = readLocalApi();
-        if (!api) throw new Error("Unable to open System Settings.");
-        await api.shell.openSystemSettings(permission);
-      }}
-      onEnable={() => host.save(true)}
+      localCheck={host.localCheck}
+      onCheck={checkGrants}
+      onAllow={openGuide}
+      onReveal={window.desktopBridge?.revealCuaGrantTarget}
+      onRelaunch={window.desktopBridge?.relaunchForCuaGrants}
+      onEnable={() => host.save({ enableCua: true })}
       onVerify={async () => {
         const verifyDriver = window.desktopBridge?.verifyCuaDriver;
         if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
@@ -143,73 +155,31 @@ function ComputerUseControls({
   local: boolean;
 }) {
   const host = useComputerUseHost(environmentId, local);
-  const [setupOpen, setSetupOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  // A grant revoked in System Settings shows here while the setting stays on.
-  const grants = usePermissionStatus(
-    async () => ({
-      accessibility: await checkPermission("accessibility"),
-      "screen-recording": await checkPermission("screen-recording"),
-    }),
-    { accessibility: true, "screen-recording": true },
-    host.localMac && host.enabled && !setupOpen,
-  );
-  const missingGrants =
-    host.localMac && host.enabled ? CUA_PERMISSIONS.filter((id) => !grants.status[id]) : [];
-  const supported = host.status !== null && !computerUseUnavailable(host.status);
-  const statusText =
-    saveError ??
-    computerUseStatusText({
-      enabled: host.enabled,
-      status: host.status,
-      error: host.error,
-      missingGrants,
-    });
-
+  const bridge = window.desktopBridge;
   return (
-    <>
-      <SettingsRow
-        {...searchableSetting("computer-use")}
-        serverScoped
-        settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Agents get the tools from their next turn; turning this off stops computer use right away.`}
-        status={statusText ? <span role="status">{statusText}</span> : undefined}
-        control={
-          <div className="flex items-center gap-2">
-            {host.enabled && supported ? (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={saving || !host.canConfigure}
-                onClick={() => setSetupOpen(true)}
-              >
-                {host.localMac ? "Set up" : "Requirements"}
-              </Button>
-            ) : null}
-            <Switch
-              aria-label="Computer use"
-              checked={host.enabled}
-              disabled={saving || !host.canConfigure || (!host.enabled && !supported)}
-              onCheckedChange={(checked) => {
-                setSaveError(null);
-                if (checked) {
-                  setSetupOpen(true);
-                  return;
-                }
-                setSaving(true);
-                void host.save(false).then((failure) => {
-                  setSaving(false);
-                  setSaveError(failure);
-                });
-              }}
-            />
-          </div>
-        }
-      />
-      {setupOpen && host.canConfigure ? (
-        <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
-      ) : null}
-    </>
+    <ComputerUsePanel
+      environmentId={environmentId}
+      hostLabel={hostLabel}
+      enabled={host.enabled}
+      canConfigure={host.canConfigure}
+      status={host.status}
+      error={host.error}
+      localMac={host.localMac}
+      localCheck={host.localCheck}
+      disabledSkills={host.disabledSkills}
+      movePointer={host.movePointer}
+      save={host.save}
+      bridge={{
+        checkGrants,
+        openGuide,
+        verify: async () => {
+          const verifyDriver = window.desktopBridge?.verifyCuaDriver;
+          if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
+          return verifyDriver().finally(host.refresh);
+        },
+        relaunch: bridge?.relaunchForCuaGrants,
+        reveal: bridge?.revealCuaGrantTarget,
+      }}
+    />
   );
 }

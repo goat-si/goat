@@ -117,8 +117,9 @@ Real password or setup prompt dismissal, expiry, and window closure still block 
 - **Host key.** A changed, unknown under strict checking, or unverifiable host
   key is `configuration`. The fix is to forget the host and review the new
   fingerprint; GOAT never replaces a pinned key automatically.
-- **Runtime refusal.** A remote runtime newer than this app, or an incompatible
-  one that cannot be replaced, is `configuration`. It is deliberately not
+- **Runtime refusal.** A remote runtime that does not speak this app's protocol
+  and cannot be replaced, including a newer one, is `configuration`. A newer
+  runtime that speaks it is attached and shown ready. It is deliberately not
   `unsupported`: that reason switches the environment off in the registry, and
   updating the app or stopping the remote server must bring it back without
   the user finding a disabled switch.

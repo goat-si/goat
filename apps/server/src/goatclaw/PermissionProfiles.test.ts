@@ -557,31 +557,128 @@ it.effect("a role launch binds the child under the role's profile, narrowed by t
       id: "sweeper",
       childThreadId: ThreadId.make("sweeper"),
       runtimeMode: "full-access",
-      profileId: "worker",
+      role: "issue-sweeper",
     });
     yield* seed("sweeper");
     expect(yield* profiles.resolve(threadScope("sweeper"))).toMatchObject({
       profile: { id: "worker", capabilities: BUILTIN_PERMISSION_PROFILES.worker!.capabilities },
       runtimeMode: "auto",
     });
-    // A worker caller cannot hand a merge-manager role the merge capability it lacks.
+    // A worker caller cannot start a merge manager: narrowing would drop the merge its brief asks for.
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.updateSettings({ goatclaw: { defaultProfile: "worker" } });
+    const refused = yield* profiles
+      .claim(outside, {
+        id: "merger",
+        childThreadId: ThreadId.make("merger"),
+        runtimeMode: "full-access",
+        role: "merge-manager",
+      })
+      .pipe(Effect.flip);
+    expect(refused).toMatchObject({
+      code: "capability_denied",
+      message: "A merge-manager launch needs pr.merge, which this caller's profile does not allow.",
+    });
+    const sql = yield* SqlClient.SqlClient;
+    expect(yield* sql`SELECT id FROM goatclaw_lane_reservations WHERE id = 'merger'`).toEqual([]);
+    expect(
+      yield* sql`SELECT thread_id FROM goatclaw_thread_profiles WHERE thread_id = 'merger'`,
+    ).toEqual([]);
+    // An owner caller can: the child holds merge-manager's capabilities, pr.merge included.
+    yield* settings.updateSettings({ goatclaw: { defaultProfile: "owner" } });
     const granted = yield* profiles.claim(outside, {
       id: "merger",
       childThreadId: ThreadId.make("merger"),
       runtimeMode: "full-access",
-      profileId: "merge-manager",
+      role: "merge-manager",
     });
-    expect(granted.profile.id).toBe("merge-manager");
-    expect(granted.profile.capabilities).not.toContain("pr.merge");
-    expect(granted.runtimeMode).toBe("auto");
+    expect(granted.profile).toMatchObject({ id: "merge-manager" });
+    expect(granted.profile.capabilities).toContain("pr.merge");
+    const { "merge-manager": _removed, ...remaining } = (yield* settings.getSettings).goatclaw
+      .profiles;
+    yield* settings.updateSettings({ goatclaw: { profiles: remaining } });
     expect(
       (yield* profiles
-        .claim(outside, { id: "ghost", runtimeMode: "auto", profileId: "missing" })
+        .claim(outside, { id: "ghost", runtimeMode: "auto", role: "merge-manager" })
         .pipe(Effect.flip)).message,
-    ).toContain("missing does not exist");
+    ).toContain("merge-manager does not exist");
   }).pipe(Effect.provide(fixture("manager"))),
+);
+
+// #858: a person whose agents run under worker can still have a supervisor land pull requests.
+it.effect(
+  "a supervisor a worker thread launches can start a merge manager; ceilings still refuse it",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const refusal =
+        "A merge-manager launch needs pr.merge, which this caller's profile does not allow.";
+      yield* seed("person", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "full-access");
+      // The merge manager holds what the worker caller held plus merge, under its runtime ceiling.
+      expect(
+        yield* profiles.claim(threadScope("supervisor"), {
+          id: "merger",
+          childThreadId: ThreadId.make("merger"),
+          runtimeMode: "full-access",
+          role: "merge-manager",
+        }),
+      ).toMatchObject({
+        runtimeMode: "auto",
+        profile: {
+          id: "merge-manager",
+          capabilities: [...BUILTIN_PERMISSION_PROFILES.worker!.capabilities, "pr.merge"],
+        },
+      });
+      // The person's own thread still cannot start one.
+      expect(
+        (yield* profiles
+          .claim(threadScope("person"), {
+            id: "direct",
+            runtimeMode: "auto",
+            role: "merge-manager",
+          })
+          .pipe(Effect.flip)).message,
+      ).toBe(refusal);
+      // A ceiling forwarded from a worker on another machine still removes merge.
+      yield* profiles.claim(outside, {
+        id: "forwarded-supervisor",
+        childThreadId: ThreadId.make("forwarded-supervisor"),
+        runtimeMode: "full-access",
+        role: "supervisor",
+        forwarded: BUILTIN_PERMISSION_PROFILES.worker!,
+      });
+      yield* seed("forwarded-supervisor", "full-access");
+      expect(
+        (yield* profiles
+          .claim(threadScope("forwarded-supervisor"), {
+            id: "forwarded-merger",
+            runtimeMode: "full-access",
+            role: "merge-manager",
+          })
+          .pipe(Effect.flip)).message,
+      ).toBe(refusal);
+      // An observer cannot launch the supervisor in the first place.
+      yield* settings.updateSettings({ goatclaw: { defaultProfile: "observer" } });
+      yield* seed("watcher", "auto");
+      expect(
+        (yield* profiles
+          .claim(threadScope("watcher"), {
+            id: "observer-supervisor",
+            childThreadId: ThreadId.make("observer-supervisor"),
+            runtimeMode: "auto",
+            role: "supervisor",
+          })
+          .pipe(Effect.flip)).message,
+      ).toContain("does not allow threads.launch");
+    }).pipe(Effect.provide(fixture("worker"))),
 );
 
 it.effect("role launches and bindings stop while goatclaw is off", () =>
@@ -589,7 +686,7 @@ it.effect("role launches and bindings stop while goatclaw is off", () =>
     const profiles = yield* PermissionProfiles;
     const sql = yield* SqlClient.SqlClient;
     const error = yield* profiles
-      .claim(outside, { id: "role", runtimeMode: "auto", profileId: "worker" })
+      .claim(outside, { id: "role", runtimeMode: "auto", role: "issue-sweeper" })
       .pipe(Effect.flip);
     expect(error.code).toBe("capability_denied");
     yield* profiles.bind(ThreadId.make("bot-turn"), "owner", "channel:owner");
@@ -639,6 +736,61 @@ it.effect("counts live native subagents, nested ones included, against maxLanes"
   }).pipe(Effect.provide(fixture())),
 );
 
+it.effect(
+  "delegated descendants share the root lane budget without sharing reservation ownership",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed("root", "auto");
+      for (const [parent, child] of [
+        ["root", "child"],
+        ["child", "grandchild"],
+      ]) {
+        yield* profiles.claim(threadScope(parent!), {
+          id: child!,
+          childThreadId: ThreadId.make(child!),
+          runtimeMode: "auto",
+        });
+        yield* seed(child!, "auto");
+        yield* sql`INSERT INTO orchestration_v2_projection_subagents
+        (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+        VALUES (${child!}, ${parent!}, ${child!}, 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}')`;
+      }
+      yield* profiles.claim(threadScope("grandchild"), { id: "third", runtimeMode: "auto" });
+      const denied = yield* profiles
+        .claim(threadScope("child"), {
+          id: "fourth",
+          runtimeMode: "auto",
+        })
+        .pipe(Effect.result);
+      expect(denied._tag).toBe("Failure");
+      if (denied._tag === "Failure")
+        expect(denied.failure.message).toContain("permits at most 3 running lanes");
+      expect(
+        (yield* profiles.claim(threadScope("grandchild"), {
+          id: "third",
+          runtimeMode: "auto",
+        })).enabled,
+      ).toBe(true);
+      expect(
+        (yield* profiles
+          .claim(threadScope("root"), {
+            id: "third",
+            runtimeMode: "auto",
+          })
+          .pipe(Effect.flip)).message,
+      ).toContain("belongs to another caller");
+      yield* profiles.release("third");
+      expect(
+        (yield* profiles.claim(threadScope("root"), {
+          id: "replacement",
+          runtimeMode: "auto",
+        })).enabled,
+      ).toBe(true);
+    }).pipe(Effect.provide(fixture())),
+);
+
 it.effect("native subagent limits follow the thread's live profile and fail closed", () =>
   Effect.gen(function* () {
     const profiles = yield* PermissionProfiles;
@@ -649,7 +801,7 @@ it.effect("native subagent limits follow the thread's live profile and fail clos
       id: "child",
       childThreadId: ThreadId.make("child"),
       runtimeMode: "full-access",
-      profileId: "owner",
+      role: "supervisor",
     });
     expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBe(6);
     const policy = (yield* settings.getSettings).goatclaw;
@@ -666,4 +818,128 @@ it.effect("native subagent limits follow the thread's live profile and fail clos
     yield* settings.updateSettings({ goatclaw: { enabled: false } });
     expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBeUndefined();
   }).pipe(Effect.provide(fixture("manager"))),
+);
+
+it.effect(
+  "counts native lanes under delegated children and keeps the narrower live lane ceiling",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* seed("root", "auto");
+      yield* profiles.claim(threadScope("root"), {
+        id: "child",
+        childThreadId: ThreadId.make("child"),
+        runtimeMode: "auto",
+      });
+      yield* seed("child", "auto");
+      yield* sql`INSERT INTO orchestration_v2_projection_subagents
+      (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+      VALUES ('delegated', 'root', 'child', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}'),
+             ('native', 'child', 'native-child', 'node', 'codex', 'provider_native', 'running', '2026-10-23', '{}'),
+             ('nested', 'native-child', NULL, 'node', 'codex', 'provider_native', 'waiting', '2026-10-23', '{}')`;
+      for (const caller of ["root", "child"]) {
+        expect(
+          (yield* profiles
+            .claim(threadScope(caller), { id: `extra:${caller}`, runtimeMode: "auto" })
+            .pipe(Effect.flip)).message,
+        ).toContain("permits at most 3 running lanes");
+      }
+      yield* sql`UPDATE orchestration_v2_projection_subagents SET status = 'completed' WHERE subagent_id IN ('native', 'nested')`;
+      const policy = (yield* settings.getSettings).goatclaw;
+      yield* settings.updateSettings({
+        goatclaw: {
+          profiles: { ...policy.profiles, worker: { ...policy.profiles.worker!, maxLanes: 1 } },
+        },
+      });
+      expect(
+        (yield* profiles
+          .claim(threadScope("child"), { id: "narrowed", runtimeMode: "auto" })
+          .pipe(Effect.flip)).message,
+      ).toContain("permits at most 1 running lanes");
+      yield* seed("unrelated", "auto");
+      expect(
+        (yield* profiles.claim(threadScope("unrelated"), { id: "unrelated", runtimeMode: "auto" }))
+          .enabled,
+      ).toBe(true);
+    }).pipe(Effect.provide(fixture())),
+);
+
+it.effect("refuses cyclic delegation ancestry without admitting another lane", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed("a", "auto");
+    yield* sql`INSERT INTO orchestration_v2_projection_subagents
+      (subagent_id, thread_id, child_thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+      VALUES ('a-to-b', 'a', 'b', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}'),
+             ('b-to-a', 'b', 'a', 'node', 'codex', 'app_owned', 'running', '2026-10-23', '{}')`;
+    expect(
+      (yield* profiles
+        .claim(threadScope("a"), { id: "cycle", runtimeMode: "auto" })
+        .pipe(Effect.flip)).code,
+    ).toBe("capability_denied");
+    expect(yield* sql`SELECT id FROM goatclaw_lane_reservations`).toEqual([]);
+  }).pipe(Effect.provide(fixture())),
+);
+
+// #855: the profile a thread is bound under may allow what its launch ceiling does not.
+it.effect("names the ceiling that refused, not the stored profile it narrowed", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* profiles.claim(outside, {
+      id: "forwarded",
+      childThreadId: ThreadId.make("forwarded"),
+      runtimeMode: "full-access",
+      forwarded: BUILTIN_PERMISSION_PROFILES.worker!,
+    });
+    yield* seed("forwarded");
+    expect(yield* profiles.check(threadScope("forwarded"), "threads.remote")).toEqual({
+      ok: false,
+      reason: "Ceiling worker (narrowing manager) does not allow threads.remote.",
+    });
+    yield* seed("unbound");
+    expect(yield* profiles.check(threadScope("unbound"), "hub.manage")).toEqual({
+      ok: false,
+      reason: "Profile manager does not allow hub.manage.",
+    });
+    const view = yield* profiles.resolve(threadScope("forwarded"));
+    expect(view.profile.id).toBe("manager");
+  }).pipe(Effect.provide(fixture("manager"))),
+);
+
+// A ceiling that allows what the snapshot refuses, wholly or for that field, must not be blamed.
+it.effect.each([
+  { name: "wider", forwarded: BUILTIN_PERMISSION_PROFILES.owner! },
+  { name: "mixed", forwarded: { ...BUILTIN_PERMISSION_PROFILES.owner!, maxLanes: 3 } },
+])(
+  "blames the launch snapshot, not a $name forwarded ceiling, once the profile widens",
+  ({ name, forwarded }) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* profiles.claim(outside, {
+        id: name,
+        childThreadId: ThreadId.make(name),
+        runtimeMode: "full-access",
+        forwarded,
+      });
+      const policy = (yield* settings.getSettings).goatclaw;
+      const manager = policy.profiles.manager!;
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: {
+            ...policy.profiles,
+            manager: { ...manager, capabilities: [...manager.capabilities, "hub.manage"] },
+          },
+        },
+      });
+      yield* seed(name);
+      expect(yield* profiles.check(threadScope(name), "hub.manage")).toEqual({
+        ok: false,
+        reason: "Profile manager as this thread was launched with it does not allow hub.manage.",
+      });
+    }).pipe(Effect.provide(fixture("manager"))),
 );

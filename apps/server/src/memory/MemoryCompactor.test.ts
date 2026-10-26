@@ -22,14 +22,14 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/076_Memory.ts";
-import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
+import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
@@ -849,7 +849,7 @@ it.effect(
       const compactor = yield* Compactor.MemoryCompactor;
       const input = { ...McpFixture.upsert(96001), memorySpaceId: space };
       const invocation = { ...McpFixture.scope(), environmentId: hubEnv };
-      const first = yield* McpFixture.call("memory_upsert", input, invocation);
+      const first = yield* McpFixture.call("goat_memory_upsert", input, invocation);
       assert.isNotTrue(first.result.isError);
       const pending = yield* decodeReplayReceipt(first.body);
       const ack = Effect.fnUntraced(function* (operationId: M.MemoryOperationId) {
@@ -866,7 +866,7 @@ it.effect(
       const counts = sql`SELECT (SELECT count(*) FROM memory_events) AS events,(SELECT count(*) FROM memory_payloads) AS payloads,(SELECT count(*) FROM memory_outbox) AS outbox`;
       const replay = Effect.gen(function* () {
         const before = yield* counts;
-        const response = yield* McpFixture.call("memory_upsert", input, invocation);
+        const response = yield* McpFixture.call("goat_memory_upsert", input, invocation);
         assert.isNotTrue(response.result.isError);
         const receipt = yield* decodeReplayReceipt(response.body, {
           onExcessProperty: "error",
@@ -876,7 +876,7 @@ it.effect(
         assert.strictEqual(
           (
             (yield* McpFixture.call(
-              "memory_upsert",
+              "goat_memory_upsert",
               { ...input, payload: { ...input.payload, text: "changed" } },
               invocation,
             )).body as { code: string }
@@ -893,8 +893,11 @@ it.effect(
           },
         };
         assert.strictEqual(
-          ((yield* McpFixture.call("memory_upsert", input, otherCaller)).body as { code: string })
-            .code,
+          (
+            (yield* McpFixture.call("goat_memory_upsert", input, otherCaller)).body as {
+              code: string;
+            }
+          ).code,
           "operation_id_reused",
         );
         assert.deepStrictEqual(yield* counts, before);
@@ -945,6 +948,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(live),
           Layer.provide(Layer.mock(Sync.MemorySyncService)({})),
           Layer.provideMerge(McpServer.McpServer.layer),

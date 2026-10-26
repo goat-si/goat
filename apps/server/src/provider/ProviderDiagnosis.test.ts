@@ -11,6 +11,7 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { DevinCloudCli } from "@goat/provider-devin-cloud/server";
@@ -291,7 +292,7 @@ it.effect(
       expect(failures(diagnosis)).toEqual(["forbidden_environment"]);
       const environment = checkOf(diagnosis, "environment")!;
       expect(environment.summary).toContain("ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL");
-      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.setup" });
+      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.update" });
       expect(environment.fix?.instruction).toContain("OpenCodex Claude intercept");
       expect(environment.fix?.instruction).toContain("empty value");
       expect(JSON.stringify(result)).not.toContain(OPENCODEX_TOKEN);
@@ -428,6 +429,7 @@ it.effect("checks a project's remote without echoing credentials in it", () =>
 const devinCloud = (siblingInstanceId: string) => ({
   "devin-cloud": { driver: driver("devinCloud"), config: { enabled: true, siblingInstanceId } },
 });
+const devinRegistry = devinSibling({ source: "registry", agentId: "devin" });
 
 it.effect("Devin Cloud with a signed-in Devin ACP sibling is ready", () =>
   Effect.gen(function* () {
@@ -469,13 +471,17 @@ it.effect("Devin Cloud auto-resolves one enabled Devin ACP sibling", () =>
 );
 
 it.effect(
-  "automatic Devin Cloud asks for a sibling when none exists and a choice when ambiguous",
+  "automatic Devin Cloud reports auto setup when no sibling exists and a choice when ambiguous",
   () =>
     Effect.gen(function* () {
       const noSibling = yield* diagnose({ driver: driver("devinCloud") });
-      expect(failures(only(noSibling.result.diagnoses))).toContain("disabled");
-      expect(failures(only(noSibling.result.diagnoses))).toContain("sibling_missing");
-      expect(checkOf(only(noSibling.result.diagnoses), "instance")?.status).toBe("pass");
+      const pending = only(noSibling.result.diagnoses);
+      // The devin CLI on PATH is what auto setup links; nobody is asked for an instance id.
+      expect(failures(pending)).toEqual(["sibling_missing"]);
+      expect(checkOf(pending, "auto_setup")?.summary).toContain("acpRegistry_devin");
+      expect(checkOf(pending, "auto_setup")?.fix?.instruction).not.toContain("instance");
+      expect(checkOf(pending, "auth")?.status).toBe("pass");
+      expect(checkOf(pending, "instance")?.status).toBe("pass");
 
       const first = devinSibling({ source: "registry", agentId: "devin" });
       const one = yield* diagnose(
@@ -526,7 +532,13 @@ it.effect("Devin Cloud names an old CLI, a signed-out CLI, and a disabled siblin
     );
     expect(checkOf(only(disabled.result.diagnoses), "sibling")).toMatchObject({
       reason: "sibling_invalid",
-      fix: { instruction: expect.stringContaining("Enable ACP instance devin-acp") },
+      fix: {
+        instruction: expect.stringContaining("Enable ACP instance devin-acp"),
+        call: {
+          tool: "goat_provider_update",
+          arguments: { instanceId: "devin-acp", enabled: true },
+        },
+      },
     });
   }),
 );
@@ -538,6 +550,47 @@ it.effect("an unknown instance id tells the agent to list providers", () =>
       actor: "agent",
       path: "provider.list",
     });
+  }),
+);
+
+it.effect("every fix path a diagnosis emits resolves through goat_call", () =>
+  Effect.gen(function* () {
+    const results = [
+      yield* diagnose({ instanceId: id("typo") }),
+      yield* diagnose(
+        { driver: driver("claudeCloud") },
+        { instances: { claudeAgent: { driver: driver("claudeAgent"), enabled: false } } },
+      ),
+      yield* diagnose(
+        { instanceId: id("cloud-work") },
+        { instances: claudeCloud(), env: { HOME: "/home/user", ANTHROPIC_AUTH_TOKEN: "x" } },
+      ),
+      yield* diagnose(
+        { instanceId: id("devin-cloud") },
+        { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling({}, false) } },
+      ),
+      yield* diagnose(
+        { instanceId: id("devin-cloud") },
+        { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling() }, executables: {} },
+      ),
+    ].flatMap(({ result }) => result.diagnoses.flatMap((diagnosis) => diagnosis.checks));
+    // Two Devin siblings: a person picks one in Settings, which no GOAT tool does for them.
+    const ambiguous = yield* diagnose(
+      { driver: driver("devinCloud") },
+      { instances: { "devin-one": devinRegistry, "devin-two": devinRegistry } },
+    );
+    const choose = checkOf(only(ambiguous.result.diagnoses), "sibling")?.fix;
+    expect(choose).toEqual({ actor: "human", instruction: expect.any(String) });
+    const checks = [
+      ...results,
+      ...only(ambiguous.result.diagnoses).checks,
+      ...snapshotChecks(snapshot({ enabled: false, status: "disabled" })),
+      ...snapshotChecks(snapshot({ installed: false, status: "error" })),
+      ...snapshotChecks(snapshot({ auth: { status: "unauthenticated" }, status: "error" })),
+    ];
+    const paths = checks.flatMap((item) => (item.fix?.path === undefined ? [] : [item.fix.path]));
+    expect(paths.filter((path) => resolveAgentSurfaceEntry(path) === undefined)).toEqual([]);
+    expect(paths).toContain("provider.update");
   }),
 );
 

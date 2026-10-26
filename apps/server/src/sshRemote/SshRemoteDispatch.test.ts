@@ -49,15 +49,22 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
-import Migration0062 from "../persistence/Migrations/069_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/070_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/072_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/074_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/079_MemoryTaskGrantCeiling.ts";
+import Migration0062 from "../persistence/Migrations/070_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/071_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/073_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/080_MemoryTaskGrantCeiling.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import { hostFailure } from "../mcp/hostFailure.ts";
+import { fromFailure } from "@goat/contracts/agentSurface/envelope";
+import {
+  host,
+  initialize,
+  type ToolAnswer,
+  withRemote,
+} from "./SshRemoteDispatch.hostCall.testkit.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 import {
   broadWorkspaceRoot,
@@ -65,6 +72,7 @@ import {
   readRemoteToolResult,
   resolveSshCliRunner,
 } from "./SshRemoteDispatch.ts";
+import { layerPermissionProfilesOff } from "../mcp/McpToolAccess.testkit.ts";
 
 describe("SSH dispatch tool compatibility", () => {
   it.effect("fails once with the host and unknown GOAT tool on a legacy-only endpoint", () =>
@@ -200,7 +208,8 @@ describe("SSH dispatch tool compatibility", () => {
         expect(calls).toEqual(["goat_project_list"]);
         expect(projectsCreated).toBe(0);
         expect(threadsLaunched).toBe(0);
-        expect(fetchEndpoint).toHaveBeenCalledTimes(3);
+        // One session reads the tool catalog for launch admission, then one calls goat_project_list.
+        expect(fetchEndpoint).toHaveBeenCalledTimes(6);
       } finally {
         vi.unstubAllGlobals();
         managerLayer.mockRestore();
@@ -531,165 +540,6 @@ describe("SSH dispatch packaged runtime", () => {
 });
 
 describe("SshRemoteDispatch.callHostTool", () => {
-  const host = "build-box";
-  const target = { alias: host, hostname: host, username: null, port: null };
-
-  type ToolAnswer =
-    | { readonly status: number }
-    | { readonly result: unknown }
-    | { readonly rpcError: string }
-    | { readonly throws: string };
-
-  /**
-   * Runs body against a dispatch whose SSH manager and remote /mcp are fakes.
-   * `answer` decides each HTTP request; the record says what reached the remote.
-   */
-  const withRemote = <A, E>(
-    options: {
-      readonly answer: (request: {
-        readonly method: string;
-        readonly tool?: string;
-        readonly authorization: string | null;
-      }) => ToolAnswer | Promise<ToolAnswer>;
-      readonly beforeSessionIssue?: (attempt: number) => Effect.Effect<void, SshCommandError>;
-      readonly ensureFails?: boolean;
-      readonly ceilingApplied?: boolean;
-      /** The remote CLI cannot grant orchestration:approve. */
-      readonly approvalsFail?: boolean;
-    },
-    body: Effect.Effect<A, E, SshRemoteDispatch.SshRemoteDispatch>,
-  ) =>
-    Effect.gen(function* () {
-      const record = {
-        toolCalls: [] as string[],
-        sessionsIssued: 0,
-        requests: 0,
-        sessionRequests: [] as Array<boolean>,
-        providersManageRequests: [] as Array<boolean>,
-      };
-      const fetchEndpoint = vi.fn(async (_url: string, init?: RequestInit) => {
-        record.requests += 1;
-        const request = JSON.parse(String(init?.body)) as {
-          id?: string;
-          method: string;
-          params?: { name?: string };
-        };
-        if (request.method === "tools/call") record.toolCalls.push(request.params?.name ?? "");
-        const answer = await options.answer({
-          method: request.method,
-          authorization: new Headers(init?.headers).get("authorization"),
-          ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
-        });
-        if ("throws" in answer) throw new TypeError(answer.throws);
-        if ("status" in answer) return new Response(null, { status: answer.status });
-        if (request.method === "notifications/initialized") {
-          return new Response(null, { status: 202 });
-        }
-        if ("rpcError" in answer) {
-          return Response.json({
-            jsonrpc: "2.0",
-            id: request.id,
-            error: { code: -32602, message: answer.rpcError },
-          });
-        }
-        return Response.json({ jsonrpc: "2.0", id: request.id, result: answer.result });
-      });
-      const manager = SshTunnel.SshEnvironmentManager.of({
-        status: () => Effect.die("Unexpected runtime status"),
-        ensureEnvironment: () =>
-          options.ensureFails === true
-            ? Effect.fail(
-                new SshCommandError({
-                  message: "ssh: connect to host build-box port 22: Operation timed out",
-                  command: ["ssh", host],
-                  exitCode: 255,
-                  stderr: "",
-                }),
-              )
-            : Effect.succeed({
-                target,
-                httpBaseUrl: "http://127.0.0.1:41000/",
-                wsBaseUrl: "ws://127.0.0.1:41000/",
-                pairingToken: null,
-              }),
-        readyEnvironment: () =>
-          Effect.succeed({
-            target,
-            httpBaseUrl: "http://127.0.0.1:41000/",
-            wsBaseUrl: "ws://127.0.0.1:41000/",
-            pairingToken: null,
-          }),
-        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
-        publishSetupOutcome: () => Effect.succeed(true),
-        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
-        forgetEnvironment: () => Effect.die("Unexpected forget"),
-        disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
-        revalidateTunnels: () => Effect.void,
-        issueClientSession: () => Effect.die("unused"),
-        issueMcpClientSession: (_target, sessionOptions) => {
-          record.sessionRequests.push(sessionOptions.approvals === true);
-          record.providersManageRequests.push(sessionOptions.providersManage === true);
-          return sessionOptions.approvals === true && options.approvalsFail === true
-            ? Effect.fail(
-                new SshCommandError({
-                  message: "unknown option value: orchestration:approve",
-                  command: ["ssh", host],
-                  exitCode: 2,
-                  stderr: "",
-                }),
-              )
-            : Effect.gen(function* () {
-                yield* options.beforeSessionIssue?.(record.sessionRequests.length) ?? Effect.void;
-                record.sessionsIssued += 1;
-                return {
-                  token: `session-${record.sessionsIssued}`,
-                  expiresAt: null,
-                  runtimeModeCeilingApplied: options.ceilingApplied ?? true,
-                };
-              });
-        },
-        runRemoteScript: () => Effect.die("Unexpected remote script"),
-      });
-      const discoverHosts = vi
-        .spyOn(SshConfig, "discoverSshHosts")
-        .mockReturnValue(Effect.succeed([{ ...target, source: "ssh-config" }]));
-      const managerLayer = vi
-        .spyOn(SshTunnel.SshEnvironmentManager, "layer")
-        .mockReturnValue(Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
-      vi.stubGlobal("fetch", fetchEndpoint);
-      try {
-        const result = yield* body.pipe(
-          Effect.result,
-          Effect.provide(
-            SshRemoteDispatch.layer.pipe(
-              Layer.provide(ServerSettings.layerTest()),
-              Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-host-call-test-" })),
-              Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
-            ),
-          ),
-        );
-        return { result, record };
-      } finally {
-        vi.unstubAllGlobals();
-        managerLayer.mockRestore();
-        discoverHosts.mockRestore();
-      }
-    });
-
-  const initialize = (request: { readonly method: string }): ToolAnswer | undefined =>
-    request.method === "initialize"
-      ? {
-          result: {
-            protocolVersion: "2025-06-18",
-            capabilities: { tools: {} },
-            serverInfo: { name: "GOAT", version: "test" },
-          },
-        }
-      : request.method === "notifications/initialized"
-        ? { result: null }
-        : undefined;
-
   const readCall = (authorize: Effect.Effect<RuntimeMode> = Effect.succeed("full-access")) =>
     Effect.gen(function* () {
       const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
@@ -813,6 +663,69 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect.each([
+    ["0.1.2", "task_status"],
+    ["0.1.3", "goat_task_read"],
+  ] as const)(
+    "forwards a call to a remote at %s under the name it answers to: %s",
+    ([version, sent]) =>
+      Effect.gen(function* () {
+        const call = Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          return yield* dispatch.callHostTool(
+            {
+              host,
+              tool: "goat_task_read",
+              arguments: { taskId: "t" },
+              timeoutMs: 5_000,
+              writes: false,
+            },
+            Effect.succeed("full-access" as const),
+          );
+        });
+        const { result, record } = yield* withRemote(
+          {
+            serverVersion: version,
+            answer: (request) =>
+              initialize(request) ?? { result: { structuredContent: { ok: true } } },
+          },
+          call,
+        );
+        expect(result._tag).toBe("Success");
+        expect(record.toolCalls).toEqual([sent]);
+      }),
+  );
+
+  it.effect("answers remote_outdated when the remote lacks the tool, and runs nothing here", () =>
+    Effect.gen(function* () {
+      const call = Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        return yield* dispatch.callHostTool(
+          { host, tool: "goat_provider_sync_read", arguments: {}, timeoutMs: 5_000, writes: false },
+          Effect.succeed("full-access" as const),
+        );
+      });
+      const { result, record } = yield* withRemote(
+        {
+          answer: (request) =>
+            initialize(request) ?? { rpcError: "Tool 'goat_provider_sync_status' not found" },
+        },
+        call,
+      );
+      expect(record.toolCalls).toEqual(["goat_provider_sync_status"]);
+      if (result._tag !== "Failure") throw new Error("expected a refusal");
+      expect(result.failure.reason).toBe("remote_outdated");
+      expect(hostFailure(result.failure)).toMatchObject({
+        code: "remote_outdated",
+        reason: "remote_outdated",
+      });
+      expect(fromFailure({ ...hostFailure(result.failure) }, { effect: "read" })).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", reason: "remote_outdated", retryable: false },
+      });
+    }),
+  );
+
   it.effect("names an older remote that lacks the tool, in the form status fallback matches", () =>
     Effect.gen(function* () {
       const statusCall = Effect.gen(function* () {
@@ -838,7 +751,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
       expect(result).toMatchObject({
         _tag: "Failure",
         failure: {
-          reason: "remote_refused",
+          reason: "remote_outdated",
           message: expect.stringContaining(
             `GOAT on ${host} ${SshRemoteDispatch.REMOTE_THREAD_STATUS_UNSUPPORTED}; it runs an older build`,
           ),
@@ -1304,6 +1217,7 @@ const registrationLayer = McpHttpServer.toolkitRegistration(
     ),
   }),
 ).pipe(
+  Layer.provide(layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
 );
@@ -1399,6 +1313,8 @@ const withLaunchRemote = <A, E>(
     registrationAccess?: boolean;
     declaresMemoryCeiling?: boolean;
     beforeSessionIssue?: (scopes: ReadonlyArray<string>) => Effect.Effect<void, SshCommandError>;
+    /** Sees each MCP request before it is answered. */
+    onRequest?: (method: string) => void;
   },
   body: (record: {
     tools: { name: string; args: Record<string, unknown>; authorization: string | null }[];
@@ -1518,6 +1434,7 @@ const withLaunchRemote = <A, E>(
         params?: { name?: string; arguments?: Record<string, unknown> };
       };
       if (options.rejectSession?.()) return new Response(null, { status: 401 });
+      options.onRequest?.(req.method);
       if (req.method === "notifications/initialized") return new Response(null, { status: 202 });
       let result: unknown;
       if (req.method === "initialize")
@@ -1643,6 +1560,24 @@ it.effect("alias launch remains compatible", () =>
       expect(record.targets).toHaveLength(0);
     }),
   ),
+);
+it.effect(
+  "regression #1451: a destination that cannot hold the goatclaw ceiling registers no project",
+  () =>
+    withLaunchRemote({}, (record) =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const error = yield* dispatch
+          .launchThread(
+            { ...launchInput, permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.worker! },
+            Effect.void,
+          )
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({ remoteCode: "permission_profile_unsupported" });
+        expect(record.tools.map((call) => call.name)).not.toContain("goat_project_create");
+        expect(record.tools.map((call) => call.name)).not.toContain("goat_thread_launch");
+      }),
+    ),
 );
 it.effect("issues independently for concurrent launches with different memory grant keys", () =>
   Effect.gen(function* () {
@@ -1876,6 +1811,61 @@ it.effect.each(
       expect(record.tools.filter((call) => call.name === "goat_thread_launch")).toHaveLength(1);
     }),
   ),
+);
+it.effect("regression #1451: a launch tool error that may follow the create stays uncertain", () =>
+  withLaunchRemote(
+    {
+      refusal: true,
+      launchReply: { code: "orchestration_error", message: "projection read failed" },
+    },
+    () =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const error = yield* dispatch.launchThread(launchInput, Effect.void).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          reason: "remote_refused",
+          remoteCode: "orchestration_error",
+          launchMayHaveStarted: true,
+        });
+      }),
+  ),
+);
+it.effect(
+  "regression #1451: a caller revoked while the project write's session starts registers nothing",
+  () => {
+    let listed = false;
+    let revoked = false;
+    return withLaunchRemote(
+      {
+        onRequest: (method) => {
+          // The project list was read; the next session start is the project create's.
+          if (method === "initialize" && listed) revoked = true;
+          if (method === "tools/call") listed = true;
+        },
+      },
+      (record) =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const error = yield* dispatch
+            .launchThread(
+              launchInput,
+              Effect.suspend(() =>
+                revoked
+                  ? Effect.fail(
+                      new SshRemoteDispatch.SshRemoteDispatchError({
+                        reason: "caller_changed",
+                        message: "revoked",
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            )
+            .pipe(Effect.flip);
+          expect(error).toMatchObject({ message: "revoked" });
+          expect(record.tools.map((call) => call.name)).not.toContain("goat_project_create");
+        }),
+    );
+  },
 );
 it.effect("structured remote refusal is definite", () =>
   withLaunchRemote(
@@ -2413,7 +2403,15 @@ describe("SSH dispatch launch lineage", () => {
       expect(attempts).toBe(allowed ? 1 : 0);
       expect(result._tag).toBe(allowed ? "Success" : "Failure");
       if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({
+        // A thread launch refused before any remote write arrives wrapped as stage "authorize",
+        // so its launcher releases the capacity it reserved; the refusal is the cause.
+        if (kind === "thread")
+          expect(result.failure).toMatchObject({ _tag: "RemoteDispatchError", stage: "authorize" });
+        const refusal =
+          kind === "thread"
+            ? (result.failure as { readonly cause?: unknown }).cause
+            : result.failure;
+        expect(refusal).toMatchObject({
           reason: "remote_refused",
           remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
         });
@@ -4250,7 +4248,7 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
       expect(failure._tag).toBe("Failure");
       if (failure._tag === "Failure") {
         expect(failure.failure.reason).toBe("host_unavailable");
-        expect(failure.failure.message).toContain("goat_ssh_host_prepare");
+        expect(failure.failure.message).toContain('goat_call {path:"ssh.host_prepare"}');
       }
       expect([ensures, sessions]).toEqual([0, 0]);
     }).pipe(

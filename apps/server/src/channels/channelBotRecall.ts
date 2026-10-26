@@ -186,11 +186,11 @@ export const journalFor = (
       (task.requester.displayName === "" ? "" : " (for " + task.requester.displayName + ")") +
       (task.resultSummary === undefined || task.resultSummary.trim() === ""
         ? ""
-        : " — " + cut(task.resultSummary.replace(/\s+/gu, " ").trim(), JOURNAL_RESULT_CHARS)) +
-      (prs.length === 0 ? "" : " — " + prs.join(", ")) +
+        : ": " + cut(task.resultSummary.replace(/\s+/gu, " ").trim(), JOURNAL_RESULT_CHARS)) +
+      (prs.length === 0 ? "" : "; " + prs.join(", ")) +
       (task.observed?.result === undefined
         ? ""
-        : " — " + channelEvidenceLabels(task.observed.result).join("; "));
+        : "; " + channelEvidenceLabels(task.observed.result).join("; "));
     if (used + line.length + 1 > chars) break;
     lines.push(line);
     used += line.length + 1;

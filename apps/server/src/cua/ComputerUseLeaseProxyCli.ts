@@ -5,26 +5,48 @@
  *
  * @module ComputerUseLeaseProxyCli
  */
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
+import * as NodeStream from "node:stream";
 
-import { CuaDriverMcpConfiguration } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
+import {
+  CuaDriverMcpConfiguration,
+  type ComputerUseLeaseReport,
+  ComputerUseCallAdmission,
+  type ComputerUseCallReservation,
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
-import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { makeHelperInputFeed } from "./agentInputReports.ts";
+import { makeAppGuide } from "./ComputerUseGuide.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
+import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts";
+import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
+import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
+import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
+import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
+import { overlayChannel } from "./overlayChannel.ts";
+import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
-
-const argument = (args: ReadonlyArray<string>, name: string) => {
-  const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
-};
+const decodeAdmission = Schema.decodeUnknownOption(ComputerUseCallAdmission);
+/** A window report waits this long at most; the call it rides on goes ahead either way. */
+const TARGET_REPORT_TIMEOUT_MS = 2_000;
+const decodeX11Display = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
+  ),
+);
 
 async function* responseLines(response: Response): AsyncGenerator<string> {
   if (!response.ok || response.body === null) return;
@@ -39,106 +61,269 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
   }
 }
 
+/**
+ * Tells the lease route which window the control acts on, or that a person used the keyboard or
+ * pointer; true when the server took it.
+ */
+async function report(
+  url: string,
+  authorization: string,
+  body: ComputerUseLeaseReport,
+): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
+    });
+    return response.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+async function reserveCall(
+  url: string,
+  authorization: string,
+  call: ComputerUseCallReservation,
+): Promise<ComputerUseCallAdmission> {
+  try {
+    const response = await fetch(`${url}/calls`, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(call),
+      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
+    });
+    if (response.ok) {
+      const decision = decodeAdmission(await response.json());
+      if (Option.isSome(decision)) return decision.value;
+    }
+  } catch {
+    // Lost admission or release acknowledgement grants no authority; server tickets stay held.
+  }
+  return { status: "refused", detail: "unauthorized" };
+}
+
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
+  const platform = HostProcess.Platform.defaultValue();
+  const drivers = new Set<NodeChildProcess.ChildProcess>();
+  endDriversWithProxy(platform, () => drivers);
   const url = process.env[LEASE_PROXY_ENV.url];
   const authorization = process.env[LEASE_PROXY_ENV.authorization];
   const driver = decodeDriver(process.env[LEASE_PROXY_ENV.driver] ?? "");
-  const handoffId = argument(args, "--handoff");
-  const expiresAt = DateTime.make(argument(args, "--expires") ?? "");
+  const launch = parseLeaseProxyArguments(args);
   if (
     url === undefined ||
     authorization === undefined ||
     Option.isNone(driver) ||
-    handoffId === undefined ||
-    Option.isNone(expiresAt)
+    launch === undefined
   ) {
-    process.stderr.write("cua-lease-proxy was started without its lease or driver.\n");
+    process.stderr.write("cua-lease-proxy was started without a valid control/thread or driver.\n");
     process.exitCode = 2;
     return;
   }
   const descriptor = driver.value;
+  // The skill's path and per-app notes ride on the driver's answers (ComputerUseGuide.ts).
+  const guide = makeAppGuide(platform, process.env[LEASE_PROXY_ENV.skill]?.trim() || undefined);
+  // The X display GOAT started the driver on; every window the driver names must be there (#1358).
+  const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
+  const placement = Option.isSome(x11Display)
+    ? makeX11WindowPlacement(x11Display.value)
+    : undefined;
   // The driver child never sees the thread's GOAT credential.
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
   for (const variable of descriptor.environment) childEnvironment[variable.name] = variable.value;
+  // The macOS helper in agent connection mode draws the cursor overlay from fd 3 (#1214).
+  const drawsOverlay = platform === "darwin" && descriptor.args.includes("--mcp");
+
+  // A driver that reads its capability manifest from a path GOAT rewrites (the macOS helper's
+  // --mcp mode, #1416) gets a fresh child when the file changes.
+  const manifestFlag = descriptor.args.indexOf("--capability-manifest");
+  const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
+
+  const startDriver = (overlay: boolean) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const child = spawnDriverProcess(
+          platform,
+          descriptor.command,
+          descriptor.args,
+          childEnvironment,
+          overlay,
+        );
+        drivers.add(child);
+        const watch = makeDriverWatch();
+        // Fire and forget: a lost report only delays the host's record, never this connection.
+        const send = (body: DriverWatchReport | undefined) =>
+          body === undefined ? undefined : void report(url, authorization, body);
+        child.once("exit", (code) => {
+          drivers.delete(child);
+          send(watch.exited(code ?? undefined));
+        });
+        child.stdout.once("data", () => send(watch.answered()));
+        return { child, watch };
+      }),
+      ({ child, watch }) =>
+        Effect.sync(() => {
+          watch.stopping();
+          killDriverGroup(platform, child, "SIGTERM");
+        }),
+    ).pipe(
+      Effect.flatMap(({ child, watch }) =>
+        Effect.gen(function* () {
+          // Ownership is released only after both the process and its pipes close.
+          const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          const exited = new Promise<number | undefined>((resolve) => {
+            if (child.exitCode !== null) resolve(child.exitCode);
+            else child.once("exit", (code) => resolve(code ?? undefined));
+          });
+          // The helper's input reports, every one of them: a person's may be among a burst.
+          const seen = yield* makeHelperInputFeed();
+          const channel = child.stdio[3];
+          return {
+            ...(overlay && channel instanceof NodeStream.Duplex
+              ? {
+                  // Dated the moment the line is read, on the clock the server compares with.
+                  overlay: overlayChannel(channel, (input) =>
+                    seen.offer({
+                      source: input.source,
+                      at: Date.now() - input.ageMs,
+                    }),
+                  ),
+                  humanInput: seen.events,
+                }
+              : {}),
+            send: (line: string) =>
+              Effect.sync(() => {
+                if (child.stdin.writable) child.stdin.write(line + "\n");
+              }),
+            lines: Stream.fromAsyncIterable(
+              NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+              () => undefined,
+            ).pipe(Stream.catchCause(() => Stream.empty)),
+            // Stdout closes just before the exit is reported; a child still running after a
+            // moment is not one that refused its parent.
+            exitCode: Effect.promise(() => exited).pipe(
+              Effect.timeoutOption("1 second"),
+              Effect.map(Option.getOrUndefined),
+            ),
+            kill: Effect.promise(() => {
+              watch.stopping();
+              child.stdin.end();
+              killDriverGroup(platform, child, "SIGKILL");
+              return closed;
+            }),
+          };
+        }),
+      ),
+    );
 
   const leaseUrl = new URL(url);
-  leaseUrl.searchParams.set("handoff", handoffId);
+  leaseUrl.searchParams.delete("control");
+  leaseUrl.searchParams.delete("thread");
+  leaseUrl.searchParams.set(
+    launch.mode === "control" ? "control" : "thread",
+    launch.mode === "control" ? launch.controlId : launch.threadId,
+  );
   const abort = new AbortController();
 
-  await Effect.runPromise(
-    runLeaseProxy({
-      handoffId,
-      expiresAt: expiresAt.value,
-      input: Stream.fromAsyncIterable(
-        NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
-        () => undefined,
-      ).pipe(Stream.catchCause(() => Stream.empty)),
-      output: (line) => Effect.sync(() => void process.stdout.write(line + "\n")),
-      leaseUpdates: leaseUpdateLines(
-        Stream.fromAsyncIterable(
-          (async function* () {
-            const response = await fetch(leaseUrl, {
-              headers: { authorization },
-              signal: abort.signal,
-            });
-            yield* responseLines(response);
-          })(),
-          (cause) => cause,
-        ),
+  const reports = (controlId: string) => ({
+    onTarget: (target: { readonly pid: number; readonly windowId: number }) =>
+      Effect.promise(() =>
+        report(url, authorization, { controlId, pid: target.pid, windowId: target.windowId }),
       ),
-      startDriver: Effect.acquireRelease(
-        Effect.sync(() => {
-          const child = NodeChildProcess.spawn(descriptor.command, [...descriptor.args], {
-            env: childEnvironment,
-            stdio: ["pipe", "pipe", "inherit"],
-            windowsHide: true,
-          });
-          child.on("error", () => undefined);
-          child.stdin.on("error", () => undefined);
-          return child;
+    onCursor: (cursor: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursor"]>>[0]) =>
+      Effect.promise(() => report(url, authorization, { controlId, cursor })),
+    onHumanInput: (
+      events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
+    ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
+    onAgentInput: (
+      agentInput: Parameters<NonNullable<LeaseProxyOptions<never, never>["onAgentInput"]>>[0],
+    ) => Effect.promise(() => report(url, authorization, { controlId, agentInput })),
+  });
+  const lines = Stream.fromAsyncIterable(
+    (async function* () {
+      const response = await fetch(leaseUrl, { headers: { authorization }, signal: abort.signal });
+      yield* responseLines(response);
+    })(),
+    (cause) => cause,
+  );
+  const common = {
+    connectionId: NodeCrypto.randomUUID(),
+    reservation: (call: ComputerUseCallReservation) =>
+      Effect.promise(() => reserveCall(url, authorization, call)),
+    bundleIds: platform === "darwin",
+    input: Stream.fromAsyncIterable(
+      NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
+      () => undefined,
+    ).pipe(Stream.catchCause(() => Stream.empty)),
+    output: (line: string, context?: { readonly tool?: string | undefined }) =>
+      Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
+    startDriver: startDriver(drawsOverlay),
+    // A handshake child never draws or watches input (#1604): on macOS the helper starts its
+    // overlay and input feed only when the proxy opens their channel.
+    startHandshakeDriver: startDriver(false),
+    ...(placement === undefined
+      ? {}
+      : {
+          placement: (
+            windows: Parameters<NonNullable<LeaseProxyOptions<never, never>["placement"]>>[0],
+          ) => Effect.promise(() => placement(windows)),
         }),
-        (child) => Effect.sync(() => void child.kill()),
-      ).pipe(
-        Effect.map((child) => ({
-          send: (line: string) =>
-            Effect.sync(() => {
-              if (child.stdin.writable) child.stdin.write(line + "\n");
-            }),
-          lines: Stream.fromAsyncIterable(
-            NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
-            () => undefined,
-          ).pipe(Stream.catchCause(() => Stream.empty)),
-          kill: Effect.sync(() => {
-            child.stdin.end();
-            child.kill("SIGKILL");
-          }),
-        })),
-      ),
-      revokeSessions: (sessions) =>
-        Effect.promise(() =>
-          Promise.all(
-            sessions.map(
-              (session) =>
-                new Promise<void>((resolve) => {
-                  NodeChildProcess.execFile(
-                    descriptor.command,
-                    [
-                      "revoke",
-                      "--session",
-                      session,
-                      ...(descriptor.socketPath === undefined
-                        ? []
-                        : ["--socket", descriptor.socketPath]),
-                    ],
-                    { env: childEnvironment, timeout: 5_000, windowsHide: true },
-                    () => resolve(),
-                  );
-                }),
+    ...(manifestPath === undefined
+      ? {}
+      : {
+          manifestStamp: () => {
+            try {
+              const info = NodeFS.statSync(manifestPath);
+              return info.ino + ":" + info.size + ":" + info.mtimeMs;
+            } catch {
+              return undefined;
+            }
+          },
+        }),
+    revokeSessions: (sessions: ReadonlyArray<string>) =>
+      // A driver without a socket is a direct child of this connection; killing it ends its
+      // sessions, and there is no daemon left to ask.
+      descriptor.socketPath === undefined
+        ? Effect.void
+        : Effect.promise(() =>
+            Promise.all(
+              sessions.map(
+                (session) =>
+                  new Promise<void>((resolve) => {
+                    NodeChildProcess.execFile(
+                      descriptor.command,
+                      [
+                        "revoke",
+                        "--session",
+                        session,
+                        ...(descriptor.socketPath === undefined
+                          ? []
+                          : ["--socket", descriptor.socketPath]),
+                      ],
+                      { env: childEnvironment, timeout: 5_000, windowsHide: true },
+                      () => resolve(),
+                    );
+                  }),
+              ),
             ),
-          ),
-        ).pipe(Effect.asVoid),
-    }).pipe(Effect.scoped, Effect.ensuring(Effect.sync(() => abort.abort()))),
+          ).pipe(Effect.asVoid),
+  };
+  const program =
+    launch.mode === "control"
+      ? runLeaseProxy({
+          ...common,
+          ...reports(launch.controlId),
+          controlId: launch.controlId,
+          expiresAt: launch.expiresAt,
+          leaseUpdates: leaseUpdateLines(lines),
+        })
+      : runThreadLeaseProxy({ ...common, reports, leaseUpdates: threadLeaseUpdateLines(lines) });
+  await Effect.runPromise(
+    program.pipe(Effect.scoped, Effect.ensuring(Effect.sync(() => abort.abort()))),
   );
   process.exit(0);
 }

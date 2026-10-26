@@ -27,13 +27,27 @@ export const ProviderDiagnosisFix = Schema.Struct({
   actor: ProviderDiagnosisActor,
   /** One plain sentence saying what to do now. */
   instruction: TrimmedNonEmptyString,
-  /** Agent surface path that performs or starts this step, such as `provider.setup`. */
+  /** goat_call path that performs or starts this step, such as `provider.update`. */
   path: Schema.optionalKey(TrimmedNonEmptyString),
   handoff: Schema.optionalKey(ProviderDiagnosisHandoffKind),
   /** A command the person runs in a terminal on the environment's machine. */
   command: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The GOAT tool call that applies this fix. A caller allowed to manage providers makes it
+   * directly; any other thread agent gets an approval card from it.
+   */
+  call: Schema.optionalKey(
+    Schema.Struct({
+      tool: TrimmedNonEmptyString,
+      arguments: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ),
 });
 export type ProviderDiagnosisFix = typeof ProviderDiagnosisFix.Type;
+
+/** The goat_call path of the provider tool a settings fix's call makes. */
+export const providerSettingsFixPath = (call: NonNullable<ProviderDiagnosisFix["call"]>) =>
+  `provider.${call.tool.replace(/^goat_provider_/u, "")}`;
 
 export const ProviderDiagnosisCheckStatus = Schema.Literals([
   "pass",

@@ -344,7 +344,7 @@ const main = Command.make(
       });
     const recordPath = path.join(
       home,
-      ".cache/t3code/native-clients",
+      ".cache/goat/native-clients",
       platform,
       `${yield* digest(device)}.json`,
     );

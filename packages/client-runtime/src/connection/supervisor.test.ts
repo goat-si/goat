@@ -7,7 +7,6 @@ vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
 
 import {
   AuthStandardClientScopes,
-  EnvironmentId,
   type ServerConfig,
   type DesktopSshPreparationProgress,
 } from "@goat/contracts";
@@ -18,7 +17,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -30,10 +28,8 @@ import * as TokenStore from "../authorization/tokenStore.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as RpcHttp from "../rpc/http.ts";
-import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { fetchEnvironmentSessionState } from "../state/session.ts";
 import type { ConnectionCatalogEntry, ConnectionRoute } from "./catalog.ts";
-import * as Connectivity from "./connectivity.ts";
 import * as ConnectionDriver from "./driver.ts";
 import { BearerConnectionProfile } from "./catalog.ts";
 import {
@@ -41,28 +37,24 @@ import {
   ConnectionBlockedError,
   ConnectionAttemptSuperseded,
   SshConnectionTarget,
-  ConnectionTransientError,
-  PrimaryConnectionTarget,
   RelayConnectionTarget,
   type ConnectionAttemptError,
   type ConnectionTarget,
-  type NetworkStatus,
   type PreparedConnection,
   type SupervisorConnectionState,
 } from "./model.ts";
-import * as RpcSession from "../rpc/session.ts";
 import { presentConnectionState } from "./presentation.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import { sshPreparationFailure } from "./sshFailure.ts";
-import * as ConnectionWakeups from "./wakeups.ts";
 import { connectionRouteId, entryWithRoutes, isLearned, mergeLearnedRoutes } from "./routes.ts";
 
-const TARGET = new PrimaryConnectionTarget({
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Test environment",
-  httpBaseUrl: "https://environment.example.test",
-  wsBaseUrl: "wss://environment.example.test",
-});
+import {
+  TARGET,
+  PREPARED_CONNECTION,
+  awaitState,
+  makeHarness,
+  transient,
+} from "./supervisorTestSupport.ts";
 
 const RELAY_TARGET = new RelayConnectionTarget({
   environmentId: TARGET.environmentId,
@@ -80,17 +72,6 @@ const RELAY_ENTRY: ConnectionCatalogEntry = {
   profile: Option.none(),
   enabled: true,
 };
-
-const PREPARED_CONNECTION: PreparedConnection = {
-  environmentId: TARGET.environmentId,
-  label: TARGET.label,
-  httpBaseUrl: TARGET.httpBaseUrl,
-  socketUrl: "wss://environment.example.test/ws",
-  httpAuthorization: null,
-  target: TARGET,
-};
-
-const TEST_RPC_CLIENT = {} as WsRpcProtocolClient;
 
 const LAN_TARGET = new BearerConnectionTarget({
   environmentId: TARGET.environmentId,
@@ -120,13 +101,6 @@ function preparedFor(target: ConnectionTarget): PreparedConnection {
   return { ...PREPARED_CONNECTION, target };
 }
 
-function transient(message = "Connection failed.") {
-  return new ConnectionTransientError({
-    reason: "transport",
-    detail: message,
-  });
-}
-
 function blocked(message = "Authentication required.") {
   return new ConnectionBlockedError({
     reason: "authentication",
@@ -134,164 +108,11 @@ function blocked(message = "Authentication required.") {
   });
 }
 
-function awaitState(
-  state: SubscriptionRef.SubscriptionRef<SupervisorConnectionState>,
-  predicate: (value: SupervisorConnectionState) => boolean,
-) {
-  return SubscriptionRef.changes(state).pipe(
-    Stream.filter(predicate),
-    Stream.runHead,
-    Effect.map(Option.getOrThrow),
-  );
-}
-
 const eventuallyState = Effect.fn("TestConnectionHarness.eventuallyState")(function* (
   state: SubscriptionRef.SubscriptionRef<SupervisorConnectionState>,
   predicate: (value: SupervisorConnectionState) => boolean,
 ) {
   return yield* awaitState(state, predicate);
-});
-
-const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?: {
-  readonly networkStatus?: NetworkStatus;
-  readonly random?: number;
-  readonly prepare?: (
-    attempt: number,
-    target: ConnectionTarget,
-    reportProgress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
-  ) => Effect.Effect<PreparedConnection, ConnectionAttemptError>;
-  readonly reportSynchronizing?: boolean;
-  readonly ready?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
-  readonly probe?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
-  readonly initialConfig?: (attempt: number) => Effect.Effect<ServerConfig, ConnectionAttemptError>;
-  readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
-}) {
-  const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
-    options?.networkStatus ?? "online",
-  );
-  const prepareCount = yield* Ref.make(0);
-  const sessionCount = yield* Ref.make(0);
-  const releaseCount = yield* Ref.make(0);
-  const wakeups = yield* SubscriptionRef.make<{
-    readonly sequence: number;
-    readonly reason: ConnectionWakeups.ConnectionWakeup;
-  }>({
-    sequence: 0,
-    reason: "application-active",
-  });
-  const closedSessions = yield* Ref.make<
-    ReadonlyArray<Deferred.Deferred<never, ConnectionTransientError>>
-  >([]);
-
-  const connectivity = Connectivity.Connectivity.of({
-    status: SubscriptionRef.get(networkStatus),
-    changes: SubscriptionRef.changes(networkStatus),
-  });
-
-  const prepare = Effect.fn("TestConnectionDriver.prepare")(function* (
-    target: ConnectionTarget,
-    reportProgress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
-  ) {
-    const attempt = yield* Ref.updateAndGet(prepareCount, (count) => count + 1);
-    if (options?.prepare) {
-      return yield* options.prepare(attempt, target, reportProgress);
-    }
-    return PREPARED_CONNECTION;
-  });
-
-  const checkRoute = (route: ConnectionRoute) =>
-    options?.checkRoute?.(route) ?? Effect.succeed<ConnectionDriver.RouteCheck>("unchecked");
-
-  const connectRoute = Effect.fn("TestConnectionDriver.connectRoute")(function* (
-    target: ConnectionTarget,
-    reportProgress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
-  ) {
-    yield* reportProgress({ stage: "preparing", routeId: connectionRouteId(target) });
-    const prepared = yield* prepare(target, reportProgress);
-    yield* reportProgress({ stage: "opening", prepared });
-
-    const attempt = yield* Ref.updateAndGet(sessionCount, (count) => count + 1);
-    const closed = yield* Deferred.make<never, ConnectionTransientError>();
-    yield* Ref.update(closedSessions, (sessions) => [...sessions, closed]);
-
-    const session = yield* Effect.acquireRelease(
-      Effect.succeed({
-        client: TEST_RPC_CLIENT,
-        initialConfig:
-          options?.initialConfig?.(attempt) ??
-          Effect.die(new Error("Initial config is not used by supervisor tests.")),
-        subscribeServerConfig: (input) => TEST_RPC_CLIENT.subscribeServerConfig(input),
-        ready: options?.ready?.(attempt) ?? Effect.void,
-        probe: options?.probe?.(attempt) ?? Effect.void,
-        closed: Deferred.await(closed),
-      } satisfies RpcSession.RpcSession),
-      () => Ref.update(releaseCount, (count) => count + 1),
-    );
-
-    if (options?.reportSynchronizing !== false) {
-      yield* reportProgress({ stage: "synchronizing", prepared });
-    }
-    yield* session.ready;
-    return { prepared, session } satisfies ConnectionDriver.EnvironmentConnectionLease;
-  });
-
-  const connect = Effect.fn("TestConnectionDriver.connect")(function* (
-    entry: ConnectionCatalogEntry,
-    reportProgress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
-  ) {
-    yield* reportProgress({ stage: "preparing" });
-    return yield* ConnectionDriver.connectOverRoutes(entry, checkRoute, (route) =>
-      connectRoute(route.target, reportProgress),
-    );
-  });
-
-  const layerDependencies = Layer.mergeAll(
-    Layer.succeed(Random.Random, {
-      nextDoubleUnsafe: () => options?.random ?? 1 - Number.EPSILON,
-      nextIntUnsafe: () => 0,
-    }),
-    Layer.succeed(Connectivity.Connectivity, connectivity),
-    Layer.succeed(
-      ConnectionWakeups.ConnectionWakeups,
-      ConnectionWakeups.ConnectionWakeups.of({
-        changes: SubscriptionRef.changes(wakeups).pipe(
-          Stream.drop(1),
-          Stream.map((event) => event.reason),
-        ),
-      }),
-    ),
-    Layer.succeed(
-      ConnectionDriver.ConnectionDriver,
-      ConnectionDriver.ConnectionDriver.of({
-        connect,
-        checkRoute: (_entry, route) => checkRoute(route),
-        preflight: (_entry, route) =>
-          checkRoute(route).pipe(Effect.map((check) => check === "answered")),
-      }),
-    ),
-  );
-
-  return {
-    dependencies: layerDependencies,
-    prepareCount,
-    sessionCount,
-    releaseCount,
-    setNetworkStatus: (status: NetworkStatus) => SubscriptionRef.set(networkStatus, status),
-    wake: (reason: ConnectionWakeups.ConnectionWakeup) =>
-      SubscriptionRef.update(wakeups, (event) => ({
-        sequence: event.sequence + 1,
-        reason,
-      })),
-    closeLatestSession: Effect.fn("TestConnectionHarness.closeLatestSession")(function* (
-      error = transient("Session closed."),
-    ) {
-      const sessions = yield* Ref.get(closedSessions);
-      const latest = sessions.at(-1);
-      if (latest) {
-        yield* Deferred.fail(latest, error);
-      }
-    }),
-  };
 });
 
 describe("retryDelayMs", () => {
@@ -1616,7 +1437,7 @@ describe("adaptive connection setup deadline", () => {
 });
 
 describe("EnvironmentSupervisor routes", () => {
-  it.effect("skips a silent LAN route and connects over T3 Connect", () =>
+  it.effect("skips a silent LAN route and connects over GOAT Connect", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         checkRoute: (route) =>
@@ -1675,7 +1496,7 @@ describe("EnvironmentSupervisor routes", () => {
         checkRoute: () => Effect.succeed("answered"),
         prepare: (_attempt, target) =>
           target._tag === "RelayConnectionTarget"
-            ? Effect.fail(blocked("Sign in to T3 Connect."))
+            ? Effect.fail(blocked("Sign in to GOAT Connect."))
             : Effect.fail(transient("LAN socket refused.")),
       });
       const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
@@ -1768,7 +1589,7 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
-  it.effect("learns the LAN address over T3 Connect and moves to it", () =>
+  it.effect("learns the LAN address over GOAT Connect and moves to it", () =>
     Effect.gen(function* () {
       const relayEntry: ConnectionCatalogEntry = {
         target: RELAY_TARGET,

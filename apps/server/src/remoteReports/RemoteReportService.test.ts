@@ -29,11 +29,13 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/069_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/070_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/073_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/074_RemoteReportRelay.ts";
-import observedChecksMigration from "../persistence/Migrations/091_ThreadRunObservedChecks.ts";
+import migration from "../persistence/Migrations/070_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
+import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
+import fencesMigration from "../persistence/Migrations/106_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -78,11 +80,9 @@ const stored = (sequence: number, event: object) =>
   }) as unknown as OrchestrationV2StoredEvent;
 const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* migration;
-  yield* dispatchMigration;
-  yield* threadRunResultsMigration;
-  yield* observedChecksMigration;
-  yield* relayMigration;
+  for (const step of [migration, dispatchMigration, threadRunResultsMigration]) yield* step;
+  for (const step of [observedChecksMigration, relayMigration, inboxRunIdMigration]) yield* step;
+  yield* fencesMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const changeTypes = [
     "thread.deleted",
@@ -125,6 +125,7 @@ const setup = Effect.gen(function* () {
     subscriptions: Array<
       Parameters<Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"]>[0]
     >;
+    dispatched: Array<Parameters<Orchestrator.OrchestratorV2["Service"]["dispatch"]>[0]>;
   } = {
     runs: [run(runA, "running")],
     messages: [],
@@ -137,10 +138,21 @@ const setup = Effect.gen(function* () {
     backgroundTasks: 0,
     continuationPending: false,
     subagents: [],
-    shell: { pullRequests: [] },
+    shell: {
+      pullRequests: [],
+      title: "Lane",
+      creationSource: "mcp",
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    },
     subscriptions: [],
+    dispatched: [],
   };
   const fake = Layer.mock(Orchestrator.OrchestratorV2)({
+    dispatch: (command) =>
+      Effect.sync(() => {
+        state.dispatched.push(command);
+        return {} as never;
+      }),
     getThreadShell: () =>
       Effect.sync(
         () =>
@@ -828,6 +840,100 @@ test("unbind removes reports, wakes waiters and blocks future reports", ({
         .reason,
     ).toBe("not_bound");
   }));
+const launcher = ThreadId.make("launcher-thread");
+const inbox = (sql: SqlClient.SqlClient) =>
+  sql<{ origin_thread_id: string; kind: string; text: string }>`
+    SELECT origin_thread_id, kind, text FROM remote_report_inbox ORDER BY id`;
+
+test("a thread launched on this machine reports to its launcher instead of failing", ({
+  service,
+  sql,
+  state,
+}) =>
+  Effect.gen(function* () {
+    yield* service.unbind(threadId);
+    state.shell = {
+      ...state.shell,
+      launchedBy: {
+        kind: "launch",
+        threadId: launcher,
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: "Supervisor",
+        via: "thread_launch",
+      },
+    };
+    expect(
+      yield* service.report(threadId, { status: "progress", summary: "Picked option B." }),
+    ).toEqual({ sequence: 0, delivery: "launcher" });
+    expect(yield* inbox(sql)).toEqual([
+      {
+        origin_thread_id: launcher,
+        kind: "progress",
+        text: "Report from a thread on this machine [remote-thread]: progress\n> Picked option B.",
+      },
+    ]);
+    // Progress waits for the launcher's next turn; only a question wakes it.
+    expect(state.dispatched).toEqual([]);
+
+    yield* service.report(threadId, { status: "needs_input", summary: "Which branch?" });
+    expect(state.dispatched).toHaveLength(1);
+    expect(state.dispatched[0]).toMatchObject({
+      type: "message.dispatch",
+      threadId: launcher,
+      dispatchMode: { type: "queue_after_active" },
+      notification: { outcome: "updated", summary: "Lane: needs_input" },
+    });
+    expect(state.dispatched[0]?.type === "message.dispatch" && state.dispatched[0].text).toContain(
+      "> Which branch?",
+    );
+  }));
+
+test("a delegated task reports to the thread that delegated it", ({ service, sql, state }) =>
+  Effect.gen(function* () {
+    yield* service.unbind(threadId);
+    state.shell = {
+      ...state.shell,
+      lineage: {
+        parentThreadId: launcher,
+        relationshipToParent: "subagent",
+        rootThreadId: launcher,
+      },
+    };
+    state.subagents = [
+      { origin: "app_owned", childThreadId: threadId } as unknown as OrchestrationV2Subagent,
+    ];
+    yield* service.report(threadId, { status: "completed", summary: "Done." });
+    expect((yield* inbox(sql)).map((row) => [row.origin_thread_id, row.kind])).toEqual([
+      [launcher, "completed"],
+    ]);
+  }));
+
+test("a thread launched from another machine without a binding still has no origin", ({
+  service,
+  sql,
+  state,
+}) =>
+  Effect.gen(function* () {
+    yield* service.unbind(threadId);
+    state.shell = {
+      ...state.shell,
+      launchedBy: {
+        kind: "launch",
+        threadId: launcher,
+        environmentId: "environment:elsewhere" as never,
+        environmentLabel: "laptop",
+        threadTitle: "Supervisor",
+        via: "ssh_thread_launch",
+      },
+    };
+    expect(
+      (yield* service.report(threadId, { status: "progress", summary: "x" }).pipe(Effect.flip))
+        .reason,
+    ).toBe("not_bound");
+    expect(yield* inbox(sql)).toEqual([]);
+  }));
+
 test("thread deletion wakes the wait into a thread_deleted error", ({
   service,
   state,

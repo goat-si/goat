@@ -1,4 +1,4 @@
-import { GoatHostStatusResult } from "@goat/contracts";
+import { GoatHostStatusResult, hasCloudMachineAliasPrefix } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -10,10 +10,13 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import { interruptibleTurns } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { type OcxLayout, prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
+import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -32,6 +35,9 @@ const Invite = Schema.Struct({
   managementUrl: Schema.String,
 });
 const decodeInvite = Schema.decodeUnknownOption(Schema.fromJsonString(Invite));
+
+/** `guardedSyncScript` exit codes besides ocx's own. */
+export const SYNC_EXIT = { notConnected: 90, connectionChanged: 91 } as const;
 
 export interface OcxOutput {
   readonly code: number;
@@ -68,6 +74,15 @@ export class HubOcx extends Context.Service<
       args: ReadonlyArray<string>,
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
+    /**
+     * `home` for a join nobody is asked about: `admit` is read after every other wait, right
+     * before ocx starts. False starts nothing and answers undefined.
+     */
+    readonly homeAdmitted: (
+      args: ReadonlyArray<string>,
+      timeoutMs: number,
+      admit: Effect.Effect<boolean>,
+    ) => Effect.Effect<OcxOutput | undefined, HubOcxError>;
     readonly device: (
       alias: string,
       args: ReadonlyArray<string>,
@@ -85,9 +100,28 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
+    /**
+     * Makes the device ready to be a Child: installs `version` for this user when OpenCodex is
+     * missing or older than Remote Link supports, then starts it unless it already answers.
+     * Stdout carries the version that answers; the code is one of `PREPARE_EXIT`.
+     */
+    readonly prepareDevice: (
+      alias: string,
+      version: string,
+      timeoutMs: number,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
+    /**
+     * `ocx sync` on a Remote Link Child, only while it is connected over `linkId`. Stdout is
+     * what ocx printed; the code is ocx's own or one of `SYNC_EXIT`.
+     */
+    readonly syncDevice: (
+      alias: string,
+      options: { readonly linkId: string; readonly restartCodex: boolean },
+      timeoutMs: number,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
-    /** Running turns on the device; undefined when it cannot be read. */
+    /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
       scope: McpInvocationScope,
@@ -96,7 +130,8 @@ export class HubOcx extends Context.Service<
     readonly deviceHealth: (alias: string) => Effect.Effect<string | undefined>;
     /** Live `ssh -R` link tunnels on this Home for the alias or port; undefined when unreadable. */
     readonly homeTunnels: (
-      alias: string,
+      /** Undefined counts by port alone, so a newer link under the alias is not counted. */
+      alias: string | undefined,
       tunnelPort: number | undefined,
     ) => Effect.Effect<number | undefined>;
   }
@@ -111,7 +146,6 @@ export const platformOf = (uname: string): DevicePlatform | undefined => {
 };
 
 /**
- * Resolves ocx in OpenCodex's remoteOcxArgv order: Desktop and system installs before PATH shims.
  * A pairing code goes to ocx's stdin through the shell's printf builtin, so it is never in argv.
  */
 export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) => {
@@ -125,14 +159,7 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
       ? `"$goat_ocx" ${quoted} </dev/null 2>/dev/null`
       : `printf '%s\\n' '${pairingCode}' | "$goat_ocx" ${quoted} 2>/dev/null`;
   return [
-    "goat_ocx=",
-    'for goat_candidate in "$HOME/.opencodex-desktop/bin/ocx" /Applications/OpenCodex.app/Contents/MacOS/ocx /usr/bin/ocx "/c/Program Files/OpenCodex/ocx"; do',
-    '  if [ -x "$goat_candidate" ]; then goat_ocx=$goat_candidate; break; fi',
-    "done",
-    'if [ -z "$goat_ocx" ]; then',
-    '  PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"',
-    "  goat_ocx=$(command -v ocx 2>/dev/null) || goat_ocx=",
-    "fi",
+    ...resolveOcx(),
     "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
     invoke,
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",
@@ -140,7 +167,34 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
   ].join("\n");
 };
 
-export const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
+const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
+
+/**
+ * `ocx sync` falls back to the machine's own providers once it is no longer connected, and it
+ * cannot be told which link to expect (lidge-jun/opencodex#7694). So the script reads
+ * `ocx connect status --json` right before the sync and refuses unless it is connected over this
+ * link, then reads it again so a connection that moved during the run is never reported synced.
+ * OpenCodex prints that status as two-space JSON, which the anchored patterns rely on.
+ */
+export const guardedSyncScript = (linkId: string, restartCodex: boolean, layout?: OcxLayout) => {
+  if (!SAFE_LINK_ID.test(linkId)) throw new TypeError("Unsafe link id.");
+  return [
+    ...resolveOcx(layout),
+    "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
+    "goat_linked() {",
+    '  goat_status=$("$goat_ocx" connect status --json </dev/null 2>/dev/null) || return 1',
+    '  printf \'%s\\n\' "$goat_status" | grep -q \'^  "state": "connected",\\{0,1\\}$\' || return 1',
+    '  printf \'%s\\n\' "$goat_status" | grep -q \'^  "transport": "link",\\{0,1\\}$\' || return 1',
+    `  printf '%s\\n' "$goat_status" | grep -q '^    "linkId": "${linkId}",\\{0,1\\}$'`,
+    "}",
+    `if ! goat_linked; then printf '\\n__goat_ocx_exit=${SYNC_EXIT.notConnected}\\n'; exit 0; fi`,
+    `goat_out=$("$goat_ocx" sync${restartCodex ? " --restart-codex" : ""} </dev/null 2>/dev/null)`,
+    "goat_code=$?",
+    `if ! goat_linked; then printf '\\n__goat_ocx_exit=${SYNC_EXIT.connectionChanged}\\n'; exit 0; fi`,
+    'printf \'%s\\n__goat_ocx_exit=%s\\n\' "$goat_out" "$goat_code"',
+    "",
+  ].join("\n");
+};
 
 export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   const match = EXIT.exec(stdout);
@@ -167,7 +221,7 @@ export const healthScript = [
 /** OpenCodex runs each link tunnel as `ssh … -R 127.0.0.1:<port>:127.0.0.1:<home> -- <alias>`. */
 export const countLinkTunnels = (
   processes: string,
-  alias: string,
+  alias: string | undefined,
   tunnelPort: number | undefined,
 ) =>
   processes.split(/\r?\n/u).filter((line) => {
@@ -177,7 +231,7 @@ export const countLinkTunnels = (
     if (!argv.includes("-R") || forward === undefined) return false;
     return (
       (tunnelPort !== undefined && forward.startsWith(`127.0.0.1:${tunnelPort}:`)) ||
-      (argv.at(-2) === "--" && argv.at(-1) === alias)
+      (alias !== undefined && argv.at(-2) === "--" && argv.at(-1) === alias)
     );
   }).length;
 
@@ -192,25 +246,52 @@ const make = Effect.gen(function* () {
   const environment = yield* HostProcess.Environment;
   const cwd = yield* HostProcess.WorkingDirectory;
 
-  const run = (command: string, args: ReadonlyArray<string>, timeoutMs: number) =>
+  const run = (
+    command: string,
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    workingDirectory: string | null = cwd,
+  ) =>
     runner.run({
       command,
       args,
       env: environment,
-      cwd,
+      cwd: workingDirectory ?? undefined,
       timeout: timeoutMs,
       maxOutputBytes: MAX_BYTES,
       timeoutBehavior: "timedOutResult",
     });
 
-  const home = Effect.fn("HubOcx.home")(function* (args: ReadonlyArray<string>, timeoutMs: number) {
+  const homeBinary = Effect.fn("HubOcx.homeBinary")(function* () {
     const binary = (yield* inventory.read).binaries[0]?.path;
     if (binary === undefined)
       return yield* new HubOcxError({
         reason: "ocx_missing",
         message: "OpenCodex is not installed on this hub.",
       });
-    const output = yield* run(binary, args, timeoutMs).pipe(
+    return binary;
+  });
+  const home = Effect.fn("HubOcx.home")(function* (args: ReadonlyArray<string>, timeoutMs: number) {
+    return yield* runHome(yield* homeBinary(), args, timeoutMs);
+  });
+  const homeAdmitted = Effect.fn("HubOcx.homeAdmitted")(function* (
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    admit: Effect.Effect<boolean>,
+  ) {
+    const binary = yield* homeBinary();
+    if (!(yield* admit)) return undefined;
+    // No working directory: the spawner awaits a check of one before it starts the process, and
+    // nothing may wait between the permission read and the start. The binary path is absolute.
+    return yield* runHome(binary, args, timeoutMs, null);
+  });
+  const runHome = Effect.fn("HubOcx.runHome")(function* (
+    binary: string,
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    workingDirectory: string | null = cwd,
+  ) {
+    const output = yield* run(binary, args, timeoutMs, workingDirectory).pipe(
       Effect.mapError(
         () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       ),
@@ -253,7 +334,12 @@ const make = Effect.gen(function* () {
 
   return HubOcx.of({
     home,
+    homeAdmitted,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
+    prepareDevice: (alias, version, timeoutMs) =>
+      runDevice(alias, prepareScript(version), timeoutMs),
+    syncDevice: (alias, options, timeoutMs) =>
+      runDevice(alias, guardedSyncScript(options.linkId, options.restartCodex), timeoutMs),
     devicePlatform: Effect.fn("HubOcx.devicePlatform")(
       function* (alias) {
         const result = yield* dispatch.runHostScript({
@@ -306,7 +392,11 @@ const make = Effect.gen(function* () {
     pinnedFingerprint: Effect.fn("HubOcx.pinnedFingerprint")(
       function* (alias) {
         if (!SAFE_ALIAS.test(alias)) return undefined;
-        for (const directory of ["goat-hosts", "goat-cloud"]) {
+        // A cloud alias is only ever pinned by the cloud machine service, never by a person.
+        const directories = hasCloudMachineAliasPrefix(alias)
+          ? ["goat-cloud"]
+          : ["goat-hosts", "goat-cloud"];
+        for (const directory of directories) {
           const file = path.join(homeDirectory, ".ssh", directory, `${alias}.known_hosts`);
           if (!(yield* fs.exists(file))) continue;
           const output = yield* run("ssh-keygen", ["-E", "sha256", "-lf", file], 10_000);
@@ -350,9 +440,9 @@ const make = Effect.gen(function* () {
           decodeStatus,
         );
         const entry = status.hosts.find(({ host }) => host === null);
-        return entry?.reachability === "ok" && !entry.lastKnown
-          ? entry.metrics?.threads.running
-          : undefined;
+        const threads =
+          entry?.reachability === "ok" && !entry.lastKnown ? entry.metrics?.threads : undefined;
+        return threads === undefined ? undefined : interruptibleTurns(threads);
       },
       Effect.orElseSucceed(() => undefined),
     ),

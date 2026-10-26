@@ -496,35 +496,35 @@ describe("Projects view hydration policy", () => {
     );
   });
 
-  it("uses Projects with no saved settings", async () => {
+  it("uses Activity with no saved settings", async () => {
     await ensureClientSettingsHydrated();
     expect(
       resolveSidebarViewIsProjects({
         status: "ready",
-        value: getClientSettings().legacySidebarEnabled,
+        value: getClientSettings().projectsSidebarEnabled,
         synchronousValue: null,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("uses Projects after hydration fails and keeps a synchronous Activity choice", async () => {
+  it("uses Activity after hydration fails and keeps a synchronous Projects choice", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     persistenceMocks.getClientSettings.mockRejectedValueOnce(new Error("read failed"));
     await expect(ensureClientSettingsHydrated()).rejects.toThrow("read failed");
     expect(
       resolveSidebarViewIsProjects({
         status: "failed",
-        value: getClientSettings().legacySidebarEnabled,
+        value: getClientSettings().projectsSidebarEnabled,
         synchronousValue: null,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolveSidebarViewIsProjects({
         status: "failed",
-        value: true,
-        synchronousValue: false,
+        value: false,
+        synchronousValue: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

@@ -1,3 +1,8 @@
+import { useAtomValue } from "@effect/atom-react";
+import { isThreadContextReadable } from "@goat/shared/composerContextReferences";
+import { environmentCatalog } from "~/connection/catalog";
+import { resolveThreadContextRoute, routeThreadContextRecord } from "~/lib/threadContextRoute";
+import { useEnvironmentConnectionPhase } from "~/state/presentation";
 import ChatMarkdown from "./ChatMarkdown";
 import { ReadOnlySourcePreview } from "./files/AttachmentFilePreview";
 import type { PreviewAnnotationPayload, ThreadContextRecord } from "@goat/contracts";
@@ -38,6 +43,8 @@ import {
 } from "./contextPresentationRegistry";
 import type { ContextChipKind } from "./ContextChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { CapabilityContextChip } from "./CapabilityContextChip";
+import { appIdForContextId, turnCapabilityForContextId } from "@goat/shared/turnCapabilities";
 import {
   ContextChipPopover,
   ContextChipShell,
@@ -325,12 +332,30 @@ function ComposerPreviewAnnotationDetails({
 
 function ComposerThreadContextChip(props: { record: ThreadContextRecord }) {
   const { environmentId } = use(ComposerContextActionsContext);
-  return (
-    <ThreadContextChip
-      record={props.record}
-      unreadable={environmentId !== null && props.record.environmentId !== environmentId}
-    />
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const phase = useEnvironmentConnectionPhase(props.record.environmentId);
+  const agentEnvironmentId = environmentId ?? props.record.environmentId;
+  const route = resolveThreadContextRoute({
+    agentEnvironmentId,
+    threadEnvironmentId: props.record.environmentId,
+    entries: catalog.entries,
+    isDesktopRenderer: window.desktopBridge !== undefined,
+  });
+  const record = routeThreadContextRecord(
+    props.record,
+    route.kind === "unreachable" ? { kind: "local" } : route,
   );
+  const readable = isThreadContextReadable({
+    record,
+    environmentId: agentEnvironmentId,
+    hostRoutingEnvironmentId: agentEnvironmentId,
+  });
+  const state = !readable
+    ? "invalid"
+    : record.host && phase !== "connected"
+      ? "unavailable"
+      : "readable";
+  return <ThreadContextChip record={record} state={state} />;
 }
 
 function UnresolvedContextChip(props: { label: string }) {
@@ -457,6 +482,17 @@ export function ComposerContextReferenceChip(props: {
   label: string;
 }): ReactElement {
   const records = use(ComposerContextRecordsContext);
+  // A capability chip is whole in its id; there is no draft record to look up.
+  const capability =
+    props.kind === "capability" ? turnCapabilityForContextId(props.contextId) : undefined;
+  if (capability !== undefined)
+    return (
+      <CapabilityContextChip
+        capability={capability}
+        label={props.label}
+        app={appIdForContextId(props.contextId) !== undefined}
+      />
+    );
   return composerContextPresentationRegistry.render(props.kind, records.get(props.contextId), {
     label: props.label,
   });

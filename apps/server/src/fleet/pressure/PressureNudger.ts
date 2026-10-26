@@ -7,7 +7,6 @@ import {
   type HostPlacementRequirements,
   type HostPressure,
   type HostPressureAdvice,
-  type HostPressureDelivery,
   type HostStatusEntry,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
@@ -26,12 +25,14 @@ import * as HostHealthMonitor from "../health/HostHealthMonitor.ts";
 import * as HostPressureMonitor from "./HostPressureMonitor.ts";
 import {
   initialPressureState,
+  HOST_PRESSURE_KEY_PREFIX,
   launchAdvice,
   NOTHING_ANNOUNCED,
   nudgeDecision,
   pressureHostKey,
   pressureNudgeText,
   pressureRecipients,
+  pressureStatusText,
   rankHosts,
   resolvePressureSettings,
   roomyHosts,
@@ -39,9 +40,7 @@ import {
   stepPressure,
   toHostPressure,
   type AnnouncedPressure,
-  type PressureNudgeKind,
   type PressureState,
-  type ResolvedPressureSettings,
 } from "./pressureModel.ts";
 
 const PRESSURE_NUDGE_INTERVAL_MS = 60_000;
@@ -81,18 +80,11 @@ interface RemoteReading {
   readonly state: PressureState | null;
 }
 
-const deliveryFor = (
-  settings: ResolvedPressureSettings,
-  kind: PressureNudgeKind,
-  level: HostPressure["level"],
-  previous: HostPressure["level"],
-): HostPressureDelivery => {
-  if (kind === "rise")
-    return level === "critical" ? settings.criticalDelivery : settings.elevatedDelivery;
-  // Easing and recovery never start a turn; they are dropped where the rise was not delivered.
-  const announced = previous === "critical" ? settings.criticalDelivery : settings.elevatedDelivery;
-  return announced === "off" ? "off" : "notice";
-};
+/** A legacy host's entry with the level stepped here, so a spike in one reading never ranks it. */
+const withSustained = (reading: RemoteReading): HostStatusEntry =>
+  reading.entry.pressure === undefined && reading.state !== null
+    ? { ...reading.entry, pressure: toHostPressure(reading.state) }
+    : reading.entry;
 
 /** Shared cached admission state; construction does not depend on watches or host-status reads. */
 export class PressureAdmissionService extends Context.Service<
@@ -102,6 +94,10 @@ export class PressureAdmissionService extends Context.Service<
     readonly admit: PressureNudgerShape["admit"];
     readonly pressureOf: (host: string | null) => Effect.Effect<HostPressure | undefined>;
     readonly freshEntries: Effect.Effect<ReadonlyArray<HostStatusEntry>>;
+    /** The same entries with each legacy host's sustained level from readings held here. */
+    readonly sustained: (
+      entries: ReadonlyArray<HostStatusEntry>,
+    ) => Effect.Effect<ReadonlyArray<HostStatusEntry>>;
   }
 >()("goat/fleet/pressure/PressureNudger/PressureAdmissionService") {}
 
@@ -142,16 +138,26 @@ const makeAdmission = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const reading = (yield* Ref.get(readings)).get(pressureHostKey(host));
     if (reading === undefined || now - reading.at > PRESSURE_READING_MAX_AGE_MS) return undefined;
-    return (
-      reading.entry.pressure ?? (reading.state === null ? undefined : toHostPressure(reading.state))
-    );
+    return withSustained(reading).pressure;
   });
 
   const freshEntries = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     return [...(yield* Ref.get(readings)).values()]
       .filter((reading) => now - reading.at <= PRESSURE_READING_MAX_AGE_MS)
-      .map((reading) => reading.entry);
+      .map(withSustained);
+  });
+
+  const sustained = Effect.fn("PressureNudger.sustained")(function* (
+    entries: ReadonlyArray<HostStatusEntry>,
+  ) {
+    const held = yield* Ref.get(readings);
+    return entries.map((entry) => {
+      const reading = held.get(pressureHostKey(entry.host));
+      return entry.pressure === undefined && reading !== undefined
+        ? withSustained({ ...reading, entry })
+        : entry;
+    });
   });
 
   const admit = Effect.fn("PressureNudger.admit")(function* (
@@ -175,13 +181,13 @@ const makeAdmission = Effect.gen(function* () {
     };
   });
 
-  return PressureAdmissionService.of({ observe, admit, pressureOf, freshEntries });
+  return PressureAdmissionService.of({ observe, admit, pressureOf, freshEntries, sustained });
 });
 export const layerAdmission = Layer.effect(PressureAdmissionService, makeAdmission);
 
 export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
-  const { observe, admit, pressureOf, freshEntries } = yield* PressureAdmissionService;
+  const { observe, admit, pressureOf, freshEntries, sustained } = yield* PressureAdmissionService;
   const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
   const watches = yield* LaunchWatchService.LaunchWatchService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -209,42 +215,53 @@ export const make = Effect.gen(function* () {
     return annotated;
   });
 
-  const deliver = (
+  const quietly = (threadId: ThreadId) =>
+    Effect.catchCause((cause) =>
+      Effect.logWarning("fleet.pressure.notice-failed", { threadId, cause }),
+    );
+
+  /** Writes the host's status row; the same record key rewrites it in place. */
+  const writeRow = (input: {
+    readonly threadId: ThreadId;
+    readonly recordKey: string;
+    readonly revision: string;
+    readonly message: string;
+    readonly critical: boolean;
+  }) =>
+    threads
+      .dispatch({
+        type: "thread.notice.record",
+        commandId: CommandId.make("server:" + input.recordKey + ":" + input.revision),
+        threadId: input.threadId,
+        recordKey: input.recordKey,
+        message: input.message,
+        severity: input.critical ? "warning" : "info",
+      })
+      .pipe(Effect.asVoid, quietly(input.threadId));
+
+  const wake = (
     threadId: ThreadId,
-    delivery: HostPressureDelivery,
     key: string,
     message: { readonly text: string; readonly summary: string },
   ) =>
-    (delivery === "wake"
-      ? threads.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("server:" + key),
-          threadId,
-          messageId: MessageId.make("message:" + key),
-          text: message.text,
-          notification: {
-            source: { kind: "monitor" },
-            outcome: "updated",
-            summary: message.summary,
-          },
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
-        })
-      : threads.dispatch({
-          type: "thread.notice.record",
-          commandId: CommandId.make("server:" + key),
-          threadId,
-          recordKey: key,
-          message: message.text,
-        })
-    ).pipe(
-      Effect.asVoid,
-      Effect.catchCause((cause) =>
-        Effect.logWarning("fleet.pressure.notice-failed", { threadId, cause }),
-      ),
-    );
+    threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("server:" + key),
+        threadId,
+        messageId: MessageId.make("message:" + key),
+        text: message.text,
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: message.summary,
+        },
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(Effect.asVoid, quietly(threadId));
 
   const tick = Effect.gen(function* () {
     const resolved = yield* settings;
@@ -265,11 +282,13 @@ export const make = Effect.gen(function* () {
       const key = pressureHostKey(host);
       const now = yield* Clock.currentTimeMillis;
       const before = (yield* Ref.get(announced)).get(key) ?? NOTHING_ANNOUNCED;
-      const decision = nudgeDecision(before, pressure.level, now, resolved.notifyCooldownMs);
-      yield* Ref.update(announced, (current) => new Map(current).set(key, decision.next));
-      if (decision.kind === null) continue;
-      const delivery = deliveryFor(resolved, decision.kind, pressure.level, before.level);
-      if (delivery === "off") continue;
+      const { next, nudge } = nudgeDecision(before, pressure.level, now, resolved);
+      const hold = (value: AnnouncedPressure) =>
+        Ref.update(announced, (current) => new Map(current).set(key, value));
+      if (nudge === null) {
+        yield* hold(next);
+        continue;
+      }
       shells ??= yield* threads
         .listProjectThreads({ projectId: undefined, includeSubagents: true })
         .pipe(Effect.orElseSucceed(() => []));
@@ -279,42 +298,77 @@ export const make = Effect.gen(function* () {
         shells,
         watches: active,
       });
-      if (routed.recipients.length === 0) continue;
-      if (decision.kind !== "recover" && entries === null) entries = (yield* readAll).hosts;
-      const alternatives =
-        decision.kind === "recover"
+      // A row keeps reaching the threads that hold it, so recovery reaches them after work ends.
+      const rowRecipients =
+        nudge.row === null
           ? []
-          : roomyHosts(entries ?? (yield* freshEntries), host, resolved, now);
+          : [
+              ...new Set([
+                ...(nudge.row.opened ? [] : (next.row?.recipients ?? [])),
+                ...routed.recipients,
+              ]),
+            ].toSorted();
+      yield* hold(
+        next.row === null || nudge.row === null
+          ? next
+          : { ...next, row: { ...next.row, recipients: rowRecipients } },
+      );
+      const wakeRecipients = nudge.wake ? routed.recipients : [];
+      if (rowRecipients.length === 0 && wakeRecipients.length === 0) continue;
+      if (nudge.kind !== "recover" && entries === null) entries = (yield* readAll).hosts;
+      const alternatives =
+        nudge.kind === "recover"
+          ? []
+          : roomyHosts(
+              entries === null ? yield* freshEntries : yield* sustained(entries),
+              host,
+              resolved,
+              now,
+            );
       yield* Effect.logInfo("fleet.pressure.notice", {
         host: key,
         level: pressure.level,
-        kind: decision.kind,
-        recipients: routed.recipients.length,
+        kind: nudge.kind,
+        row: nudge.row === null ? null : nudge.row.opened ? "opened" : "updated",
+        wake: wakeRecipients.length,
+        recipients: rowRecipients.length,
       });
+      const text = (recipient: string) => ({
+        kind: nudge.kind,
+        host,
+        pressure,
+        consumers: routed.consumers,
+        recipient,
+        alternatives,
+      });
+      const rowId = nudge.row?.id;
+      if (rowId !== undefined)
+        yield* Effect.forEach(
+          rowRecipients,
+          (recipient) =>
+            writeRow({
+              threadId: ThreadId.make(recipient),
+              recordKey: "host-pressure:" + key + ":" + rowId + ":" + recipient,
+              revision: pressure.level + ":" + pressure.since,
+              message: pressureStatusText(text(recipient)),
+              critical: pressure.level === "critical",
+            }),
+          { discard: true },
+        );
       yield* Effect.forEach(
-        routed.recipients,
+        wakeRecipients,
         (recipient) =>
-          deliver(
+          wake(
             ThreadId.make(recipient),
-            delivery,
-            "host-pressure:" +
+            HOST_PRESSURE_KEY_PREFIX +
               key +
-              ":" +
-              decision.kind +
-              ":" +
+              ":wake:" +
               pressure.level +
               ":" +
               pressure.since +
               ":" +
               recipient,
-            pressureNudgeText({
-              kind: decision.kind!,
-              host,
-              pressure,
-              consumers: routed.consumers,
-              recipient,
-              alternatives,
-            }),
+            pressureNudgeText(text(recipient)),
           ),
         { discard: true },
       );
@@ -329,7 +383,12 @@ export const make = Effect.gen(function* () {
       requirements: HostPlacementRequirements,
     ) {
       const resolved = yield* settings;
-      return rankHosts(hosts, requirements, resolved, yield* Clock.currentTimeMillis);
+      return rankHosts(
+        yield* sustained(hosts),
+        requirements,
+        resolved,
+        yield* Clock.currentTimeMillis,
+      );
     }),
     tick,
   });

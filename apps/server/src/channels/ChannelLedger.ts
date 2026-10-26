@@ -29,7 +29,6 @@ import {
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
-  ChannelTaskLedgerExportRow,
   ChannelWorkerRun,
   type ChannelTaskBrief,
   type ChannelTaskExportInput,
@@ -45,6 +44,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+
+import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
 export class ChannelLedgerError extends Schema.TaggedError<ChannelLedgerError>()(
   "ChannelLedgerError",
@@ -158,6 +159,14 @@ export class ChannelLedger extends Context.Service<
       inputId: ChannelInputId,
     ) => Effect.Effect<ChannelStoredInput | undefined, ChannelLedgerError>;
     readonly listPendingInputs: (
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<ChannelInputId>, ChannelLedgerError>;
+    /**
+     * The oldest unfinished input of each conversation, oldest first. A conversation's next
+     * input becomes receivable only after the one before it is answered, so replies keep the
+     * order people wrote in and a follow-up sees the task its previous message created.
+     */
+    readonly listReceivableInputs: (
       limit: number,
     ) => Effect.Effect<ReadonlyArray<ChannelInputId>, ChannelLedgerError>;
     /** Marks an input as being read. Returns nothing when it already finished. */
@@ -453,7 +462,7 @@ export class ChannelLedger extends Context.Service<
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;
     /**
      * The answers recorded in a task's current generation, newest first, which the dispatcher
-     * reads when it asked. A retry starts over: earlier generations' answers are not returned.
+     * reads when it asked. A retry or a move starts over: earlier generations' are not returned.
      */
     readonly recentAnswers: (
       taskId: ChannelTaskId,
@@ -575,7 +584,6 @@ const decodeWorkerRun = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelWo
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
-const encodeExportRow = Schema.encodeSync(Schema.fromJsonString(ChannelTaskLedgerExportRow));
 const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMessage));
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const encodeBot = Schema.encodeSync(Schema.fromJsonString(BotState));
@@ -971,10 +979,27 @@ const make = Effect.gen(function* () {
     listPendingInputs: (limit) =>
       sql<{ readonly input_id: ChannelInputId }>`
         SELECT input_id FROM channel_inbox WHERE state IN ('accepted', 'processing')
-        ORDER BY accepted_at LIMIT ${limit}
+        ORDER BY accepted_at, rowid LIMIT ${limit}
       `.pipe(
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listPendingInputs")),
+      ),
+
+    // rowid breaks ties in arrival order: inputs accepted in the same millisecond keep the order
+    // they were stored in.
+    listReceivableInputs: (limit) =>
+      sql<{ readonly input_id: ChannelInputId }>`
+        SELECT input_id FROM (
+          SELECT input_id, accepted_at, rowid AS arrival, ROW_NUMBER() OVER (
+            PARTITION BY conversation_id ORDER BY accepted_at, rowid
+          ) AS position
+          FROM channel_inbox WHERE state IN ('accepted', 'processing')
+        )
+        WHERE position = 1
+        ORDER BY accepted_at, arrival LIMIT ${limit}
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => row.input_id)),
+        Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
 
     beginReception: (input) =>
@@ -1187,16 +1212,7 @@ const make = Effect.gen(function* () {
             detail: "Invalid export cursor.",
           });
         }
-        const rows = yield* sql<{
-          readonly sequence: number;
-          readonly owner_id: string;
-          readonly task_json: string;
-          readonly event_json: string;
-          readonly brief_json: string | null;
-          readonly worker_json: string | null;
-          readonly human_interventions: number;
-          readonly reruns: number;
-        }>`
+        const rows = yield* sql<ChannelTaskExportSqlRow>`
           SELECT outcome.sequence, task.owner_id, task.task_json, outcome.event_json,
             (SELECT frozen.event_json FROM channel_task_events AS frozen
               WHERE frozen.task_id = outcome.task_id AND frozen.type = 'task.brief.frozen'
@@ -1213,12 +1229,17 @@ const make = Effect.gen(function* () {
                 AND answer.sequence < outcome.sequence
                 AND answer.sequence > COALESCE((
                   SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
-                  WHERE boundary.task_id = outcome.task_id AND boundary.type = 'task.retry.requested'
+                  WHERE boundary.task_id = outcome.task_id
+                    AND boundary.type IN ('task.retry.requested', 'task.moved')
                     AND boundary.sequence < outcome.sequence
                 ), 0)) AS human_interventions,
             (SELECT COUNT(*) FROM channel_task_events AS retry
               WHERE retry.task_id = outcome.task_id AND retry.type = 'task.retry.requested'
-                AND retry.sequence < outcome.sequence) AS reruns
+                AND retry.sequence < outcome.sequence) AS reruns,
+            (SELECT COUNT(*) FROM channel_task_events AS start
+              WHERE start.task_id = outcome.task_id
+                AND start.type IN ('task.retry.requested', 'task.moved')
+                AND start.sequence < outcome.sequence) AS generation_starts
           FROM channel_task_events AS outcome
           JOIN channel_tasks AS task ON task.task_id = outcome.task_id
           WHERE task.owner_id = ${input.ownerId}
@@ -1229,53 +1250,7 @@ const make = Effect.gen(function* () {
           ORDER BY outcome.sequence LIMIT ${limit + 1}
         `;
         const page = rows.slice(0, limit);
-        const lines = page.map((row) => {
-          const task = decodeTask(row.task_json);
-          const outcome = decodeEvent(row.event_json);
-          const frozen = row.brief_json === null ? undefined : decodeEvent(row.brief_json);
-          const bound = row.worker_json === null ? undefined : decodeEvent(row.worker_json);
-          const brief = frozen?.type === "task.brief.frozen" ? frozen.payload.brief : null;
-          const generation =
-            outcome.type === "task.completed" || outcome.type === "task.failed"
-              ? outcome.payload.generation
-              : row.reruns + 1;
-          const worker =
-            bound?.type === "task.worker.bound" && bound.payload.worker.generation === generation
-              ? bound.payload.worker
-              : undefined;
-          return encodeExportRow({
-            sequence: row.sequence,
-            taskId: task.taskId,
-            ownerId: row.owner_id,
-            requester: task.requester,
-            conversationId: task.conversationId,
-            originBindingId: task.originBindingId,
-            originAddress: task.originAddress,
-            originInputId: task.originInputId,
-            title: task.title,
-            brief,
-            terminalState:
-              outcome.type === "task.completed"
-                ? "completed"
-                : outcome.type === "task.failed"
-                  ? "failed"
-                  : "cancelled",
-            occurredAt: outcome.occurredAt,
-            resultSummary:
-              outcome.type === "task.completed"
-                ? outcome.payload.summary
-                : outcome.type === "task.failed"
-                  ? (outcome.payload.summary ?? outcome.payload.reason)
-                  : outcome.type === "task.cancelled"
-                    ? (outcome.payload.reason ?? null)
-                    : null,
-            // The ledger stores worker/run pointers and summaries, not transcript evidence.
-            evidence: worker ?? null,
-            channelAnswers: row.human_interventions,
-            reruns: row.reruns,
-            generation,
-          });
-        });
+        const lines = page.map(channelTaskExportLine);
         const last = page.at(-1);
         return {
           jsonl: lines.length === 0 ? "" : lines.join("\n") + "\n",
@@ -1291,7 +1266,8 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered' AND sequence < ${sequence}
           AND sequence > COALESCE((
             SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
-            WHERE boundary.task_id = ${taskId} AND boundary.type = 'task.retry.requested'
+            WHERE boundary.task_id = ${taskId}
+              AND boundary.type IN ('task.retry.requested', 'task.moved')
               AND boundary.sequence < ${sequence}
           ), 0)
         ORDER BY sequence LIMIT 501
@@ -1928,7 +1904,7 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
           AND sequence > COALESCE((
             SELECT MAX(sequence) FROM channel_task_events
-            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+            WHERE task_id = ${taskId} AND type IN ('task.retry.requested', 'task.moved')
           ), 0)
         ORDER BY sequence DESC LIMIT ${limit}
       `.pipe(
@@ -1947,7 +1923,7 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
           AND sequence > COALESCE((
             SELECT MAX(sequence) FROM channel_task_events
-            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+            WHERE task_id = ${taskId} AND type IN ('task.retry.requested', 'task.moved')
           ), 0)
           AND COALESCE(json_extract(event_json, '$.payload.projectChoice.type'), '') != 'none'
         ORDER BY sequence DESC LIMIT 1

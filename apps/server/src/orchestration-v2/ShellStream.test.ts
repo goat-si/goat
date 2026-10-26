@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import type {
+  ApplicationStoredEvent,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2ThreadShell,
@@ -21,7 +22,9 @@ import {
   dedupeShellEnrichment,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemsFromInitialSnapshot,
+  shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
+  subagentLineageOrder,
 } from "./ShellStream.ts";
 
 const emptyShellSnapshot = {
@@ -31,6 +34,149 @@ const emptyShellSnapshot = {
   threads: [],
   archivedThreads: [],
 } as OrchestrationV2ShellSnapshot;
+
+describe("subagent shell events", () => {
+  const stored = (threadId: string, type: string) =>
+    ({ event: { threadId, type } }) as ApplicationStoredEvent;
+
+  it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
+    const subagents = new Set(["child"]);
+    expect(
+      shouldPublishShellApplicationEvent(stored("parent", "turn-item.updated"), subagents),
+    ).toBe(true);
+    expect(
+      shouldPublishShellApplicationEvent(stored("child", "turn-item.updated"), subagents),
+    ).toBe(false);
+    expect(shouldPublishShellApplicationEvent(stored("child", "node.updated"), subagents)).toBe(
+      false,
+    );
+    expect(
+      shouldPublishShellApplicationEvent(stored("child", "runtime-request.updated"), subagents),
+    ).toBe(true);
+    expect(shouldPublishShellApplicationEvent(stored("child", "run.updated"), subagents)).toBe(
+      true,
+    );
+  });
+
+  it("tracks subagents created after the subscription starts", () => {
+    const subagents = new Set<string>();
+    const created = {
+      event: {
+        threadId: "new-child",
+        type: "thread.created",
+        payload: { lineage: { relationshipToParent: "subagent" } },
+      },
+    } as ApplicationStoredEvent;
+    expect(shouldPublishShellApplicationEvent(created, subagents)).toBe(true);
+    expect(
+      shouldPublishShellApplicationEvent(stored("new-child", "message.updated"), subagents),
+    ).toBe(false);
+    expect(
+      shouldPublishShellApplicationEvent(stored("new-child", "thread.deleted"), subagents),
+    ).toBe(true);
+    expect(subagents.has("new-child")).toBe(true);
+  });
+  it("publishes a promoted delegated task's transcript updates again", () => {
+    const subagents = new Set(["child"]);
+    const promoted = {
+      sequence: 1,
+      event: {
+        threadId: "child",
+        type: "thread.metadata-updated",
+        payload: { lineage: { relationshipToParent: null } },
+      },
+    } as ApplicationStoredEvent;
+    expect(shouldPublishShellApplicationEvent(promoted, subagents)).toBe(true);
+    expect(shouldPublishShellApplicationEvent(stored("child", "message.updated"), subagents)).toBe(
+      true,
+    );
+  });
+
+  it("keeps a live promotion when replay later reaches the delegated task's creation", () => {
+    const subagents = new Set<string>();
+    // Snapshot through 5; the stream's own catch-up replay covers 6-7 while the live tail is
+    // filtered concurrently, so the promotion (8) is seen before the creation (6).
+    const order = subagentLineageOrder(5);
+    const lineageEvent = (sequence: number, type: string, relationshipToParent: string | null) =>
+      ({
+        sequence,
+        event: { threadId: "child", type, payload: { lineage: { relationshipToParent } } },
+      }) as ApplicationStoredEvent;
+    const message = { sequence: 9, event: { threadId: "child", type: "message.updated" } };
+    shouldPublishShellApplicationEvent(
+      lineageEvent(8, "thread.metadata-updated", null),
+      subagents,
+      order,
+    );
+    shouldPublishShellApplicationEvent(
+      lineageEvent(6, "thread.created", "subagent"),
+      subagents,
+      order,
+    );
+    expect(
+      shouldPublishShellApplicationEvent(message as ApplicationStoredEvent, subagents, order),
+    ).toBe(true);
+  });
+
+  it("classifies an unarchived subagent the active snapshot left out", () => {
+    const subagents = new Set<string>();
+    const order = subagentLineageOrder(5);
+    const event = (sequence: number, type: string, relationshipToParent: string | null) =>
+      ({
+        sequence,
+        event: { threadId: "child", type, payload: { lineage: { relationshipToParent } } },
+      }) as ApplicationStoredEvent;
+    shouldPublishShellApplicationEvent(event(6, "thread.unarchived", "subagent"), subagents, order);
+    expect(
+      shouldPublishShellApplicationEvent(event(7, "message.updated", null), subagents, order),
+    ).toBe(false);
+
+    // A live promotion seen before a replayed unarchive keeps the promoted thread published.
+    const promoted = new Set<string>();
+    const promotedOrder = subagentLineageOrder(5);
+    shouldPublishShellApplicationEvent(
+      event(8, "thread.metadata-updated", null),
+      promoted,
+      promotedOrder,
+    );
+    shouldPublishShellApplicationEvent(
+      event(6, "thread.unarchived", "subagent"),
+      promoted,
+      promotedOrder,
+    );
+    expect(
+      shouldPublishShellApplicationEvent(
+        event(9, "message.updated", null),
+        promoted,
+        promotedOrder,
+      ),
+    ).toBe(true);
+  });
+
+  it("classifies a subagent created after the snapshot even when replay delivers it", () => {
+    const subagents = new Set<string>();
+    const order = subagentLineageOrder(5);
+    const created = {
+      sequence: 6,
+      event: {
+        threadId: "late-child",
+        type: "thread.created",
+        payload: { lineage: { relationshipToParent: "subagent" } },
+      },
+    } as ApplicationStoredEvent;
+    shouldPublishShellApplicationEvent(created, subagents, order);
+    expect(
+      shouldPublishShellApplicationEvent(
+        {
+          sequence: 7,
+          event: { threadId: "late-child", type: "node.updated" },
+        } as ApplicationStoredEvent,
+        subagents,
+        order,
+      ),
+    ).toBe(false);
+  });
+});
 
 it.effect("coalesces a slow shell subscriber by identity and location in sequence order", () =>
   Effect.scoped(

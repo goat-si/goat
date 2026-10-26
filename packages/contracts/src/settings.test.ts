@@ -44,6 +44,16 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("agent tool listing", () => {
+  it("lists the core tools to an environment that never chose, and keeps full for one that did", () => {
+    expect(decodeServerSettings({}).agentToolListing).toBe("core");
+    expect(decodeServerSettings({ agentToolListing: "full" }).agentToolListing).toBe("full");
+    expect(decodeServerSettingsPatch({ agentToolListing: "full" })).toEqual({
+      agentToolListing: "full",
+    });
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
@@ -60,6 +70,14 @@ describe("storage cleanup settings", () => {
       historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
       historyArchiveDeleteAfterDays: null,
     });
+  });
+
+  it("keeps cloud machines joining a hub whose settings predate the switch", () => {
+    expect(decodeServerSettings({ hub: { enabled: true } }).hub.autoJoinCloudMachines).toBe(true);
+    expect(
+      decodeServerSettings({ hub: { enabled: true, autoJoinCloudMachines: false } }).hub
+        .autoJoinCloudMachines,
+    ).toBe(false);
   });
 
   it("accepts partial custom patches but requires complete stored project rules", () => {
@@ -244,8 +262,14 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to Projects view", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(true);
+  it("defaults to Activity view", () => {
+    expect(decodeClientSettings({}).projectsSidebarEnabled).toBe(false);
+  });
+
+  it("moves clients that only saved the old Projects default to Activity view", () => {
+    const decoded = decodeClientSettings({ legacySidebarEnabled: true });
+    expect(decoded.projectsSidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("legacySidebarEnabled");
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -253,16 +277,18 @@ describe("ClientSettings sidebar", () => {
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(true);
+    expect(decoded.projectsSidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
   it.each([true, false])("preserves an explicit sidebar view choice: %s", (value) => {
-    expect(decodeClientSettings({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(value);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(
+    expect(decodeClientSettings({ projectsSidebarEnabled: value }).projectsSidebarEnabled).toBe(
       value,
     );
+    expect(
+      decodeClientSettingsPatch({ projectsSidebarEnabled: value }).projectsSidebarEnabled,
+    ).toBe(value);
   });
 });
 
@@ -805,5 +831,18 @@ describe("host checkpoint replication settings", () => {
     expect(() =>
       decodeServerSettings({ fleet: { hosts: { box: { checkpointReplication: "automatic" } } } }),
     ).toThrow();
+  });
+});
+
+describe("destination rail client settings", () => {
+  it("decodes settings saved before the rail was customizable", () => {
+    expect(decodeClientSettings({}).destinationRail).toEqual({ order: [], shown: [], hidden: [] });
+  });
+
+  it("keeps ids this version does not know", () => {
+    const saved = { order: ["future-item", "notes"], shown: ["future-item"], hidden: ["bot"] };
+    const settings = decodeClientSettings({ destinationRail: saved });
+    expect(settings.destinationRail).toEqual(saved);
+    expect(encodeClientSettings(settings).destinationRail).toEqual(saved);
   });
 });

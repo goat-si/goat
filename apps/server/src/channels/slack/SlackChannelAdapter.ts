@@ -29,7 +29,7 @@ import {
   type SlackClassifierConfig,
   type SlackRevocationEvent,
 } from "./slackEventMapping.ts";
-import { formatSlackOutboundText, slackChoiceBlocks } from "./slackMessageFormatting.ts";
+import { formatSlackOutboundMessages, slackChoiceBlocks } from "./slackMessageFormatting.ts";
 import {
   slackCall,
   type SlackBotApi,
@@ -231,6 +231,10 @@ const deliveryFailed = (
 /**
  * The one Slack transport. It routes each delivery to the connection named in its reply
  * address, posting into the original thread and tagging the requester.
+ *
+ * A reply too long for one Slack message posts as several, in order, with choice buttons on the
+ * last. The delivery is one outbox row, so once a part is posted a later failure is reported as
+ * unknown: a retry would post the earlier parts again.
  */
 export function makeSlackChannelTransport(input: {
   readonly activeSession: (
@@ -279,38 +283,46 @@ export function makeSlackChannelTransport(input: {
         if (destination.teamId !== active.teamId) {
           return yield* deliveryFailed("not_sent", "unknown");
         }
-        const text = formatSlackOutboundText({
+        const parts = formatSlackOutboundMessages({
           text: message.text,
           mentionUserId: message.mentionActorId,
         });
-        const blocks =
-          message.options === undefined || message.options.length === 0
-            ? undefined
-            : slackChoiceBlocks(text, message.options);
-        const post = {
-          channel: destination.channelId,
-          threadTs: destination.rootTs,
-          text,
-          ...(blocks === undefined ? {} : { blocks }),
-        };
-        const posted = yield* slackCall("chat.postMessage", () =>
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack's chat.postMessage, not window.postMessage.
-          active.botApi.postMessage(post),
-        ).pipe(
-          Effect.catch((failure) => {
-            const error = slackDeliveryError(failure);
-            return input
-              .reportFailure(destination.connectionId, active.generation, {
-                code: error.deliveryErrorCode ?? "unknown",
-                channelId: destination.channelId,
-              })
-              .pipe(Effect.andThen(Effect.fail(error)));
-          }),
-        );
+        let firstTs: string | undefined;
+        for (const [index, text] of parts.entries()) {
+          const blocks =
+            index < parts.length - 1 ||
+            message.options === undefined ||
+            message.options.length === 0
+              ? undefined
+              : slackChoiceBlocks(text, message.options);
+          const post = {
+            channel: destination.channelId,
+            threadTs: destination.rootTs,
+            text,
+            ...(blocks === undefined ? {} : { blocks }),
+          };
+          const posted = yield* slackCall("chat.postMessage", () =>
+            // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack's chat.postMessage, not window.postMessage.
+            active.botApi.postMessage(post),
+          ).pipe(
+            Effect.catch((failure) => {
+              const sent = slackDeliveryError(failure);
+              const error =
+                index === 0 ? sent : deliveryFailed("unknown", sent.deliveryErrorCode ?? "unknown");
+              return input
+                .reportFailure(destination.connectionId, active.generation, {
+                  code: sent.deliveryErrorCode ?? "unknown",
+                  channelId: destination.channelId,
+                })
+                .pipe(Effect.andThen(Effect.fail(error)));
+            }),
+          );
+          firstTs ??= posted.ts;
+        }
         return {
           deliveryId: message.deliveryId,
           acceptedAt: yield* nowIso,
-          externalMessageId: posted.ts,
+          ...(firstTs === undefined ? {} : { externalMessageId: firstTs }),
         };
       }).pipe(Effect.annotateLogs({ channelKind: message.destination.kind })),
   };

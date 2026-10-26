@@ -2,16 +2,14 @@ import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
-  IsoDateTime,
+  type GoatclawCeilingAdvice,
   isOrchestrationV2WorkActive,
   isProviderAvailable,
   MessageId,
   ModelSelection,
   NodeId,
-  NonNegativeInt,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
-  OrchestrationV2TaskRole,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -45,6 +43,8 @@ import {
   type OrchestratorMcpTaskCancelResult,
   type OrchestratorMcpThreadDetail,
   type OrchestratorMcpThreadInterruptInput,
+  type OrchestratorMcpThreadRetryInput,
+  type OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadInterruptResult,
   type OrchestratorMcpThreadListInput,
   type OrchestratorMcpThreadListItem,
@@ -74,15 +74,13 @@ import {
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookUrlUnavailableReason,
   type ServerProvider,
-  type ServerProviderModel,
   ThreadId,
-  TurnItemId,
 } from "@goat/contracts";
-import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
+import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -100,12 +98,26 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import {
+  admissionCorrelationId,
+  admitDelegate,
+  bindChildWork,
+  existingChildWorkConflict,
+  launchChildWork,
+  launchRemoteChildWork,
+  releaseChildWork,
+  releaseReservation,
+} from "./childWorkAdmission.ts";
+import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { cloudTaskForRun, cloudTaskView } from "./cloudTaskView.ts";
+import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { statusFromShell } from "./threadStatus.ts";
+import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 
 import {
   delegatedTaskProgress,
@@ -134,60 +146,20 @@ import {
   requireThreadScope,
 } from "./McpInvocationContext.ts";
 
-import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { makeRequestSecret } from "./SecretRequestTool.ts";
+import { stableCommandId, stablePart } from "./stableCommandId.ts";
+import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
+import { statusFromShell } from "./threadStatus.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
 // coordinator's exports can still be undefined while this module evaluates.
 const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
+  // eslint-disable-next-line goat/no-inline-schema-compile -- The remote schema resolves after this import cycle initializes.
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
-
-const ReviewExportCursor = Schema.fromJsonString(
-  Schema.Struct({
-    from: IsoDateTime,
-    to: IsoDateTime,
-    taskId: NodeId,
-    index: NonNegativeInt,
-  }),
-);
-const decodeReviewExportCursor = Schema.decodeUnknownEffect(ReviewExportCursor);
-const encodeReviewExportCursor = Schema.encodeEffect(ReviewExportCursor);
-const ReviewExportFields = {
-  taskId: NodeId,
-  threadId: ThreadId,
-  role: Schema.optional(OrchestrationV2TaskRole),
-  reviewerModel: Schema.NullOr(ModelSelection),
-  authorModel: Schema.NullOr(ModelSelection),
-};
-const encodeReviewExportEntry = Schema.encodeEffect(
-  Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({
-        ...ReviewLedgerEntry.members[0].fields,
-        ...ReviewExportFields,
-        latestOutcome: Schema.NullOr(ReviewLedgerEntry.members[1]),
-      }),
-      Schema.Struct({ ...ReviewLedgerEntry.members[1].fields, ...ReviewExportFields }),
-    ]),
-  ),
-);
-
-/** Latest decisions and any outcome recorded after that decision. */
-function reviewFindings(reviewLedger: ReadonlyArray<ReviewLedgerEntry>) {
-  const findings = new Map<string, OrchestratorMcpReviewFindingsRecordResult["findings"][number]>();
-  for (const entry of reviewLedger) {
-    if (entry.kind === "decision")
-      findings.set(entry.findingId, { decision: entry, latestOutcome: null });
-    else {
-      const finding = findings.get(entry.findingId);
-      if (finding !== undefined)
-        findings.set(entry.findingId, { ...finding, latestOutcome: entry });
-    }
-  }
-  return [...findings.values()];
-}
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -199,7 +171,6 @@ const TASK_WAKE_EVENTS = [
   { thread: "child", eventType: "runtime-request.updated" },
   { thread: "child", eventType: "turn-item.updated" },
 ] as const;
-const SECRET_REQUEST_POLL_INTERVAL_MS = 500;
 const DEFAULT_THREAD_LIST_LIMIT = 50;
 const DEFAULT_THREAD_READ_LIMIT = 50;
 const DEFAULT_THREAD_RUN_LIMIT = 10;
@@ -273,6 +244,11 @@ export interface OrchestratorMcpServiceShape {
   readonly updateScheduledTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpUpdateScheduledTaskInput,
+    /**
+     * Admits a keyed call once the caller may change this task, before it saves, so a replay
+     * passes these checks again and never consumes a secretRef twice.
+     */
+    admit?: Effect.Effect<void>,
   ) => Effect.Effect<OrchestratorMcpScheduleTaskResult, OrchestratorMcpFailure>;
   readonly deleteScheduledTask: (
     scope: McpInvocationScope,
@@ -310,6 +286,11 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
   ) => Effect.Effect<OrchestratorMcpThreadInterruptResult, OrchestratorMcpFailure>;
+  /** Runs a failed run's workspace preparation again, like Retry in the thread. */
+  readonly retryThread: (
+    scope: McpInvocationScope,
+    input: Omit<OrchestratorMcpThreadRetryInput, "host">,
+  ) => Effect.Effect<Omit<OrchestratorMcpThreadRetryResult, "host">, OrchestratorMcpFailure>;
 }
 
 export class OrchestratorMcpService extends Context.Service<
@@ -389,6 +370,11 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   }
 }
 
+// Without a reason, a Stop reads as the user's (see RunExecutionService.USER_STOP_REASON).
+function agentStopReason(reason: string | undefined): string {
+  return reason === undefined ? "Stopped by an agent" : `Stopped by an agent: ${reason}`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -407,11 +393,11 @@ function scheduledTaskWorkspaceStrategy(
  */
 const WEBHOOK_URL_UNAVAILABLE: Record<ScheduledTaskWebhookUrlUnavailableReason, string> = {
   relay_not_linked:
-    "This environment is not linked to T3 Connect. Ask the user to sign in to T3 Connect and turn on remote access for it.",
+    "This environment is not linked to GOAT Connect. Ask the user to sign in to GOAT Connect and turn on remote access for it.",
   managed_tunnel_not_configured:
-    "This environment is linked to T3 Connect but has no managed tunnel. Ask the user to turn on remote access for it in Settings → Connections.",
+    "This environment is linked to GOAT Connect but has no managed tunnel. Ask the user to turn on remote access for it in Settings → Connections.",
   managed_tunnel_unrecognized:
-    "This environment's managed tunnel is not one T3 Connect can route webhooks to. Ask the user to turn remote access off and on again in Settings → Connections.",
+    "This environment's managed tunnel is not one GOAT Connect can route webhooks to. Ask the user to turn remote access off and on again in Settings → Connections.",
 };
 
 /**
@@ -423,7 +409,7 @@ const WEBHOOK_DIRECT_URL_HINT =
 
 /** The link state could not be read, so the cause is unknown. */
 const WEBHOOK_URL_UNKNOWN =
-  "This environment could not read its T3 Connect state. Ask the user to check remote access in Settings → Connections.";
+  "This environment could not read its GOAT Connect state. Ask the user to check remote access in Settings → Connections.";
 
 /** Public webhook URLs come from the hosted tunnel, which is off until GOAT Connect ships. */
 const WEBHOOK_URL_CONNECT_OFF =
@@ -466,55 +452,16 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    runCount: task.runCount,
+    lastRunAt: task.lastRunAt,
     ...webhookUrlFields(task.webhook, mayRun),
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
+    ...(task.webhook?.secretRef === undefined
+      ? {}
+      : { webhookSignatureSecretRef: task.webhook.secretRef }),
   };
-}
-
-/**
- * Large catalogs (OpenCode, Cursor, Pi) can list hundreds of models, so agents
- * get a short list by default and search for the rest. These providers have
- * small official catalogs, so all their current models are listed.
- */
-const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent", "muse", "grok"]);
-const LISTED_MODEL_LIMIT = 8;
-
-/**
- * Picks the models orchestrator_capabilities shows for one provider. Hidden
- * models never appear. With search terms, lists matches; otherwise lists pinned
- * models (custom, favorite, the caller's own) plus the provider's non-legacy
- * models, or only the first few in the user's model order for large catalogs.
- */
-function listCapabilityModels(input: {
-  readonly provider: ServerProvider;
-  readonly preferences:
-    | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
-    | undefined;
-  readonly isPinned: (model: ServerProviderModel) => boolean;
-  readonly searchTerms: ReadonlyArray<string>;
-}) {
-  const rank = new Map(input.preferences?.modelOrder.map((slug, index) => [slug, index]));
-  const visible = input.provider.models
-    .filter((model) => model.isCustom || !input.preferences?.hiddenModels.includes(model.slug))
-    .toSorted((a, b) => (rank.get(a.slug) ?? rank.size) - (rank.get(b.slug) ?? rank.size));
-  if (input.searchTerms.length > 0) {
-    const matches = visible.filter((model) => {
-      const text = `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
-      return input.searchTerms.every((term) => text.includes(term));
-    });
-    const listed = matches.slice(0, LISTED_MODEL_LIMIT);
-    return { listed, omitted: matches.length - listed.length };
-  }
-  const current = visible.filter((model) => !model.isLegacy);
-  const shown = new Set(
-    FULL_CATALOG_DRIVERS.has(input.provider.driver)
-      ? current
-      : current.slice(0, LISTED_MODEL_LIMIT),
-  );
-  const listed = visible.filter((model) => input.isPinned(model) || shown.has(model));
-  return { listed, omitted: visible.length - listed.length };
 }
 
 /** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
@@ -919,28 +866,6 @@ export function resolveInteractionMode(
     : Effect.succeed(resolved);
 }
 
-function stablePart(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function stableCommandId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly operation: string;
-  readonly index?: number;
-}): CommandId {
-  return CommandId.make(
-    [
-      "command",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.operation),
-      stablePart(input.requestKey),
-      ...(input.index === undefined ? [] : [String(input.index)]),
-    ].join(":"),
-  );
-}
-
 function stableThreadId(input: {
   readonly scope: McpInvocationScope;
   readonly requestKey: string;
@@ -1113,8 +1038,26 @@ function threadDetail(
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
     ...threadSnooze(shell, nowMs),
+    ...threadOrganization(projection.thread, latest),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
+  };
+}
+
+/** What goat_thread_organize changes beyond archive, settle and snooze, so a caller can reconcile it. */
+function threadOrganization(
+  thread: OrchestrationV2ThreadProjection["thread"],
+  latest: OrchestrationV2Run | undefined,
+): Pick<OrchestratorMcpThreadDetail, "snoozedAt" | "pinned" | "unread"> {
+  const completedAt = latest?.completedAt ?? null;
+  return {
+    snoozedAt: thread.snoozedAt == null ? null : DateTime.formatIso(thread.snoozedAt),
+    pinned: thread.pinnedAt != null,
+    // The sidebar's rule; thread.mark-unread rewinds lastVisitedAt to just before completion.
+    unread:
+      completedAt !== null &&
+      thread.lastVisitedAt != null &&
+      DateTime.isGreaterThan(completedAt, thread.lastVisitedAt),
   };
 }
 
@@ -1123,6 +1066,7 @@ function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
     runId: run.id,
     ordinal: run.ordinal,
     status: run.status,
+    ...(run.terminationCause === undefined ? {} : { terminationCause: run.terminationCause }),
     providerInstanceId: run.modelSelection.instanceId,
     model: run.modelSelection.model,
     requestedAt: DateTime.formatIso(run.requestedAt),
@@ -1260,7 +1204,7 @@ function timelineItem(input: {
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
-  const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
+  const fleet = yield* FleetSync.GoatclawFleetSync;
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
@@ -1546,253 +1490,24 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const authorizeRemoteWrite = (scope: McpThreadInvocationScope, expectedRunId?: RunId) =>
-    Effect.gen(function* () {
-      yield* requireCapability(scope);
-      if (scope.client?.access === "read-only")
-        return yield* failure(
-          "capability_denied",
-          "A read-only MCP client cannot reach another machine.",
-        );
-      const caller = yield* threadManagement
-        .getThreadShell(scope.thread.threadId)
-        .pipe(Effect.mapError(threadManagementFailure));
-      if (caller === null || caller.deletedAt !== null)
-        return yield* failure("thread_not_found", "The calling thread was not found.");
-      if (
-        caller.archivedAt !== null ||
-        caller.activeRunId === null ||
-        caller.providerInstanceId !== scope.thread.providerInstanceId
-      )
-        return yield* failure(
-          "parent_not_active",
-          "The calling provider no longer owns an active thread run.",
-        );
-      if (caller.runtimeMode !== "full-access" || caller.interactionMode !== "default")
-        return yield* failure(
-          "capability_denied",
-          "SSH delegation needs a full-access/default caller.",
-        );
-      if (expectedRunId !== undefined && caller.activeRunId !== expectedRunId)
-        return yield* failure(
-          "parent_not_active",
-          "The spawning parent run changed before remote launch.",
-        );
-      return caller.runtimeMode;
-    });
-  const preflightCloudLaunch = (
-    scope: McpInvocationScope,
-    projectId: ProjectId,
-    modelSelection: ModelSelection,
-    worktreePath: string | null,
-    branch: string | null,
-  ) =>
-    Effect.gen(function* () {
-      const adapter = yield* providerAdapters
-        .get(modelSelection.instanceId)
-        .pipe(
-          Effect.mapError(() =>
-            failure("provider_unavailable", "The selected provider is unavailable."),
-          ),
-        );
-      const capabilities = yield* adapter
-        .getCapabilities()
-        .pipe(
-          Effect.mapError(() =>
-            failure("provider_unavailable", "Provider capabilities are unavailable."),
-          ),
-        );
-      if (!isCloudExecution(capabilities)) return;
-      yield* permissions.requireCloudApproval(
-        scope,
-        yield* permissions.require(scope, "cloud.launch"),
-        { target: `delegate:${modelSelection.instanceId}` },
-      );
-      if (Option.isNone(cloudSources))
-        return yield* failure("orchestration_error", "Cloud source preflight is unavailable.");
-      const project = Option.getOrUndefined(
-        yield* projects
-          .getById(projectId)
-          .pipe(
-            Effect.mapError(() => failure("orchestration_error", "Unable to read the project.")),
-          ),
-      );
-      if (project === undefined)
-        return yield* failure("invalid_request", "The project was not found.");
-      yield* cloudSources.value
-        .resolve({
-          cwd:
-            capabilities.sessions.sourceRestriction === "project-folder"
-              ? project.workspaceRoot
-              : (worktreePath ?? project.workspaceRoot),
-          restriction: capabilities.sessions.sourceRestriction ?? "published-ref",
-          ...(branch === null ? {} : { branch }),
-        })
-        .pipe(Effect.mapError((error) => failure("invalid_request", error.message)));
-    });
-
-  const ensureCloudCancellationSupported = (
-    projection: Pick<OrchestrationV2ThreadProjection, "runs" | "providerThreads">,
-    code: "task_not_cancellable" | "invalid_request",
-    runId?: RunId,
-  ) =>
-    Effect.gen(function* () {
-      const run =
-        runId === undefined
-          ? (ThreadManagementService.latestActiveRun(projection) ??
-            ThreadManagementService.latestRun(projection))
-          : projection.runs.find((candidate) => candidate.id === runId);
-      const thread = projection.providerThreads.find(
-        (candidate) => candidate.id === run?.providerThreadId,
-      );
-      if (thread?.cloudTask?.status !== "running" && thread?.cloudTask?.status !== "submitting")
-        return;
-      const adapter = yield* providerAdapters
-        .get(thread.providerInstanceId)
-        .pipe(
-          Effect.mapError(() =>
-            failure(
-              "provider_unavailable",
-              "Cloud tracking is unavailable; remote work may continue.",
-            ),
-          ),
-        );
-      const capabilities = yield* adapter
-        .getCapabilities()
-        .pipe(
-          Effect.mapError(() =>
-            failure(
-              "provider_unavailable",
-              "Cloud capabilities are unavailable; remote work may continue.",
-            ),
-          ),
-        );
-      if (!capabilities.turns.supportsInterrupt)
-        return yield* failure(
-          code,
-          `Cloud cancellation is not supported by ${thread.providerInstanceId}. Remote work may continue.`,
-        );
-    });
-
-  const decodeRemoteThreadStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResult);
-  const decodeRemoteThreadRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
-  const readRemoteCloudTask = (
-    scope: McpThreadInvocationScope,
-    host: string,
-    threadId: ThreadId,
-  ) => {
-    const read = (tool: string, args: Readonly<Record<string, unknown>>) =>
-      ssh
-        .callHostTool(
-          {
-            host,
-            tool,
-            arguments: args,
-            writes: false,
-            timeoutMs: 120_000,
-          },
-          authorizeRemoteWrite(scope),
-        )
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof SshRemoteDispatch.SshRemoteDispatchError ? hostFailure(error) : error,
-          ),
-        );
-    const decodeFailure = () =>
-      failure("orchestration_error", "Remote cloud task metadata is invalid.");
-    return read("goat_thread_status", { threadId }).pipe(
-      Effect.flatMap((value) =>
-        decodeRemoteThreadStatus(value).pipe(Effect.mapError(decodeFailure)),
-      ),
-      Effect.map((status) => cloudTaskView(status.cloudTask)),
-      Effect.catchIf(
-        (error) => error.message.includes(SshRemoteDispatch.REMOTE_THREAD_STATUS_UNSUPPORTED),
-        () =>
-          read("goat_thread_read", { threadId, limit: 1, runLimit: 2 }).pipe(
-            Effect.flatMap((value) =>
-              decodeRemoteThreadRead(value).pipe(Effect.mapError(decodeFailure)),
-            ),
-            Effect.map((result) => cloudTaskView(result.cloudTask)),
-          ),
-      ),
-    );
-  };
-
-  const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
-  const resolveRemoteTarget = Effect.fn("orchestratorMcp.resolveRemoteTarget")(function* (
-    scope: McpThreadInvocationScope,
-    parent: Pick<OrchestrationV2ThreadProjection, "thread">,
-    target: OrchestratorMcpTarget & { readonly host: string },
-  ) {
-    const catalog = yield* ssh
-      .callHostTool(
-        {
-          host: target.host,
-          tool: "orchestrator_capabilities",
-          arguments: {},
-          writes: false,
-          timeoutMs: 120_000,
-        },
-        authorizeRemoteWrite(scope),
-      )
-      .pipe(
-        Effect.mapError((error) =>
-          error instanceof SshRemoteDispatch.SshRemoteDispatchError ? hostFailure(error) : error,
-        ),
-        Effect.flatMap((value) =>
-          decodeRemoteCapabilities(value).pipe(
-            Effect.mapError(() =>
-              failure("orchestration_error", "Remote capability response is invalid."),
-            ),
-          ),
-        ),
-      );
-    const inherited = parent.thread.modelSelection;
-    const candidates = catalog.providers.filter((provider) => provider.canRunChildTask);
-    const instanceId =
-      target.providerInstanceId ??
-      (target.driverKind === undefined
-        ? inherited.instanceId
-        : (candidates.find(
-            (provider) =>
-              provider.driverKind === target.driverKind &&
-              provider.providerInstanceId === inherited.instanceId,
-          )?.providerInstanceId ??
-          candidates.find((provider) => provider.driverKind === target.driverKind)
-            ?.providerInstanceId));
-    const provider = candidates.find((row) => row.providerInstanceId === instanceId);
-    if (provider === undefined)
-      return yield* failure(
-        "provider_unavailable",
-        "The selected provider is unavailable on this host.",
-      );
-    if (target.driverKind !== undefined && target.driverKind !== provider.driverKind)
-      return yield* failure("invalid_request", "Remote provider and driver do not match.");
-    const model =
-      target.model ??
-      (instanceId === inherited.instanceId ? inherited.model : provider.models[0]?.id);
-    const advertised = provider.models.find((row) => row.id === model);
-    if (advertised === undefined)
-      return yield* failure(
-        "model_unavailable",
-        "The selected model is not advertised on this host.",
-      );
-    const options =
-      target.options ??
-      (instanceId === inherited.instanceId && model === inherited.model
-        ? inherited.options
-        : undefined);
-    const invalid =
-      options === undefined
-        ? []
-        : invalidOptionSelections(options, advertisedOptionDescriptors(advertised.options ?? []));
-    if (invalid.length > 0) return yield* failure("invalid_request", invalid.join(" "));
-    const modelSelection: ModelSelection = {
-      instanceId: provider.providerInstanceId,
-      model: advertised.id,
-      ...(options === undefined ? {} : { options }),
-    };
-    return { modelSelection, driver: provider.driverKind };
+  const {
+    authorizeRemoteWrite,
+    preflightCloudLaunch,
+    ensureCloudCancellationSupported,
+    readRemoteCloudTask,
+    resolveRemoteTarget,
+  } = makeRemoteTaskTargets({
+    permissions,
+    projects,
+    providerAdapters,
+    ssh,
+    threadManagement,
+    cloudSources,
+    requireCapability,
+    failure,
+    threadManagementFailure,
+    advertisedOptionDescriptors,
+    invalidOptionSelections,
   });
 
   const resolveTarget = Effect.fn("OrchestratorMcpService.resolveTarget")(function* (input: {
@@ -1922,19 +1637,10 @@ const make = Effect.gen(function* () {
 
     const inheritsOptions =
       instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
-    let options = inheritsOptions ? inheritedSelection.options : undefined;
-    if (requestedOptions !== undefined) {
-      const selections = new Map(
-        (requestedOptions.length === 0 ? [] : (options ?? [])).map((selection) => [
-          selection.id,
-          selection,
-        ]),
-      );
-      for (const selection of requestedOptions) {
-        selections.set(selection.id, selection);
-      }
-      options = [...selections.values()];
-    }
+    const options = overrideOptionSelections(
+      inheritsOptions ? inheritedSelection.options : undefined,
+      requestedOptions,
+    );
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
       supportedRuntimeModes: provider.supportedRuntimeModes,
@@ -2449,7 +2155,8 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
-    permissionProfile: (scope) => permissions.resolve(scope),
+    permissionProfile: (scope) =>
+      permissions.resolve(scope).pipe(Effect.map(({ narrowing: _narrowing, ...view }) => view)),
     admitRemoteSend: Effect.fn("OrchestratorMcpService.admitRemoteSend")(function* (scope, input) {
       const effective = yield* permissions.resolve(scope);
       if (!effective.enabled) return { ceiling: undefined, settle: () => Effect.void };
@@ -2554,65 +2261,68 @@ const make = Effect.gen(function* () {
         };
       },
     ),
-    updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
-      function* (scope, input) {
-        const { parent, limits } = yield* loadCaller(scope);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
-        yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
-        if (
-          input.bindToCurrentThread === true &&
-          (parent === undefined || parent.thread.projectId !== existing.projectId)
-        ) {
-          return yield* failure(
-            "invalid_request",
-            parent === undefined
-              ? "bindToCurrentThread needs an agent running inside a GOAT thread."
-              : "bindToCurrentThread binds to this thread, which belongs to a different project.",
-          );
-        }
-        const threadId =
-          input.bindToCurrentThread === undefined
-            ? existing.threadId
-            : input.bindToCurrentThread && parent !== undefined
-              ? parent.thread.id
-              : null;
-        // Rebinding changes where runs execute, so the workspace strategy must
-        // follow: unbinding a root-strategy task would otherwise run loose
-        // prompts in the shared project checkout.
-        const workspaceStrategy =
-          input.bindToCurrentThread === undefined
-            ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
-        const upsertInput: ScheduledTaskUpsertInput = {
-          id: existing.id,
-          title: input.title ?? existing.title,
-          prompt: input.prompt ?? existing.prompt,
-          enabled: input.enabled ?? existing.enabled,
-          schedule: input.schedule ?? existing.schedule,
-          projectId: existing.projectId,
-          threadId,
-          workspaceStrategy,
-          modelSelection: existing.modelSelection,
-          runtimeMode: existing.runtimeMode,
-          interactionMode: existing.interactionMode,
-          createdBy: existing.createdBy,
-          creationSource: existing.creationSource,
-        };
-        const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
-          Effect.mapError(() =>
-            failure("invalid_request", "Caller memory authority is no longer available."),
+    updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(function* (
+      scope,
+      input,
+      admit = Effect.void,
+    ) {
+      const { parent, limits } = yield* loadCaller(scope);
+      const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+      yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
+      if (
+        input.bindToCurrentThread === true &&
+        (parent === undefined || parent.thread.projectId !== existing.projectId)
+      ) {
+        return yield* failure(
+          "invalid_request",
+          parent === undefined
+            ? "bindToCurrentThread needs an agent running inside a GOAT thread."
+            : "bindToCurrentThread binds to this thread, which belongs to a different project.",
+        );
+      }
+      const threadId =
+        input.bindToCurrentThread === undefined
+          ? existing.threadId
+          : input.bindToCurrentThread && parent !== undefined
+            ? parent.thread.id
+            : null;
+      // Rebinding changes where runs execute, so the workspace strategy must
+      // follow: unbinding a root-strategy task would otherwise run loose
+      // prompts in the shared project checkout.
+      const workspaceStrategy =
+        input.bindToCurrentThread === undefined
+          ? existing.workspaceStrategy
+          : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+      const upsertInput: ScheduledTaskUpsertInput = {
+        id: existing.id,
+        title: input.title ?? existing.title,
+        prompt: input.prompt ?? existing.prompt,
+        enabled: input.enabled ?? existing.enabled,
+        schedule: input.schedule ?? existing.schedule,
+        projectId: existing.projectId,
+        threadId,
+        workspaceStrategy,
+        modelSelection: existing.modelSelection,
+        runtimeMode: existing.runtimeMode,
+        interactionMode: existing.interactionMode,
+        createdBy: existing.createdBy,
+        creationSource: existing.creationSource,
+      };
+      const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
+        Effect.mapError(() =>
+          failure("invalid_request", "Caller memory authority is no longer available."),
+        ),
+      );
+      yield* admit;
+      const { task } = yield* scheduledTasks
+        .upsert(upsertInput, { memoryGrantCeiling })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
           ),
         );
-        const { task } = yield* scheduledTasks
-          .upsert(upsertInput, { memoryGrantCeiling })
-          .pipe(
-            Effect.mapError((error) =>
-              failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
-            ),
-          );
-        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
-      },
-    ),
+      return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+    }),
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope);
@@ -2628,137 +2338,11 @@ const make = Effect.gen(function* () {
         return { scheduledTaskId: existing.id, deleted: true };
       },
     ),
-    requestSecret: Effect.fn("OrchestratorMcpService.requestSecret")(function* (scope, input) {
-      const { scope: threadScope, parent } = yield* loadThreadCaller(scope, "request_secret");
-      const threadId = threadScope.thread.threadId;
-      const run = ThreadManagementService.latestActiveRun(parent);
-      if (
-        run === undefined ||
-        run.rootNodeId === null ||
-        run.providerInstanceId !== threadScope.thread.providerInstanceId
-      ) {
-        return yield* failure(
-          "parent_not_active",
-          "Asking for a secret requires an active run owned by this MCP provider session.",
-        );
-      }
-      const runId = run.id;
-      const nodeId = run.rootNodeId;
-      const key = yield* requestKey(input.clientRequestId);
-      let turnItemId = TurnItemId.make(
-        `turn-item:secret-request:${stablePart(threadId)}:${stablePart(key)}`,
-      );
-      const record = (secretStatus: "pending" | "cancelled") =>
-        threadManagement
-          .dispatch({
-            type: "secret_request.record",
-            environmentId: threadScope.environmentId,
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: `secret-${secretStatus}`,
-            }),
-            threadId: threadId,
-            runId,
-            nodeId,
-            turnItemId,
-            label: input.label,
-            reason: input.reason,
-            ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
-            secretStatus,
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              failure(
-                "orchestration_error",
-                `Could not record the secret request: ${errorMessage(error)}`,
-              ),
-            ),
-          );
-      const recorded = yield* record("pending");
-      const recordedCard = recorded.storedEvents.find(
-        (stored) =>
-          stored.event.type === "turn-item.updated" &&
-          stored.event.payload.type === "secret_request",
-      )?.event;
-      const ownsCard =
-        recordedCard?.type === "turn-item.updated" && recordedCard.payload.id === turnItemId;
-      if (recordedCard?.type === "turn-item.updated") turnItemId = recordedCard.payload.id;
-      // The creating call owns cancellation; retries of its request ID do not.
-      const closeCard = ownsCard
-        ? record("cancelled").pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Could not close a secret request card", { error: error.message }),
-            ),
-          )
-        : Effect.void;
-
-      const answered = yield* Effect.gen(function* () {
-        while (true) {
-          const projection = yield* threadManagement
-            .getThreadRecords(threadId, ["runs", "turnItems"], {
-              turnItemTypes: ["secret_request"],
-              messageRoles: [],
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                failure(
-                  "orchestration_error",
-                  `Unable to read the secret request: ${errorMessage(error)}`,
-                ),
-              ),
-            );
-          const item = projection.turnItems.find((candidate) => candidate.id === turnItemId);
-          if (item?.type === "secret_request" && item.secretStatus !== "pending") {
-            return item.secretStatus;
-          }
-          const current = projection.runs.find((candidate) => candidate.id === runId);
-          if (
-            current === undefined ||
-            ThreadManagementService.isTerminalRunStatus(current.status)
-          ) {
-            yield* record("cancelled");
-            return "cancelled" as const;
-          }
-          yield* Effect.sleep(Duration.millis(SECRET_REQUEST_POLL_INTERVAL_MS));
-        }
-      }).pipe(
-        Effect.timeoutOption(
-          Duration.millis(
-            Math.min(input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-          ),
-        ),
-        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : closeCard)),
-      );
-      if (Option.isNone(answered)) yield* closeCard;
-      const status = Option.isSome(answered)
-        ? answered.value
-        : yield* threadManagement
-            .getThreadRecords(threadId, ["turnItems"], {
-              turnItemTypes: ["secret_request"],
-              messageRoles: [],
-            })
-            .pipe(
-              Effect.map((records) => {
-                const item = records.turnItems.find((candidate) => candidate.id === turnItemId);
-                return item?.type === "secret_request" &&
-                  (item.secretStatus === "saved" || item.secretStatus === "declined")
-                  ? item.secretStatus
-                  : ("timed_out" as const);
-              }),
-              Effect.orElseSucceed(() => "timed_out" as const),
-            );
-      yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
-      yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
-      if (status !== "saved") return { status };
-      const secretRef = yield* secretRequests.savedRef({ threadId: threadId, turnItemId });
-      if (Option.isNone(secretRef)) {
-        return yield* failure(
-          "orchestration_error",
-          "The user saved the secret, but it could not be read. Ask again with a new clientRequestId.",
-        );
-      }
-      return { status, secretRef: secretRef.value };
+    requestSecret: makeRequestSecret({
+      threadManagement,
+      secretRequests,
+      loadThreadCaller,
+      requestKey,
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
@@ -2857,6 +2441,14 @@ const make = Effect.gen(function* () {
     }),
     delegateTask: Effect.fn("OrchestratorMcpService.delegateTask")(function* (callerScope, input) {
       const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+      // Resolved per call: the first memoized construction of this service precedes the
+      // channel layer, so a construction-time capture would bypass channel admission.
+      const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
+      // Same per-call reason as channelChildWork; absent from the call context only in
+      // fixtures, where keeping the reservation is the safe answer.
+      const commandReceipts = yield* Effect.serviceOption(
+        CommandReceiptStore.CommandReceiptStoreV2,
+      );
       const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
         Effect.mapError(() =>
           failure("invalid_request", "Caller memory authority is no longer available."),
@@ -2880,6 +2472,7 @@ const make = Effect.gen(function* () {
       if (input.target?.host !== undefined && input.remote !== undefined) {
         const host = input.target.host;
         const remote = input.remote;
+        const requestedTarget = input.target;
         const parentNodeId = parentRun.rootNodeId;
         const callerRuntimeMode = yield* authorizeRemoteWrite(scope, parentRun.id);
         let runtimeMode = yield* resolveRuntimeMode(callerRuntimeMode, input.runtimeMode);
@@ -2887,25 +2480,52 @@ const make = Effect.gen(function* () {
           parent.thread.interactionMode,
           input.interactionMode,
         );
-        const key = yield* requestKey(input.clientRequestId);
+        const admission = yield* admitDelegate(channelChildWork, {
+          callerThreadId: scope.thread.threadId,
+          prompt: taskPrompt(input),
+          clientRequestId: input.clientRequestId,
+          target: input.target,
+          role: input.role,
+          remote: { host, cwd: remote.cwd, workspace: remote.workspace },
+        });
+        if (admission !== undefined && admission._tag === "existing")
+          return yield* existingChildWorkConflict(admission);
+        const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
-        if (existing !== undefined) return yield* finishTaskWait(scope, taskId, key, input);
-        yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
-        yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
-        const target = yield* resolveRemoteTarget(scope, parent, {
-          ...input.target,
-          host: input.target.host,
-        });
-        const admitted = yield* permissions.claim(scope, {
-          id: taskId,
-          runtimeMode,
-          host,
-          worktree: remote.workspace?.type === "worktree",
-        });
-        // The destination must enforce this ceiling; goatclaw's fleet policy reaches it first.
-        if (admitted.enabled && Option.isSome(fleet)) yield* fleet.value.ensure(host);
+        const acknowledge = (ceiling: GoatclawCeilingAdvice | undefined) =>
+          finishTaskWait(scope, taskId, key, input).pipe(
+            Effect.map((delegated) =>
+              ceiling === undefined ? delegated : { ...delegated, ceiling },
+            ),
+          );
+        // A replay or a concurrent duplicate forwards nothing itself, and whether the call that
+        // launched carried a ceiling is not recorded, so neither says anything about one.
+        if (existing !== undefined) return yield* acknowledge(undefined);
+        // Checks and claims sit between admission and launch; when one fails, the
+        // reservation returns so a rejected request never holds the descendant budget.
+        const prepared = yield* Effect.gen(function* () {
+          yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
+          yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
+          const target = yield* resolveRemoteTarget(scope, parent, {
+            ...requestedTarget,
+            host,
+          });
+          const claimed = yield* permissions.claim(scope, {
+            id: taskId,
+            runtimeMode,
+            host,
+            worktree: remote.workspace?.type === "worktree",
+          });
+          const advice = claimed.enabled
+            ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+            : undefined;
+          return { target, claimed, advice };
+        }).pipe(Effect.onError(() => releaseReservation(channelChildWork, admission)));
+        const target = prepared.target;
+        const admitted = prepared.claimed;
+        const ceilingAdvice = prepared.advice;
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -2933,7 +2553,7 @@ const make = Effect.gen(function* () {
               parentThreadId: scope.thread.threadId,
               parentRunId: parentRun.id,
               parentNodeId,
-              task: taskPrompt(input),
+              task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
               ...(input.title === undefined ? {} : { title: input.title }),
               modelSelection: target.modelSelection,
               driver: target.driver,
@@ -2946,6 +2566,12 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(threadManagementFailure));
         });
+        // A refused claim launched nothing, so the lane claimed above returns.
+        const claimLaunch = launchRemoteChildWork(channelChildWork, admission, host).pipe(
+          Effect.onError(() =>
+            admitted.enabled ? permissions.release(taskId).pipe(Effect.ignore) : Effect.void,
+          ),
+        );
         const launched = yield* remoteDispatch
           .launch(
             {
@@ -2953,13 +2579,16 @@ const make = Effect.gen(function* () {
               originThreadId: scope.thread.threadId,
               delivery: "wake",
               task: { taskId, parentRunId: parentRun.id },
+              // A channel-owned caller's binding id derives from its child-work record, so a
+              // retry collides on the remote_dispatches key instead of launching twice.
+              correlationId: admissionCorrelationId(admission),
               launch: {
                 host,
                 cwd: remote.cwd,
                 memoryGrantCeiling,
                 workspace: remote.workspace ?? { type: "cwd" },
                 title: input.title ?? taskPrompt(input).slice(0, 72),
-                message: taskPrompt(input),
+                message: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
                 modelSelection: target.modelSelection,
                 runtimeMode,
                 callerRuntimeMode,
@@ -2978,19 +2607,32 @@ const make = Effect.gen(function* () {
             },
             register,
           )
-          .pipe(Effect.result);
-        if (admitted.enabled && launched._tag === "Failure") {
+          .pipe(
+            Effect.result,
+            // The claim holds the launch in flight until its row and remote write finish.
+            (launch) => Effect.andThen(claimLaunch, launch),
+            Effect.scoped,
+          );
+        if (launched._tag === "Failure") {
+          // The coordinator wraps a failure it proved happened before any remote write
+          // (stage "authorize"); the task key it deleted frees this lane and slot too.
+          const preSend =
+            isRemoteDispatchError(launched.failure) && launched.failure.stage === "authorize";
           const underlying = isRemoteDispatchError(launched.failure)
             ? launched.failure.cause
             : launched.failure;
-          if (
-            underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-            (underlying.reason === "remote_refused" ||
-              underlying.reason === "invalid_request" ||
-              underlying.reason === "host_unknown") &&
-            underlying.launchMayHaveStarted !== true
-          )
-            yield* permissions.release(taskId);
+          const refusedBeforeLaunch =
+            preSend ||
+            (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+              (underlying.reason === "remote_refused" ||
+                underlying.reason === "invalid_request" ||
+                underlying.reason === "host_unknown") &&
+              underlying.launchMayHaveStarted !== true);
+          // The destination never started, so the lane and the child-work slot return.
+          if (refusedBeforeLaunch) {
+            if (admitted.enabled) yield* permissions.release(taskId);
+            yield* releaseChildWork(channelChildWork, admission);
+          }
         }
         if (admitted.enabled && launched._tag === "Success")
           yield* permissions.complete(
@@ -2998,12 +2640,13 @@ const make = Effect.gen(function* () {
             launched.success.launch.threadId,
             launched.success.correlationId,
           );
+        if (launched._tag === "Success") yield* bindChildWork(channelChildWork, admission);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
           launched.failure.reason === "duplicate_task"
         )
-          return yield* finishTaskWait(scope, taskId, key, input);
+          return yield* acknowledge(undefined);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -3016,8 +2659,19 @@ const make = Effect.gen(function* () {
           if (ownerError === undefined)
             return yield* failure(
               "invalid_request",
-              "An earlier delegate_task with this clientRequestId did not finish launching; use a new clientRequestId.",
+              "An earlier goat_task_create with this clientRequestId did not finish launching; use a new clientRequestId.",
             );
+        }
+        if (
+          launched._tag === "Failure" &&
+          isRemoteDispatchError(launched.failure) &&
+          launched.failure.stage === "authorize"
+        ) {
+          // A proven pre-send failure wraps the one the caller can act on.
+          const ownerError = launched.failure.cause;
+          if (isOrchestratorMcpFailure(ownerError)) return yield* ownerError;
+          if (ownerError instanceof SshRemoteDispatch.SshRemoteDispatchError)
+            return yield* hostFailure(ownerError);
         }
         if (launched._tag === "Failure" || launched.success.launch.runId === null) {
           const refreshed = yield* loadProjection(scope.thread.threadId);
@@ -3063,7 +2717,7 @@ const make = Effect.gen(function* () {
             summary:
               refusal !== null
                 ? `Remote launch refused on host ${host}; nothing was launched (${refusal}).`
-                : `launch outcome unknown; inspect goat_thread_list with host ${host} before retrying`,
+                : `launch outcome unknown; inspect ${goatCallText("thread.list")} with host ${host} before retrying`,
           }).pipe(
             Effect.provideService(
               ThreadManagementService.ThreadManagementService,
@@ -3072,84 +2726,117 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
           );
         }
-        return yield* finishTaskWait(scope, taskId, key, input);
+        return yield* acknowledge(ceilingAdvice);
       }
 
       const providers = yield* loadProviders;
-      const key = yield* requestKey(input.clientRequestId);
+      const admission = yield* admitDelegate(channelChildWork, {
+        callerThreadId: scope.thread.threadId,
+        prompt: taskPrompt(input),
+        clientRequestId: input.clientRequestId,
+        target: input.target,
+        isolation: input.isolation,
+        role: input.role,
+      });
+      if (admission !== undefined && admission._tag === "existing")
+        return yield* existingChildWorkConflict(admission);
+      const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
       const commandId = stableCommandId({
         scope,
         requestKey: key,
         operation: "delegate-task",
       });
-      const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
-      const target = yield* resolveTargetRechecking({
-        parent,
-        target: input.target,
-        providers,
-        skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
-      });
-      const requestedRuntimeMode = yield* resolveRuntimeMode(
-        parent.thread.runtimeMode,
-        input.runtimeMode,
-        target,
-      );
-      const interactionMode = yield* resolveInteractionMode(
-        parent.thread.interactionMode,
-        input.interactionMode,
-      );
-      let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
-      if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
-        const project = yield* requireProject(parent.thread.projectId);
-        const base = yield* gitDriver
-          .resolveCommit({
-            cwd: parent.thread.worktreePath ?? project.workspaceRoot,
-            revision: "HEAD",
-          })
-          .pipe(
-            Effect.mapError(() =>
-              failure("invalid_request", "Unable to resolve the parent checkout commit."),
-            ),
-          );
-        // Launch preparation creates the worktree from the project root, so a
-        // parent checkout in another repository (such as a Git folder inside
-        // Scratch) would hand it a commit it cannot find.
-        if (parent.thread.worktreePath !== null) {
-          yield* gitDriver
-            .resolveCommit({ cwd: project.workspaceRoot, revision: base.commitSha })
+      const prepared = yield* Effect.gen(function* () {
+        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+        const target = yield* resolveTargetRechecking({
+          parent,
+          target: input.target,
+          providers,
+          skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
+        });
+        const requestedRuntimeMode = yield* resolveRuntimeMode(
+          parent.thread.runtimeMode,
+          input.runtimeMode,
+          target,
+        );
+        const interactionMode = yield* resolveInteractionMode(
+          parent.thread.interactionMode,
+          input.interactionMode,
+        );
+        let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
+        if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+          const project = yield* requireProject(parent.thread.projectId);
+          const base = yield* gitDriver
+            .resolveCommit({
+              cwd: parent.thread.worktreePath ?? project.workspaceRoot,
+              revision: "HEAD",
+            })
             .pipe(
               Effect.mapError(() =>
-                failure(
-                  "invalid_request",
-                  `Isolation "worktree" creates the child checkout in project "${project.title}" (${project.workspaceRoot}), which does not contain the parent checkout's commit. Use isolation "shared" to work in the parent's checkout.`,
-                ),
+                failure("invalid_request", "Unable to resolve the parent checkout commit."),
               ),
             );
+          // Launch preparation creates the worktree from the project root, so a
+          // parent checkout in another repository (such as a Git folder inside
+          // Scratch) would hand it a commit it cannot find.
+          if (parent.thread.worktreePath !== null) {
+            yield* gitDriver
+              .resolveCommit({ cwd: project.workspaceRoot, revision: base.commitSha })
+              .pipe(
+                Effect.mapError(() =>
+                  failure(
+                    "invalid_request",
+                    `Isolation "worktree" creates the child checkout in project "${project.title}" (${project.workspaceRoot}), which does not contain the parent checkout's commit. Use isolation "shared" to work in the parent's checkout.`,
+                  ),
+                ),
+              );
+          }
+          workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
         }
-        workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
-      }
-      // ThreadManagementService.dispatch is the chokepoint for this command
-      // type's own enablement check, using the same command id and its
-      // receipt-replay exemption, so no separate assert runs here.
-      if (!isRetryOfAcceptedDelegation)
-        yield* preflightCloudLaunch(
-          scope,
-          parent.thread.projectId,
-          target.modelSelection,
-          parent.thread.worktreePath,
-          parent.thread.branch,
+        // ThreadManagementService.dispatch is the chokepoint for this command
+        // type's own enablement check, using the same command id and its
+        // receipt-replay exemption, so no separate assert runs here.
+        if (!isRetryOfAcceptedDelegation)
+          yield* preflightCloudLaunch(
+            scope,
+            parent.thread.projectId,
+            target.modelSelection,
+            parent.thread.worktreePath,
+            parent.thread.branch,
+          );
+        yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
+          Effect.mapError(() =>
+            failure("invalid_request", "Caller memory authority is no longer available."),
+          ),
         );
-      yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
-        Effect.mapError(() =>
-          failure("invalid_request", "Caller memory authority is no longer available."),
+        return {
+          isRetryOfAcceptedDelegation,
+          target,
+          requestedRuntimeMode,
+          interactionMode,
+          workspaceStrategy,
+        };
+      }).pipe(Effect.onError(() => releaseReservation(channelChildWork, admission)));
+      const target = prepared.target;
+      const requestedRuntimeMode = prepared.requestedRuntimeMode;
+      const interactionMode = prepared.interactionMode;
+      const workspaceStrategy = prepared.workspaceStrategy;
+      const admitted = yield* permissions
+        .claim(scope, {
+          id: commandId,
+          childThreadId: derive.delegatedTaskThread({ commandId }),
+          runtimeMode: requestedRuntimeMode,
+          worktree: input.isolation === "worktree",
+        })
+        .pipe(Effect.onError(() => releaseChildWork(channelChildWork, admission)));
+      // A refused claim launched nothing, so the lane claimed above returns.
+      const claimLaunch = launchChildWork(channelChildWork, admission, {
+        threadId: derive.delegatedTaskThread({ commandId }),
+      }).pipe(
+        Effect.onError(() =>
+          admitted.enabled ? permissions.release(commandId).pipe(Effect.ignore) : Effect.void,
         ),
       );
-      const admitted = yield* permissions.claim(scope, {
-        id: commandId,
-        childThreadId: derive.delegatedTaskThread({ commandId }),
-        runtimeMode: requestedRuntimeMode,
-        worktree: input.isolation === "worktree",
-      });
       const runtimeMode = admitted.runtimeMode;
       const result = yield* threadManagement
         .dispatch({
@@ -3163,7 +2850,7 @@ const make = Effect.gen(function* () {
           parentThreadId: scope.thread.threadId,
           parentRunId: parentRun.id,
           parentNodeId: parentRun.rootNodeId,
-          task: taskPrompt(input),
+          task: Profiles.childBrief(admitted, scope.thread.threadId, taskPrompt(input)),
           ...(input.title === undefined ? {} : { title: input.title }),
           modelSelection: target.modelSelection,
           runtimeMode,
@@ -3180,6 +2867,22 @@ const make = Effect.gen(function* () {
               ? permissions.release(commandId, true).pipe(Effect.ignore)
               : Effect.void,
           ),
+          // Commit certainty from the receipt, not from the dispatch error: an accepted
+          // receipt means the work exists and keeps its slot; a rejected or absent receipt
+          // means the command never ran, so the reservation goes back. An unreadable
+          // receipt proves nothing, so the slot stays rather than double-spend.
+          Effect.onError(() =>
+            commandReceipts._tag === "None"
+              ? Effect.void
+              : commandReceipts.value.getByCommandId(commandId).pipe(
+                  Effect.flatMap((receipt) =>
+                    Option.isSome(receipt) && receipt.value.status === "accepted"
+                      ? Effect.void
+                      : releaseChildWork(channelChildWork, admission),
+                  ),
+                  Effect.ignore,
+                ),
+          ),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"
               ? threadManagementFailure(error)
@@ -3188,6 +2891,9 @@ const make = Effect.gen(function* () {
                   `Unable to create delegated task: ${errorMessage(error)}`,
                 ),
           ),
+          // The claim holds the launch in flight until the delegation commits.
+          (dispatch) => Effect.andThen(claimLaunch, dispatch),
+          Effect.scoped,
         );
       if (admitted.enabled) yield* permissions.complete(commandId);
       const taskEvent = result.storedEvents.find(
@@ -3202,6 +2908,8 @@ const make = Effect.gen(function* () {
       }
       const taskId = taskEvent.event.payload.id;
       const childThreadId = taskEvent.event.payload.childThreadId;
+      if (childThreadId !== null)
+        yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
       const childRunEvent = result.storedEvents.find(
         (stored) => stored.event.type === "run.created" && stored.event.threadId === childThreadId,
       );
@@ -3267,7 +2975,11 @@ const make = Effect.gen(function* () {
         const updated = yield* loadProjection(parent.thread.id);
         const reviewLedger =
           updated.subagents.find((task) => task.id === input.taskId)?.reviewLedger ?? [];
-        return { taskId: input.taskId, reviewLedger, findings: reviewFindings(reviewLedger) };
+        return {
+          taskId: input.taskId,
+          reviewLedger,
+          findings: ReviewExport.reviewFindings(reviewLedger),
+        };
       }),
     exportReviewFindings: (scope, input) =>
       Effect.gen(function* () {
@@ -3279,7 +2991,7 @@ const make = Effect.gen(function* () {
         const cursor =
           input.cursor === undefined
             ? undefined
-            : yield* decodeReviewExportCursor(input.cursor).pipe(
+            : yield* ReviewExport.decodeReviewExportCursor(input.cursor).pipe(
                 Effect.mapError(() =>
                   failure("invalid_request", "Invalid review findings cursor."),
                 ),
@@ -3316,7 +3028,7 @@ const make = Effect.gen(function* () {
             reviewerModel: task.modelSelection ?? null,
             authorModel: task.parentModelSelection ?? null,
           };
-          return encodeReviewExportEntry(
+          return ReviewExport.encodeReviewExportEntry(
             entry.kind === "decision"
               ? {
                   ...entry,
@@ -3336,7 +3048,7 @@ const make = Effect.gen(function* () {
           ...(rows.length <= limit || last === undefined
             ? {}
             : {
-                nextCursor: yield* encodeReviewExportCursor({
+                nextCursor: yield* ReviewExport.encodeReviewExportCursor({
                   from: input.from,
                   to: input.to,
                   taskId: last.task.id,
@@ -3502,13 +3214,14 @@ const make = Effect.gen(function* () {
       });
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
-        const reason = input.reason;
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: childThreadId,
-            ...(reason === undefined ? {} : { reason }),
+            stopDelegatedTasks: false,
+            reason,
             stopCascadeFrom: scope.thread.threadId,
           })
           .pipe(
@@ -3667,7 +3380,7 @@ const make = Effect.gen(function* () {
         if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
           return yield* failure(
             "capability_denied",
-            "With goatclaw enabled, use goat_thread_launch or delegate_task so every child inherits its permission profile.",
+            `With goatclaw enabled, use ${goatCallText("thread.launch")} or ${goatCallText("task.create")} so every child inherits its permission profile.`,
           );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
@@ -4054,18 +3767,14 @@ const make = Effect.gen(function* () {
       const result = yield* threadManagement
         .sendToThread({
           projectId: target.thread.projectId,
-          commandId: stableCommandId({
-            scope,
-            requestKey: key,
-            operation: "thread-send",
-          }),
+          commandId: admissionId,
           threadId: input.threadId,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
           ...(input.expectedLatestRunId === undefined
             ? {}
             : { expectedLatestRunId: input.expectedLatestRunId }),
           messageId,
-          text: input.message,
+          ...withTurnCapabilities({ text: input.message }, input.capabilities ?? []),
           attachments: [],
           mode,
           createdBy: "agent",
@@ -4125,6 +3834,9 @@ const make = Effect.gen(function* () {
         ...(result.pendingRequestIds === undefined
           ? {}
           : { pendingRequestIds: result.pendingRequestIds }),
+        ...(result.run?.completedAt == null
+          ? {}
+          : { completedAt: DateTime.formatIso(result.run.completedAt) }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     threadStatus: (scope, input) =>
@@ -4146,7 +3858,7 @@ const make = Effect.gen(function* () {
           .getThreadRecords(input.threadId, ["runs", "turnItems", "providerThreads"], {
             runIds,
             turnItemRunIds: runIds,
-            turnItemTypes: ["user_message", "assistant_message"],
+            turnItemTypes: ["user_message", "assistant_message", "error"],
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const cloudTask = cloudTaskForRun(
@@ -4184,16 +3896,18 @@ const make = Effect.gen(function* () {
             run.status !== "queued" && !ThreadManagementService.isTerminalRunStatus(run.status),
         );
         const commandId = stableCommandId({ scope, requestKey: key, operation: "thread-stop" });
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: input.threadId,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            stopDelegatedTasks: false,
+            reason,
           })
           .pipe(Effect.mapError(stopFailure));
         yield* threadManagement
-          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason: input.reason })
+          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason })
           .pipe(Effect.mapError(stopFailure));
         return {
           threadId: input.threadId,
@@ -4212,7 +3926,7 @@ const make = Effect.gen(function* () {
           }),
           threadId: input.threadId,
           ...(input.runId === undefined ? {} : { runId: input.runId }),
-          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          reason: agentStopReason(input.reason),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -4237,6 +3951,41 @@ const make = Effect.gen(function* () {
         status: result.type === "already_terminal" ? result.run.status : "interrupt_requested",
       } satisfies OrchestratorMcpThreadInterruptResult;
     }),
+    retryThread: Effect.fn("OrchestratorMcpService.retryThread")(function* (scope, input) {
+      const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
+      yield* assertLiveCallerForOtherThread(scope, parent, target);
+      yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
+      yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
+      const key = yield* requestKey(input.clientRequestId);
+      const run =
+        input.runId === undefined
+          ? target.runs.toSorted((left, right) => left.ordinal - right.ordinal).at(-1)
+          : target.runs.find((candidate) => candidate.id === input.runId);
+      if (run === undefined)
+        return yield* failure("run_not_found", `Thread ${input.threadId} has no run to retry.`);
+      if (run.status === "preparing")
+        return { threadId: input.threadId, runId: run.id, status: "preparing" as const };
+      if (run.status !== "failed" || run.workspacePreparation === undefined)
+        return yield* failure(
+          "invalid_request",
+          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with ${goatCallText("thread.send")} instead.`,
+        );
+      yield* threadLaunch
+        .retryPreparation({
+          commandId: stableCommandId({ scope, requestKey: key, operation: "thread-retry" }),
+          threadId: input.threadId,
+          runId: run.id,
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to retry run ${run.id} of thread ${input.threadId}: ${errorMessage(error)}`,
+            ),
+          ),
+        );
+      return { threadId: input.threadId, runId: run.id, status: "preparing" as const };
+    }),
   });
 });
 
@@ -4253,6 +4002,7 @@ export const layer: Layer.Layer<
   | ProjectService.ProjectService
   | SecretRequests.SecretRequests
   | RemoteDispatchCoordinator.RemoteDispatchCoordinator
+  | FleetSync.GoatclawFleetSync
   | SshRemoteDispatch.SshRemoteDispatch
   | ServerSettings.ServerSettingsService
 > = Layer.effect(OrchestratorMcpService, make).pipe(Layer.provide(Profiles.layer));

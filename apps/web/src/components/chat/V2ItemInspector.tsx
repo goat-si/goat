@@ -10,14 +10,18 @@ import {
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
   turnItemOutputImages,
+  turnItemOutputLinks,
   turnItemOutputText,
 } from "@goat/client-runtime/work-log/item-detail";
+import { commandDisplayText } from "@goat/client-runtime/work-log/command-label";
+import { computerUseDisplayInput } from "@goat/client-runtime/work-log/computer-use";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
-import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
+import { dynamicToolTitle, isJavaScriptReplTool } from "@goat/shared/toolActivity";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "~/components/solar";
 import { memo, type ReactNode, Suspense, use } from "react";
 
 import { useRenderedAppearance } from "../../hooks/useTheme";
+import type { DiffPanelSourceItem, OpenTurnDiff } from "../../diffPanelStore";
 import { cn } from "../../lib/utils";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
@@ -31,7 +35,7 @@ import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
-import { ShellCommandBlock } from "./ShellCommandBlock";
+import { CopyRegion, ShellCommandLine, ToolCallCard } from "./ToolCallCard";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -39,7 +43,7 @@ interface V2ItemInspectorProps {
   readonly cwd?: string | undefined;
   readonly workspaceRoot?: string | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  readonly onOpenTurnDiff: OpenTurnDiff;
   readonly onRollbackCheckpoint?: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -49,14 +53,29 @@ interface V2ItemInspectorProps {
   readonly hideFileChangeSummary?: boolean;
 }
 
-/** The diff a file-change summary opens: the whole run for multi-file edits, else that file. */
-export function fileChangeDiffTarget(
-  item: Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
-): { readonly runId: RunId; readonly filePath: string | undefined } | null {
-  if (item.runId === null) return null;
+/**
+ * The diff a file-change summary opens: the whole run for multi-file edits, else that file. An
+ * edit whose patch the server holds names itself too, so the panel can show it before the run's
+ * checkpoint exists.
+ */
+export function fileChangeDiffTarget(projectedItem: OrchestrationV2ProjectedTurnItem): {
+  readonly runId: RunId;
+  readonly filePath: string | undefined;
+  readonly sourceItem: DiffPanelSourceItem | undefined;
+} | null {
+  const item = projectedItem.item;
+  if (item.type !== "file_change" || item.runId === null) return null;
   return {
     runId: item.runId,
     filePath: item.changes !== undefined && item.changes.length > 1 ? undefined : item.fileName,
+    sourceItem:
+      item.patchOmitted === true
+        ? {
+            threadId: projectedItem.sourceThreadId,
+            itemId: projectedItem.sourceItemId,
+            revision: turnItemDetailRevision(item),
+          }
+        : undefined,
   };
 }
 
@@ -145,8 +164,9 @@ function useFetchedTurnItem(
   return {
     item,
     output: {
-      output: turnItemOutputText(item),
+      output: turnItemOutputText(item, { omitLinks: true }),
       images: turnItemOutputImages(item),
+      links: turnItemOutputLinks(item),
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -163,10 +183,13 @@ function useFetchedTurnItem(
 interface ToolOutputState {
   readonly output: string | null;
   readonly images: ReturnType<typeof turnItemOutputImages>;
+  readonly links: ReturnType<typeof turnItemOutputLinks>;
   readonly environmentId: EnvironmentId;
   readonly pending: boolean;
   readonly error: string | null;
   readonly empty: boolean;
+  /** Inside a tool call card, where output gets a shorter, edge-faded scroller. */
+  readonly compact?: boolean;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
@@ -181,18 +204,52 @@ function ToolOutput(props: ToolOutputState) {
       onImageExpand={props.onImageExpand}
     />
   ));
+  const links =
+    props.links.length > 0 ? (
+      <ul className="space-y-0.5">
+        {props.links.map((link) => {
+          const href = resolveExternalWebLinkHref(link.uri);
+          return (
+            <li key={link.uri} className="truncate">
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-foreground/85 hover:underline"
+                >
+                  {link.name}
+                  <ExternalLinkIcon className="size-3 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-foreground/85">{link.name}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    ) : null;
   const text = props.output ? (
-    <div className="max-h-80 overflow-auto text-muted-foreground">{props.output}</div>
+    props.compact ? (
+      <CopyRegion text={props.output} label="Copy output">
+        <div className="scroll-edge-fade max-h-48 overflow-auto pe-7 text-foreground/80">
+          {props.output}
+        </div>
+      </CopyRegion>
+    ) : (
+      <div className="max-h-80 overflow-auto text-muted-foreground">{props.output}</div>
+    )
   ) : props.pending ? (
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
     <div className="text-destructive">Couldn&apos;t load output: {props.error}</div>
-  ) : props.empty && images.length === 0 ? (
+  ) : props.empty && images.length === 0 && links === null ? (
     <div className="text-muted-foreground italic">No output.</div>
   ) : null;
   return (
     <>
       {images}
+      {links}
       {text}
     </>
   );
@@ -216,50 +273,70 @@ function ToolCallBody(
     readonly command?: string;
     readonly args?: unknown;
     readonly toolName?: string | null;
+    readonly title?: string;
     readonly exitCode?: number | undefined;
     /** Replaces the fetched output, e.g. with a command's live output. */
     readonly outputSlot?: ReactNode;
   },
 ) {
   const call = toolCallLines({ command: props.command, args: props.args });
+  const command = call.command;
+  // Copy what the card shows: the same key/value lines or the same formatted text.
+  const inputText =
+    call.argsText ?? call.args?.map(([key, value]) => `${key} ${value}`).join("\n") ?? "";
+  const failedExit = props.exitCode !== undefined && props.exitCode !== 0;
   return (
-    <div className={cn("space-y-1.5", monoClassName)}>
-      {call.command ? <ShellCommandBlock command={call.command} /> : null}
-      {call.args ? (
-        <div className="text-foreground/85">
-          {call.args.map(([key, value]) => (
-            <div key={key}>
-              <span className="text-muted-foreground">{key} </span>
-              {key === "code" && isJavaScriptReplTool(props.toolName) ? (
-                <StructuredValue value={value} language="typescript" />
-              ) : (
-                value
-              )}
+    <ToolCallCard
+      title={command !== null ? "Shell" : (props.title ?? "Tool")}
+      footer={failedExit ? `Exit code ${props.exitCode}` : null}
+    >
+      <div className={cn("space-y-1.5", monoClassName)}>
+        {command !== null ? (
+          <CopyRegion text={commandDisplayText(command)} label="Copy command">
+            <ShellCommandLine command={command} />
+          </CopyRegion>
+        ) : null}
+        {inputText ? (
+          <CopyRegion text={inputText} label="Copy input">
+            <div className="pe-7">
+              {call.args ? (
+                <div className="text-foreground/85">
+                  {call.args.map(([key, value]) => (
+                    <div key={key}>
+                      <span className="text-muted-foreground">{key} </span>
+                      {key === "code" && isJavaScriptReplTool(props.toolName) ? (
+                        <StructuredValue value={value} language="typescript" />
+                      ) : (
+                        value
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
             </div>
-          ))}
-        </div>
-      ) : null}
-      {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
-      {props.outputSlot ?? <ToolOutput {...props} />}
-      {props.exitCode !== undefined && props.exitCode !== 0 ? (
-        <div className="text-destructive">exit {props.exitCode}</div>
-      ) : null}
-    </div>
+          </CopyRegion>
+        ) : null}
+        {props.outputSlot ?? <ToolOutput {...props} compact />}
+      </div>
+    </ToolCallCard>
   );
 }
 
 function FileChangeDetail({
+  projectedItem,
   item,
   workspaceRoot,
   hideSummary,
   onOpenTurnDiff,
 }: {
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
   readonly item: Extract<OrchestrationV2TurnItem, { type: "file_change" }>;
   readonly workspaceRoot: string | undefined;
   readonly hideSummary: boolean;
   readonly onOpenTurnDiff: V2ItemInspectorProps["onOpenTurnDiff"];
 }) {
-  const diffTarget = fileChangeDiffTarget(item);
+  const diffTarget = fileChangeDiffTarget(projectedItem);
   const failedDiff = item.status === "failed" && item.diffStr?.trim() ? item.diffStr : null;
   const changes = item.changes ?? [];
   const path = formatWorkspaceRelativePath(item.fileName, workspaceRoot);
@@ -285,7 +362,9 @@ function FileChangeDetail({
             <Button
               size="xs"
               variant="outline"
-              onClick={() => onOpenTurnDiff(diffTarget.runId, diffTarget.filePath)}
+              onClick={() =>
+                onOpenTurnDiff(diffTarget.runId, diffTarget.filePath, diffTarget.sourceItem)
+              }
             >
               Open diff
             </Button>
@@ -359,6 +438,7 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
 
       {item.type === "file_change" ? (
         <FileChangeDetail
+          projectedItem={props.projectedItem}
           item={item}
           workspaceRoot={props.workspaceRoot}
           hideSummary={props.hideFileChangeSummary === true}
@@ -422,7 +502,11 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "dynamic_tool" ? (
         <ToolCallBody
           toolName={item.toolName}
-          args={item.input}
+          title={
+            dynamicToolTitle(item.toolName, item.input, item.title) ??
+            (item.title?.trim() || item.toolName || "Tool")
+          }
+          args={computerUseDisplayInput(item.toolName, item.input)}
           {...outputState}
           onImageExpand={props.onImageExpand}
         />

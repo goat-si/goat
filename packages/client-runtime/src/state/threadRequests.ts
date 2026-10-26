@@ -15,7 +15,19 @@ import type { ThreadStructure, ThreadStructureVisibleTurnItem } from "./models.t
 export type ApprovalResponder = (
   requestId: RuntimeRequestId,
   decision: ProviderApprovalDecision,
+  feedback?: string,
 ) => Promise<AtomCommandResult<unknown, unknown> | undefined>;
+
+/** Feedback belongs to the displayed request, which may be a native child's tool call. */
+export async function sendApprovalFeedback(
+  approval: ThreadPendingApproval,
+  feedback: string,
+  respond: ApprovalResponder,
+): Promise<boolean> {
+  if (!approval.supportsFeedback || approval.responseCapability !== "live" || !feedback.trim())
+    return false;
+  return (await respond(approval.requestId, "decline", feedback.trim()))?._tag === "Success";
+}
 
 /** Declines every approval a redirect replaces; any one still pending would block the agent. */
 export async function declinePendingApprovals(
@@ -40,6 +52,7 @@ export interface ThreadPendingApproval {
   readonly appName?: string;
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
   readonly responseCapability: "live" | "not_resumable";
+  readonly supportsFeedback?: boolean;
 }
 
 export const FULL_ACCESS_OVERRIDE_QUESTION = "Why am I being asked this?";
@@ -49,7 +62,7 @@ export function fullAccessOverrideExplanation(
 ): string {
   return override === "ask_rule"
     ? "Full access skips approvals, but an ask rule in the agent's own settings matches this action, so it still asks. Remove or narrow that rule to stop these prompts."
-    : "Full access skips approvals, but the agent still stops for a few safety checks of its own that no setting can skip, such as a delete whose path it can't verify. T3 Code can't turn these off, so check the request and approve it if it's what you expect.";
+    : "Full access skips approvals, but the agent still stops for a few safety checks of its own that no setting can skip, such as a delete whose path it can't verify. GOAT can't turn these off, so check the request and approve it if it's what you expect.";
 }
 
 export interface ThreadUserInputQuestion extends Omit<
@@ -142,6 +155,9 @@ export function derivePendingThreadRequests(
         ? { options: item.options }
         : {}),
       responseCapability: responseCapability === "live" ? "live" : "not_resumable",
+      ...(request.responseCapability.type === "live" && request.responseCapability.supportsFeedback
+        ? { supportsFeedback: true }
+        : {}),
     });
   }
 

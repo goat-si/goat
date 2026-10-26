@@ -1,5 +1,5 @@
 /**
- * KnownWorkspaces - the folders a client-named cwd may act in: a T3-managed
+ * KnownWorkspaces - the folders a client-named cwd may act in: a GOAT-managed
  * worktree folder, a registered project, or a thread's worktree. Clients send
  * the thread's worktree, else the project root. A client also sets a thread's
  * worktree path, so one counts only under a managed folder or when git lists
@@ -8,6 +8,7 @@
  * @module KnownWorkspaces
  */
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -106,7 +107,10 @@ export const make = Effect.gen(function* () {
           project_id AS "projectId"
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
-      `.pipe(Effect.orElseSucceed(() => []));
+      `.pipe(
+        NodeSqliteClient.readOnly,
+        Effect.orElseSucceed(() => []),
+      );
       const projectWorktrees = new Map<string, ReadonlyArray<string>>();
       const isProjectWorktree = Effect.fnUntraced(function* (
         projectId: string,

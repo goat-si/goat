@@ -26,19 +26,27 @@
     thread, which samples CPU, so the notice goes into the orchestrating threads instead.
 - **Chosen.**
   - Each server classifies itself (`HostPressureMonitor`, every 30 s): load per core, whole-host CPU,
-    free memory, free disk, and its own event-loop stalls. A level rises after its reading holds
-    for `sustainMs` (default 2 min); a stall of `criticalEventLoopDelayMs` (5 s) is critical at once.
-    A level falls only after readings stay under 80 % of the thresholds for `sustainMs`. The
-    result rides that machine's own `goat_host_status` entry as `pressure`, so remote pressure arrives
-    with the existing fan-out; a host that predates it is classified from its metrics.
+    free memory, free disk, and its own event-loop stalls. A machine reading raises the level after
+    it holds for `sustainMs` (default 3 min). Stalls are a GOAT health signal judged over ten
+    minutes, never one at a time: a build or test run routinely stalls the loop 2–4 s once, and
+    treating that as load flipped hosts to elevated and back every quarter hour (2026-10-22). Three
+    stalls of half `criticalEventLoopDelayMs` are elevated, two of it are critical, and one of three
+    times it (the 26 s class above) is critical at once. A level falls only after every reading
+    stays under 80 % of its threshold, and stalls under theirs, for `recoverMs` (5 min). The
+    longest recent stall is still reported at any level. The result rides that machine's own
+    `goat_host_status` entry as `pressure`, so remote pressure arrives with the existing fan-out; a
+    host that predates it is stepped through the same hysteresis on the reading machine, and
+    placement ranks that sustained level, never one sample.
   - `PressureNudger` (every 60 s) reads this machine's level and, only for hosts with launch watches
     that still have runs to report, the fan-out. Recipients are the threads that started work
     there (`launchedBy` or subagent parent for local work, the watch's launcher for remote work)
-    and their own launchers up to the thread a person started. Rising to critical wakes them
-    through the same queued `message.dispatch` launch reports use; elevated, easing and recovery
-    are thread notices that start no turn. Each host and level is announced at most once per
-    `notifyCooldownMs` (15 min). The message names the readings, the running work, hosts with room
-    and a suggested move.
+    and their own launchers up to the thread a person started. Each recipient keeps one status row
+    per host, a `thread.notice.record` whose key holds the row's id, so later changes rewrite it in
+    place; a new row opens at most once per `notifyCooldownMs` (45 min), and easing or recovery
+    never opens one. The row is `info` severity, drawn as a quiet line, except while critical.
+    Rising to critical also wakes the threads through the same queued `message.dispatch` launch
+    reports use, at once even inside the cooldown, but at most once per cooldown. The text names
+    the readings, the running work, hosts with room and a suggested move.
   - `goat_host_status` takes `placement` requirements and returns a ranking: filter (reachable,
     compatible, not cordoned, platform, provider, quota, not critical), then score with
     channelPlacement's weights plus load per core and an elevated penalty. Goal placement refuses

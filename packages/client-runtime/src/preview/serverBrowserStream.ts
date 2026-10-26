@@ -19,6 +19,8 @@ export interface PreviewStreamControl {
   readonly canOperate: boolean;
   readonly controller: "agent" | "you" | "another-viewer" | "unclaimed";
   readonly generation: number;
+  /** A secret field has focus; viewers other than its controller get no frames. */
+  readonly private?: boolean;
   readonly dialog: null | {
     readonly type: string;
     readonly message: string;
@@ -180,6 +182,8 @@ export interface PreviewStreamTarget {
   readonly maxHeight: number;
   /** Passive viewers reduce their own access, including automatic control grants. */
   readonly interactive?: boolean;
+  /** Holding each ack this long caps the frame rate; the server sends one frame per ack. */
+  readonly ackDelayMs?: number;
 }
 
 export interface PreviewStreamEvents {
@@ -239,7 +243,11 @@ export function createPreviewStreamClient(
       if (socket !== ws) return;
       if (event.data instanceof ArrayBuffer) {
         failures = 0;
-        ws.send(ACK_MESSAGE);
+        if (target.ackDelayMs === undefined) ws.send(ACK_MESSAGE);
+        else
+          setTimeout(() => {
+            if (socket === ws && ws.readyState === WebSocket.OPEN) ws.send(ACK_MESSAGE);
+          }, target.ackDelayMs);
         events.onFrame(event.data);
         return;
       }
@@ -262,6 +270,7 @@ export function createPreviewStreamClient(
         controller,
         generation,
         dialog,
+        private: privateMode,
         text,
         id,
         fileName,
@@ -337,6 +346,7 @@ export function createPreviewStreamClient(
           controller,
           generation,
           dialog,
+          ...(typeof privateMode === "boolean" ? { private: privateMode } : {}),
         };
         control = nextControl;
         events.onControl?.(nextControl);
@@ -392,6 +402,11 @@ export function createPreviewStreamClient(
 
 export interface PreviewFramePainter {
   readonly paint: (jpeg: ArrayBuffer) => void;
+  /**
+   * While suppressed, frames are dropped. Every change also discards the queued frame and any
+   * decode still running, so pixels from before a private interval, or during it, never paint.
+   */
+  readonly setSuppressed: (suppressed: boolean) => void;
   readonly stop: () => void;
 }
 
@@ -402,13 +417,16 @@ export function createPreviewFramePainter(
 ): PreviewFramePainter {
   const context = canvas.getContext("2d");
   let stopped = false;
+  let suppressed = false;
+  let generation = 0;
   let decoding = false;
   let waiting: ArrayBuffer | null = null;
   const draw = (jpeg: ArrayBuffer) => {
     decoding = true;
+    const started = generation;
     void createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
       .then((bitmap) => {
-        if (stopped || !context) {
+        if (stopped || !context || started !== generation) {
           bitmap.close();
           return;
         }
@@ -425,14 +443,20 @@ export function createPreviewFramePainter(
         decoding = false;
         const next = waiting;
         waiting = null;
-        if (next && !stopped) draw(next);
+        if (next && !stopped && !suppressed) draw(next);
       });
   };
   return {
     paint: (jpeg) => {
-      if (stopped) return;
+      if (stopped || suppressed) return;
       if (decoding) waiting = jpeg;
       else draw(jpeg);
+    },
+    setSuppressed: (next) => {
+      if (next === suppressed) return;
+      suppressed = next;
+      generation += 1;
+      waiting = null;
     },
     stop: () => {
       stopped = true;
@@ -451,7 +475,7 @@ const decodeHostSetup = (reason: string): PreviewStreamHostSetup => {
       return { need: value.need, command: value.command };
     }
   } catch {}
-  return { need: "sandbox", command: "sudo npx t3 browser setup" };
+  return { need: "sandbox", command: "sudo goat browser setup" };
 };
 
 export const previewStreamHostSetupMessage = (setup: PreviewStreamHostSetup) =>

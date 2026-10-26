@@ -1,18 +1,23 @@
 import {
   OrchestratorMcpFailure,
+  type PermissionCapability,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
 } from "@goat/contracts";
-import type { AgentSurfaceEffect } from "@goat/contracts/agentSurface";
+import type { AgentSurfaceEffect, AgentSurfaceEntry } from "@goat/contracts/agentSurface";
+import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { Tool, Toolkit } from "effect/ai";
 
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   DispatchModeLimit,
   type DispatchModeRefusal,
@@ -24,6 +29,7 @@ import {
   assertLiveCaller,
   assertTargetWithinLimits,
   type Caller,
+  type CallerLimits,
   loadCaller,
   readCaller,
   unavailable,
@@ -92,18 +98,17 @@ export class ToolEffects extends Context.Service<
   Readonly<Record<string, AgentSurfaceEffect>>
 >()("goat/mcp/McpToolAccess/ToolEffects") {}
 
-const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
-  Effect.flatMap((scope) =>
-    scope.client?.access === "read-only"
-      ? Effect.fail(
-          new OrchestratorMcpFailure({
-            code: "capability_denied",
-            message:
-              "This tool changes the environment, and this MCP client was approved for read-only access.",
-          }),
-        )
-      : Effect.void,
-  ),
+const refuseReadOnlyClientWith = (message: string) =>
+  McpInvocationContext.McpInvocationContext.pipe(
+    Effect.flatMap((scope) =>
+      scope.client?.access === "read-only"
+        ? Effect.fail(new OrchestratorMcpFailure({ code: "capability_denied", message }))
+        : Effect.void,
+    ),
+  );
+
+const refuseReadOnlyClient = refuseReadOnlyClientWith(
+  "This tool changes the environment, and this MCP client was approved for read-only access.",
 );
 
 const writingCaller = refuseReadOnlyClient.pipe(
@@ -116,12 +121,175 @@ const orchestratingCaller = refuseReadOnlyClient.pipe(
   Effect.tap(assertLiveCaller),
 );
 
+/** What a read that uses this machine's SSH keys to reach another host must pass first. */
+export const hostReachingCaller = refuseReadOnlyClientWith(
+  "This call reaches other machines with this machine's SSH keys, and this MCP client was approved for read-only access.",
+).pipe(Effect.andThen(readCaller()), Effect.tap(assertLiveCaller));
+
+/**
+ * Where a write is admitted: after its caller checks and before its handler runs. ToolAdmission
+ * provides one per call and reserves a clientRequestId here, so a replay passes every check
+ * again and a caller that lost its grant is refused instead of answered from the record.
+ */
+export class KeyedAdmission extends Context.Service<
+  KeyedAdmission,
+  {
+    /**
+     * Reserves the call's key, or ends the call with its recorded answer or a refusal and never
+     * returns. `params` are the decoded arguments; their digest binds the key to this request.
+     */
+    readonly admit: (params: unknown, limits: CallerLimits | undefined) => Effect.Effect<void>;
+  }
+>()("goat/mcp/McpToolAccess/KeyedAdmission") {}
+
+/**
+ * Admits a write here. Declarations admit after their checks; a handler whose own checks must
+ * pass first declares `admission: "handler"` and yields this itself.
+ */
+export const admit = (params: unknown) =>
+  Effect.flatMap(Effect.serviceOption(KeyedAdmission), (admission) =>
+    admission._tag === "Some"
+      ? Effect.flatMap(Effect.serviceOption(AdmittedLimits), (limits) =>
+          admission.value.admit(params, Option.getOrUndefined(limits)),
+        )
+      : Effect.void,
+  );
+
+/** The modes the declaration resolved for this caller; a replay must still hold them. */
+class AdmittedLimits extends Context.Service<AdmittedLimits, CallerLimits>()(
+  "goat/mcp/McpToolAccess/AdmittedLimits",
+) {}
+
+const withLimits = <A, E, R>(limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  Effect.provideService(run, AdmittedLimits, limits);
+
+const admitted = <A, E, R>(params: unknown, limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  withLimits(limits, Effect.andThen(admit(params), run));
+
+type AdmissionOption = { readonly admission?: "handler" };
+
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
 );
 
+const stringArgument = (args: unknown, key: string) => {
+  const value =
+    typeof args === "object" && args !== null ? (args as Record<string, unknown>)[key] : undefined;
+  return typeof value === "string" ? value : undefined;
+};
+
+const capabilityRefused = (message: string) =>
+  new OrchestratorMcpFailure({ code: "capability_denied", message });
+
+const admitCapability = (
+  tool: string,
+  capability: PermissionCapability,
+  result: Profiles.CheckResult,
+) =>
+  result.ok
+    ? Effect.void
+    : Effect.fail(
+        capabilityRefused(`${tool} needs the goatclaw ${capability} capability. ${result.reason}`),
+      );
+
+const admitHost = (tool: string, host: string, result: Profiles.CheckResult) =>
+  result.ok
+    ? Effect.void
+    : Effect.fail(
+        capabilityRefused(
+          `${tool} acts on host ${host}, which needs the goatclaw threads.remote capability and a host the profile allows. ${result.reason}`,
+        ),
+      );
+
+const namedHosts = (
+  entry: (AgentSurfaceEntry & { readonly path: string }) | undefined,
+  args: unknown,
+) =>
+  entry === undefined
+    ? []
+    : hostArgumentsOf(entry).flatMap((key) => stringArgument(args, key) ?? []);
+
+/**
+ * With goatclaw on, a GOAT thread runs a write only when its effective profile holds the
+ * capability the tool's registry entry declares, plus threads.remote and an allowed host for
+ * every host the call names, even when the entry declares no capability. Direct calls and
+ * goat_call reach it through the served handle, before arguments decode. Outside clients stay
+ * bounded by their approved access: other GOAT hosts call writes as one. A call without an
+ * invocation scope comes from inside this process.
+ */
+export const requireDeclaredCapability = (
+  permissions: Profiles.PermissionProfiles["Service"],
+  tool: string,
+  declaredEffect: AgentSurfaceEffect,
+  args: unknown,
+): Effect.Effect<void, OrchestratorMcpFailure> => {
+  // Any name or path of the entry: the toolkit's shipped name, the listed name, or a legacy one.
+  const entry: (AgentSurfaceEntry & { readonly path: string }) | undefined =
+    resolveAgentSurfaceEntry(tool);
+  const capability = entry?.capability;
+  // A mismatch between the registry and the handler's declaration fails closed below.
+  const reads = declaredEffect === "read" && (entry?.effect ?? "read") === "read";
+  const hosts = reads ? [] : namedHosts(entry, args);
+  if (reads || (capability === "none" && hosts.length === 0)) return Effect.void;
+  return Effect.gen(function* () {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.isNone(scope) || scope.value.thread === undefined) return;
+    const effective = yield* permissions.resolve(scope.value).pipe(
+      Effect.mapError(
+        (failure) =>
+          new OrchestratorMcpFailure({
+            code: failure.code,
+            message: `${tool}: ${failure.message}`,
+          }),
+      ),
+    );
+    if (capability === undefined) {
+      if (effective.enabled)
+        return yield* capabilityRefused(`${tool} declares no goatclaw capability.`);
+      return;
+    }
+    if (capability !== "none")
+      yield* admitCapability(tool, capability, Profiles.checkProfile(effective, capability, {}));
+    for (const host of hosts)
+      yield* admitHost(tool, host, Profiles.checkProfile(effective, "threads.remote", { host }));
+  });
+};
+
 export const reads = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => handle(params));
+
+/**
+ * Runs other registered tools, each through its own declaration, so it adds no
+ * gate of its own. Declared a write so clients never auto-approve it as read-only.
+ */
+export const dispatches = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) => handle(params));
+
+/**
+ * Receives a tool's original failure before the MCP layer flattens it into text.
+ * goat_call provides one per nested call, so the envelope keeps the error's tag,
+ * code and computed message; ordinary requests have none and nothing is recorded.
+ */
+export class CallFailureCapture extends Context.Service<
+  CallFailureCapture,
+  { readonly record: (error: unknown) => Effect.Effect<void> }
+>()("goat/mcp/McpToolAccess/CallFailureCapture") {}
+
+const recordFailure = (error: unknown) =>
+  Effect.serviceOption(CallFailureCapture).pipe(
+    Effect.flatMap((capture) =>
+      capture._tag === "Some" ? capture.value.record(error) : Effect.void,
+    ),
+  );
+
+const capturingFailures = <Handler>(handler: Handler): Handler =>
+  (typeof handler === "function"
+    ? (...args: ReadonlyArray<unknown>) => {
+        const result = (handler as (...args: ReadonlyArray<unknown>) => unknown)(...args);
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- wraps every handler shape; Handler restores the types.
+        return Effect.isEffect(result) ? result.pipe(Effect.tapError(recordFailure)) : result;
+      }
+    : handler) as Handler;
 
 /**
  * Changes nothing, but when `reachesHost` says the call goes to another
@@ -135,35 +303,76 @@ export const readsOrReachesHost = <P, A, E, R>(
 ) =>
   declare("read", (params: P) =>
     reachesHost(params)
-      ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))
+      ? hostReachingCaller.pipe(Effect.flatMap(() => handle(params)))
       : handle(params),
   );
 
 export const readsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => requireThreadCaller.pipe(Effect.flatMap(() => handle(params))));
 
-export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const actsAsCaller = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap(() => handle(params)),
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
     ),
   );
 
-export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => orchestratingCaller.pipe(Effect.flatMap(() => handle(params))));
+export const writes = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
+  declare("write", (params: P) =>
+    orchestratingCaller.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
+    ),
+  );
+
+/**
+ * `writes` for a tool whose service acts for the calling thread, so an outside
+ * client is refused here, where goat_describe can see it, instead of in the service.
+ */
+export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    requireThreadCaller.pipe(
+      Effect.andThen(orchestratingCaller),
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    ),
+  );
 
 /**
  * Unlike `writes` it does not need thread control; the handler checks its
  * capability, as the capability toolkits do.
  */
-export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => writingCaller.pipe(Effect.flatMap(() => handle(params))));
+export const writesWithCapability = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
+  declare("write", (params: P) =>
+    writingCaller.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
+    ),
+  );
 
 export const writesThreads = <P, A, E, R>(
   threads: (params: P) => ReadonlyArray<ThreadId | undefined>,
   handle: (params: P) => Effect.Effect<A, E, R>,
-  options: { readonly refusalSuffix?: string } = {},
+  options: AdmissionOption & { readonly refusalSuffix?: string } = {},
 ) =>
   declare("write", (params: P) =>
     Effect.gen(function* () {
@@ -190,7 +399,11 @@ export const writesThreads = <P, A, E, R>(
       // orchestrator checks again under the thread's lock and records its
       // refusal here, since handlers wrap dispatch errors their own way.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      return yield* handle(params).pipe(
+      return yield* (
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params))
+      ).pipe(
         Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
         Effect.catch((error) =>
           Effect.flatMap(Ref.get(refused), (refusal) =>
@@ -235,7 +448,7 @@ export const startsThreads = <P, A, E, R>(
           requested.interactionMode,
         ),
       };
-      return yield* handle(params, started);
+      return yield* admitted(params, limits, handle(params, started));
     }),
   );
 
@@ -251,14 +464,69 @@ export const writesEnvironment = <P, A, E, R>(
     params: P,
     check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
   ) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) => {
   const check = orchestratingCaller.pipe(
     Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
   );
-  return declare("write", (params: P) => check.pipe(Effect.flatMap(() => handle(params, check))));
+  return declare("write", (params: P) =>
+    check.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params, check))
+          : admitted(params, caller.limits, handle(params, check)),
+      ),
+    ),
+  );
 };
 
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
+
+const setsUpProjectsRequired =
+  "Creating or cloning a project needs a live full-access/default caller, or, with goatclaw on, a live calling thread in default interaction mode whose profile allows worktree.create and lets it run at auto or above.";
+
+/**
+ * goatclaw's worker and manager agents set up the projects they work in (#858), and the worker
+ * profile caps them at auto. So when goatclaw governs the calling thread, its profile decides,
+ * full access included: it must allow worktree.create, and the thread's mode after the profile's
+ * ceiling must be auto or above. Outside clients, goatclaw off, or no profile service to ask
+ * keep the full-access/default requirement `writesEnvironment` has.
+ */
+const assertSetsUpProjects = Effect.fn("McpToolAccess.assertSetsUpProjects")(function* (
+  caller: Caller,
+) {
+  const { runtimeMode, interactionMode } = caller.limits;
+  const fullAccess = interactionMode === "default" && runtimeMode === "full-access";
+  const ungoverned = fullAccess ? Effect.void : capabilityRefused(setsUpProjectsRequired);
+  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
+  if (caller.scope.thread === undefined || Option.isNone(permissions)) return yield* ungoverned;
+  const result = yield* permissions.value.check(caller.scope, "worktree.create", { runtimeMode });
+  if (!result.ok) return yield* capabilityRefused(`${setsUpProjectsRequired} ${result.reason}`);
+  if (!result.effective.enabled) return yield* ungoverned;
+  const effectiveMode = result.effective.runtimeMode;
+  if (
+    interactionMode !== "default" ||
+    (effectiveMode !== "auto" && effectiveMode !== "full-access")
+  )
+    return yield* capabilityRefused(
+      `${setsUpProjectsRequired} This thread runs at ${effectiveMode} under profile ${result.effective.profile.id}.`,
+    );
+});
+
+const projectSetupCaller = orchestratingCaller.pipe(Effect.tap(assertSetsUpProjects));
+
+/**
+ * Creates or clones a project: `writesEnvironment`, except as `assertSetsUpProjects` allows.
+ * Admission can wait on a concurrent duplicate, so the caller is checked again after it.
+ */
+export const setsUpProjects = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    projectSetupCaller.pipe(
+      Effect.flatMap((caller) =>
+        admitted(params, caller.limits, Effect.andThen(projectSetupCaller, handle(params))),
+      ),
+    ),
+  );
 
 const removesCheckoutsRequired =
   "Removing worktrees needs a live full-access/default calling thread or a full-access client.";
@@ -273,15 +541,20 @@ export const removesCheckouts = <P, A, E, R>(
   removes: (params: P) => boolean,
   reachesHost: (params: P) => boolean,
   handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) =>
   declare("destructive", (params: P) =>
     removes(params)
       ? orchestratingCaller.pipe(
           Effect.tap((caller) => assertFullAccess(caller, removesCheckoutsRequired)),
-          Effect.flatMap(() => handle(params)),
+          Effect.flatMap((caller) =>
+            options.admission === "handler"
+              ? withLimits(caller.limits, handle(params))
+              : admitted(params, caller.limits, handle(params)),
+          ),
         )
       : reachesHost(params)
-        ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))
+        ? hostReachingCaller.pipe(Effect.flatMap(() => handle(params)))
         : handle(params),
   );
 type Declarations<Handlers> = {
@@ -313,8 +586,12 @@ export class HandlersLayer<Tools extends Record<string, Tool.Any>, EX = never, R
   }
 }
 
-const checkedHandlers = <Handlers>(declarations: Declarations<Handlers>): Handlers =>
-  Struct.map(declarations, checkedHandler);
+const checkedHandlers = <Handlers>(declarations: Declarations<Handlers>): Handlers => {
+  const handlers: Readonly<Record<string, unknown>> = Struct.map(declarations, checkedHandler);
+  return Object.fromEntries(
+    Object.entries(handlers).map(([name, handler]) => [name, capturingFailures(handler)]),
+  ) as Handlers;
+};
 
 export const toLayer = <Tools extends Record<string, Tool.Any>, EX = never, RX = never>(
   toolkit: Toolkit.Toolkit<Tools>,

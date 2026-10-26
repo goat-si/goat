@@ -1094,7 +1094,7 @@ it.effect.each([
       expect(result.failure).toBeInstanceOf(
         ThreadManagementService.ThreadManagementReviewTaskFinishedError,
       );
-      expect(result.failure.message).toContain("delegate_task");
+      expect(result.failure.message).toContain("goat_task_create");
       expect(dispatched).toHaveLength(0);
     } else {
       expect(result._tag).toBe("Success");

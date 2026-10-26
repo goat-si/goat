@@ -282,7 +282,7 @@ describe("connection catalog host", () => {
   );
   it.effect.each([
     ["direct", direct],
-    ["T3 Connect", { ...relay, enabled: true }],
+    ["GOAT Connect", { ...relay, enabled: true }],
   ] as const)("adds an SSH route to an existing %s machine with created:false", ([_name, entry]) =>
     Effect.gen(function* () {
       const registeredEntry = {

@@ -10,7 +10,7 @@ import {
 } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
+import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
 export const capabilities = {
@@ -83,6 +84,29 @@ export const capabilities = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 type Task = NonNullable<OrchestrationV2ProviderThread["cloudTask"]>;
+
+export const RETRY_PROMPT =
+  "Your previous run stopped because of an unexpected error before it finished. Continue the original task from where it stopped.";
+const RETRY_PROGRESS = "Cursor stopped on an unexpected error. GOAT retried once automatically.";
+// Errors a person has to fix; repeating the request cannot help.
+const PERMANENT_ERROR =
+  /auth|permission|forbidden|quota|limit|billing|payment|plan|invalid|not.?found|config/i;
+
+/**
+ * Cursor sometimes stops a fresh run with "The agent stopped because of an unexpected error",
+ * and Retry in Cursor then finishes it. A run that GOAT started gets that retry once, unless it
+ * already produced a branch or PR, was stopped, or failed for a reason a person must fix.
+ */
+export function shouldRetryCursorRun(task: Task, result: RunResult, stopRequested: boolean) {
+  if (result.status !== "error" || stopRequested) return false;
+  if (task.attach === "registered" || task.autoRetriedFromTaskId !== undefined) return false;
+  // Judge this run's own output; an earlier turn's PR stays on the task.
+  const { prUrl: _prUrl, branch: _branch, ...fresh } = task;
+  const output = resultTask(fresh, result);
+  if (output.prUrl !== undefined || output.branch !== undefined) return false;
+  // The SDK's error code is optional, so a refusal may explain itself only in its message.
+  return !PERMANENT_ERROR.test(`${result.error?.code ?? ""} ${result.error?.message ?? ""}`);
+}
 type TurnInput = ProviderAdapter.ProviderAdapterV2TurnInput;
 type AttachInput = Omit<TurnInput, "message" | "cloudLaunchSource">;
 type Progress = { assistantText: string; text: string };
@@ -153,7 +177,7 @@ export function resultTask(task: Task, result: RunResult): Task {
           : "Cursor Cloud failed. Open the agent for details."),
     ...(output?.branch ? { branch: output.branch } : {}),
     ...(prUrl ? { prUrl } : {}),
-    ...(result.status === "error" ? { error: "Cursor reported a terminal cloud error." } : {}),
+    ...(result.status === "error" ? { error: runErrorText(result.error?.message) } : {}),
   };
 }
 
@@ -321,6 +345,53 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               }),
             );
           });
+        const retryItem = (ctx: Active, status: "running" | "completed", at: DateTime.Utc) =>
+          emit({
+            type: "turn_item.updated",
+            driver: DRIVER,
+            turnItem: makeProviderRetryTurnItem({
+              driver: DRIVER,
+              threadId: ctx.input.threadId,
+              runId: ctx.input.runId,
+              nodeId: ctx.input.rootNodeId,
+              providerThreadId: ctx.thread.id,
+              providerTurnId: ctx.turn.id,
+              itemOrdinal: ctx.input.providerTurnOrdinal * 100 + 2,
+              failure: makeProviderFailure({ class: "provider_error", message: RETRY_PROGRESS }),
+              retry: { attempt: 1, maxAttempts: 1, retryDelayMs: 0 },
+              status,
+              startedAt: at,
+              updatedAt: at,
+            }),
+          });
+        const retryOnce = (ctx: Active) =>
+          Effect.gen(function* () {
+            const failed = ctx.thread.cloudTask!;
+            const apiKey = yield* key;
+            const marked: Task = {
+              ...failed,
+              status: "submitting",
+              autoRetriedFromTaskId: failed.taskId,
+              progress: RETRY_PROGRESS,
+            };
+            // Spend the retry before sending: a restart in between reconciles as unknown.
+            yield* commit(ctx, marked);
+            yield* retryItem(ctx, "running", yield* DateTime.now);
+            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey }));
+            const sent = yield* call("send", () =>
+              agent.send(RETRY_PROMPT, {
+                model: cursorSdkModelSelection(ctx.input.modelSelection),
+                idempotencyKey: `goat:${instanceId}:${ctx.input.runId}:${ctx.input.attemptId}:retry`,
+              }),
+            ).pipe(Effect.ensuring(Effect.sync(() => agent.close())));
+            ctx.run = sent;
+            yield* commit(ctx, {
+              ...marked,
+              taskId: sent.id,
+              status: "running",
+              tracking: "polled",
+            });
+          });
         const finalize = (ctx: Active, result: RunResult) =>
           Effect.gen(function* () {
             if (ctx.finalized) return;
@@ -343,6 +414,9 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               completedAt: timestamp,
             } satisfies OrchestrationV2ProviderTurn;
             yield* commit(ctx, task, turn);
+            // A failed retry is reported by the terminal failure item, which shares this item's id.
+            if (status === "completed" && task.autoRetriedFromTaskId !== undefined)
+              yield* retryItem(ctx, "completed", timestamp);
             yield* emit(
               status === "failed"
                 ? {
@@ -376,7 +450,12 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             while (!ctx.finalized) {
               const run = yield* fresh(ctx);
               if (run.status !== "running") {
-                yield* finalize(ctx, yield* call("result", () => run.wait()));
+                const result = yield* call("result", () => run.wait());
+                if (shouldRetryCursorRun(ctx.thread.cloudTask!, result, ctx.stopRequested)) {
+                  yield* retryOnce(ctx);
+                  continue;
+                }
+                yield* finalize(ctx, result);
                 return;
               }
               const task = ctx.thread.cloudTask!;
@@ -531,12 +610,42 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 return yield* protocol(
                   "A Cursor Cloud run is already active or awaiting reconciliation.",
                 );
-              if (input.message.attachments.length > 0)
-                return yield* protocol("Cursor Cloud currently accepts text-only messages.");
-              if (!input.cloudSource || !input.commitCloudTask)
+              const commitCloudTask = input.commitCloudTask;
+              if (!input.cloudSource || !commitCloudTask)
                 return yield* protocol(
                   "Cloud source or persistence was not resolved by the shared base.",
                 );
+              // These refusals come before any Cursor request. Record the base's submitting intent
+              // as failed, or shared finalization reports an unknown task that may still be running.
+              const refuse = (detail: string, guidance = "") =>
+                Effect.gen(function* () {
+                  const intent = input.providerThread.cloudTask;
+                  if (intent?.status === "submitting") {
+                    const now = yield* DateTime.now;
+                    yield* commitCloudTask(
+                      {
+                        ...intent,
+                        status: "failed",
+                        error: detail,
+                        summary: `${detail}${guidance} Nothing was sent to Cursor Cloud.`,
+                        updatedAt: DateTime.formatIso(now),
+                      },
+                      {
+                        nativeThreadRef: input.providerThread.nativeThreadRef,
+                        nativeConversationHeadRef: input.providerThread.nativeConversationHeadRef,
+                      },
+                    ).pipe(
+                      Effect.catch(() =>
+                        Effect.logWarning("Cursor Cloud refusal could not be persisted", {
+                          runId: input.runId,
+                        }),
+                      ),
+                    );
+                  }
+                  return yield* protocol(detail);
+                });
+              if (input.message.attachments.length > 0)
+                return yield* refuse("Cursor Cloud currently accepts text-only messages.");
               const sandbox = input.runtimePolicy.sandboxPolicy;
               if (
                 input.runtimePolicy.runtimeMode !== "full-access" ||
@@ -548,7 +657,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                     !("type" in sandbox) ||
                     sandbox.type !== "dangerFullAccess"))
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud supports full access only; GOAT sandbox and approval overrides cannot be applied in the cloud.",
                 );
               }
@@ -563,12 +672,16 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 !/^[a-f0-9]{40,64}$/i.test(source.sha) ||
                 repository(source.repository) === undefined
               ) {
-                return yield* protocol(
+                return yield* refuse(
                   "Cursor Cloud requires a published repository and remote tip SHA.",
                 );
               }
               const sha = source.sha;
-              const apiKey = yield* key;
+              const apiKey = yield* key.pipe(
+                Effect.catch((failure) =>
+                  refuse(failure.detail, " Sign in to Cursor, then send the message again."),
+                ),
+              );
               const agentId = input.providerThread.nativeThreadRef?.nativeId;
               const agent = yield* Effect.acquireRelease(
                 call(agentId ? "resume" : "create", () =>
@@ -699,6 +812,44 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 yield* input.commitCloudTask(task);
               }
               const runId = task.taskId;
+              // startTurn recorded this run's refusal before any Cursor request (the base wrote
+              // this run's submitting intent first), and the run ended before it was finalized.
+              // Settle it as recorded; nothing reached Cursor, so there is nothing to reconcile.
+              if (task.status === "failed" && task.acceptedAppRunId !== input.runId) {
+                const timestamp = yield* DateTime.now;
+                const refused: OrchestrationV2ProviderTurn = {
+                  id: ids.derive.providerTurn({
+                    driver: DRIVER,
+                    nativeTurnId: `${instanceId}:refused:${input.runId}`,
+                  }),
+                  providerThreadId: input.providerThread.id,
+                  nodeId: input.rootNodeId,
+                  runAttemptId: input.attemptId,
+                  nativeTurnRef: null,
+                  ordinal: PositiveInt.make(input.providerTurnOrdinal),
+                  status: "failed",
+                  startedAt: timestamp,
+                  completedAt: timestamp,
+                };
+                yield* emit({
+                  type: "provider_turn.updated",
+                  driver: DRIVER,
+                  threadId: input.threadId,
+                  providerTurn: refused,
+                });
+                yield* emit({
+                  type: "turn.terminal",
+                  driver: DRIVER,
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId: refused.id,
+                  runOrdinal: PositiveInt.make(input.runOrdinal),
+                  failureItemOrdinal: PositiveInt.make(input.providerTurnOrdinal * 100 + 2),
+                  status: "failed",
+                  failure: makeProviderFailure({ class: "provider_error" }),
+                  threadDisposition: "reusable",
+                });
+                return;
+              }
               if (
                 !agentId ||
                 task.status === "submitting" ||

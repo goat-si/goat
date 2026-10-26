@@ -1,4 +1,4 @@
-# T3 Connect
+# GOAT Connect
 
 > **Status:** T3 Connect is disabled in every build by `GOAT_CONNECT_ENABLED=false`
 > in [`@goat/shared/goatConnect`](../../packages/shared/src/goatConnect.ts).
@@ -14,14 +14,15 @@ hidden (see [the route predicate](../../packages/client-runtime/src/connection/r
 Saved relay-only environments stay unavailable and can be forgotten; direct pairing,
 Tailscale, and SSH are unaffected.
 
-T3 Connect uses Clerk for cloud identity. The relay manages environment links,
+GOAT Connect uses Clerk for cloud identity. The relay manages environment links,
 credentials for reaching environments, and managed tunnel allocations. After
 bootstrap, clients send application traffic through the environment's tunnel
 hostname; the relay Worker does not proxy their HTTP or WebSocket sessions.
 The one exception is automation webhooks: the relay forwards
-`/v1/hooks/:environmentId/:hookId/:token` to the environment's tunnel so
-senders get a stable URL. It keeps bodies and tokens out of its traces and
-leaves token and signature verification to the environment
+`/v1/hooks/:endpointKey/:hookId/:token` to the environment's tunnel so
+senders get a stable URL. `endpointKey` is the 16-hex hash suffix of the
+managed tunnel's name, not the environment id. It keeps bodies and tokens out
+of its traces and leaves token and signature verification to the environment
 ([forwarder](../../infra/relay/src/hooks/HookForwarder.ts)).
 
 By default the forwarder stores nothing. An environment can opt in to having
@@ -159,7 +160,7 @@ user's choice and is never replaced, since linking asks before downloading.
 
 Once the pinned release registers a connection, managed releases older than the
 pin are deleted except the newest of them. That one, and any newer release, can
-belong to another server sharing the same T3 home, such as a rollback after a
+belong to another server sharing the same GOAT home, such as a rollback after a
 failed update, which could not run again without it.
 
 The version comes from running `cloudflared version`, not from the folder name.

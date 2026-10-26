@@ -1,0 +1,55 @@
+{
+  "gate": "listing",
+  "taskSetVersion": 3,
+  "projectId": "mcp:a4550a82-7f5a-4e43-b681-0f6c928811fc",
+  "pairs": 10,
+  "baselineArm": "full",
+  "candidateArm": "core",
+  "listingSettings": "/home/ubuntu/.goat/worktrees/goat/feat-context-diet-d8/.goat/userdata/settings.json",
+  "arms": [
+    {
+      "id": "full",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "anthropic/claude-opus-5-5"
+      },
+      "listing": {
+        "mode": "full"
+      },
+      "forbidTools": [],
+      "forbidItemTypes": ["command_execution", "file_change"]
+    },
+    {
+      "id": "core",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "anthropic/claude-opus-5-5"
+      },
+      "listing": {
+        "mode": "core",
+        "resident": []
+      },
+      "forbidTools": [],
+      "forbidItemTypes": ["command_execution", "file_change"]
+    }
+  ],
+  "fixtureModel": {
+    "instanceId": "codex",
+    "model": "gpt-6-luna"
+  },
+  "reviewModels": [
+    {
+      "instanceId": "codex",
+      "model": "gpt-6-luna"
+    },
+    {
+      "instanceId": "codex",
+      "model": "command-code/deepseek-deepseek-v4.1-flash-fast"
+    },
+    {
+      "instanceId": "codex",
+      "model": "anthropic/claude-sonnet-5-5"
+    }
+  ],
+  "values": {}
+}

@@ -424,6 +424,21 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    // Threads already named in the audit log, so each appears once per server start.
+    const auditedIgnoredThreads = new Set<string>();
+    const auditIgnoredActivity = projections.getIgnoredActivity(20).pipe(
+      Effect.flatMap((ignored) =>
+        Effect.forEach(
+          ignored.filter((entry) => !auditedIgnoredThreads.has(entry.threadId)),
+          (entry) => {
+            auditedIgnoredThreads.add(entry.threadId);
+            return Effect.logInfo("server.activity.ignored-stale-records", entry);
+          },
+          { discard: true },
+        ),
+      ),
+      Effect.ignore,
+    );
     const descriptor = (endpointName: string) =>
       Effect.fn("environment.metadata.descriptor")(function* () {
         yield* annotateEnvironmentRequest(endpointName);
@@ -437,10 +452,16 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
           message: "SSH activity requires a loopback peer.",
         });
       }
-      const activity = yield* projections
-        .getServerActivity()
+      const blockers = yield* projections
+        .getServerActivityBlockers(5)
         .pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
-      return { activity, serverVersion: packageJson.version, pid: process.pid };
+      yield* auditIgnoredActivity;
+      return {
+        activity: blockers.length > 0 ? ("busy" as const) : ("idle" as const),
+        serverVersion: packageJson.version,
+        pid: process.pid,
+        blockers,
+      };
     });
     return handlers
       .handle("descriptor", descriptor("descriptor"))

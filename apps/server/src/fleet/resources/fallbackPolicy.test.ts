@@ -38,6 +38,18 @@ describe("decideNext", () => {
     assert.deepStrictEqual(decision, { _tag: "Step", step: steps[0]!, hop: 2 });
   });
 
+  it("moves past a route that refuses the model for this account on the unavailable trigger (#1205)", () => {
+    const refused = input({
+      chain: { steps, on: ["usage_limit", "unavailable"] },
+      failure: "permission_error",
+    });
+    assert.deepStrictEqual(decideNext(refused), { _tag: "Step", step: steps[1]!, hop: 1 });
+    assert.deepStrictEqual(decideNext(input({ failure: "permission_error" })), {
+      _tag: "Exhausted",
+      reason: "permission_error is not one of this chain's triggers",
+    });
+  });
+
   it("is exhausted when every other step is cooling down", () => {
     assert.deepStrictEqual(decideNext(input({ unavailable: () => "is cooling down" })), {
       _tag: "Exhausted",

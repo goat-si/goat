@@ -1,11 +1,8 @@
 import { EnvironmentId, type ThreadPullRequestLink } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  resolvePullRequestTabLink,
-  surfaceShortcutActionForKey,
-  surfaceShortcutTargetsTypingContext,
-} from "./RightPanelTabs";
+import { panelTabKeyAction, resolvePullRequestTabLink } from "./RightPanelTab";
+import { surfaceShortcutActionForKey, surfaceShortcutTargetsTypingContext } from "./RightPanelTabs";
 
 function shortcutEvent(
   key: string,
@@ -96,5 +93,23 @@ describe("pull request tab snapshots", () => {
         link,
       ),
     ).toBe(newer);
+  });
+});
+
+describe("panel tab keyboard", () => {
+  it("moves focus with arrows, wrapping at both ends, and jumps with Home and End", () => {
+    expect(panelTabKeyAction("ArrowRight", 0, 3)).toEqual({ type: "focus", index: 1 });
+    expect(panelTabKeyAction("ArrowRight", 2, 3)).toEqual({ type: "focus", index: 0 });
+    expect(panelTabKeyAction("ArrowLeft", 0, 3)).toEqual({ type: "focus", index: 2 });
+    expect(panelTabKeyAction("Home", 2, 3)).toEqual({ type: "focus", index: 0 });
+    expect(panelTabKeyAction("End", 0, 3)).toEqual({ type: "focus", index: 2 });
+  });
+
+  it("opens the focused tab only on Enter or Space and closes it on Delete", () => {
+    expect(panelTabKeyAction("Enter", 1, 3)).toEqual({ type: "activate" });
+    expect(panelTabKeyAction(" ", 1, 3)).toEqual({ type: "activate" });
+    expect(panelTabKeyAction("Delete", 1, 3)).toEqual({ type: "close" });
+    expect(panelTabKeyAction("Backspace", 1, 3)).toEqual({ type: "close" });
+    expect(panelTabKeyAction("a", 1, 3)).toBeNull();
   });
 });

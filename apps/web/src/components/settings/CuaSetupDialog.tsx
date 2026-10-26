@@ -1,25 +1,22 @@
-import type { CuaHostStatus, DesktopCuaVerification } from "@goat/contracts";
+import type { CuaHostStatus, DesktopCuaGrants, DesktopCuaVerification } from "@goat/contracts";
 import { useRef, useState } from "react";
 
 import { CircleAlertIcon, CircleCheckIcon } from "~/components/solar";
-import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
-import { PermissionChecklist, PermissionContinueButton } from "../permissions/PermissionChecklist";
-import { usePermissionStatus } from "../permissions/usePermissionStatus";
+import { PermissionContinueButton } from "../permissions/PermissionChecklist";
+import {
+  OnboardingBody,
+  OnboardingFooter,
+  OnboardingHeader,
+  OnboardingPopup,
+} from "../onboarding/OnboardingDialog";
 import { Button } from "../ui/button";
+import { Dialog } from "../ui/dialog";
+import { CuaGrantSteps, useCuaGrants } from "./CuaGrantSteps";
 import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
-import {
-  CUA_PERMISSIONS,
   CUA_WAYLAND_NOTE,
   computerUseUnavailable,
   cuaHostRequirements,
+  cuaNeedsRelaunch,
   cuaVerificationRows,
   type CuaPermission,
 } from "./CuaSetupDialog.logic";
@@ -29,8 +26,11 @@ export function CuaSetupDialog({
   hostLabel,
   status,
   localMac,
+  localCheck,
   onCheck,
   onAllow,
+  onReveal,
+  onRelaunch,
   onEnable,
   onVerify,
   onClose,
@@ -40,29 +40,40 @@ export function CuaSetupDialog({
   status: CuaHostStatus;
   /** This desktop runs the host, so it can grant macOS permissions and prove them. */
   localMac: boolean;
-  onCheck: (permission: CuaPermission) => Promise<boolean>;
+  /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
+  localCheck: boolean;
+  /** The grants of the app computer use runs as: the helper when GOAT ships one. */
+  onCheck: () => Promise<DesktopCuaGrants>;
+  /** Opens the pane with the panel to drag that app into its list. */
   onAllow: (permission: CuaPermission) => Promise<void>;
+  onReveal?: (() => Promise<void>) | undefined;
+  /** Quits and reopens GOAT; absent where the desktop cannot. */
+  onRelaunch?: (() => Promise<void>) | undefined;
   /** Turns the setting on; resolves to an error message when it could not be saved. */
   onEnable: () => Promise<string | null>;
   onVerify: () => Promise<DesktopCuaVerification>;
   onClose: (outcome: "enabled" | "dismissed") => void;
 }) {
-  const [busy, setBusy] = useState<"allow" | "enable" | "verify" | null>(null);
+  const [busy, setBusy] = useState<"allow" | "enable" | "verify" | "relaunch" | null>(null);
   const pending = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [isOn, setIsOn] = useState(enabled);
   const [verification, setVerification] = useState<DesktopCuaVerification | null>(null);
-  const permission = usePermissionStatus(
-    async () => ({
-      accessibility: await onCheck("accessibility"),
-      "screen-recording": await onCheck("screen-recording"),
-    }),
-    { accessibility: false, "screen-recording": false },
+  const [opened, setOpened] = useState<CuaPermission | null>(null);
+  const checked = useCuaGrants(
+    onCheck,
     localMac && busy === null && verification?.verified !== true,
   );
-  const granted = !localMac || permission.isReady(CUA_PERMISSIONS);
+  const holder = checked.grants && checked.grants.principal !== "unusable" ? checked.grants : null;
+  const unusable = checked.grants?.principal === "unusable" ? checked.grants.message : null;
+  const granted =
+    !localMac ||
+    (holder !== null && checked.error === null && holder.accessibility && holder.screenRecording);
 
-  const run = async (kind: "allow" | "enable" | "verify", action: () => Promise<void>) => {
+  const run = async (
+    kind: "allow" | "enable" | "verify" | "relaunch",
+    action: () => Promise<void>,
+  ) => {
     if (pending.current) return;
     pending.current = true;
     setBusy(kind);
@@ -79,10 +90,23 @@ export function CuaSetupDialog({
   };
   const allow = (target: CuaPermission) =>
     run("allow", async () => {
-      await onAllow(target).catch(() =>
-        setError("Could not open System Settings. Try Allow again."),
+      await onAllow(target).then(
+        () => setOpened(target),
+        () => setError("Could not open System Settings. Try again."),
       );
     });
+  const relaunch = onRelaunch
+    ? () =>
+        run("relaunch", async () => {
+          await onRelaunch().catch(() =>
+            setError("Could not reopen GOAT. Quit it and open it again."),
+          );
+        })
+    : undefined;
+  const needsRelaunch =
+    localMac &&
+    onRelaunch !== undefined &&
+    cuaNeedsRelaunch({ grants: holder, opened, verification });
   const verify = () =>
     run("verify", async () => {
       setVerification(
@@ -108,8 +132,8 @@ export function CuaSetupDialog({
       } else setError(failure);
     });
     if (!saved) return;
-    // Only the Mac running the host can prove its grants; elsewhere the switch is the result.
-    if (localMac) await verify();
+    // Only the desktop running the host can prove it; elsewhere the switch is the result.
+    if (localCheck) await verify();
     else onClose("enabled");
   };
 
@@ -121,48 +145,53 @@ export function CuaSetupDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogPopup showCloseButton={busy === null}>
-        <DialogHeader>
-          <DialogTitle>
-            {verified ? "Computer use is ready" : `Let agents use ${hostLabel}`}
-          </DialogTitle>
-          <DialogDescription>
-            {verified
-              ? "From their next turn, agents can see and use apps on this Mac."
-              : `Agents can see and use apps on ${hostLabel} in the background, without taking over your cursor. They get the computer use tools from their next turn.`}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="space-y-3 text-sm">
+      <OnboardingPopup showCloseButton={busy === null}>
+        <OnboardingHeader
+          host={hostLabel}
+          title={verified ? "Computer use is ready" : `Let agents use ${hostLabel}`}
+          description={
+            verified
+              ? `From their next turn, agents can see and use apps on ${hostLabel}.`
+              : `Agents see and use apps on ${hostLabel} in the background, without taking over your cursor.`
+          }
+        />
+        <OnboardingBody>
+          <div className="space-y-3">
             {localMac && !verified ? (
-              <PermissionChecklist
-                busy={busy !== null}
-                permissions={[
-                  {
-                    id: "accessibility",
-                    icon: <MacAccessibilityIcon className="size-8 shrink-0 drop-shadow-sm" />,
-                    title: "Accessibility",
-                    description: "Click, type, and read controls in other apps.",
-                    granted: permission.status.accessibility,
-                    onAllow: () => void allow("accessibility"),
-                  },
-                  {
-                    id: "screen-recording",
-                    icon: <MacScreenRecordingIcon className="size-8 shrink-0 drop-shadow-sm" />,
-                    title: "Screen Recording",
-                    description: "See windows to decide what to do next.",
-                    granted: permission.status["screen-recording"],
-                    onAllow: () => void allow("screen-recording"),
-                  },
-                ]}
-              />
+              unusable ? (
+                <p role="alert" className="text-destructive">
+                  {unusable}
+                </p>
+              ) : holder ? (
+                <CuaGrantSteps
+                  grants={holder}
+                  opened={opened}
+                  busy={busy !== null}
+                  onOpen={(target) => void allow(target)}
+                  onReveal={
+                    onReveal
+                      ? () =>
+                          void onReveal().catch(() =>
+                            setError(`Could not show ${holder.name} in Finder.`),
+                          )
+                      : undefined
+                  }
+                />
+              ) : checked.error === null ? (
+                <p role="status" className="text-muted-foreground">
+                  Checking permissions…
+                </p>
+              ) : null
             ) : null}
             {!localMac ? (
               <p className="text-muted-foreground">
                 {cuaHostRequirements(status.platform, hostLabel)}
               </p>
             ) : null}
-            {status.display && status.display.capability !== "available" ? (
+            {status.display &&
+            status.display.capability !== "available" &&
+            // The steps above already say which grants this Mac still needs.
+            !(holder !== null && !verified && status.display.capability === "partial") ? (
               <p
                 role={status.display.capability === "unavailable" ? "alert" : undefined}
                 className={
@@ -220,19 +249,30 @@ export function CuaSetupDialog({
                 Restarting computer use and checking that it can see and read a GOAT window…
               </p>
             ) : null}
-            {error || (localMac && permission.error) ? (
+            {error || (localMac && checked.error) ? (
               <p role="alert" className="text-xs text-destructive">
-                {error ?? permission.error}
+                {error ?? checked.error}
               </p>
             ) : null}
-            {localMac && !granted && verification === null ? (
-              <p className="text-xs text-muted-foreground">
-                If a permission stays off after you allow it, quit and reopen GOAT.
-              </p>
+            {needsRelaunch ? (
+              <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                  macOS applies some permissions only to a newly opened app. Quit and reopen GOAT,
+                  then come back here.
+                </p>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy !== null}
+                  onClick={() => void relaunch?.()}
+                >
+                  {busy === "relaunch" ? "Reopening…" : "Quit & reopen"}
+                </Button>
+              </div>
             ) : null}
           </div>
-        </DialogPanel>
-        <DialogFooter>
+        </OnboardingBody>
+        <OnboardingFooter hint="Turn it off any time in Settings → Integrations.">
           {verified ? (
             <Button onClick={close}>Done</Button>
           ) : (
@@ -243,7 +283,7 @@ export function CuaSetupDialog({
               <PermissionContinueButton
                 ready={granted && (isOn || !computerUseUnavailable(status))}
                 busy={busy !== null}
-                onClick={() => void (isOn && localMac ? verify() : turnOn())}
+                onClick={() => void (isOn && localCheck ? verify() : turnOn())}
               >
                 {busy === "enable"
                   ? "Turning on…"
@@ -257,8 +297,8 @@ export function CuaSetupDialog({
               </PermissionContinueButton>
             </>
           )}
-        </DialogFooter>
-      </DialogPopup>
+        </OnboardingFooter>
+      </OnboardingPopup>
     </Dialog>
   );
 }

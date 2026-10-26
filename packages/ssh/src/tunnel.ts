@@ -1,15 +1,8 @@
 import {
-  isSshHostUnreachable,
-  sshAuthenticationFailure,
-  sshFailureDiagnostic,
-  sshLocalProxyFailure,
-} from "@goat/shared/sshFailure";
-import {
   LEGACY_SSH_ARCHIVE_VERSION_KEY,
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
 } from "@goat/contracts/legacyT3Names";
 import type {
-  AuthEnvironmentScope,
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshPreparationProgress,
   DesktopSshRuntimePendingResult,
@@ -23,44 +16,20 @@ import type {
   SshRuntimePhase,
 } from "@goat/contracts";
 import {
-  AuthEnvironmentScopes,
   SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
   SERVER_EXIT_CODE_DATABASE_AHEAD,
-  buildSshKeyAuthInstructions,
 } from "@goat/contracts";
-import {
-  compareRuntimeProtocols,
-  ownRuntimeProtocolRanges,
-  SSH_RUNTIME_PROTOCOL_VERSION,
-} from "@goat/shared/sshRuntimeProtocol";
-import {
-  describeReadinessCause,
-  waitForHttpReady as waitForHttpReadyShared,
-} from "@goat/shared/httpReadiness";
-import {
-  CLI_ARCHIVE_PLATFORM_KEYS,
-  CLI_RELEASE_REPOSITORY,
-  cliArchiveFileName,
-  cliArchivePlatformKey,
-  cliReleaseDownloadBaseUrl,
-  isPublishableCliReleaseVersion,
-  type CliArchivePlatformKey,
-} from "@goat/shared/cliRelease";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import { describeReadinessCause } from "@goat/shared/httpReadiness";
+import { cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { extractJsonObject, fromLenientJson } from "@goat/shared/schemaJson";
-import { compareRuntimeBuilds, parseSemver, type RuntimeBuild } from "@goat/shared/semver";
-import {
-  encodePowerShellCommand,
-  WINDOWS_DETACHED_SPAWN_POWERSHELL,
-  WINDOWS_PROCESS_INFO_POWERSHELL,
-} from "@goat/shared/windowsHostProcess";
-import * as Config from "effect/Config";
-import * as Cause from "effect/Cause";
+import { fromLenientJson } from "@goat/shared/schemaJson";
+import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -86,10 +55,73 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
-import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
-import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
-import { downloadRuntimeArchiveWithHttps } from "./runtimeArchiveHttp.ts";
-import { findPublishedRuntime, type PublishedRuntimeMiss } from "./runtimePublished.ts";
+import {
+  SSH_READY_PROBE_TIMEOUT_MS,
+  SSH_READY_TIMEOUT_MS,
+  type SshReadinessBudget,
+  sshReadinessBudget,
+  waitForHttpReady,
+} from "./sshReadiness.ts";
+export { type SshReadinessBudget, sshReadinessBudget, waitForHttpReady } from "./sshReadiness.ts";
+export { hostEnvironmentIdScript } from "./appServer.ts";
+import {
+  type AppServerProbe,
+  appServerLaunch,
+  appServerStatus,
+  probeAppServer,
+  readForwardDescriptor,
+  shouldMoveToAppServer,
+} from "./appServer.ts";
+import {
+  applyScriptPlaceholders,
+  decodeRemoteJsonOutput,
+  isNodeScriptRunner,
+  matchesSignals,
+  liveRuntimeBlocksUpdate,
+  notifyRuntimePhase,
+  REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
+  REMOTE_ARCHIVE_DOWNLOAD_SECONDS,
+  REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+  REMOTE_ARCHIVE_LOCK_WAIT_SECONDS,
+  requestedRuntime,
+  shellSingleQuote,
+  sshTargetLogFields,
+  stripTrailingNewlines,
+  type PreparedRemoteRuntime,
+  type RemoteGoatRunnerOptions,
+  type SshRuntimeProgressCallback,
+} from "./remoteRuntime.ts";
+import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
+import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { runtimePreparationError } from "./runtimePreparationErrors.ts";
+import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
+import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
+import { makeManagedTrust } from "./managedTrust.ts";
+import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
+import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
+import {
+  makeRemoteSessions,
+  memoryScopesUnsupportedError,
+  type RemoteClientSession,
+  type RemoteClientSessionOptions,
+  type RemoteMcpClientSession,
+  type RemoteMcpClientSessionOptions,
+} from "./remoteSessions.ts";
+import {
+  REMOTE_RUNTIME_CLEANUP_SCRIPT,
+  REMOTE_RUNTIME_FACT_WARMUP_SCRIPT,
+} from "./runtimeMaintenanceScripts.ts";
+import {
+  KEEP_EXISTING_RUNNER_INSTALL,
+  REMOTE_LAUNCH_LISTENER_SCRIPT,
+  REMOTE_LEGACY_IDENTITY_SCRIPT,
+  REMOTE_OWNED_IDENTITY_SCRIPT,
+  REMOTE_PROTOCOL_GUARD_SCRIPT,
+  REMOTE_REPLACEMENT_LOCK_SCRIPT,
+  REMOTE_RUNNER_SETUP_SCRIPT,
+  REPLACE_RUNNER_INSTALL,
+  VERIFY_OWNED_BEFORE_PUBLICATION,
+} from "./runtimeOwnershipScripts.ts";
 import {
   baseSshArgs,
   buildSshHostSpecEffect,
@@ -124,408 +156,18 @@ import {
 const DEFAULT_REMOTE_PORT = 3773;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const REMOTE_LAUNCH_ATTEMPTS = 3;
-const SSH_READY_TIMEOUT_MS = 20_000;
-const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
-// Ceilings for a slow link. A forwarded probe costs at least one round trip,
-// which reaches ~600 ms over a phone hotspot relayed across continents.
-const SSH_READY_MAX_PROBE_TIMEOUT_MS = 5_000;
-const SSH_READY_MAX_TIMEOUT_MS = 60_000;
 // How long an open forward has to answer before it counts as dead. A forward
 // whose TCP connection died during sleep accepts locally and never answers.
 const EXISTING_TUNNEL_CHECK_TIMEOUT_MS = 2_000;
+/** How long a target uses the managed server after its GOAT app server refused a credential. */
+const APP_SERVER_REFUSAL_MS = 600_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
-// A cold archive launch also downloads and unpacks a ~70 MB release archive
-// and may wait on another installer's lock. The budgets nest: the checksum
-// file is tiny and the archive download is bounded; a waiter outlasts both
-// downloads plus extraction so it can reuse the result; and the SSH command
-// outlasts an install (own or waited-for) plus readiness, with slack for
-// verification and extraction, which have no timeout of their own.
-const REMOTE_ARCHIVE_CHECKSUMS_SECONDS = 30;
-const REMOTE_ARCHIVE_DOWNLOAD_SECONDS = 240;
-const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
-const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;
-const REMOTE_REPLACEMENT_WAIT_ATTEMPTS = 50;
-
-export interface RemoteGoatRunnerOptions {
-  readonly nodeScriptPath?: string | null;
-  readonly nodeEngineRange?: string | null;
-  readonly archiveVersion?: string | null;
-  /**
-   * Commit time (Unix seconds) of the build `archiveVersion` names. It orders that build against
-   * the host's when their versions cannot be ordered, such as two `0.1.0-dev.<sha>` builds.
-   */
-  readonly archiveCommitTime?: number;
-  /** Acquisition authority recorded only when an archive is installed. */
-  readonly archiveSource?: "bundle" | "cache" | "mirror" | "https" | "gh";
-  readonly releaseBaseUrl?: string | null;
-  /** Writable user cache; only this directory may receive gh downloads. */
-  readonly archiveDirectory?: string | null;
-  /** Read-only packaged archives. Never create, repair, or download into this directory. */
-  readonly bundledArchiveDirectory?: string | null;
-  /**
-   * Ask the host to download a published release itself before this client uploads one.
-   * The desktop app and the server's SSH dispatch set it; without it the client always
-   * acquires the archive and uploads it.
-   */
-  readonly hostDownload?: boolean;
-  /**
-   * When this build's own runtime cannot be acquired for a host that runs nothing usable,
-   * install the newest published runtime that is compatible with it instead. The desktop app
-   * and the server's SSH dispatch set it.
-   */
-  readonly publishedFallback?: boolean;
-  /** Local gh executable used for authenticated acquisition; defaults to PATH lookup. */
-  readonly ghCommand?: string | undefined;
-  /** Deadline for the best-effort post-install cleanup and fact warming round trip; 10 s by default. */
-  readonly cleanupTimeoutMs?: number | undefined;
-  /**
-   * Reuse the remote's existing `run-t3.sh` instead of replacing it. Pairing and
-   * MCP-session helpers set it so remote CLI commands run with the binary that
-   * matches the running server. A launch with it never installs, refreshes, or
-   * replaces the host's runtime.
-   */
-  readonly keepExistingRunner?: boolean | null;
-  /**
-   * The first connection per manager may refresh an older owned runtime once,
-   * when idle. Packaged desktop and the server's SSH dispatch set it.
-   */
-  readonly refreshOwnedRuntimeOnFirstConnection?: boolean;
-  /**
-   * The user confirmed replacing the live runtime even if its work outlasts the drain window.
-   * Without it an expired window cancels the replacement and the server keeps running.
-   */
-  readonly confirmReplacement?: boolean;
-  /** Drain window for a replacement, in seconds (default 60, at most 300). */
-  readonly replacementGraceSeconds?: number;
-  /**
-   * A person asked for this refresh. Only refreshes without it, and without
-   * `confirmReplacement`, are automatic and let the runtime arbitrate the target.
-   */
-  readonly manualRefresh?: boolean;
-  /**
-   * The protocol the candidate build speaks, when it is not this build's own: a runtime that
-   * replaces itself with a newer release builds the launch script on that release's behalf.
-   */
-  readonly candidateProtocol?: { readonly ssh: number; readonly orchestration: number };
-}
-
-export interface PreparedRemoteRuntime {
-  readonly runner: RemoteGoatRunnerOptions;
-  readonly version: string | null;
-  readonly requestedVersion: string | null;
-  readonly source: "requested" | "retained" | "live" | "installed";
-  readonly installedExecutableSha256?: string;
-  readonly requireInstalled: boolean;
-  /** This preparation uploaded the archive, so an older runtime may have just become garbage. */
-  readonly uploaded?: boolean;
-  readonly mayUpgradeOwnedServer: boolean;
-  /** SHA-256 of the retained run-t3.sh observed by preparation; null for other sources. */
-  readonly retainedRunnerSha256: string | null;
-  readonly refreshIfIdle?: boolean;
-  readonly expectedLiveVersion?: string;
-  readonly expectedLiveRunnerSha256?: string;
-  readonly upgradeFailure?: SshHostFailure;
-  /** Why a compatible live selection can be attached to, but cannot be updated. */
-  readonly updateBlocked?: string;
-  readonly reconnectProbe?: string;
-  readonly reconnectPending?: SshRuntimePendingReplacement;
-  readonly hostPlatform?: "darwin" | "linux" | "win32";
-  /**
-   * Set for a published fallback chosen because the host had no GOAT data. Launch refuses to
-   * start it if data appeared meanwhile, since that data may come from a newer build.
-   */
-  readonly requireFreshHost?: boolean;
-}
-const requestedRuntime = (runner: RemoteGoatRunnerOptions | undefined): PreparedRemoteRuntime => ({
-  runner: { ...runner },
-  version: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
-  requestedVersion: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
-  source: "requested",
-  requireInstalled: false,
-  retainedRunnerSha256: null,
-  mayUpgradeOwnedServer: runner?.keepExistingRunner !== true,
-});
-const RuntimeSignals = Schema.Struct({
-  serverVersion: Schema.String,
-  sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Int),
-  orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
-  invalid: Schema.optionalKey(Schema.Boolean),
-});
-const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
-/**
- * Protocol ranges decide compatibility. Only a server too old to advertise both integers
- * (`unknown`) falls back to the exact release, since an identical build speaks identical protocols.
- */
-const matchesSignals = (signals: typeof RuntimeSignals.Type, requested: string) => {
-  if (signals.invalid) return false;
-  const verdict = compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, signals);
-  return (
-    verdict === "compatible" ||
-    (verdict === "unknown" &&
-      signals.serverVersion === requested &&
-      (signals.sshRuntimeProtocolVersion === undefined ||
-        signals.sshRuntimeProtocolVersion === SSH_RUNTIME_PROTOCOL_VERSION) &&
-      (signals.orchestrationProtocolVersion === undefined ||
-        signals.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION))
-  );
-};
-
-// Starting goat costs about 0.4 s on a host, and one reconnect used to start it dozens of times
-// for answers that cannot change while their inputs stand: those of an unchanged executable, and
-// those of one running server instance. Each answer is recorded under a key naming every input it
-// depends on, so an executable that changed, was reinstalled or removed, or a server that was
-// replaced or restarted misses and is asked again. Failures are never recorded, and a record is
-// kept only when its key still holds after the answer. Windows hosts ask every time.
-const REMOTE_FACTS_SCRIPT = `case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) GOAT_FACTS_DIR= ;;
-  *) GOAT_FACTS_DIR="$HOME/.goat/ssh-launch/facts" ;;
-esac
-FACT_NAME=; FACT_KEY=
-fact_nl='
-'
-file_sig() {
-  [ -f "$1" ] && [ ! -L "$1" ] || return 1
-  # BSD stat first: GNU stat reads -f as a file-system query and rejects the format operand.
-  sig_value="$(stat -f '%d:%i:%z:%m:%c' "$1" 2>/dev/null)" ||
-    sig_value="$(stat -c '%d:%i:%s:%Y:%Z' "$1" 2>/dev/null)" || return 1
-  printf '%s\\n' "$sig_value" | LC_ALL=C grep -Eq '^[0-9]+(:[0-9]+){4}$' || return 1
-  printf '%s' "$sig_value"
-}
-# Sets FACT_NAME and FACT_KEY for running goat as $1: an installed executable, or an archive
-# runner, which execs one. An executable changed less than 2 s ago is not keyed: a second write
-# within the same second would leave its ctime unchanged.
-exec_fact_key() {
-  FACT_NAME=; FACT_KEY=
-  [ -n "$GOAT_FACTS_DIR" ] && [ -f "$1" ] || return 1
-  fact_versions="$HOME/.goat/runtime/goat/versions"
-  case "$1" in
-    "$fact_versions"/*/goat) fact_exe="$1"; fact_via=exe ;;
-    *)
-      command -v read_runner_hint >/dev/null 2>&1 || return 1
-      [ -z "$(read_runner_hint "$1" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY} 2>/dev/null)" ] || return 1
-      fact_exe="$fact_versions/$(read_runner_hint "$1" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY} 2>/dev/null)/goat"
-      fact_via="$(runner_sha256 "$1" 2>/dev/null)" || return 1 ;;
-  esac
-  fact_version="\${fact_exe%/goat}"; fact_version="\${fact_version##*/}"
-  valid_version "$fact_version" && [ "$fact_exe" = "$fact_versions/$fact_version/goat" ] || return 1
-  fact_sig="$(file_sig "$fact_exe")" || return 1
-  [ "$(( $(date +%s) - \${fact_sig##*:} ))" -ge 2 ] || return 1
-  # A runner installs a version without its marker instead of running it.
-  [ "$(cat "$fact_versions/$fact_version/.install-complete" 2>/dev/null)" = "$fact_version" ] || return 1
-  case "$fact_via" in exe) FACT_NAME="$fact_version.exe" ;; *) FACT_NAME="$fact_version.runner" ;; esac
-  FACT_KEY="$fact_exe $fact_sig $fact_via"
-}
-prune_removed_facts() (
-  [ -n "$GOAT_FACTS_DIR" ] || exit 0
-  # A missing version is enough to discard answers; incomplete installs and links are not.
-  for fact_parent in "$HOME" "$HOME/.goat" "$HOME/.goat/ssh-launch" "$GOAT_FACTS_DIR" \
-    "$HOME/.goat/runtime" "$HOME/.goat/runtime/goat" "$HOME/.goat/runtime/goat/versions"; do
-    [ ! -L "$fact_parent" ] && [ -d "$fact_parent" ] && [ -r "$fact_parent" ] && [ -x "$fact_parent" ] || exit 0
-  done
-  set +f
-  for fact_file in "$GOAT_FACTS_DIR"/*; do
-    [ ! -L "$fact_file" ] && [ -f "$fact_file" ] || continue
-    fact_base="\${fact_file##*/}"
-    case "$fact_base" in version.*|own.*|commit.*|scopes.*|live.*|compat.*) ;; *) continue ;; esac
-    case "$fact_base" in *.exe|*.runner) ;; *) continue ;; esac
-    fact_version="\${fact_base#*.}"; fact_version="\${fact_version%.*}"
-    valid_version "$fact_version" || continue
-    fact_dir="$HOME/.goat/runtime/goat/versions/$fact_version"
-    [ ! -L "$fact_dir" ] && [ ! -e "$fact_dir" ] || continue
-    rm -f "$fact_file" || true
-  done
-) 2>/dev/null || true
-# A recorded value must parse as an answer of its kind (the name's first word); anything else,
-# such as a damaged file, is a miss and is asked again.
-fact_valid() {
-  case "$1" in
-    version) case "$2" in "goat v"*) valid_version "\${2#goat v}" ;; *) return 1 ;; esac ;;
-    own) (set -f; set -- $2; valid_own_tokens "$@") ;;
-    commit) valid_positive "$2" ;;
-    scopes) case "$2" in has|lacks|unknown) ;; *) return 1 ;; esac ;;
-    live) (set -f; set -- $2; valid_live_tokens "$@" && [ "$1" = live ] && valid_positive "$5") ;;
-    compat)
-      (set -f; set -- $2
-        [ "$#" = 3 ] || exit 1
-        case "$1" in compatible|update-required|client-too-old) ;; *) exit 1 ;; esac
-        [ "$2" = 1 ] || exit 1
-        case "$3" in ''|-|*[!A-Za-z0-9-]*) exit 1 ;; *) ;; esac) ;;
-    *) return 1 ;;
-  esac
-}
-fact_get() {
-  [ -n "$1" ] && [ -n "$2" ] && [ -f "$GOAT_FACTS_DIR/$1" ] && [ ! -L "$GOAT_FACTS_DIR/$1" ] || return 1
-  { IFS= read -r fact_recorded && IFS= read -r fact_value; } <"$GOAT_FACTS_DIR/$1" || return 1
-  [ "$fact_recorded" = "$2" ] && fact_valid "\${1%%.*}" "$fact_value" || return 1
-  printf '%s\\n' "$fact_value"
-}
-fact_put() {
-  [ -n "$1" ] && [ -n "$2" ] || return 0
-  case "$2$3" in *"$fact_nl"*) return 0 ;; esac
-  (
-    umask 077
-    [ ! -L "$GOAT_FACTS_DIR" ] && mkdir -p "$GOAT_FACTS_DIR" &&
-      fact_tmp="$(mktemp "$GOAT_FACTS_DIR/.fact.XXXXXX")" || exit 0
-    printf '%s\\n%s\\n' "$2" "$3" >"$fact_tmp" && mv -f "$fact_tmp" "$GOAT_FACTS_DIR/$1" || rm -f "$fact_tmp"
-  ) 2>/dev/null || true
-}
-# Prints the output of goat run as "$2" "$3"..., recorded as fact $1 of that executable.
-exec_fact() {
-  fact_kind="$1"; shift
-  exec_fact_key "$1" || true
-  fact_name="$fact_kind.$FACT_NAME"; fact_key="$FACT_KEY"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
-  fact_out="$("$@")" || return 1
-  if [ -n "$fact_key" ] && exec_fact_key "$1" && [ "$FACT_KEY" = "$fact_key" ]; then
-    fact_put "$fact_name" "$fact_key" "$fact_out"
-  fi
-  printf '%s\\n' "$fact_out"
-}
-# A live answer from goat $1 depends on its executable, the runtime record $2, the launch port
-# and PID files $3 and $4, and whether the PIDs they name still run the same processes.
-live_fact_key() {
-  exec_fact_key "$1" || return 1
-  fact_live="$FACT_KEY"; FACT_KEY=
-  [ -f "$2" ] && fact_record="$(tr '\\n' ' ' <"$2")" && [ -n "$fact_record" ] || return 1
-  fact_pid="$(printf '%s\\n' "$fact_record" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')"
-  valid_positive "$fact_pid" || return 1
-  fact_record_port="$(printf '%s\\n' "$fact_record" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')"
-  valid_positive "$fact_record_port" || return 1
-  fact_start="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fact_pid" 2>/dev/null)" && [ -n "$fact_start" ] || return 1
-  fact_port="$(cat "$3" 2>/dev/null || true)"; fact_remembered="$(cat "$4" 2>/dev/null || true)"
-  fact_remembered_start=
-  if valid_positive "$fact_remembered"; then
-    fact_remembered_start="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$fact_remembered" 2>/dev/null || true)"
-  fi
-  FACT_KEY="$fact_live|$fact_record|$fact_start|$fact_port|$fact_remembered|$fact_remembered_start"
-}
-# True when live PID $1 and port $2 are the record's own: only then does the record's process
-# identify the server that answered. A historical or service-managed record answers PID 0, and
-# whatever listens on its port may change without changing the key.
-fact_bound() {
-  [ "$1" = "$fact_pid" ] && [ "$2" = "$fact_record_port" ]
-}
-# Live protocol tokens from goat $1 for runtime record $2, port file $3 and PID file $4.
-# Only a live answer from the record's own process is recorded; anything else is asked again.
-live_fact() {
-  live_fact_key "$1" "$2" "$3" "$4" || FACT_KEY=
-  fact_name="live.$FACT_NAME"; fact_key="$FACT_KEY"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
-  fact_out="$("$1" __ssh-helper protocol --runtime-file "$2" --port-file "$3" --pid-file "$4" --shell)" || return 1
-  fact_answer="$(set -f; set -- $fact_out; printf '%s %s' "\${5:-}" "\${6:-}")"
-  if [ -n "$fact_key" ] && live_fact_key "$1" "$2" "$3" "$4" && [ "$FACT_KEY" = "$fact_key" ] &&
-     fact_valid live "$fact_out" && fact_bound "\${fact_answer% *}" "\${fact_answer#* }"; then
-    fact_put "$fact_name" "$fact_key" "$fact_out"
-  fi
-  printf '%s\\n' "$fact_out"
-}
-# Compatibility tokens from goat $1 for the server on port $2, keyed like live_fact by $3-$5.
-# $6 is the PID the live answer named; it is recorded only for the record's own process.
-compat_fact() {
-  live_fact_key "$1" "$3" "$4" "$5" || FACT_KEY=
-  fact_name="compat.$FACT_NAME"; fact_key="$FACT_KEY"
-  [ -z "$fact_key" ] || fact_key="$fact_key|$2"
-  if fact_get "$fact_name" "$fact_key"; then return 0; fi
-  fact_out="$("$1" __ssh-helper compat --port "$2")" || return 1
-  if [ -n "$fact_key" ] && live_fact_key "$1" "$3" "$4" "$5" && [ "$FACT_KEY|$2" = "$fact_key" ] &&
-     fact_valid compat "$fact_out" && fact_bound "$6" "$2"; then
-    fact_put "$fact_name" "$fact_key" "$fact_out"
-  fi
-  printf '%s\\n' "$fact_out"
-}
-`;
-
-const REMOTE_PROTOCOL_TOKEN_SCRIPT = `valid_version() {
-  printf '%s\\n' "$1" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$'
-}
-valid_uint() {
-  printf '%s\\n' "$1" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)$' || return 1
-  [ "\${#1}" -le 16 ] && awk -v n="$1" 'BEGIN { exit !(n <= 9007199254740991) }'
-}
-valid_positive() { valid_uint "$1" && [ "$1" != 0 ]; }
-valid_port() { valid_uint "$1" && [ "$1" -le 65535 ]; }
-# A server this user runs from GOAT's own runtime directory for the default home is GOAT's
-# managed runtime, whichever client or person started it. Lost launch records (a manual
-# restart, a moved state directory) must not turn it into a foreign server nobody may replace.
-# Records that name a live process belong to someone: another server, an older client's
-# per-client directory, or an ownership change in progress. Attaching to a foreign server
-# removes its PID file, so a lost-records server has none.
-managed_orphan() {
-  orphan_pid="$1"; orphan_port="$2"; orphan_version="$3"; orphan_state="$4"
-  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 1 ;; esac
-  valid_positive "$orphan_pid" && valid_positive "$orphan_port" && valid_port "$orphan_port" &&
-    valid_version "$orphan_version" || return 1
-  [ ! -e "$orphan_state/draining" ] && [ ! -L "$orphan_state/draining" ] || return 1
-  case "$-" in *f*) orphan_noglob=1 ;; *) orphan_noglob=0 ;; esac
-  set +f
-  for orphan_record in "$HOME/.goat/ssh-launch/"*/pid; do
-    orphan_recorded="$(cat "$orphan_record" 2>/dev/null || true)"
-    if valid_positive "$orphan_recorded" && kill -0 "$orphan_recorded" 2>/dev/null; then
-      [ "$orphan_noglob" = 0 ] || set -f
-      return 1
-    fi
-  done
-  [ "$orphan_noglob" = 0 ] || set -f
-  orphan_dir="$HOME/.goat/runtime/goat/versions/$orphan_version"
-  [ -d "$orphan_dir" ] && [ ! -L "$orphan_dir" ] && [ -x "$orphan_dir/goat" ] && [ ! -L "$orphan_dir/goat" ] || return 1
-  orphan_uid="$(ps -o uid= -p "$orphan_pid" 2>/dev/null | awk 'NF==1 { print $1 }')"
-  [ -n "$orphan_uid" ] && [ "$orphan_uid" = "$(id -u)" ] || return 1
-  [ "$(ps -o command= -p "$orphan_pid" 2>/dev/null)" = "$orphan_dir/goat serve --host 127.0.0.1 --port $orphan_port --base-dir $HOME/.goat" ]
-}
-valid_protocol_field() { [ "$1" = unknown ] || valid_positive "$1"; }
-valid_own_tokens() {
-  [ "$#" = 5 ] && valid_version "$1" && valid_protocol_field "$2" &&
-    valid_protocol_field "$3" && valid_uint "$4" && valid_port "$5" || return 1
-  # Own advertisement is normally not running: 0 0 is a valid pair.
-  { [ "$4" = 0 ] && [ "$5" = 0 ]; } ||
-    { valid_positive "$4" && valid_positive "$5"; }
-}
-valid_live_tokens() {
-  [ "$#" = 6 ] && valid_uint "$5" && valid_port "$6" || return 1
-  case "$1" in
-    live) valid_version "$2" && valid_protocol_field "$3" &&
-      valid_protocol_field "$4" && valid_positive "$6" ;;
-    none) [ "$2 $3 $4 $5 $6" = 'unknown unknown unknown 0 0' ] ;;
-    unknown) [ "$2 $3 $4" = 'unknown unknown unknown' ] ;;
-    *) return 1 ;;
-  esac
-}
-# Commit time of the build behind executable $1; fails for unstamped or older builds.
-build_commit_time() {
-  t="$(exec_fact commit "$1" __ssh-helper commit-time 2>/dev/null || true)"
-  valid_positive "$t" && printf '%s' "$t"
-}
-# True only when executable $1 lists its session scopes and memory:read is not among them.
-# Every GOAT CLI prints its scope choices here, so this also answers for builds before memory.
-lacks_memory_scopes() {
-  [ -x "$1" ] || return 1
-  exec_fact_key "$1" || true
-  scope_name="scopes.$FACT_NAME"; scope_key="$FACT_KEY"
-  if ! scope_verdict="$(fact_get "$scope_name" "$scope_key")"; then
-    scope_help="$("$1" auth session issue --help 2>/dev/null)" || return 1
-    case "$scope_help" in *memory:read*) scope_verdict=has ;; *--scope*) scope_verdict=lacks ;; *) scope_verdict=unknown ;; esac
-    if [ -n "$scope_key" ] && exec_fact_key "$1" && [ "$FACT_KEY" = "$scope_key" ]; then
-      fact_put "$scope_name" "$scope_key" "$scope_verdict"
-    fi
-  fi
-  [ "$scope_verdict" = lacks ]
-}
-runner_sha256() {
-  if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 "$1")" || return 1
-  elif command -v sha256sum >/dev/null 2>&1; then digest="$(sha256sum "$1")" || return 1
-  else printf 'Install shasum or sha256sum to verify the retained GOAT runner.\\n' >&2; return 1; fi
-  digest="\${digest%% *}"
-  printf '%s\\n' "$digest" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || return 1
-  printf '%s' "$digest"
-}
-${REMOTE_FACTS_SCRIPT}
-`;
 
 export interface SshEnvironmentManagerOptions {
   readonly resolveCliRunner?: Effect.Effect<RemoteGoatRunnerOptions>;
@@ -554,7 +196,7 @@ interface SshTunnelEntry {
   readonly key: string;
   readonly target: DesktopSshEnvironmentTarget;
   readonly remotePort: number;
-  readonly remoteServerKind: "external" | "managed" | null;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
   readonly localPort: number;
   readonly httpBaseUrl: string;
   readonly wsBaseUrl: string;
@@ -583,19 +225,6 @@ type SshEnvironmentEffectError =
   | SshPasswordPromptError
   | NetService.NetError;
 
-function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
-  return {
-    alias: target.alias,
-    hostname: target.hostname,
-    username: target.username,
-    port: target.port,
-  };
-}
-
-function isNodeScriptRunner(runner: RemoteGoatRunnerOptions | undefined): boolean {
-  return Boolean(runner?.nodeScriptPath?.trim());
-}
-
 function sshRunnerLogFields(runner: RemoteGoatRunnerOptions | undefined) {
   if (runner?.nodeScriptPath?.trim()) {
     return { runner: "node-script", nodeScriptPath: runner.nodeScriptPath.trim() };
@@ -619,13 +248,6 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
   readonly promptCount: number;
   readonly authSecret: string | null;
 }
-
-export interface SshRuntimeProgress {
-  readonly target: DesktopSshEnvironmentTarget;
-  readonly phase: SshRuntimePhase;
-  readonly upload?: SshHostStatus["upload"];
-}
-export type SshRuntimeProgressCallback = (progress: SshRuntimeProgress) => void;
 export interface SshEnvironmentEnsureOptions {
   readonly preparedAttachmentId?: string;
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
@@ -636,20 +258,6 @@ export interface SshEnvironmentEnsureOptions {
   readonly refreshRuntime?: boolean;
   readonly confirmReplacement?: boolean;
   readonly onPhase?: SshRuntimeProgressCallback;
-}
-
-// Progress observers must never change the outcome of an SSH operation.
-function notifyRuntimePhase(
-  target: DesktopSshEnvironmentTarget,
-  phase: SshRuntimePhase,
-  onPhase?: SshRuntimeProgressCallback,
-  upload?: SshHostStatus["upload"],
-) {
-  try {
-    onPhase?.({ target, phase, ...(upload === undefined ? {} : { upload }) });
-  } catch {
-    // The requesting view may already have gone away.
-  }
 }
 
 /** Publications never resolve aliases or acquire installation locks; stale operations are ignored. */
@@ -731,6 +339,10 @@ export interface SshEnvironmentManagerShape {
     target: DesktopSshEnvironmentTarget,
     options: RemoteClientSessionOptions,
   ) => Effect.Effect<RemoteClientSession, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  /** The kind of server this manager's connection to the target uses, if any. */
+  readonly attachedServerKind?: (
+    target: DesktopSshEnvironmentTarget,
+  ) => Effect.Effect<"app" | "external" | "managed" | null>;
   /** Runs a POSIX `sh` script on the remote host with this manager's SSH auth. */
   readonly runRemoteScript: (
     target: DesktopSshEnvironmentTarget,
@@ -740,43 +352,6 @@ export interface SshEnvironmentManagerShape {
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext
   >;
-}
-
-export interface RemoteMcpClientSessionOptions {
-  readonly requireReady?: boolean;
-  readonly label: string;
-  /** A duration the remote CLI accepts, such as `12h`. */
-  readonly ttl: string;
-  /** Most a thread started through this session may run with; null keeps the remote default. */
-  readonly runtimeModeCeiling: string | null;
-  /** Also grant `orchestration:approve`. A remote CLI that predates it fails the issue. */
-  readonly approvals?: boolean;
-  /** Also grant `providers:manage`, only for a caller that holds it live on this machine. */
-  readonly providersManage?: boolean;
-  /** Also grant `settings:write`, for this machine's own fleet settings sync. */
-  readonly settingsWrite?: boolean;
-  /** Explicit task memory grants; an older CLI must refuse rather than omit them. */
-  readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
-}
-
-export interface RemoteMcpClientSession {
-  readonly token: string;
-  readonly expiresAt: string | null;
-  /** False when the remote CLI predates `--runtime-mode-ceiling` and kept its default. */
-  readonly runtimeModeCeilingApplied: boolean;
-}
-
-export interface RemoteClientSessionOptions {
-  readonly subject: string;
-  readonly label: string;
-  readonly ttl: string;
-  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
-}
-
-export interface RemoteClientSession {
-  readonly token: string;
-  readonly expiresAt: string | null;
-  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
 }
 
 const RemoteLaunchResult = Schema.Union([
@@ -791,65 +366,14 @@ const RemoteLaunchResult = Schema.Union([
   Schema.Struct({ status: Schema.Literal("pending"), pending: SshRuntimePendingReplacementSchema }),
 ]);
 
-const RemotePairingResult = Schema.Struct({
-  credential: Schema.String,
-});
-
-const RemoteMcpSessionResult = Schema.Struct({
-  token: Schema.String,
-  expiresAt: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
-const RemoteClientSessionResult = Schema.Struct({
-  token: Schema.String,
-  expiresAt: Schema.optional(Schema.NullOr(Schema.String)),
-  scopes: AuthEnvironmentScopes,
-});
-
 const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
-const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
-const decodeRemoteMcpSessionResult = Schema.decodeEffect(fromLenientJson(RemoteMcpSessionResult));
-const decodeRemoteClientSessionResult = Schema.decodeEffect(
-  fromLenientJson(RemoteClientSessionResult),
-);
-
-const decodeRemoteJsonOutput = <A, E>(
-  stdout: string,
-  decode: (input: string) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
-  decode(stdout).pipe(
-    Effect.catch((error) =>
-      Effect.gen(function* () {
-        const jsonObject = extractJsonObject(stdout);
-        if (jsonObject === stdout.trim()) {
-          return yield* Effect.fail(error);
-        }
-        const exit = yield* Effect.exit(decode(jsonObject));
-        if (Exit.isSuccess(exit)) {
-          return exit.value;
-        }
-        return yield* Effect.fail(error);
-      }),
-    ),
-  );
 
 const decodeRemoteLaunchOutput = (stdout: string) =>
   decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
 
-const decodeRemotePairingOutput = (stdout: string) =>
-  decodeRemoteJsonOutput(stdout, decodeRemotePairingResult);
-
 function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
   return cleaned.length > 0 ? cleaned : fallbackMessage;
-}
-
-function stripTrailingNewlines(value: string): string {
-  return value.replace(/\n+$/u, "");
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function buildRemoteContendedOutput(
@@ -861,19 +385,13 @@ if [ "$LOCK_DETAIL" = recovery-stale ]; then lock_pending_fields="$lock_pending_
 printf '{"status":"pending","pending":{%s}}\\n' "$lock_pending_fields"`;
 }
 
-function applyScriptPlaceholders(
-  template: string,
-  replacements: Readonly<Record<string, string>>,
-): string {
-  let result = template;
-  for (const [token, value] of Object.entries(replacements)) {
-    // A replacer function keeps `$$` and other `$` patterns in the value literal.
-    result = result.replaceAll(`@@${token}@@`, () => value);
-  }
-  return result;
-}
-
 export { describeReadinessCause };
+export type {
+  PreparedRemoteRuntime,
+  RemoteGoatRunnerOptions,
+  SshRuntimeProgress,
+  SshRuntimeProgressCallback,
+} from "./remoteRuntime.ts";
 
 export const REMOTE_PICK_PORT_SCRIPT = `const fs = require("node:fs");
 const net = require("node:net");
@@ -972,13 +490,6 @@ function probe() {
   }
   process.exit(1);
 })().catch(() => process.exit(1));
-`;
-
-// Retained runners are data: inspect either declaration spelling without sourcing shell code.
-const REMOTE_RUNNER_HINT_SCRIPT = String.raw`read_runner_hint() {
-  if grep -q "^$2=" "$1"; then hint_key="$2"; else hint_key="$3"; fi
-  sed -n "s/^$hint_key='\(.*\)'$/\1/p" "$1"
-}
 `;
 
 const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
@@ -1266,1032 +777,6 @@ exec 9>&-
 exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
-// Process inspection for the lock owner (this shell) and the server it launches. On a Windows
-// host, Git Bash and Cygwin list only their own processes in /proc and ps, while the server is a
-// native process: PowerShell reads its identity, and the identity's Windows paths are mapped back
-// to the POSIX form the launch script records.
-export const REMOTE_HOST_PROCESS_SCRIPT = String.raw`case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*)
-    GOAT_HOST_WINDOWS=1
-    # By default ln -s copies, so the lock's dangling owner link could not be created.
-    MSYS="winsymlinks:sys${"${MSYS:+ $MSYS}"}"; CYGWIN="winsymlinks:sys${"${CYGWIN:+ $CYGWIN}"}"; export MSYS CYGWIN ;;
-  *) GOAT_HOST_WINDOWS=0 ;;
-esac
-if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-  process_start() { [ -r "/proc/$1/stat" ] && sed 's/^.*) //' "/proc/$1/stat" | awk '{ print $20 }'; }
-  process_presence() {
-    [ -d /proc/self ] || return 1
-    if [ -d "/proc/$1" ]; then echo present; else echo absent; fi
-  }
-  windows_process_info() {
-    win_info="$(GOAT_PROCESS_ID="$1" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_PROCESS_INFO_POWERSHELL)}' </dev/null 2>/dev/null)" || return 1
-    printf '%s\n' "$win_info" | tr -d '\r'
-  }
-  server_alive() {
-    MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
-  }
-  server_kill() { MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$1" /F >/dev/null 2>&1; }
-  server_uid() {
-    win_info="$(windows_process_info "$1")" || return 1
-    if [ "$(printf '%s\n' "$win_info" | sed -n 1p)" = self ]; then id -u; else echo other; fi
-  }
-  server_start() {
-    win_info="$(windows_process_info "$1")" || return 1
-    printf '%s\n' "$win_info" | sed -n 2p
-  }
-  server_command() {
-    win_info="$(windows_process_info "$1")" || return 1
-    win_words="$(printf '%s\n' "$win_info" | sed '1,2d')"
-    [ -n "$win_words" ] || return 1
-    win_line=; win_first=1
-    while IFS= read -r win_word; do
-      case "$win_word" in [A-Za-z]:[\\/]*) win_word="$(cygpath -u "$win_word")" || return 1 ;; esac
-      if [ "$win_first" = 1 ]; then
-        win_line="$(printf '%s' "$win_word" | sed 's/\.[Ee][Xx][Ee]$//')"; win_first=0
-      else win_line="$win_line $win_word"; fi
-    done <<GOAT_WORDS
-$win_words
-GOAT_WORDS
-    printf '%s\n' "$win_line"
-  }
-  # Starts a program outside the SSH session's job, appending its output to $1; prints its PID.
-  # The program and arguments are passed as given, so callers convert paths with cygpath -w.
-  windows_spawn_detached() {
-    win_log="$(cygpath -w "$1")" || return 1; shift
-    win_args=
-    for win_word in "$@"; do
-      win_args="$win_args$win_word
-"
-    done
-    win_pid="$(GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
-    printf '%s\n' "$win_pid" | tr -d '\r'
-  }
-else
-  process_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; }
-  process_presence() {
-    process_table="$(ps -e -o pid= 2>/dev/null)" || return 1
-    printf '%s\n' "$process_table" | awk -v p="$1" '$1==p { found=1 } END { print found ? "present" : "absent" }'
-  }
-  # An exited, unreaped server still passes kill -0; it cannot be reused.
-  # /proc is authoritative for that zombie. ps can return an empty stat under load
-  # and must not turn a dead server back into a live one.
-  server_alive() {
-    [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1
-    if [ -r "/proc/$1/stat" ]; then
-      alive_state="$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{ print $1 }' || true)"
-      case "$alive_state" in
-        Z) return 1 ;;
-        ?*) return 0 ;;
-      esac
-    fi
-    kill -0 "$1" 2>/dev/null || return 1
-    case "$(ps -o stat= -p "$1" 2>/dev/null || true)" in *Z*) return 1 ;; esac
-  }
-  server_kill() { kill "$1" 2>/dev/null; }
-  server_uid() { ps -o uid= -p "$1" 2>/dev/null; }
-  server_start() { process_start "$1"; }
-  server_command() { ps -o command= -p "$1" 2>/dev/null; }
-fi
-`;
-
-// One host-wide mutex protects publication and server lifecycle across SSH aliases.
-const REMOTE_REPLACEMENT_LOCK_SCRIPT = String.raw`${REMOTE_HOST_PROCESS_SCRIPT}LOCK="$DEFAULT_SERVER_HOME/ssh-launch/replacement.lock"
-RECOVERY="$DEFAULT_SERVER_HOME/ssh-launch/replacement.recovery"
-LOCK_HELD=0; OWNER=; LOCK_DETAIL=
-release_replacement_lock() {
-  if [ -n "$OWNER" ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$LOCK"; fi
-  LOCK_HELD=0
-}
-release_recovery_lock() {
-  if [ -n "$OWNER" ] && [ "$(readlink "$RECOVERY" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$RECOVERY"; fi
-}
-owner_proven_dead() {
-  recorded="$1"
-  old_ifs="$IFS"; IFS='|'; set -f; set -- $recorded; IFS="$old_ifs"
-  [ "$#" = 5 ] && [ "$1" = "$LOCK_HOST" ] && [ "$2" = "$LOCK_UID" ] &&
-    valid_positive "$3" && [ -n "$4" ] && [ -n "$5" ] || return 1
-  owner_pid="$3"; owner_start="$4"
-  # Failure to inspect the process table is not proof of death (nor is age).
-  presence="$(process_presence "$owner_pid")" || return 1
-  case "$presence" in absent) return 0 ;; present) ;; *) return 1 ;; esac
-  current_start="$(process_start "$owner_pid")" || return 1
-  [ -n "$current_start" ] && [ "$current_start" != "$owner_start" ]
-}
-acquire_replacement_lock() {
-  if [ "$LOCK_HELD" = 1 ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then return 0; fi
-  LOCK_HOST="$(uname -n 2>/dev/null)" || return 1
-  LOCK_UID="$(id -u 2>/dev/null)" || return 1
-  LOCK_START="$(process_start "$$")" || return 1
-  [ -n "$LOCK_HOST" ] && [ -n "$LOCK_UID" ] && [ -n "$LOCK_START" ] || return 1
-  nonce_dir="$(mktemp -d "$STATE_DIR/lock-owner-XXXXXX")" || return 1
-  NONCE="$(basename "$nonce_dir")"
-  rmdir "$nonce_dir" || return 1
-  OWNER="$LOCK_HOST|$LOCK_UID|$$|$LOCK_START|$NONCE"
-  mkdir -p "$DEFAULT_SERVER_HOME/ssh-launch"
-  if [ ! -d "$LOCK" ] && ln -s "$OWNER" "$LOCK" 2>/dev/null &&
-     [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then LOCK_HELD=1; return 0; fi
-  dead_owner="$(readlink "$LOCK" 2>/dev/null)" || return 1
-  owner_proven_dead "$dead_owner" || return 1
-  if [ -d "$RECOVERY" ] || ! ln -s "$OWNER" "$RECOVERY" 2>/dev/null ||
-     [ "$(readlink "$RECOVERY" 2>/dev/null || true)" != "$OWNER" ]; then
-    printf 'Recovery is locked; remove %s after checking that no GOAT client is replacing this runtime.\n' "$RECOVERY" >&2
-    LOCK_DETAIL=recovery-stale
-    return 1
-  fi
-  # Only serialized recoverers can remove a dead owner's unchanged link.
-  if [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$dead_owner" ] && owner_proven_dead "$dead_owner"; then rm -f "$LOCK"; fi
-  release_recovery_lock
-  if [ ! -d "$LOCK" ] && ln -s "$OWNER" "$LOCK" 2>/dev/null &&
-     [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then LOCK_HELD=1; return 0; fi
-  return 1
-}
-wait_for_replacement_lock() {
-  replacement_wait=0
-  while [ -e "$LOCK" ] || [ -L "$LOCK" ]; do
-    [ "$replacement_wait" -lt ${REMOTE_REPLACEMENT_WAIT_ATTEMPTS} ] || return 1
-    waiting_owner="$(readlink "$LOCK" 2>/dev/null)" || return 1
-    old_ifs="$IFS"; IFS='|'; set -f; set -- $waiting_owner; IFS="$old_ifs"
-    [ "$#" = 5 ] && [ "$1" = "$(uname -n)" ] && [ "$2" = "$(id -u)" ] &&
-      valid_positive "$3" && [ -n "$4" ] && [ -n "$5" ] || return 1
-    # Only a proven local owner can make progress; foreign or ambiguous locks stay pending.
-    [ "$(process_start "$3" 2>/dev/null)" = "$4" ] || return 1
-    replacement_wait=$((replacement_wait + 1))
-    sleep 0.1
-  done
-}
-`;
-
-// Publishing a runner is the switch boundary. Execute the candidate first;
-// auth commands keep an existing runner so they match its running server.
-const REMOTE_PROTOCOL_GUARD_SCRIPT = `compatible_fields() {
-  # version ssh orchestration; full matching integers OR exact legacy.
-  [ "$2" = "@@GOAT_SSH_PROTOCOL@@" ] && [ "$3" = "@@GOAT_ORCHESTRATION_PROTOCOL@@" ] && return 0
-  [ -n "$REQUESTED_VERSION" ] && [ "$1" = "$REQUESTED_VERSION" ] &&
-    { [ "$2" = unknown ] || [ "$2" = "@@GOAT_SSH_PROTOCOL@@" ]; } &&
-    { [ "$3" = unknown ] || [ "$3" = "@@GOAT_ORCHESTRATION_PROTOCOL@@" ]; }
-}
-check_candidate_protocol() {
-  if [ -n "$SELECTED_VERSION" ] &&
-     [ "$(exec_fact version "$CHECK_RUNNER" --version 2>/dev/null || true)" != "goat v$SELECTED_VERSION" ]; then
-    printf 'Selected executable changed before protocol use.\\n' >&2; exit 1
-  fi
-  if own="$(exec_fact own "$CHECK_RUNNER" __ssh-helper protocol --shell 2>/dev/null)"; then
-    set -f; set -- $own
-    if ! valid_own_tokens "$@"; then printf 'Malformed candidate protocol output.\\n' >&2; exit 1; fi
-    if [ -n "$SELECTED_VERSION" ] && [ "$1" != "$SELECTED_VERSION" ]; then
-      printf 'Selected version and binary protocol identity disagree.\\n' >&2; exit 1
-    fi
-    if ! compatible_fields "$1" "$2" "$3"; then
-      printf 'Candidate signals %s incompatible with SSH=%s orchestration=%s.\\n' "$own" "@@GOAT_SSH_PROTOCOL@@" "@@GOAT_ORCHESTRATION_PROTOCOL@@" >&2; exit 1
-    fi
-  elif [ -z "$SELECTED_VERSION" ] || [ "$SELECTED_VERSION" != "$REQUESTED_VERSION" ] ||
-       [ "$(exec_fact version "$CHECK_RUNNER" --version 2>/dev/null || true)" != "goat v$REQUESTED_VERSION" ]; then
-    printf 'No protocol signals; only an independently proven exact release is allowed.\\n' >&2; exit 1
-  fi
-}
-# Only an owning launch holding the host replacement lock writes ownership records. Identity,
-# port and PID come first and the managed marker last, so a reader never sees ownership without identity.
-adopt_managed_orphan() {
-  [ "\${OWNING_LAUNCH:-0}" = 1 ] && [ "\${LOCK_HELD:-0}" = 1 ] && [ "\${LEGACY_PENDING:-0}" != 1 ] &&
-    [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || return 1
-  managed_orphan "$LIVE_PID" "$LIVE_PORT" "$LIVE_VERSION" "$STATE_DIR" || return 1
-  adopt_next="$STATE_DIR/identity.adopt.$$"
-  printf '%s\n' "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$adopt_next" &&
-    mv -f "$adopt_next" "$STATE_DIR/identity" &&
-    printf '%s\n' "$LIVE_PORT" >"$PORT_FILE" && printf '%s\n' "$LIVE_PID" >"$PID_FILE" &&
-    printf 'managed\n' >"$MANAGED_FILE" || { rm -f "$adopt_next"; return 1; }
-  verify_owned_identity "$LIVE_PID" "$LIVE_PORT"
-}
-check_live_protocol() {
-  LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
-  LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
-  LIVE_DRAIN=0; LIVE_INSTANCE_ID=; DEFER_NO_DRAIN=0
-  if live="$(live_fact "$CHECK_RUNNER" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
-    set -f; set -- $live
-    if ! valid_live_tokens "$@"; then printf 'Malformed live protocol output.\n' >&2; exit 1; fi
-    LIVE_STATUS="$1"; LIVE_VERSION="$2"; LIVE_PID="$5"; LIVE_PORT="$6"
-    if [ "$LIVE_STATUS" = live ] && valid_positive "$LIVE_PID" &&
-       [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
-       [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$LIVE_PID" ] &&
-       [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$LIVE_PORT" ]; then LIVE_OWNED=1; fi
-    if [ "$LIVE_STATUS" = live ]; then read_live_compat "$2" "$3" "$4"; fi
-    if [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 0 ] && adopt_managed_orphan; then LIVE_OWNED=1; fi
-  else
-    if [ -e "$DEFAULT_RUNTIME_FILE" ] || [ -e "$PORT_FILE" ] || [ -e "$PID_FILE" ]; then LIVE_STATUS=unknown; fi
-  fi
-  DRAIN_UNCERTAIN=0
-  if [ -e "$STATE_DIR/draining" ] || [ -L "$STATE_DIR/draining" ]; then
-    draining_instance="$(cat "$STATE_DIR/draining" 2>/dev/null || true)"
-    if [ "$LIVE_STATUS" = none ] ||
-       { [ -n "$draining_instance" ] && [ -n "$LIVE_INSTANCE_ID" ] && [ "$draining_instance" != "$LIVE_INSTANCE_ID" ]; }; then
-      # Only an owner can retire a fence after the live helper proves its start is gone.
-      if [ "$LOCK_HELD" = 1 ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then
-        rm -f "$STATE_DIR/draining"
-      fi
-    else DRAIN_UNCERTAIN=1; fi
-  fi
-@@GOAT_RECONNECT_LIVE_GUARD@@  if [ "$ALLOW_LEGACY_ADOPTION" = 1 ] &&
-     { [ "$LIVE_STATUS" = unknown ] || { [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 1 ] && [ ! -e "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ]; }; }; then
-    legacy_verified=1
-    if [ "$LEGACY_COMMITTED" = 1 ]; then
-      verify_owned_identity "$LEGACY_PID" "$LEGACY_PORT" || ownership_unverified
-    elif ! verify_legacy_identity; then legacy_verified=0; LIVE_STATUS=unknown; fi
-    if [ "$legacy_verified" = 1 ] && [ "$LEGACY_PENDING" = 1 ]; then
-      LIVE_STATUS=live; LIVE_PID="$LEGACY_PID"; LIVE_PORT="$LEGACY_PORT"; LIVE_VERSION="$LEGACY_VERSION"
-      LIVE_OWNED=1; REPLACEMENT_REASON=legacy; NEEDS_OWNED_UPGRADE=1
-    fi
-  fi
-  if [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LIVE_OWNED" = 1 ] && [ "$LEGACY_PENDING" != 1 ] &&
-     [ ! -e "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ]; then LIVE_STATUS=unknown; fi
-  if [ "$LIVE_STATUS" = unknown ]; then
-    recorded_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-    recorded_port="$(cat "$PORT_FILE" 2>/dev/null || true)"
-    valid_positive "$recorded_pid" || recorded_pid=unknown
-    valid_positive "$recorded_port" || recorded_port=unknown
-    stop_pid="$recorded_pid"
-    [ "$stop_pid" != unknown ] || stop_pid='<pid>'
-    printf 'Cannot verify live GOAT PID=%s port=%s: descriptor unavailable or persisted identity disagrees; it may predate GOAT SSH runtime protocol metadata. It was left running, and the runner and ownership files were preserved. If this is your earlier GOAT server, stop it on the remote host (kill %s) and reconnect.\\n' "$recorded_pid" "$recorded_port" "$stop_pid" >&2; exit 1
-  fi
-  if [ "$LIVE_OWNED" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LEGACY_PENDING" != 1 ]; then
-    verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified
-  fi
-  if [ "$LIVE_STATUS" = live ] && [ -n "$REQUESTED_VERSION" ]; then
-    if [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_VERSION" = "$SELECTED_VERSION" ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ]; then
-      # A retained compatible selection only reuses its proven live version;
-      # older compatible helpers need not implement the new replacement comparator.
-      comparison=selected
-    else
-      # Commit times order builds whose versions cannot (dev shas, dev against nightly).
-      set --
-      if live_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat")" &&
-         requested_commit="$(build_commit_time "$RUNNER_CANDIDATE_FILE.pin")"; then
-        set -- --live-commit-time "$live_commit" --requested-commit-time "$requested_commit"
-      fi
-      comparison="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper compare-version "$@" "$LIVE_VERSION" "$REQUESTED_VERSION" 2>/dev/null || true)"
-    fi
-    case "$comparison" in
-      selected) ;;
-      newer)
-        if [ "$LIVE_COMPATIBLE" != 1 ]; then
-          printf 'Remote runtime is newer than this app; update the app.\n' >&2; exit 1
-        fi
-        NEEDS_OWNED_UPGRADE=0 ;;
-      unknown)
-        # No proven order: never replace, so a possibly newer server is never downgraded.
-        if [ "$LIVE_COMPATIBLE" != 1 ]; then
-          printf 'Remote runtime GOAT %s cannot be ordered against this app (GOAT %s); it was left running. Stop it on the remote host when its work is done, then reconnect.\n' "$LIVE_VERSION" "$REQUESTED_VERSION" >&2; exit 1
-        fi
-        NEEDS_OWNED_UPGRADE=0
-        # Except a server that cannot issue the sessions this app needs: keeping it would leave
-        # the host unusable for those tasks, so an idle refresh replaces it with this build.
-        if [ "$REFRESH_IF_IDLE" = 1 ] && [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_OWNED" = 1 ] && [ "$REPLACEMENT_REASON" != legacy ] &&
-           lacks_memory_scopes "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat"; then
-          REPLACEMENT_REASON=capability; NEEDS_OWNED_UPGRADE=1
-        fi ;;
-      older)
-        if [ "$REFRESH_IF_IDLE" = 1 ] && [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_OWNED" = 1 ] && [ "$REPLACEMENT_REASON" != legacy ]; then
-          REPLACEMENT_REASON=older; NEEDS_OWNED_UPGRADE=1
-        fi ;;
-      equal) ;;
-      *)
-        # Exact-version old helpers may lack comparison; no ordering decision is needed.
-        if [ "$LIVE_VERSION" != "$REQUESTED_VERSION" ]; then
-          printf 'Cannot verify remote version ordering; process was preserved.\n' >&2; exit 1
-        fi ;;
-    esac
-  fi
-  if [ "$LIVE_STATUS" = live ] && [ "$LIVE_COMPATIBLE" != 1 ]; then
-    if [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LIVE_OWNED" = 1 ]; then NEEDS_OWNED_UPGRADE=1
-    else printf 'Live GOAT PID=%s port=%s is incompatible; it was left running. Upgrade with the owning client or reconnect.\n' "$LIVE_PID" "$LIVE_PORT" >&2; exit 1; fi
-  fi
-  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" != 1 ]; then
-    printf 'Secondary preparation cannot replace a live runtime.\n' >&2; exit 1
-  fi
-  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$LIVE_DRAIN" != 1 ]; then
-    if [ "$REFRESH_IF_IDLE" = 1 ] && [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_OWNED" = 1 ] &&
-       { [ "$REPLACEMENT_REASON" = older ] || [ "$REPLACEMENT_REASON" = capability ]; }; then
-      DEFER_NO_DRAIN=1
-    elif [ "$REPLACEMENT_REASON" = legacy ]; then
-      printf 'Live GOAT PID=%s port=%s was started by an older app that cannot hand over ownership without draining; it was left running. Stop it on the remote host when its work is done, then reconnect.\n' "$LIVE_PID" "$LIVE_PORT" >&2; exit 1
-    else
-      printf 'Live GOAT PID=%s port=%s is incompatible; it was left running because it cannot drain for a replacement and this app cannot attach to it. Stop it on the remote host when its work is done, then reconnect.\n' "$LIVE_PID" "$LIVE_PORT" >&2; exit 1
-    fi
-  fi
-}
-read_live_compat() {
-  # The pinned helper applies the one protocol-range comparator. A helper that
-  # predates it, or a server without integers, falls back to exact fields.
-  compat_version="$1"; compat_ssh="$2"; compat_orchestration="$3"
-  if compat_tokens="$(compat_fact "$RUNNER_CANDIDATE_FILE.pin" "$LIVE_PORT" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" "$LIVE_PID" 2>/dev/null)"; then
-    set -f; set -- $compat_tokens
-    if [ "$#" = 3 ]; then
-      case "$1" in
-        compatible) LIVE_COMPATIBLE=1 ;;
-        unknown) if compatible_fields "$compat_version" "$compat_ssh" "$compat_orchestration"; then LIVE_COMPATIBLE=1; fi ;;
-      esac
-      case "$3" in
-        -|''|*[!A-Za-z0-9-]*) ;;
-        *) if [ "$2" = 1 ]; then LIVE_DRAIN=1; LIVE_INSTANCE_ID="$3"; fi ;;
-      esac
-      return 0
-    fi
-  fi
-  if compatible_fields "$compat_version" "$compat_ssh" "$compat_orchestration"; then LIVE_COMPATIBLE=1; fi
-}
-recheck_selected_before_use() {
-  check_retained_runner
-  # Never let a vanished ready selection become a network install.
-  if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
-    selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-    if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
-      printf 'Selected GOAT runtime disappeared before use.\\n' >&2; exit 1
-    fi
-  fi
-  if [ "$RUNNER_PUBLISHED" = 1 ]; then
-    if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_FILE"; then
-      printf 'Published selected runner changed before use.\\n' >&2; exit 1
-    fi
-    CHECK_RUNNER="$RUNNER_FILE"
-  else
-    if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
-      printf 'Candidate runner changed before use.\\n' >&2; exit 1
-    fi
-    CHECK_RUNNER="$RUNNER_NEXT"
-  fi
-  check_candidate_protocol
-  check_live_protocol
-  CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
-}
-`;
-
-const REMOTE_RUNNER_SETUP_SCRIPT = `RUNNER_FILE="$STATE_DIR/run-t3.sh"
-RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
-RUNNER_CANDIDATE_FILE="$RUNNER_NEXT"
-CHECK_RUNNER="$RUNNER_NEXT"
-DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
-PORT_FILE="$STATE_DIR/port"
-PID_FILE="$STATE_DIR/pid"
-MANAGED_FILE="$STATE_DIR/managed"
-REQUESTED_RUNNER=@@GOAT_REQUESTED_RUNNER@@
-EXPECTED_ARCHIVE_VERSION=@@GOAT_EXPECTED_ARCHIVE_VERSION@@
-SELECTED_VERSION=@@GOAT_SELECTED_VERSION@@
-REQUESTED_VERSION=@@GOAT_REQUESTED_VERSION@@
-REQUIRE_INSTALLED=@@GOAT_REQUIRE_INSTALLED@@
-PRESERVE_SELECTED_RUNNER=@@GOAT_PRESERVE_SELECTED_RUNNER@@
-ALLOW_OWNED_UPGRADE=@@GOAT_ALLOW_OWNED_UPGRADE@@
-ALLOW_LEGACY_ADOPTION=@@GOAT_ALLOW_LEGACY_ADOPTION@@
-REFRESH_IF_IDLE=@@GOAT_REFRESH_IF_IDLE@@
-REFRESH_LIVE_VERSION=@@GOAT_REFRESH_LIVE_VERSION@@
-EXPECTED_LIVE_RUNNER_SHA256=@@GOAT_LIVE_RUNNER_SHA256@@
-OWNING_LAUNCH=@@GOAT_OWNING_LAUNCH@@
-DRAIN_FORCE=@@GOAT_DRAIN_FORCE@@
-DRAIN_AUTOMATIC=@@GOAT_DRAIN_AUTOMATIC@@
-DRAIN_GRACE_SECONDS=@@GOAT_DRAIN_GRACE_SECONDS@@
-RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
-LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
-RETAINED_SNAPSHOT_FILE=; LEGACY_PID=; LEGACY_PORT=; LEGACY_IDENTITY=; LEGACY_VERSION=; LEGACY_UID=; LEGACY_START=
-EXPECTED_RETAINED_SHA256=@@GOAT_RETAINED_RUNNER_SHA256@@
-EXPECTED_INSTALLED_SHA256=@@GOAT_INSTALLED_EXECUTABLE_SHA256@@
-@@GOAT_PROTOCOL_TOKENS@@
-${REMOTE_RUNNER_HINT_SCRIPT}
-check_retained_runner() {
-  # Recovery pins the executable observed by the probe as well as the runner.
-  if [ -n "$EXPECTED_INSTALLED_SHA256" ] &&
-     [ "$(runner_sha256 "$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat")" != "$EXPECTED_INSTALLED_SHA256" ]; then
-    printf 'Recorded GOAT executable changed since probe; reconnect.\\n' >&2; exit 1
-  fi
-  if [ "$RUNNER_PUBLISHED" = 0 ] && [ -n "$EXPECTED_LIVE_RUNNER_SHA256" ] &&
-     [ "$(runner_sha256 "$RUNNER_FILE")" != "$EXPECTED_LIVE_RUNNER_SHA256" ]; then
-    printf 'Running runner changed before publication; process was preserved.\\n' >&2; exit 1
-  fi
-  if [ "$PRESERVE_SELECTED_RUNNER" = 1 ]; then
-    if [ -z "$EXPECTED_RETAINED_SHA256" ] || [ ! -f "$RUNNER_FILE" ] ||
-       [ "$(runner_sha256 "$RUNNER_FILE")" != "$EXPECTED_RETAINED_SHA256" ]; then
-      printf 'Selected retained GOAT runner bytes changed since probe; reconnect to prepare again.\\n' >&2; exit 1
-    fi
-  fi
-}
-mkdir -p "$STATE_DIR"
-@@GOAT_REPLACEMENT_LOCK@@
-cleanup_runner_next() {
-  if [ "$LEGACY_COMMITTED" = 1 ] && [ "$LEGACY_TERMINATED" = 0 ]; then
-    rollback_legacy_switch
-  fi
-  release_recovery_lock
-  release_replacement_lock
-  rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore"
-  [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
-  [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
-}
-trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-@@GOAT_CAPTURE_RUNNING_RUNNER@@
-if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
-  selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-  if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
-    printf 'Selected GOAT %s disappeared; reconnect to prepare again.\\n' "$SELECTED_VERSION" >&2; exit 1
-  fi
-fi
-check_retained_runner
-if [ "$PRESERVE_SELECTED_RUNNER" = 1 ]; then
-  # Use copied retained bytes and verify the parsed selected version again.
-  if [ ! -f "$RUNNER_FILE" ] ||
-     [ "$(read_runner_hint "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" != "$SELECTED_VERSION" ] ||
-     [ -n "$(read_runner_hint "$RUNNER_FILE" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" ]; then
-    printf 'Selected retained runner changed; reconnect to prepare again.\\n' >&2; exit 1
-  fi
-  cp "$RUNNER_FILE" "$RUNNER_NEXT"
-else
-  cat >"$RUNNER_NEXT" <<'SH'
-@@GOAT_RUNNER_SCRIPT@@
-SH
-fi
-chmod 700 "$RUNNER_NEXT"
-# Verify copied bytes before executing or pinning, closing a same-version replacement race.
-check_retained_runner
-if [ "$PRESERVE_SELECTED_RUNNER" = 1 ] &&
-   [ "$(runner_sha256 "$RUNNER_NEXT")" != "$EXPECTED_RETAINED_SHA256" ]; then
-  printf 'Retained GOAT runner changed while copying; reconnect.\\n' >&2; exit 1
-fi
-cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
-if ! RUNNER_VERSION_OUTPUT="$(exec_fact version "$RUNNER_NEXT" --version)"; then
-  printf 'Cannot validate %s; existing runner and server were preserved.\\n' "$REQUESTED_RUNNER" >&2; exit 1
-fi
-if [ -n "$EXPECTED_ARCHIVE_VERSION" ] && [ "$RUNNER_VERSION_OUTPUT" != "goat v$EXPECTED_ARCHIVE_VERSION" ]; then
-  printf 'Expected goat v%s, observed %s; existing runner and server were preserved.\\n' "$EXPECTED_ARCHIVE_VERSION" "$RUNNER_VERSION_OUTPUT" >&2; exit 1
-fi
-TARGET_VERSION="\${RUNNER_VERSION_OUTPUT#goat v}"
-if [ -n "$SELECTED_VERSION" ]; then
-  # Cold mirrors installed this exact archive during validation; pin future use too.
-  selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-  if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
-    printf 'Validated selected archive is not complete.\\n' >&2; exit 1
-  fi
-  REQUIRE_INSTALLED=1
-fi
-RUNNER_CHANGED=0
-@@GOAT_PROTOCOL_GUARD@@
-check_candidate_protocol
-check_live_protocol
-if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
-  printf 'Candidate runner changed during validation; reconnect.\n' >&2; exit 1
-fi
-publish_selected_runner() {
-  [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || {
-    printf 'Replacement lock ownership changed; runner was preserved.\\n' >&2; exit 1;
-  }
-  check_retained_runner
-@@GOAT_RUNNER_INSTALL@@
-  RUNNER_PUBLISHED=1
-}
-pending_attachment_safe() {
-  [ "$DRAIN_UNCERTAIN" = 0 ] || return 1
-  # A replacement needs the mutex; lock-only contention can reuse a proven live server.
-  { [ "$LOCK_HELD" = 1 ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; } ||
-    { [ "$reason" = contended ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ]; }
-}
-emit_pending_only() {
-  printf '{"status":"pending","pending":{%s}}\n' "$pending_fields"
-  exit 0
-}
-emit_pending() {
-  reason="$1"; pending_detail="\${2:-}"
-  [ -n "$pending_detail" ] || pending_detail="$LOCK_DETAIL"
-  pending_fields="$(printf '"reason":"%s","replacement":"%s","requestedVersion":"%s","liveVersion":"%s"' "$reason" "$REPLACEMENT_REASON" "$REQUESTED_VERSION" "$LIVE_VERSION")"
-  case "$pending_detail" in
-    recovery-stale) pending_fields="$pending_fields,"'"detail":"recovery-stale"' ;;
-    drain-unavailable) pending_fields="$pending_fields,"'"refreshCause":"drain_unavailable"' ;;
-  esac
-  # Reuse is independently proven using the retained runner, never the incompatible candidate.
-  pending_attachment_safe || emit_pending_only
-  if [ "$reason" = contended ] && [ "$NEEDS_OWNED_UPGRADE" = 0 ] && [ ! -f "$RETAINED_SNAPSHOT_FILE" ]; then
-    capture_running_runner || emit_pending_only
-  fi
-@@GOAT_READY_BASELINE@@
-  if [ "$LIVE_COMPATIBLE" = 1 ] && [ -f "$RETAINED_SNAPSHOT_FILE" ] &&
-     [ "$(runner_sha256 "$RUNNER_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] &&
-     [ "$("$RETAINED_SNAPSHOT_FILE" --version 2>/dev/null || true)" = "goat v$LIVE_VERSION" ]; then
-    retained_own="$("$RETAINED_SNAPSHOT_FILE" __ssh-helper protocol --shell 2>/dev/null || true)"
-    set -f; set -- $retained_own
-    if valid_own_tokens "$@" && compatible_fields "$1" "$2" "$3" && [ "$1" = "$LIVE_VERSION" ] &&
-       "$RETAINED_SNAPSHOT_FILE" __ssh-helper wait-ready "$LIVE_PORT" "@@GOAT_REUSE_READY_TIMEOUT_MS@@" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" >/dev/null 2>&1; then
-      CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
-      pending_pid="$LIVE_PID"; pending_port="$LIVE_PORT"; pending_version="$LIVE_VERSION"
-      check_retained_runner
-      check_live_protocol
-      pending_attachment_safe || emit_pending_only
-      if [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_PID" = "$pending_pid" ] && [ "$LIVE_PORT" = "$pending_port" ] && [ "$LIVE_VERSION" = "$pending_version" ] &&
-         { [ "$pending_detail" != drain-unavailable ] || { [ "$LIVE_OWNED" = 1 ] && verify_owned_identity "$LIVE_PID" "$LIVE_PORT"; }; }; then
-        pending_kind=external; [ "$LIVE_OWNED" != 1 ] || pending_kind=managed
-        # Lock contention does not imply a replacement; compatible attach-only servers stay ready.
-        pending_suffix=
-        if [ "$reason" != contended ] || [ "$NEEDS_OWNED_UPGRADE" != 0 ]; then
-          pending_suffix="$(printf ',"pending":{%s}' "$pending_fields")"
-        fi
-        printf '{"status":"ready","remotePort":%s,"serverKind":"%s","selectedVersion":"%s"%s}\n' "$LIVE_PORT" "$pending_kind" "$LIVE_VERSION" "$pending_suffix"
-        exit 0
-      fi
-    fi
-  fi
-  emit_pending_only
-}
-if [ "$OWNING_LAUNCH" = 1 ]; then
-  acquire_replacement_lock || { wait_for_replacement_lock && acquire_replacement_lock || emit_pending contended; }
-  # Classification and ordering must be fresh under the host-wide mutex.
-  CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
-  check_live_protocol
-  RECONCILING_DRAIN=0
-  if [ "$DRAIN_UNCERTAIN" = 1 ]; then
-    [ "$ALLOW_OWNED_UPGRADE" = 1 ] && [ "$LIVE_OWNED" = 1 ] && [ "$LIVE_DRAIN" = 1 ] && [ -n "$LIVE_INSTANCE_ID" ] || emit_pending unknown
-    # Retry the authenticated request: the server joins an active drain, confirms its
-    # cancellation, or exits for the supervisor. HTTP readiness alone proves none of these.
-    RECONCILING_DRAIN=1; NEEDS_OWNED_UPGRADE=1
-  fi
-  if [ "$LIVE_COMPATIBLE" = 1 ] && [ "$LIVE_VERSION" = "$SELECTED_VERSION" ] &&
-     [ "$LIVE_VERSION" = "$REQUESTED_VERSION" ] && [ -n "$REFRESH_LIVE_VERSION" ] &&
-     [ "$REFRESH_LIVE_VERSION" != "$LIVE_VERSION" ]; then
-    # Another owner completed this exact refresh while we waited; the old runner pin is obsolete.
-    EXPECTED_LIVE_RUNNER_SHA256="$(runner_sha256 "$RUNNER_FILE")" || ownership_unverified
-  fi
-  if [ "$LIVE_COMPATIBLE" = 1 ] && [ "$comparison" = newer ] && [ "$LIVE_VERSION" != "$SELECTED_VERSION" ]; then
-    # Another client may have completed a newer installation since preparation.
-    # Pin its independently verified retained runner rather than publish our older candidate.
-    selected_dir="$HOME/.goat/runtime/goat/versions/$LIVE_VERSION"
-    [ -x "$selected_dir/goat" ] && [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" = "$LIVE_VERSION" ] || ownership_unverified
-    fresh_sha="$(runner_sha256 "$RUNNER_FILE")" || ownership_unverified
-    cp "$RUNNER_FILE" "$RUNNER_NEXT"
-    [ "$(runner_sha256 "$RUNNER_NEXT")" = "$fresh_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$fresh_sha" ] || ownership_unverified
-    [ "$("$RUNNER_NEXT" --version 2>/dev/null || true)" = "goat v$LIVE_VERSION" ] || ownership_unverified
-    cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
-    SELECTED_VERSION="$LIVE_VERSION"; REQUIRE_INSTALLED=1
-    EXPECTED_LIVE_RUNNER_SHA256="$fresh_sha"
-    [ "$PRESERVE_SELECTED_RUNNER" = 0 ] || EXPECTED_RETAINED_SHA256="$fresh_sha"
-  fi
-  check_candidate_protocol
-  check_retained_runner
-  check_live_protocol
-  [ "$RECONCILING_DRAIN" != 1 ] || NEEDS_OWNED_UPGRADE=1
-@@GOAT_VERIFY_OWNED_BEFORE_PUBLICATION@@
-  [ "$DEFER_NO_DRAIN" != 1 ] || emit_pending unknown drain-unavailable
-  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$RECONCILING_DRAIN" != 1 ] && [ "$REPLACEMENT_REASON" != incompatible ] && [ "$DRAIN_FORCE" != 1 ]; then
-    # An optional refresh waits for idle; launch probes again last, then the server drains.
-    activity="$(read_refresh_activity)"
-    [ "$activity" = idle ] || emit_pending "$activity"
-  fi
-else
-  # Pairing/MCP reuse is read-only; only initial shared setup may publish.
-  if [ -f "$RUNNER_FILE" ] && [ "$LIVE_STATUS" != none ]; then
-    if ! cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"; then
-      secondary_sha="$(runner_sha256 "$RUNNER_FILE")" || exit 1
-      cp "$RUNNER_FILE" "$RUNNER_NEXT"
-      [ "$(runner_sha256 "$RUNNER_NEXT")" = "$secondary_sha" ] && [ "$(runner_sha256 "$RUNNER_FILE")" = "$secondary_sha" ] || exit 1
-      cp "$RUNNER_NEXT" "$RUNNER_CANDIDATE_FILE.pin"
-      CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
-      check_candidate_protocol
-      check_live_protocol
-    fi
-    RUNNER_PUBLISHED=1
-  else
-    acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\n' >&2; exit 1; }
-    check_live_protocol
-    publish_selected_runner
-  fi
-fi
-
-`;
-
-// Legacy adoption reads only a pinned retained runner; never evaluate shell source.
-const REMOTE_LEGACY_IDENTITY_SCRIPT = String.raw`capture_running_runner() {
-  RETAINED_SNAPSHOT_FILE="$STATE_DIR/run-t3.retained.$$"
-  if [ -f "$RUNNER_FILE" ]; then
-    running_sha="$(runner_sha256 "$RUNNER_FILE")" || return 1
-    if [ -n "$EXPECTED_LIVE_RUNNER_SHA256" ] && [ "$running_sha" != "$EXPECTED_LIVE_RUNNER_SHA256" ]; then return 1; fi
-    cp "$RUNNER_FILE" "$RETAINED_SNAPSHOT_FILE"
-    [ "$(runner_sha256 "$RETAINED_SNAPSHOT_FILE")" = "$running_sha" ] &&
-      [ "$(runner_sha256 "$RUNNER_FILE")" = "$running_sha" ] || return 1
-    EXPECTED_LIVE_RUNNER_SHA256="$running_sha"
-  fi
-}
-decode_named_retained_assignment() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" {
-      count++
-      if (index($0, key "=") != 1) bad=1
-      value=substr($0,length(key)+2)
-    }
-    END {
-      if (bad || count != 1 || length(value)<2 || substr(value,1,1)!="\047" || substr(value,length(value),1)!="\047") exit 1
-      text=substr(value,2,length(value)-2); decoded=""
-      for (i=1;i<=length(text);i++) {
-        c=substr(text,i,1)
-        if (c=="\047") {
-          if (substr(text,i,4)!="\047\\\047\047") exit 1
-          decoded=decoded "\047"; i+=3
-        } else decoded=decoded c
-      }
-      print decoded
-    }' "$RETAINED_SNAPSHOT_FILE"
-}
-decode_retained_assignment() {
-  if awk -v key="$1" '$0 ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" {found=1} END {exit !found}' "$RETAINED_SNAPSHOT_FILE"; then
-    decode_named_retained_assignment "$1"
-  else
-    decode_named_retained_assignment "$2"
-  fi
-}
-legacy_files_regular() {
-  for legacy_file in "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$RUNNER_FILE"; do
-    [ -f "$legacy_file" ] && [ ! -L "$legacy_file" ] || return 1
-  done
-}
-read_legacy_value() {
-  awk 'NR==1 { value=$0 } END { if (NR!=1) exit 1; print value }' "$1"
-}
-verify_legacy_process() {
-  legacy_files_regular || return 1
-  legacy_uid="$(server_uid "$1")" || return 1
-  legacy_uid="$(printf '%s\n' "$legacy_uid" | awk 'NF==1 { print $1 }')"
-  [ "$legacy_uid" = "$(id -u)" ] || return 1
-  legacy_start="$(server_start "$1")" || return 1
-  [ -n "$legacy_start" ] || return 1
-  case "$legacy_start" in *[[:cntrl:]]*) return 1 ;; esac
-  legacy_command="$(server_command "$1")" || return 1
-  [ "$legacy_command" = "$2" ] || return 1
-  if [ "$LEGACY_PENDING" = 1 ]; then
-    [ "$legacy_uid" = "$LEGACY_UID" ] && [ "$legacy_start" = "$LEGACY_START" ] || return 1
-  fi
-  if [ "$RUNNER_PUBLISHED" = 1 ]; then
-    cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_FILE" || return 1
-  else
-    [ "$(runner_sha256 "$RUNNER_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] || return 1
-  fi
-  legacy_files_regular
-}
-verify_legacy_identity() {
-  [ "$ALLOW_LEGACY_ADOPTION" = 1 ] && [ ! -e "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
-  legacy_files_regular || return 1
-  [ -f "$RETAINED_SNAPSHOT_FILE" ] && [ -n "$EXPECTED_LIVE_RUNNER_SHA256" ] || return 1
-  [ "$(runner_sha256 "$RUNNER_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] &&
-    [ "$(runner_sha256 "$RETAINED_SNAPSHOT_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] || return 1
-  legacy_pid="$(read_legacy_value "$PID_FILE")" || return 1
-  legacy_port="$(read_legacy_value "$PORT_FILE")" || return 1
-  [ "$(read_legacy_value "$MANAGED_FILE")" = managed ] &&
-    valid_positive "$legacy_pid" && valid_positive "$legacy_port" && valid_port "$legacy_port" &&
-    server_alive "$legacy_pid" || return 1
-  legacy_version="$(decode_retained_assignment GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" || return 1
-  legacy_entry="$(decode_retained_assignment GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" || return 1
-  [ -z "$legacy_entry" ] || return 1
-  case "$legacy_version" in ''|*[!0-9A-Za-z.-]*) return 1 ;; esac
-  valid_version "$legacy_version" || return 1
-  legacy_tail="$HOME/.goat/runtime/goat/versions/$legacy_version/goat serve --host 127.0.0.1 --port $legacy_port --base-dir $DEFAULT_SERVER_HOME"
-  verify_legacy_process "$legacy_pid" "$legacy_tail" || return 1
-  if [ "$LEGACY_PENDING" = 1 ]; then
-    [ "$LEGACY_PID" = "$legacy_pid" ] && [ "$LEGACY_PORT" = "$legacy_port" ] &&
-      [ "$LEGACY_IDENTITY" = "$legacy_tail" ] || return 1
-  fi
-  [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$legacy_pid" ] &&
-    [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$legacy_port" ] &&
-    [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
-    [ ! -e "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] &&
-    [ "$(runner_sha256 "$RUNNER_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] || return 1
-  LEGACY_PID="$legacy_pid"; LEGACY_PORT="$legacy_port"; LEGACY_IDENTITY="$legacy_tail"
-  LEGACY_VERSION="$legacy_version"; LEGACY_UID="$legacy_uid"; LEGACY_START="$legacy_start"; LEGACY_PENDING=1
-}
-commit_legacy_identity() {
-  verify_legacy_identity || return 1
-  legacy_next="$STATE_DIR/identity.next.$$"
-  printf '%s\n' "$LEGACY_IDENTITY" >"$legacy_next"
-  verify_legacy_identity || { rm -f "$legacy_next"; return 1; }
-  # Atomic create, refusing a competing identity instead of overwriting it.
-  if ! ln "$legacy_next" "$STATE_DIR/identity" 2>/dev/null; then rm -f "$legacy_next"; return 1; fi
-  if ! verify_owned_identity "$LEGACY_PID" "$LEGACY_PORT"; then
-    if [ "$legacy_next" -ef "$STATE_DIR/identity" ]; then rm -f "$STATE_DIR/identity"; fi
-    rm -f "$legacy_next"; return 1
-  fi
-  # Keep a hard link so rollback removes only the identity created by this attempt.
-  LEGACY_IDENTITY_LINK="$legacy_next"
-  LEGACY_COMMITTED=1
-}
-rollback_legacy_switch() {
-  # A failed switch must remain retryable while the legacy process is still alive.
-  # Never overwrite runner bytes or an identity replaced by another actor.
-  if [ "$LEGACY_PUBLICATION_STARTED" = 1 ] && [ -f "$RETAINED_SNAPSHOT_FILE" ] &&
-     [ ! -L "$RUNNER_FILE" ] && cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_FILE"; then
-    if cp -p "$RETAINED_SNAPSHOT_FILE" "$RUNNER_CANDIDATE_FILE.restore" &&
-       mv -f "$RUNNER_CANDIDATE_FILE.restore" "$RUNNER_FILE"; then :
-    else printf 'Could not restore the retained GOAT runner after a failed switch.\n' >&2; fi
-  fi
-  if [ -n "$LEGACY_IDENTITY_LINK" ] && [ "$LEGACY_IDENTITY_LINK" -ef "$STATE_DIR/identity" ] &&
-     [ "$(cat "$STATE_DIR/identity" 2>/dev/null)" = "$LEGACY_IDENTITY" ]; then
-    rm -f "$STATE_DIR/identity"
-  fi
-}
-read_refresh_activity() {
-  activity_runner="$RUNNER_CANDIDATE_FILE.pin"
-  if activity="$("$activity_runner" __ssh-helper activity --port "$LIVE_PORT" --pid "$LIVE_PID" --shell 2>/dev/null)"; then
-    case "$activity" in idle|busy) printf '%s' "$activity"; return ;; esac
-  fi
-  printf unknown
-}
-
-`;
-
-// PID existence and protocol metadata are not authority to signal a process.
-// Both termination paths must corroborate the complete invocation we launch.
-const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
-  owned_pid="$1"; owned_port="$2"
-  valid_positive "$owned_pid" && valid_positive "$owned_port" && valid_port "$owned_port" || return 1
-  [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] || return 1
-  [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
-  owned_uid="$(server_uid "$owned_pid")" || return 1
-  [ "$(printf '%s\\n' "$owned_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
-  owned_identity="$(cat "$STATE_DIR/identity" 2>/dev/null)" || return 1
-  [ -n "$owned_identity" ] || return 1
-  case "$owned_identity" in
-    *" --port $owned_port --base-dir $DEFAULT_SERVER_HOME") ;;
-    *) return 1 ;;
-  esac
-  owned_command="$(server_command "$owned_pid")" || return 1
-  case "$owned_identity" in
-    "$HOME/.goat/runtime/goat/versions/"*)
-      # An archive's identity includes its executable, so no prefix is allowed.
-      [ "$owned_command" = "$owned_identity" ] || return 1 ;;
-    *)
-      # Node shims can exec a different binary; the persisted entry and arguments own it.
-      case "$owned_command" in *" $owned_identity") ;; *) return 1 ;; esac ;;
-  esac
-  # Ownership and the running server's identity must still match after inspection.
-  [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$owned_pid" ] &&
-    [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$owned_port" ] &&
-    [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
-    [ "$(cat "$STATE_DIR/identity" 2>/dev/null || true)" = "$owned_identity" ]
-}
-`;
-
-const VERIFY_OWNED_BEFORE_PUBLICATION = `if [ "$LEGACY_PENDING" = 1 ]; then
-  verify_legacy_identity || ownership_unverified
-elif [ "$LIVE_OWNED" = 1 ] && ! verify_owned_identity "$LIVE_PID" "$LIVE_PORT"; then
-  printf 'GOAT ownership could not be verified for PID %s: persisted launch identity is missing or mismatched; process, runner and ownership files were preserved.\\n' "$LIVE_PID" >&2
-  exit 1
-fi`;
-
-// Use the existing post-install round trip: young executables remain unkeyed everywhere else.
-const REMOTE_RUNTIME_FACT_WARMUP_SCRIPT = String.raw`warm_runtime_facts() (
-  [ -n "$GOAT_FACTS_DIR" ] || exit 0
-  # Skip an observed rollback window; concurrent changes are covered by each fact's keys.
-  [ ! -e "$STATE_DIR/run-t3.previous" ] && [ ! -L "$STATE_DIR/run-t3.previous" ] || exit 1
-  warm_exe="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
-  warm_sig="$(file_sig "$warm_exe")" || exit 1
-  warm_age=$(( $(date +%s) - ${"${warm_sig##*:}"} ))
-  # A clock behind ctime is not a reason to extend the cleanup's deadline.
-  [ "$warm_age" -ge 0 ] || exit 1
-  if [ "$warm_age" -lt 2 ]; then sleep "$(( 2 - warm_age ))" || exit 1; fi
-  exec_fact_key "$warm_exe" || exit 1
-  warm_exe_key="$FACT_KEY"; warm_exe_name="$FACT_NAME"
-  # Independent answers run side by side, so warming costs about two goat starts on a host
-  # whose cleanup already used most of the deadline.
-  exec_fact version "$warm_exe" --version >/dev/null 2>&1 &
-  exec_fact own "$warm_exe" __ssh-helper protocol --shell >/dev/null 2>&1 &
-  build_commit_time "$warm_exe" >/dev/null 2>&1 &
-  lacks_memory_scopes "$warm_exe" >/dev/null 2>&1 &
-  if warm_live="$(live_fact "$warm_exe" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
-    (
-      set -f; set -- $warm_live
-      valid_live_tokens "$@" && [ "$1" = live ] && [ "$2" = "$SELECTED_VERSION" ] &&
-        [ "$6" = "$REMOTE_PORT" ] &&
-        compat_fact "$warm_exe" "$6" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" "$5" >/dev/null 2>&1
-    ) || true
-  fi
-  wait || true
-  # exec_fact_key keys a runner only when it is an archive runner that execs this executable
-  # with the same arguments, so its answers are the executable's under the runner's key.
-  exec_fact_key "$RUNNER_FILE" || exit 0
-  # The runner may have been republished for another version while this ran.
-  [ "${"${FACT_KEY% *}"}" = "${"${warm_exe_key% *}"}" ] || exit 0
-  warm_runner_key="$FACT_KEY"; warm_runner_name="$FACT_NAME"
-  exec_fact_key "$warm_exe" && [ "$FACT_KEY" = "$warm_exe_key" ] || exit 0
-  for warm_kind in version own commit scopes live compat; do
-    warm_file="$GOAT_FACTS_DIR/$warm_kind.$warm_exe_name"
-    [ -f "$warm_file" ] && [ ! -L "$warm_file" ] || continue
-    { IFS= read -r warm_key && IFS= read -r warm_value; } <"$warm_file" || continue
-    case "$warm_key" in "$warm_exe_key"*) ;; *) continue ;; esac
-    fact_valid "$warm_kind" "$warm_value" || continue
-    fact_put "$warm_kind.$warm_runner_name" "$warm_runner_key${'${warm_key#"$warm_exe_key"}'}" "$warm_value"
-  done
-)
-warm_runtime_facts >/dev/null 2>&1 || exit 0
-`;
-
-// The caller holds the replacement mutex after readiness, outside any supervisor trial.
-export const REMOTE_RUNTIME_CLEANUP_SCRIPT = String.raw`cleanup_runtime_versions() {
-  [ "$GOAT_HOST_WINDOWS" = 0 ] && [ "$GOAT_ARCHIVE_MODE" = 1 ] || return 0
-  [ "$LOCK_HELD" = 1 ] && [ -z "${"${UPGRADE_VERSION:-}"}" ] || return 0
-  [ "$(readlink "$LOCK" 2>/dev/null)" = "$OWNER" ] || return 1
-  # A detached supervisor can outlive the SSH shell that owned the replacement lock.
-  [ ! -e "$STATE_DIR/run-t3.previous" ] && [ ! -L "$STATE_DIR/run-t3.previous" ] || return 1
-  for parent in "$HOME" "$HOME/.goat" "$HOME/.goat/runtime" "$HOME/.goat/runtime/goat" "$HOME/.goat/runtime/goat/versions"; do
-    [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
-  done
-  versions="$HOME/.goat/runtime/goat/versions"
-  # Linux names every process's executable and directory under /proc. macOS has no /proc,
-  # so lsof answers the same question there.
-  cleanup_lsof=
-  if [ ! -d /proc/self ]; then
-    for candidate in "$(command -v lsof 2>/dev/null || true)" /usr/sbin/lsof /sbin/lsof; do
-      if [ -n "$candidate" ] && [ -x "$candidate" ]; then cleanup_lsof="$candidate"; break; fi
-    done
-    [ -n "$cleanup_lsof" ] || return 1
-  fi
-  [ ! -L "$versions/.maintenance.lock" ] || return 1
-  if command -v flock >/dev/null 2>&1; then
-    exec 9>"$versions/.maintenance.lock" || return 1
-    flock -n -x 9 || return 1
-  else
-    # Without flock (macOS) an atomic directory is the mutex, released when this subshell
-    # exits. One a killed cleanup left behind over an hour ago is stale.
-    maintenance="$versions/.maintenance.lock.d"
-    [ ! -L "$maintenance" ] || return 1
-    if ! mkdir "$maintenance" 2>/dev/null; then
-      [ -n "$(find "$maintenance" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
-        rmdir "$maintenance" 2>/dev/null && mkdir "$maintenance" 2>/dev/null || return 1
-    fi
-    trap 'rmdir "$maintenance" 2>/dev/null || true' EXIT
-  fi
-  set +f
-  # Older clients do not take the maintenance mutex; their install locks still veto cleanup.
-  for install in "$versions"/.*.install.lock*; do
-    [ ! -e "$install" ] && [ ! -L "$install" ] || return 1
-  done
-  retained="$(read_runner_hint "$RUNNER_FILE" GOAT_ARCHIVE_VERSION T3_ARCHIVE_VERSION)" || return 1
-  valid_version "$retained" && valid_version "$SELECTED_VERSION" || return 1
-  live_binary="$versions/$SELECTED_VERSION/goat"
-  [ ! -L "$versions/$SELECTED_VERSION" ] && [ ! -L "$live_binary" ] || return 1
-  # Revalidate the descriptor under both mutexes, after the readiness handshake.
-  live="$("$live_binary" __ssh-helper protocol --runtime-file "$DEFAULT_RUNTIME_FILE" --port-file "$PORT_FILE" --pid-file "$PID_FILE" --shell)" || return 1
-  set -f; set -- $live; set +f
-  valid_live_tokens "$@" && [ "$1" = live ] && [ "$2" = "$SELECTED_VERSION" ] &&
-    [ "$6" = "$REMOTE_PORT" ] || return 1
-  cleanup_process_paths() {
-    # Only this user's processes can run from this user's runtime directory, and /proc
-    # hides other users' executable and cwd links from an unprivileged reader.
-    uid="$(id -u)" || return 1
-    commands="$(ps -o command= -U "$uid")" && pids="$(ps -o pid= -U "$uid")" || return 1
-    [ -n "$commands" ] && [ -n "$pids" ] || return 1
-    paths="$commands"
-    if [ -n "$cleanup_lsof" ]; then
-      # Like an unreadable /proc entry, any lsof failure vetoes deletion.
-      open_paths="$("$cleanup_lsof" -n -P -w -a -u "$uid" -d cwd,txt -Fn 2>/dev/null)" || return 1
-      paths="$paths
-$(printf '%s\n' "$open_paths" | sed -n 's/^n//p')"
-      return 0
-    fi
-    # ps alone misses chdir and exec with a custom argv[0]. An unreadable live process vetoes
-    # deletion; one that exited since ps listed it has nothing left to protect.
-    for pid in $pids; do
-      case "$pid" in *[!0-9]*|'') return 1 ;; esac
-      if executable="$(readlink "/proc/$pid/exe")" && cwd="$(readlink "/proc/$pid/cwd")"; then
-        paths="$paths
-$executable
-$cwd"
-      elif [ -e "/proc/$pid" ]; then
-        return 1
-      fi
-    done
-  }
-  cleanup_process_paths || return 1
-  cleanup_commit() {
-    binary="$versions/$1/goat"
-    [ ! -L "$binary" ] && [ ! -L "$versions/$1/.install-record" ] || return 1
-    record="$(cat "$versions/$1/.install-record" 2>/dev/null)" || return 1
-    set -f; set -- $record; set +f
-    [ "$#" = 4 ] && [ "$versions/$1/goat" = "$binary" ] || return 1
-    [ "$(runner_sha256 "$binary")" = "$3" ] || return 1
-    build_commit_time "$binary"
-  }
-  cleanup_order() {
-    first="$1"; second="$2"; set --
-    if first_time="$(cleanup_commit "$first")" && second_time="$(cleanup_commit "$second")"; then
-      set -- --live-commit-time "$first_time" --requested-commit-time "$second_time"
-    fi
-    "$live_binary" __ssh-helper compare-version "$@" "$first" "$second" 2>/dev/null
-  }
-  # A complete install that is provably older than the live build.
-  cleanup_older() {
-    dir="$versions/$1"
-    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -x "$dir/goat" ] && [ ! -L "$dir/goat" ] || return 1
-    valid_version "$1" && [ "$1" != "$SELECTED_VERSION" ] || return 1
-    [ ! -L "$dir/.install-complete" ] && [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$1" ] || return 1
-    [ "$(cleanup_order "$SELECTED_VERSION" "$1")" = newer ]
-  }
-  cleanup_ifs="$IFS"; IFS='
-'
-  # Install markers, most recent first. Version names never contain a newline.
-  installed="$(ls -t "$versions"/*/.install-complete 2>/dev/null || true)"
-  # One rollback build is kept: the older build installed last, which this host ran before
-  # the live one.
-  previous=
-  for marker in $installed; do
-    # Only the list splits on newlines; commands inside split words as usual.
-    IFS="$cleanup_ifs"
-    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
-    if cleanup_older "$version"; then previous="$version"; break; fi
-  done
-  # Each check starts goat, so a long backlog is pruned over several connections within the
-  # caller's deadline, oldest installs first.
-  started="$(date +%s)"
-  IFS='
-'
-  for marker in $(printf '%s\n' "$installed" | awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }'); do
-    IFS="$cleanup_ifs"
-    [ $(( $(date +%s) - started )) -lt 6 ] || break
-    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
-    [ "$version" != "$previous" ] && [ "$version" != "$retained" ] &&
-      [ "$version" != "$REQUESTED_VERSION" ] || continue
-    cleanup_older "$version" || continue
-    dir="$versions/$version"
-    cleanup_process_paths || return 1
-    case "$paths" in *"$dir/"*|*"$dir
-"*|*"$dir") continue ;; esac
-    [ ! -L "$dir" ] || return 1
-    [ ! -e "$versions/.$version.install.lock" ] && [ ! -L "$versions/.$version.install.lock" ] || return 1
-    trash="$(mktemp -d "$versions/.trash-XXXXXXXX")" || return 1
-    # Moving into an owned empty sibling keeps a failed recursive delete out of runtime discovery.
-    mv "$dir" "$trash/runtime" || return 1
-    rm -rf "$trash" || return 1
-    printf 'ssh.runtime.cleanup.removed version=%s\n' "$version" >&2
-  done
-  IFS="$cleanup_ifs"
-  # Staging exists only while an install holds its lock, and none is held now.
-  for leftover in "$versions"/.staging-* "$versions"/.trash-*; do
-    [ -d "$leftover" ] && [ ! -L "$leftover" ] || continue
-    [ -n "$(find "$leftover" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
-    rm -rf "$leftover" || return 1
-    printf 'ssh.runtime.cleanup.removed leftover=%s\n' "${"${leftover##*/}"}" >&2
-  done
-}
-(cleanup_runtime_versions) || { printf 'ssh.runtime.cleanup.skipped inspection, lock, or cleanup failed\n' >&2 || true; }
-`;
-
-// Retained archives have a port-only wait-ready helper. Inspect the kernel's socket owner
-// in the launch shell instead, without adding helper arguments or starts on reconnect.
-export const REMOTE_LAUNCH_LISTENER_SCRIPT = String.raw`# macOS login shells often omit /usr/sbin, which is where lsof lives, and archive
-# launches never call ensure_remote_node_path. Resolve lsof without that PATH.
-ensure_listener_path() {
-  prepend_path_if_dir "/usr/sbin"
-  prepend_path_if_dir "/sbin"
-  export PATH
-}
-listener_lsof() {
-  if command -v lsof >/dev/null 2>&1; then
-    command -v lsof
-    return 0
-  fi
-  for candidate in /usr/sbin/lsof /sbin/lsof; do
-    if [ -x "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-listener_probe_available() {
-  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then return 0; fi
-  if [ -d /proc/self/fd ]; then return 0; fi
-  listener_lsof >/dev/null 2>&1
-}
-server_owns_listener() (
-  # Protocol parsing leaves noglob enabled; socket fd discovery needs expansion.
-  set +f
-  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
-    GOAT_PROCESS_ID="$1" GOAT_LISTEN_PORT="$2" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand("$ErrorActionPreference = 'Stop'; $connections = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:GOAT_LISTEN_PORT) -ErrorAction Stop); if ($connections | Where-Object { $_.OwningProcess -eq [int]$env:GOAT_PROCESS_ID -and $_.LocalAddress -eq '127.0.0.1' }) { exit 0 }; exit 1")}' </dev/null >/dev/null 2>&1
-  elif [ -d /proc/self/fd ]; then
-    listen_sockets=' '
-    for listen_fd in /proc/"$1"/fd/*; do
-      listen_socket="$(readlink "$listen_fd" 2>/dev/null)" || continue
-      case "$listen_socket" in socket:*) listen_sockets="$listen_sockets$listen_socket " ;; esac
-    done
-    listen_address="$(printf '0100007F:%04X' "$2")" || return 1
-    awk -v address="$listen_address" -v sockets="$listen_sockets" '
-      $2 == address && $4 == "0A" && index(sockets, " socket:[" $10 "] ") { found=1 }
-      END { exit !found }
-    ' /proc/"$1"/net/tcp 2>/dev/null
-  else
-    lsof_bin="$(listener_lsof)" || return 1
-    "$lsof_bin" -nP -a -p "$1" -iTCP@127.0.0.1:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1"
-  fi
-)
-wait_launched_listener() {
-  listen_deadline=$(( $(date +%s) + (@@GOAT_READY_TIMEOUT_MS@@ + 999) / 1000 ))
-  while server_alive "$REMOTE_PID" && [ "$(date +%s)" -lt "$listen_deadline" ]; do
-    server_owns_listener "$REMOTE_PID" "$REMOTE_PORT" && return 0
-    sleep 0.1
-  done
-  return 1
-}
-`;
-
 const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
@@ -2303,7 +788,7 @@ PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
 LOG_FILE="$STATE_DIR/server.log"
 ownership_unverified() {
-  printf 'GOAT ownership could not be verified; process and ownership files were preserved.\\n' >&2; exit 1
+  printf 'GOAT ownership could not be verified; process and ownership files were preserved. The running server does not match the launch identity in %s/identity. If you started it by hand, stop it on the host and reconnect so GOAT starts its own.\\n' "$STATE_DIR" >&2; exit 1
 }
 @@GOAT_OWNED_IDENTITY@@
 @@GOAT_LEGACY_IDENTITY@@
@@ -2396,7 +881,7 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   check_retained_runner
   if [ "$LEGACY_PENDING" = 1 ] && [ "$LEGACY_COMMITTED" = 0 ]; then
     verify_legacy_identity || ownership_unverified
-  else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified; fi
+  else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || repair_owned_identity || ownership_unverified; fi
   UPGRADE_START="$(server_start "$UPGRADE_PID")" || ownership_unverified
   [ -n "$UPGRADE_START" ] || ownership_unverified
   if [ "$RECONCILING_DRAIN" != 1 ] && [ "$REPLACEMENT_REASON" != incompatible ] && [ "$DRAIN_FORCE" != 1 ]; then
@@ -2622,67 +1107,6 @@ if [ "$OWNING_LAUNCH" = 1 ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" != "$
 fi
 @@GOAT_READY_BASELINE@@printf '{"status":"ready","remotePort":%s,"serverKind":"%s","selectedVersion":"%s"%s}\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}" "$SELECTED_VERSION" "$refresh_fields"
 
-`;
-
-const REMOTE_PAIRING_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-DEFAULT_SERVER_HOME="$HOME/.goat"
-@@GOAT_RUNNER_SETUP@@
-PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"
-recheck_selected_before_use
-"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json
-`;
-
-const REPLACE_RUNNER_INSTALL = `if [ -f "$RUNNER_FILE" ] && cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"; then
-  rm -f "$RUNNER_NEXT"
-else
-  mv "$RUNNER_NEXT" "$RUNNER_FILE"
-  RUNNER_CHANGED=1
-fi`;
-const KEEP_EXISTING_RUNNER_INSTALL = `if [ ! -f "$RUNNER_FILE" ] || ! cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"; then
-  printf 'Selected retained runner changed before publication; reconnect.\\n' >&2; exit 1
-fi
-rm -f "$RUNNER_NEXT"`;
-
-// Issues an `mcp-client` bearer session, the only kind the remote's `/mcp`
-// admits from outside a thread. `--runtime-mode-ceiling` is newer than some
-// remotes, so an older CLI is retried without it and reports the default.
-// Memory grants are explicit consent, so they are never dropped: a CLI that cannot issue
-// them refuses with a GOAT_SESSION_ERROR line, and every CLI that can also applies a ceiling.
-const REMOTE_MCP_SESSION_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-DEFAULT_SERVER_HOME="$HOME/.goat"
-@@GOAT_RUNNER_SETUP@@
-set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate @@GOAT_EXTRA_SCOPES@@--ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
-CEILING=@@GOAT_CEILING@@
-MEMORY_SCOPES=@@GOAT_MEMORY_SCOPES@@
-recheck_selected_before_use
-if [ "$MEMORY_SCOPES" = required ]; then
-  if lacks_memory_scopes "$RUNNER_FILE"; then
-    runtime="$("$RUNNER_FILE" --version 2>/dev/null || true)"; runtime="\${runtime#goat v}"
-    printf 'GOAT_SESSION_ERROR=memory_scopes_unsupported runtime=%s\\n' "\${runtime:-unknown}"
-    printf 'GOAT %s on this host cannot grant memory access to tasks.\\n' "\${runtime:-unknown}" >&2
-    exit 1
-  fi
-  CEILING_RESULT=default
-  if [ -n "$CEILING" ]; then set -- "$@" --runtime-mode-ceiling "$CEILING"; CEILING_RESULT=applied; fi
-  OUTPUT="$("$RUNNER_FILE" "$@")"
-  printf 'GOAT_CEILING=%s\\n%s\\n' "$CEILING_RESULT" "$OUTPUT"
-elif [ -n "$CEILING" ] && OUTPUT="$("$RUNNER_FILE" "$@" --runtime-mode-ceiling "$CEILING" 2>/dev/null)"; then
-  printf 'GOAT_CEILING=applied\\n%s\\n' "$OUTPUT"
-else
-  recheck_selected_before_use
-  OUTPUT="$("$RUNNER_FILE" "$@")"
-  printf 'GOAT_CEILING=default\\n%s\\n' "$OUTPUT"
-fi
-`;
-
-const REMOTE_CLIENT_SESSION_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-DEFAULT_SERVER_HOME="$HOME/.goat"
-@@GOAT_RUNNER_SETUP@@
-recheck_selected_before_use
-"$RUNNER_FILE" auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject @@GOAT_SUBJECT@@ @@GOAT_SCOPES@@ --ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
 `;
 
 const REMOTE_STOP_SCRIPT = `set -eu
@@ -2948,1545 +1372,38 @@ export function buildRemoteLaunchScript(
   });
 }
 
-export function buildRemoteMcpSessionScript(
-  stateKey: string,
-  options: RemoteMcpClientSessionOptions,
-  input?: RemoteGoatRunnerOptions,
-  selection = requestedRuntime(input),
-): string {
-  return applyScriptPlaceholders(REMOTE_MCP_SESSION_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_TTL: shellSingleQuote(options.ttl),
-    GOAT_LABEL: shellSingleQuote(options.label),
-    GOAT_CEILING: shellSingleQuote(options.runtimeModeCeiling ?? ""),
-    GOAT_MEMORY_SCOPES: (options.memoryScopes?.length ?? 0) > 0 ? "required" : "none",
-    GOAT_EXTRA_SCOPES:
-      (options.approvals === true ? "--scope orchestration:approve " : "") +
-      (options.providersManage === true ? "--scope providers:manage " : "") +
-      (options.settingsWrite === true ? "--scope settings:write " : "") +
-      (options.memoryScopes ?? []).map((scope) => `--scope ${shellSingleQuote(scope)} `).join(""),
-    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
-      ...selection,
-      mayUpgradeOwnedServer: false,
-    }),
-  });
-}
+// GOAT runtime provisioning lives in runtimeProvisioning.ts and embeds the runner built above.
+export const {
+  buildRemoteGoatUploadInstallerScript,
+  buildRemoteHostDownloadScript,
+  buildRemoteUploadScript,
+  prepareRemoteRuntime,
+} = makeRuntimeProvisioning(buildRemoteGoatRunnerScript);
+export { buildRemoteRuntimeProbeScript, remoteUploadCommand };
 
-export function buildRemoteClientSessionScript(
-  stateKey: string,
-  options: RemoteClientSessionOptions,
-  input?: RemoteGoatRunnerOptions,
-  selection = requestedRuntime(input),
-): string {
-  if (options.scopes.length === 0) {
-    throw new Error("A remote client session requires explicit scopes.");
-  }
-  if (options.subject === "mcp-client") {
-    throw new Error("The mcp-client subject cannot access client HTTP or WebSocket endpoints.");
-  }
-  return applyScriptPlaceholders(REMOTE_CLIENT_SESSION_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_SUBJECT: shellSingleQuote(options.subject),
-    GOAT_SCOPES: options.scopes.map((scope) => `--scope ${shellSingleQuote(scope)}`).join(" "),
-    GOAT_TTL: shellSingleQuote(options.ttl),
-    GOAT_LABEL: shellSingleQuote(options.label),
-    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
-      ...selection,
-      mayUpgradeOwnedServer: false,
-    }),
-  });
-}
-
-export const decodeRemoteClientSessionOutput = Effect.fn(
-  "ssh/tunnel.decodeRemoteClientSessionOutput",
-)(function* (stdout: string, requestedScopes: ReadonlyArray<AuthEnvironmentScope>) {
-  const session = yield* decodeRemoteJsonOutput(stdout, decodeRemoteClientSessionResult).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SshPairingError({
-          message: "The remote GOAT CLI did not return a client session with explicit scopes.",
-          stdout,
-          cause,
-        }),
-    ),
-  );
-  if (session.token.trim().length === 0) {
-    return yield* new SshPairingError({
-      message: "The remote GOAT CLI returned an empty client session token.",
-      stdout,
-    });
-  }
-  const requested = new Set(requestedScopes);
-  const granted = new Set(session.scopes);
-  if (
-    requested.size === 0 ||
-    granted.size !== requested.size ||
-    !session.scopes.every((scope) => requested.has(scope))
-  ) {
-    return yield* new SshPairingError({
-      message: "The remote GOAT CLI returned client session scopes that differ from the request.",
-      stdout,
-    });
-  }
-  return {
-    token: session.token,
-    expiresAt: session.expiresAt ?? null,
-    scopes: session.scopes,
-  } satisfies RemoteClientSession;
-});
-
-/** The session script's refusal when the remote CLI cannot issue requested memory scopes. */
-const MEMORY_SCOPES_UNSUPPORTED = /^GOAT_SESSION_ERROR=memory_scopes_unsupported runtime=(\S+)$/m;
-
-/** Turns that refusal into the error a user reads, with what will or should happen next. */
-const memoryScopesUnsupportedError = (stdout: string, alias: string, remedy: string) => {
-  const runtime = MEMORY_SCOPES_UNSUPPORTED.exec(stdout)?.[1];
-  return runtime === undefined
-    ? undefined
-    : new SshPairingError({
-        reason: "memory-scopes-unsupported",
-        message: `GOAT ${runtime} on ${alias} cannot grant memory access to tasks. ${remedy}`,
-        stdout,
-      });
+// GOAT remote MCP and client sessions live in remoteSessions.ts; they reuse the setup above.
+const {
+  buildRemoteClientSessionScript,
+  buildRemoteMcpSessionScript,
+  buildRemotePairingScript,
+  issueRemoteClientSession,
+  issueRemoteMcpClientSession,
+  issueRemotePairingToken,
+} = makeRemoteSessions({ buildRemoteRunnerSetupScript, prepareRemoteRuntime });
+export {
+  buildRemoteClientSessionScript,
+  buildRemoteMcpSessionScript,
+  buildRemotePairingScript,
+  issueRemoteMcpClientSession,
+  issueRemotePairingToken,
 };
-
-/** Reads the remote session script's output: a ceiling marker line, then the CLI's JSON. */
-export const decodeRemoteMcpSessionOutput = Effect.fn("ssh/tunnel.decodeRemoteMcpSessionOutput")(
-  function* (stdout: string) {
-    const marker = /^(?:GOAT|T3)_CEILING=(applied|default)$/mu.exec(stdout);
-    const session = yield* decodeRemoteJsonOutput(
-      marker === null ? stdout : stdout.slice(marker.index + marker[0].length),
-      decodeRemoteMcpSessionResult,
-    );
-    return {
-      token: session.token,
-      expiresAt: session.expiresAt ?? null,
-      runtimeModeCeilingApplied: marker?.[1] === "applied",
-    } satisfies RemoteMcpClientSession;
-  },
-);
-
-export function buildRemotePairingScript(
-  stateKey: string,
-  input?: RemoteGoatRunnerOptions,
-  selection = requestedRuntime(input),
-): string {
-  return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
-      ...selection,
-      mayUpgradeOwnedServer: false,
-    }),
-  });
-}
-
-/**
- * Installers are transient copies of the runner with its fetch block swapped out, so the
- * managed run-t3.sh bytes (and the retained-runner identity built on them) never change.
- */
-function replaceRunnerAcquisitionBlock(script: string, replace: (block: string) => string): string {
-  const startAnchor = '  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS"';
-  const endAnchor = "  if command -v sha256sum >/dev/null 2>&1; then";
-  const start = script.indexOf(startAnchor);
-  const end = script.indexOf(endAnchor);
-  if (
-    start < 0 ||
-    end <= start ||
-    script.indexOf(startAnchor, start + 1) !== -1 ||
-    script.indexOf(endAnchor, end + 1) !== -1
-  ) {
-    throw new SshLaunchError({ message: "acquisition block no longer matches", stdout: "" });
-  }
-  return script.slice(0, start) + replace(script.slice(start, end)) + script.slice(end);
-}
-
-export function buildRemoteGoatUploadInstallerScript(
-  input: RemoteGoatRunnerOptions,
-  sha256: string,
-): string {
-  if (
-    isNodeScriptRunner(input) ||
-    !input.archiveVersion?.trim() ||
-    !/^[0-9a-f]{64}$/iu.test(sha256)
-  ) {
-    throw new SshLaunchError({
-      message: "Upload requires an archive version and SHA256 digest.",
-      stdout: "",
-    });
-  }
-  return replaceRunnerAcquisitionBlock(
-    buildRemoteGoatRunnerScript(input),
-    () =>
-      '  cp "$GOAT_SSH_UPLOADED_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE"\n' +
-      `  GOAT_EXPECTED='${sha256.toLowerCase()}'\n`,
-  );
-}
-
-// curl --retry and wget --tries back off only on transient failures (timeouts, 408, 429,
-// 5xx), so a 404 or a host without DNS fails at once and the client uploads instead.
-const REMOTE_HOST_FETCH_FUNCTION = `  goat_host_fetch() {
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsSL --connect-timeout 10 --retry 2 --max-time "$3" "$1" -o "$2" && return 0
-    elif command -v wget >/dev/null 2>&1; then
-      if wget --help 2>&1 | grep -q -- --retry-on-http-error; then
-        wget -q --timeout=30 --tries=3 --waitretry=2 --retry-on-http-error=408,429,500,502,503,504 "$1" -O "$2" && return 0
-      else
-        wget -q --timeout=30 --tries=3 --waitretry=2 "$1" -O "$2" && return 0
-      fi
-    else
-      printf 'Remote host needs curl or wget to download %s.\\n' "$GOAT_ARCHIVE" >&2
-      return 1
-    fi
-    printf 'Remote host could not download %s.\\n' "$1" >&2
-    return 1
-  }
-`;
-
-/**
- * Installs the requested published release on the host from its own network, verified
- * against the release's SHA256SUMS like every HTTPS acquisition, and exits after
- * `goat --version` without starting a server. Launch then finds the runtime ready.
- */
-export function buildRemoteHostDownloadScript(input: RemoteGoatRunnerOptions): string {
-  if (isNodeScriptRunner(input) || !input.archiveVersion?.trim()) {
-    throw new SshLaunchError({
-      message: "Host download requires an archive version.",
-      stdout: "",
-    });
-  }
-  return (
-    "set -- --version\n" +
-    replaceRunnerAcquisitionBlock(
-      buildRemoteGoatRunnerScript(input),
-      (block) =>
-        REMOTE_HOST_FETCH_FUNCTION + block.replaceAll('  goat_fetch "', '  goat_host_fetch "'),
-    )
-  );
-}
-
-export function buildRemoteUploadScript(input: RemoteGoatRunnerOptions, sha256: string): string {
-  const { archiveSource, ...runner } = input;
-  const installer = buildRemoteGoatUploadInstallerScript(runner, sha256);
-  return `set -eu
-umask 077
-mkdir -p "$HOME/.goat/runtime/goat/versions"
-upload_dir="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.upload-XXXXXX")"
-trap 'rm -rf "$upload_dir"' EXIT
-trap 'exit 1' HUP INT TERM
-cat > "$upload_dir/archive.tar.gz"
-export GOAT_SSH_UPLOADED_ARCHIVE="$upload_dir/archive.tar.gz"
-export GOAT_SSH_ARCHIVE_SOURCE=${shellSingleQuote(archiveSource ?? "cache")}
-sh -c ${shellSingleQuote(installer)} -- --version
-`;
-}
-
-/**
- * The SSH invocation that runs the upload script with the archive on stdin. Windows OpenSSH
- * truncates a remote command near 8 KiB, so a Windows host reads the script from the front of
- * stdin, ahead of the archive. dd reads it a byte at a time: a buffered reader such as BSD head
- * would also consume the start of the archive.
- */
-export function remoteUploadCommand(
-  script: string,
-  archive: Uint8Array,
-  platform: "darwin" | "linux" | "win32",
-): {
-  readonly remoteCommandArgs: ReadonlyArray<string>;
-  readonly stdin: Uint8Array;
-  readonly archiveOffset: number;
-  readonly archiveLength: number;
-} {
-  if (platform !== "win32") {
-    return {
-      remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
-      stdin: archive,
-      archiveOffset: 0,
-      archiveLength: archive.byteLength,
-    };
-  }
-  const scriptBytes = new TextEncoder().encode(script);
-  const stdin = new Uint8Array(scriptBytes.byteLength + archive.byteLength);
-  stdin.set(scriptBytes);
-  stdin.set(archive, scriptBytes.byteLength);
-  const bootstrap = `upload_script="$(mktemp)" && dd bs=1 count=${scriptBytes.byteLength} of="$upload_script" 2>/dev/null && sh "$upload_script"; upload_status=$?; rm -f "$upload_script"; exit "$upload_status"`;
-  return {
-    remoteCommandArgs: ["sh", "-c", shellSingleQuote(bootstrap)],
-    stdin,
-    archiveOffset: scriptBytes.byteLength,
-    archiveLength: archive.byteLength,
-  };
-}
-
-export function buildRemoteRuntimeProbeScript(
-  version: string,
-  stateKey?: string,
-  _keepExistingRunner = false,
-  recordReconnect = false,
-): string {
-  return `set -eu
-V=${shellSingleQuote(version)}
-state_key=${shellSingleQuote(stateKey ?? "")}
-state="$HOME/.goat/ssh-launch/$state_key"
-runtime_file="$HOME/.goat/userdata/server-runtime.json"
-${REMOTE_PROTOCOL_TOKEN_SCRIPT}
-prune_removed_facts
-ready_version() {
-  valid_version "$1" && [ -x "$HOME/.goat/runtime/goat/versions/$1/goat" ] &&
-    [ "$(cat "$HOME/.goat/runtime/goat/versions/$1/.install-complete" 2>/dev/null)" = "$1" ]
-}
-signals_json() {
-  # Positional parameters are scoped to this function, not the enclosing script.
-  version="$1"; ssh="$2"; orch="$3"
-  valid_version "$version" || return 1
-  fields=
-  for pair in "sshRuntimeProtocolVersion:$ssh" "orchestrationProtocolVersion:$orch"; do
-    key="\${pair%%:*}"; value="\${pair#*:}"
-    if [ "$value" = unknown ]; then continue; fi
-    case "$value" in ''|*[!0-9]*) return 1 ;; esac
-    valid_positive "$value" || return 1
-    fields="$fields,\\"$key\\":$value"
-  done
-  printf '{"serverVersion":"%s"%s}' "$version" "$fields"
-}
-binary_json() {
-  v="$1"; exe="$HOME/.goat/runtime/goat/versions/$v/goat"
-  if ! ready_version "$v" || [ "$(exec_fact version "$exe" --version 2>/dev/null || true)" != "goat v$v" ]; then return 1; fi
-  if own="$(exec_fact own "$exe" __ssh-helper protocol --shell 2>/dev/null)"; then
-    set -f; set -- $own
-    if ! valid_own_tokens "$@" || [ "$1" != "$v" ]; then printf '{"serverVersion":"%s","invalid":true}' "$v"; return; fi
-    if signals="$(signals_json "$1" "$2" "$3")"; then printf '%s' "$signals";
-    else printf '{"serverVersion":"%s","invalid":true}' "$v"; fi
-  else
-    # Exact legacy fallback has independent --version evidence above.
-    printf '{"serverVersion":"%s"}' "$v"
-  fi
-}
-${REMOTE_RUNNER_HINT_SCRIPT}
-${
-  recordReconnect
-    ? `# Capturing a baseline cannot help until the executable and live process can be keyed.
-if [ "\${1:-}" = capture ] &&
-   { [ ! -f "$state/identity" ] || ! live_fact_key "$state/run-t3.sh" "$runtime_file" "$state/port" "$state/pid"; }; then
-  exit 1
-fi
-`
-    : ""
-}
-retained_version=
-retained_sha256=
-if [ -n "$state_key" ] && [ -f "$state/run-t3.sh" ]; then
-  retained_sha256="$(runner_sha256 "$state/run-t3.sh")" || exit 1
-  node_path="$(read_runner_hint "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})"
-  if [ -z "$node_path" ]; then
-    retained_version="$(read_runner_hint "$state/run-t3.sh" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})"
-  fi
-fi
-retained_fields=
-# A published fallback that has not yet served (pending) or failed verification (rejected).
-# Any marker GOAT cannot read still holds the version.
-held_of() {
-  held_file="$HOME/.goat/runtime/goat/held/$1"
-  [ -e "$held_file" ] || [ -L "$held_file" ] || return 1
-  case "$(cat "$held_file" 2>/dev/null || true)" in rejected) printf rejected ;; *) printf pending ;; esac
-}
-if [ -n "$retained_sha256" ]; then
-  retained_fields="$(printf ',"retainedRunnerSha256":"%s"' "$retained_sha256")"
-fi
-if ready_version "$retained_version"; then
-  retained_signals="$(binary_json "$retained_version" || true)"
-  if [ -n "$retained_signals" ]; then
-    [ "$(runner_sha256 "$state/run-t3.sh")" = "$retained_sha256" ] || {
-      printf 'Retained GOAT runner changed during probe; reconnect.\\n' >&2; exit 1;
-    }
-    retained_fields="$(printf ',"retained":"ready","retainedVersion":"%s","retainedSignals":%s,"retainedRunnerSha256":"%s"' "$retained_version" "$retained_signals" "$retained_sha256")"
-    if retained_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$retained_version/goat")"; then
-      retained_fields="$retained_fields,\\"retainedCommitTime\\":$retained_commit"
-    fi
-    if [ "$retained_version" != "$V" ] && lacks_memory_scopes "$HOME/.goat/runtime/goat/versions/$retained_version/goat"; then
-      retained_fields="$retained_fields,\\"retainedLacksMemoryScopes\\":true"
-    fi
-    if retained_held="$(held_of "$retained_version")"; then
-      retained_fields="$retained_fields,\\"retainedHeld\\":\\"$retained_held\\""
-    fi
-  fi
-fi
-# Records pin executable identity. Unrecorded installs must prove their exact version and both
-# protocols themselves; launch re-verifies the executable SHA captured by this probe.
-installed_candidates=
-installed_versions=
-installed_collected=0
-# Discovery used to run here; it keeps the glob setting it would have had at this point.
-case "$-" in *f*) installed_noglob=1 ;; *) installed_noglob=0 ;; esac
-# Hashing and asking every recorded install costs seconds, and only a host with no live server
-# uses the result (to fall back when this app's runtime cannot be installed), so it runs on demand.
-collect_installed_candidates() {
-  [ "$installed_collected" = 0 ] || return 0
-  installed_collected=1
-  case "$-" in *f*) caller_noglob=1 ;; *) caller_noglob=0 ;; esac
-  if [ "$installed_noglob" = 1 ]; then set -f; else set +f; fi
-  record_list="$(ls -t "$HOME/.goat/runtime/goat/versions/"*/.install-record 2>/dev/null | head -n 8)"
-  old_ifs="$IFS"; IFS='
-'
-  for record in $record_list; do
-    IFS="$old_ifs"
-    dir="\${record%/.install-record}"; recorded_version="\${dir##*/}"
-    valid_version "$recorded_version" || continue
-    [ "$recorded_version" != "$retained_version" ] || continue
-    [ ! -L "$dir" ] && [ ! -L "$record" ] && [ ! -L "$dir/goat" ] || continue
-    read -r record_version archive_sha executable_sha record_source record_extra < "$record" || continue
-    [ "$record_version" = "$recorded_version" ] && [ -z "$record_extra" ] || continue
-    case "$record_source" in bundle|cache|mirror|https|gh) ;; *) continue ;; esac
-    printf '%s\\n' "$archive_sha" "$executable_sha" | LC_ALL=C grep -Eqv '^[0-9a-f]{64}$' && continue
-    [ "$(runner_sha256 "$dir/goat")" = "$executable_sha" ] || continue
-    candidate_signals="$(binary_json "$recorded_version" || true)"
-    [ -n "$candidate_signals" ] || continue
-    candidate_fields="$(printf '{"version":"%s","signals":%s,"executableSha256":"%s"' "$recorded_version" "$candidate_signals" "$executable_sha")"
-    if candidate_commit="$(build_commit_time "$dir/goat")"; then
-      candidate_fields="$candidate_fields,\\"commitTime\\":$candidate_commit"
-    fi
-    if held_state="$(held_of "$recorded_version")"; then
-      candidate_fields="$candidate_fields,\\"held\\":\\"$held_state\\""
-    fi
-    installed_versions="$installed_versions $recorded_version"
-    installed_candidates="$installed_candidates\${installed_candidates:+,}$candidate_fields}"
-  done
-  if [ "$installed_noglob" = 1 ]; then set -f; else set +f; fi
-  marker_list="$(ls -t "$HOME/.goat/runtime/goat/versions/"*/.install-complete 2>/dev/null || true)"
-  IFS='
-'
-  eligible=0
-  for marker in $marker_list; do
-    IFS="$old_ifs"
-    dir="\${marker%/.install-complete}"; candidate_version="\${dir##*/}"
-    [ ! -e "$dir/.install-record" ] && [ ! -L "$dir/.install-record" ] || continue
-    [ ! -L "$dir" ] && [ ! -L "$marker" ] && [ ! -L "$dir/goat" ] || continue
-    [ "$candidate_version" != "$retained_version" ] || continue
-    # Builtin exclusions first: valid_version spawns grep, and recorded installs can be numerous.
-    valid_version "$candidate_version" || continue
-    ready_version "$candidate_version" || continue
-    case " $installed_versions " in *" $candidate_version "*) continue ;; esac
-    [ "$eligible" -lt 8 ] || break
-    eligible=$((eligible + 1))
-    candidate_signals="$(binary_json "$candidate_version" || true)"
-    case "$candidate_signals" in *'"sshRuntimeProtocolVersion"'*'"orchestrationProtocolVersion"'*) ;; *) continue ;; esac
-    case "$candidate_signals" in *'"invalid"'*) continue ;; esac
-    executable_sha="$(runner_sha256 "$dir/goat")" || continue
-    candidate_fields="$(printf '{"version":"%s","signals":%s,"executableSha256":"%s","unrecorded":true' "$candidate_version" "$candidate_signals" "$executable_sha")"
-    if candidate_commit="$(build_commit_time "$dir/goat")"; then
-      candidate_fields="$candidate_fields,\\"commitTime\\":$candidate_commit"
-    fi
-    if held_state="$(held_of "$candidate_version")"; then
-      candidate_fields="$candidate_fields,\\"held\\":\\"$held_state\\""
-    fi
-    installed_versions="$installed_versions $candidate_version"
-    installed_candidates="$installed_candidates\${installed_candidates:+,}$candidate_fields}"
-  done
-  IFS="$old_ifs"
-  if [ "$caller_noglob" = 1 ]; then set -f; else set +f; fi
-}
-# Persisted version is a path hint only. The live descriptor proves identity.
-live_hint="$(sed -n 's/.*"serverVersion"[[:space:]]*:[[:space:]]*"\\([^" ]*\\)".*/\\1/p' "$runtime_file" 2>/dev/null || true)"
-live_fields=
-live_owned=false
-live_status=
-identity_absent=false
-if [ -n "$state_key" ] && [ ! -e "$state/identity" ] && [ ! -L "$state/identity" ]; then identity_absent=true; fi
-# Succeeds once the helper of installed version $1 answered for the live server.
-probe_live() {
-  candidate="$1"
-  ready_version "$candidate" || return 1
-  exe="$HOME/.goat/runtime/goat/versions/$candidate/goat"
-  live="$(live_fact "$exe" "$runtime_file" "$state/port" "$state/pid" 2>/dev/null)" || return 1
-  set -f; set -- $live
-  if ! valid_live_tokens "$@"; then
-    printf 'Malformed live GOAT protocol tokens; fix the remote helper and reconnect.\\n' >&2; exit 1
-  fi
-  live_status="$1"
-  live_fields="$(printf ',"liveStatus":"%s"' "$1")"
-  if [ "$1" = live ] && valid_positive "$5" &&
-     [ "$(cat "$state/managed" 2>/dev/null || true)" = managed ] &&
-     [ "$(cat "$state/pid" 2>/dev/null || true)" = "$5" ] &&
-     [ "$(cat "$state/port" 2>/dev/null || true)" = "$6" ]; then live_owned=true; fi
-  if [ "$1" = live ] && [ "$live_owned" = false ] && [ -n "$state_key" ] &&
-     managed_orphan "$5" "$6" "$2" "$state"; then
-    live_fields="$live_fields,\\"liveAdoptable\\":true"
-  fi
-  if [ "$1" = live ] && valid_version "$2"; then
-    live_version="$2"
-    live_fields="$live_fields$(printf ',"livePort":%s' "$6")"
-    live_signals="$(signals_json "$2" "$3" "$4" || true)"
-    live_binary="$(binary_json "$live_version" || true)"
-    if [ -n "$live_signals" ]; then
-      live_fields="$live_fields$(printf ',"liveVersion":"%s","liveSignals":%s' "$live_version" "$live_signals")"
-      if [ -n "$live_binary" ]; then
-        live_fields="$live_fields$(printf ',"liveBinarySignals":%s' "$live_binary")"
-        if live_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$live_version/goat")"; then
-          live_fields="$live_fields,\\"liveCommitTime\\":$live_commit"
-        fi
-        if [ "$live_version" != "$V" ] && lacks_memory_scopes "$HOME/.goat/runtime/goat/versions/$live_version/goat"; then
-          live_fields="$live_fields,\\"liveLacksMemoryScopes\\":true"
-        fi
-      fi
-    fi
-    # Only a server that drains for its own replacement may be replaced; others are attach-only.
-    if valid_port "$6" && live_compat="$(compat_fact "$exe" "$6" "$runtime_file" "$state/port" "$state/pid" "$5" 2>/dev/null)"; then
-      set -f; set -- $live_compat
-      if [ "$#" = 3 ] && [ "$2" = 1 ]; then live_fields="$live_fields,\\"liveDrain\\":true"; fi
-    fi
-  fi
-}
-live_answered=0
-for candidate in "$live_hint" "$retained_version" "$V"; do
-  if probe_live "$candidate"; then live_answered=1; break; fi
-done
-if [ "$live_answered" = 0 ]; then
-  collect_installed_candidates
-  for candidate in $installed_versions; do
-    if probe_live "$candidate"; then break; fi
-  done
-fi
-[ "$live_status" != none ] || collect_installed_candidates
-case "$(uname -s)" in
-  Darwin) platform=darwin ;; Linux) platform=linux ;; MINGW*|MSYS*|CYGWIN*) platform=win32 ;;
-  *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
-esac
-case "$(uname -m)" in
-  arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x64 ;;
-  *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -m)" >&2; exit 1 ;;
-esac
-ready=false
-if ready_version "$V"; then ready=true; fi
-${
-  recordReconnect
-    ? `# A byte-identical answer alone would miss a rebuilt binary or a changed ownership record.
-reconnect_key=
-if [ "$platform" != win32 ] && live_fact_key "$HOME/.goat/runtime/goat/versions/\${live_version:-}/goat" "$runtime_file" "$state/port" "$state/pid"; then
-  reconnect_live_key="$FACT_KEY"
-  if reconnect_runner="$(runner_sha256 "$state/run-t3.sh")" &&
-     reconnect_identity="$(runner_sha256 "$state/identity")" &&
-     reconnect_managed="$(runner_sha256 "$state/managed")"; then
-    reconnect_key="$(printf '%s' "$reconnect_live_key|$reconnect_runner|$reconnect_identity|$reconnect_managed" | runner_sha256 /dev/stdin)" || reconnect_key=
-  fi
-fi
-[ -z "$reconnect_key" ] || live_fields="$live_fields,\\"reconnectKey\\":\\"$reconnect_key\\""
-`
-    : ""
-}
-printf '{"platform":"%s","arch":"%s","ready":%s,"liveOwned":%s,"identityAbsent":%s,"installedCandidates":[%s]%s%s}\\n' "$platform" "$arch" "$ready" "$live_owned" "$identity_absent" "$installed_candidates" "$retained_fields" "$live_fields"
-`;
-}
-
-const decodeRemoteRuntimeProbeFields = Schema.decodeEffect(
-  fromLenientJson(
-    Schema.Struct({
-      platform: Schema.Literals(["darwin", "linux", "win32"]),
-      arch: Schema.Literals(["arm64", "x64"]),
-      ready: Schema.Boolean,
-      reconnectKey: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))),
-      installedCandidates: Schema.optionalKey(
-        Schema.Array(
-          Schema.Struct({
-            version: Schema.String,
-            signals: RuntimeSignals,
-            commitTime: Schema.optionalKey(Schema.Int),
-            unrecorded: Schema.optionalKey(Schema.Boolean),
-            /** A published fallback still being verified (`pending`) or refused (`rejected`). */
-            held: Schema.optionalKey(Schema.Literals(["pending", "rejected"])),
-            executableSha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
-          }),
-        ),
-      ),
-      retained: Schema.optionalKey(Schema.Literals(["ready", "missing"])),
-      retainedVersion: Schema.optionalKey(Schema.String),
-      retainedSignals: Schema.optionalKey(RuntimeSignals),
-      retainedRunnerSha256: Schema.optionalKey(
-        Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
-      ),
-      /** Commit times of the installed retained and live builds; absent for unstamped builds. */
-      retainedCommitTime: Schema.optionalKey(Schema.Int),
-      /** The installed build's CLI cannot issue memory scopes; absent when it can or is unknown. */
-      retainedLacksMemoryScopes: Schema.optionalKey(Schema.Boolean),
-      /** The retained runtime is a held published fallback; see `REMOTE_PUBLISHED_RUNTIME_GATE_SCRIPT`. */
-      retainedHeld: Schema.optionalKey(Schema.Literals(["pending", "rejected"])),
-      liveStatus: Schema.optionalKey(Schema.Literals(["none", "live", "unknown"])),
-      liveOwned: Schema.optionalKey(Schema.Boolean),
-      identityAbsent: Schema.optionalKey(Schema.Boolean),
-      liveVersion: Schema.optionalKey(Schema.String),
-      livePort: Schema.optionalKey(
-        Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
-      ),
-      liveSignals: Schema.optionalKey(RuntimeSignals),
-      liveBinarySignals: Schema.optionalKey(RuntimeSignals),
-      liveCommitTime: Schema.optionalKey(Schema.Int),
-      liveLacksMemoryScopes: Schema.optionalKey(Schema.Boolean),
-      /** The live server drains for a replacement. Without it the client only attaches. */
-      liveDrain: Schema.optionalKey(Schema.Boolean),
-      /** The live server is GOAT's managed runtime whose launch records were lost; see `managed_orphan`. */
-      liveAdoptable: Schema.optionalKey(Schema.Boolean),
-    }),
-  ),
-);
-
-// An owning launch adopts such a server under the replacement lock before it acts, so every
-// decision treats it as owned. Its identity is written by that adoption, not inherited.
-type RemoteRuntimeProbe = Effect.Success<ReturnType<typeof decodeRemoteRuntimeProbeFields>>;
-const decodeRemoteRuntimeProbe = (input: string) =>
-  decodeRemoteRuntimeProbeFields(input).pipe(
-    Effect.map((probe): RemoteRuntimeProbe =>
-      probe.liveAdoptable === true && probe.liveOwned !== true
-        ? { ...probe, liveOwned: true, identityAbsent: false }
-        : probe,
-    ),
-  );
-
-/**
- * SSH failures (an unreachable host, a timeout, rejected authentication) keep their own error
- * and message, so they never read as a missing runtime archive. Anything else is wrapped with
- * its message attached.
- */
-const runtimePreparationError = (cause: unknown) =>
-  cause instanceof SshLaunchError ||
-  cause instanceof SshCommandError ||
-  cause instanceof SshInvalidTargetError
-    ? cause
-    : new SshLaunchError({
-        message: `Failed to prepare the SSH runtime archive: ${
-          cause instanceof Error ? cause.message : String(cause)
-        }`,
-        stdout: "",
-        cause,
-      });
-
-/** A failure to read or fetch the archive itself: supplying another archive is the remedy. */
-const archiveSupplyError = (cause: unknown, action?: string) => {
-  const error = runtimePreparationError(cause);
-  return error instanceof SshLaunchError && error.reason === undefined
-    ? new SshLaunchError({
-        reason: "archive-unavailable",
-        message: error.message,
-        stdout: error.stdout,
-        ...(error.acquisition === undefined ? {} : { acquisition: error.acquisition }),
-        ...(action === undefined ? {} : { action }),
-        cause: error.cause,
-      })
-    : error;
-};
-
-/**
- * Succeeds with false when the host could not install the release itself (no network,
- * a proxy, a pruned release, a checksum mismatch), so the caller uploads instead. Only a
- * definite exit falls back: after a dropped connection (255) or a timeout (no exit code)
- * the host installer may still hold the install lock, so an upload would race it.
- */
-const installOnHost = Effect.fn("ssh/tunnel.installOnHost")(function* (
-  target: DesktopSshEnvironmentTarget,
-  authOptions: SshAuth.SshAuthOptions,
-  runner: RemoteGoatRunnerOptions,
-  onPhase?: SshRuntimeProgressCallback,
-) {
-  const script = yield* Effect.try({
-    try: () => buildRemoteHostDownloadScript(runner),
-    catch: runtimePreparationError,
-  });
-  notifyRuntimePhase(target, "uploading", onPhase);
-  // A login shell picks up the user's proxy settings for curl and wget.
-  return yield* runSshCommand(target, {
-    ...authOptions,
-    remoteCommandArgs: ["sh", "-l", "-s"],
-    stdin: script,
-    timeoutStage: "runtime-install",
-    timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
-  }).pipe(
-    Effect.as(true),
-    Effect.catchTags({
-      SshCommandError: (error) =>
-        error.exitCode === null || error.exitCode === 255
-          ? Effect.fail(error)
-          : Effect.logWarning("ssh.runtime.host-download.failed", {
-              ...sshTargetLogFields(target),
-              version: runner.archiveVersion,
-              exitCode: error.exitCode,
-              reason: error.message,
-            }).pipe(Effect.as(false)),
-    }),
-  );
-});
-
-/**
- * `compareRuntimeBuilds` for runtimes found on a host. Between a plain release and a prerelease
- * the commit time decides, and a plain build without one predates stamping, so it is older.
- * GOAT has only published prereleases, so a plain `0.1.1` on a host is a leftover from an older
- * install. It sorts above every `0.1.0-nightly.*` yet lacks their migrations, so starting it
- * against their database fails every launch.
- */
-const compareHostRuntimeBuilds = (left: RuntimeBuild, right: RuntimeBuild): number | undefined => {
-  const leftParsed = parseSemver(left.version);
-  const rightParsed = parseSemver(right.version);
-  const leftPlain = leftParsed?.prerelease.length === 0;
-  if (
-    leftParsed === null ||
-    rightParsed === null ||
-    leftPlain === (rightParsed.prerelease.length === 0)
-  )
-    return compareRuntimeBuilds(left, right);
-  const [plain, prerelease] = leftPlain ? [left, right] : [right, left];
-  if (prerelease.commitTime === undefined) return compareRuntimeBuilds(left, right);
-  const plainNewer = plain.commitTime === undefined ? -1 : plain.commitTime - prerelease.commitTime;
-  if (plainNewer === 0) return compareRuntimeBuilds(left, right);
-  return leftPlain ? plainNewer : -plainNewer;
-};
-
-export const prepareRemoteRuntime = (
-  target: DesktopSshEnvironmentTarget,
-  authOptions: SshAuth.SshAuthOptions,
-  runner?: RemoteGoatRunnerOptions,
-  stateKey?: string,
-  owningLaunch = false,
-  onPhase?: SshRuntimeProgressCallback,
-  observedProbe?: string,
-) =>
-  Effect.gen(function* () {
-    let exact = requestedRuntime(runner);
-    if (isNodeScriptRunner(runner)) return exact;
-    const directory = runner?.archiveDirectory?.trim() ?? "";
-    const bundleDirectory = runner?.bundledArchiveDirectory?.trim() ?? "";
-    const mirror = runner?.releaseBaseUrl?.trim() ?? "";
-    // Observe a compatible installed runtime before any acquisition, including mirrors.
-    const version = runner?.archiveVersion?.trim() ?? "";
-    yield* Effect.annotateCurrentSpan({
-      "ssh.target": target.alias,
-      "goat.runtime.version": version,
-    });
-    yield* Effect.try({
-      try: () => buildRemoteGoatRunnerScript(runner),
-      catch: runtimePreparationError,
-    });
-    notifyRuntimePhase(target, "checking", onPhase);
-    const result =
-      observedProbe === undefined
-        ? yield* runSshCommand(target, {
-            ...authOptions,
-            remoteCommandArgs: ["sh", "-l", "-s"],
-            stdin: buildRemoteRuntimeProbeScript(
-              version,
-              stateKey,
-              runner?.keepExistingRunner ?? false,
-            ),
-          }).pipe(Effect.mapError(runtimePreparationError))
-        : { stdout: observedProbe };
-    const probe = yield* decodeRemoteJsonOutput(result.stdout, decodeRemoteRuntimeProbe).pipe(
-      Effect.mapError(runtimePreparationError),
-    );
-    exact = { ...exact, hostPlatform: probe.platform };
-    // Every replace, refresh, and upgrade below needs a proven order; `undefined` means none,
-    // and then the host keeps what it runs or has installed (see `compareRuntimeBuilds`).
-    const requestedBuild = { version, commitTime: runner?.archiveCommitTime };
-    const liveOrder =
-      probe.liveVersion === undefined
-        ? undefined
-        : compareRuntimeBuilds(
-            { version: probe.liveVersion, commitTime: probe.liveCommitTime },
-            requestedBuild,
-          );
-    const retainedOrder =
-      probe.retainedVersion === undefined
-        ? undefined
-        : compareHostRuntimeBuilds(
-            { version: probe.retainedVersion, commitTime: probe.retainedCommitTime },
-            requestedBuild,
-          );
-    const liveCompatible =
-      probe.liveVersion !== undefined &&
-      probe.liveSignals !== undefined &&
-      probe.liveBinarySignals !== undefined &&
-      probe.liveSignals.serverVersion === probe.liveVersion &&
-      probe.liveBinarySignals.serverVersion === probe.liveVersion &&
-      matchesSignals(probe.liveSignals, version) &&
-      matchesSignals(probe.liveBinarySignals, version);
-    if (
-      owningLaunch &&
-      probe.liveVersion !== undefined &&
-      !liveCompatible &&
-      liveOrder !== undefined &&
-      liveOrder > 0
-    ) {
-      return yield* new SshLaunchError({
-        reason: "runtime-newer",
-        message: "Remote runtime is newer than this app; update the app.",
-        stdout: "",
-      });
-    }
-    if (
-      owningLaunch &&
-      exact.mayUpgradeOwnedServer &&
-      probe.liveStatus === "live" &&
-      probe.liveVersion !== undefined &&
-      !liveCompatible &&
-      liveOrder === undefined
-    ) {
-      return yield* new SshLaunchError({
-        message: `Remote runtime GOAT ${probe.liveVersion} cannot be ordered against this app (GOAT ${version}); it was left running. Stop it on the remote host when its work is done, then reconnect.`,
-        stdout: "",
-      });
-    }
-    const retainedCompatible =
-      probe.liveStatus === "none" &&
-      probe.retained === "ready" &&
-      probe.retainedVersion !== undefined &&
-      probe.retainedSignals !== undefined &&
-      probe.retainedRunnerSha256 !== undefined &&
-      probe.retainedSignals.serverVersion === probe.retainedVersion &&
-      matchesSignals(probe.retainedSignals, version) &&
-      // A held fallback runs only through the published path, which rechecks the host's data.
-      probe.retainedHeld === undefined;
-    // No server runs, so no thread can be interrupted: an owning client installs
-    // its own release instead of restarting an older retained one. A retained
-    // build without a commit time predates stamping, so a stamped client counts it
-    // older; only here, where nothing runs, so one manual stop moves such a host on.
-    // It keeps the retained runtime when that one is newer or of unknown order, or
-    // when the requested archive cannot be acquired (handled below, with the reason logged).
-    const retainedPredatesStamps =
-      retainedOrder === undefined &&
-      probe.retainedCommitTime === undefined &&
-      runner?.archiveCommitTime !== undefined;
-    // A runtime of unknown order whose CLI cannot issue memory scopes is replaced as if older:
-    // keeping it would fail every memory task on this host until someone stops it by hand.
-    const retainedLacksCapability =
-      retainedOrder === undefined && probe.retainedLacksMemoryScopes === true;
-    const liveLacksCapability = liveOrder === undefined && probe.liveLacksMemoryScopes === true;
-    const upgradeRetained =
-      owningLaunch &&
-      exact.mayUpgradeOwnedServer &&
-      retainedCompatible &&
-      probe.retainedVersion !== undefined &&
-      ((retainedOrder !== undefined && retainedOrder < 0) ||
-        retainedPredatesStamps ||
-        retainedLacksCapability);
-    const adoptLegacy =
-      owningLaunch &&
-      exact.mayUpgradeOwnedServer &&
-      probe.liveDrain === true &&
-      probe.identityAbsent === true &&
-      !(liveCompatible && (liveOrder === undefined || liveOrder > 0)) &&
-      (probe.liveStatus === "unknown" || (probe.liveStatus === "live" && probe.liveOwned === true));
-    const refreshIfIdle =
-      owningLaunch &&
-      exact.mayUpgradeOwnedServer &&
-      runner?.refreshOwnedRuntimeOnFirstConnection === true &&
-      liveCompatible &&
-      probe.liveOwned === true &&
-      probe.identityAbsent !== true &&
-      ((liveOrder !== undefined && liveOrder < 0) || liveLacksCapability);
-    const unorderedVersion =
-      liveCompatible && liveOrder === undefined && !refreshIfIdle
-        ? probe.liveVersion
-        : probe.liveStatus === "none" &&
-            retainedCompatible &&
-            !upgradeRetained &&
-            retainedOrder === undefined
-          ? probe.retainedVersion
-          : undefined;
-    if (owningLaunch && exact.mayUpgradeOwnedServer && unorderedVersion !== undefined) {
-      yield* Effect.logInfo("ssh.runtime.upgrade.skipped", {
-        ...sshTargetLogFields(target),
-        installedVersion: unorderedVersion,
-        requestedVersion: version,
-        reason: liveLacksCapability
-          ? `GOAT ${unorderedVersion} cannot issue memory-scoped sessions, but this connection cannot replace it (it cannot drain, another client owns it, or this app already decided on it), so it is kept and memory tasks on this host fail until it is stopped.`
-          : `GOAT ${unorderedVersion} and ${version} have no provable build order (a build without a commit time, or versions that only differ by sha or train), so the installed ${unorderedVersion} is kept.`,
-      });
-    }
-    if (
-      owningLaunch &&
-      ((refreshIfIdle && liveLacksCapability) || (upgradeRetained && retainedLacksCapability))
-    ) {
-      yield* Effect.logInfo("ssh.runtime.upgrade.capability", {
-        ...sshTargetLogFields(target),
-        installedVersion: refreshIfIdle ? probe.liveVersion : probe.retainedVersion,
-        requestedVersion: version,
-        reason:
-          "The installed runtime cannot issue memory-scoped sessions, so it is replaced when idle.",
-      });
-    }
-    if (adoptLegacy || refreshIfIdle) {
-      exact = {
-        ...exact,
-        ...(refreshIfIdle ? { refreshIfIdle: true, expectedLiveVersion: probe.liveVersion } : {}),
-        ...(probe.retainedRunnerSha256 === undefined
-          ? {}
-          : { expectedLiveRunnerSha256: probe.retainedRunnerSha256 }),
-      };
-    }
-    const selectedVersion =
-      liveCompatible && !adoptLegacy && !refreshIfIdle
-        ? probe.liveVersion
-        : retainedCompatible && !upgradeRetained
-          ? probe.retainedVersion
-          : undefined;
-    const selectInstalled = (selectedVersion: string, from = probe) => {
-      const installed =
-        from.liveStatus === "none"
-          ? from.installedCandidates?.find((candidate) => candidate.version === selectedVersion)
-          : undefined;
-      const retained =
-        selectedVersion === from.retainedVersion &&
-        from.retainedSignals !== undefined &&
-        from.retainedSignals.serverVersion === selectedVersion &&
-        matchesSignals(from.retainedSignals, version) &&
-        from.retainedRunnerSha256 !== undefined;
-      return Effect.annotateCurrentSpan(
-        "goat.runtime.source",
-        retained ? "retained-runner" : installed ? "recorded-install" : "live-runtime",
-      ).pipe(
-        Effect.as({
-          ...exact,
-          version: selectedVersion,
-          source: retained ? "retained" : installed ? "installed" : "live",
-          ...(installed === undefined
-            ? {}
-            : { installedExecutableSha256: installed.executableSha256 }),
-          requireInstalled: true,
-          runner: { ...runner, archiveVersion: selectedVersion },
-          retainedRunnerSha256: retained ? (from.retainedRunnerSha256 ?? null) : null,
-          ...(from.liveStatus === "live" &&
-          (from.liveOwned !== true ||
-            liveOrder === undefined ||
-            liveOrder > 0 ||
-            (selectedVersion !== version && from.liveDrain !== true))
-            ? {
-                updateBlocked:
-                  liveOrder !== undefined && liveOrder > 0
-                    ? `${target.alias} runs a newer GOAT (${selectedVersion}). Update this app from the update button above Settings.`
-                    : `A GOAT server that this app didn't start or cannot replace is running on ${target.alias}. Stop it on the host, then reconnect.`,
-              }
-            : {}),
-        } satisfies PreparedRemoteRuntime),
-      );
-    };
-    // Install the requested release: already present, bundled, cached, or downloaded.
-    const sourcesTried: string[] = [];
-    const platformKey = cliArchivePlatformKey(probe.platform, probe.arch);
-    const source = <A, E, R>(label: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.suspend(() => {
-        sourcesTried.push(label);
-        return effect;
-      });
-    // `fallback` installs another published version only: it never reports the requested one ready.
-    const acquireVersion = (version: string, fallback = false) =>
-      Effect.gen(function* () {
-        if (!fallback && probe.ready) {
-          yield* Effect.annotateCurrentSpan("goat.runtime.source", "ready");
-          return { ...exact, requireInstalled: true };
-        }
-        if (platformKey === undefined) {
-          if (mirror !== "") {
-            sourcesTried.push("mirror");
-            yield* Effect.annotateCurrentSpan("goat.runtime.source", "download");
-            return exact;
-          }
-          const asset =
-            platformKey === undefined
-              ? `unsupported-${probe.platform}-${probe.arch}`
-              : cliArchiveFileName(version, platformKey);
-          return yield* new SshLaunchError({
-            reason: "archive-unavailable",
-            message: `Cannot acquire the SSH runtime archive (repo=${CLI_RELEASE_REPOSITORY}, tag=v${version}, asset=${asset}, archive directory=${directory || "<not configured>"}). Configure a local archive directory and use a supported SSH platform, or an explicit release mirror.`,
-            stdout: "",
-          });
-        }
-        // The host's own network is usually faster than this client's uplink, and an upload
-        // costs this client the whole archive. Unpublished builds and mirrors skip it.
-        if (
-          runner?.hostDownload === true &&
-          mirror === "" &&
-          isPublishableCliReleaseVersion(version) &&
-          (yield* source(
-            "host",
-            installOnHost(target, authOptions, { ...runner, archiveVersion: version }, onPhase),
-          ))
-        ) {
-          yield* Effect.annotateCurrentSpan("goat.runtime.source", "host-download");
-          return { ...exact, requireInstalled: true, uploaded: true };
-        }
-        const bundledArchive =
-          bundleDirectory === ""
-            ? null
-            : yield* source(
-                "bundle",
-                readLocalRuntimeArchive(bundleDirectory, version, platformKey, true),
-              ).pipe(
-                Effect.mapError((cause) =>
-                  archiveSupplyError(cause, "Reinstall this app, then reconnect."),
-                ),
-              );
-        const localArchive =
-          bundledArchive !== null || directory === ""
-            ? null
-            : yield* source("cache", readLocalRuntimeArchive(directory, version, platformKey)).pipe(
-                Effect.mapError((cause) =>
-                  archiveSupplyError(
-                    cause,
-                    `Remove ${cliArchiveFileName(version, platformKey)} from ${directory}, then reconnect.`,
-                  ),
-                ),
-              );
-        if (bundledArchive === null && localArchive === null && mirror !== "") {
-          sourcesTried.push("mirror");
-          yield* Effect.annotateCurrentSpan("goat.runtime.source", "download");
-          return exact;
-        }
-        if (bundledArchive === null && localArchive === null) {
-          const path = yield* Path.Path;
-          if (
-            directory === "" ||
-            (bundleDirectory !== "" && path.resolve(directory) === path.resolve(bundleDirectory))
-          ) {
-            return yield* new SshLaunchError({
-              reason: "archive-unavailable",
-              message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for ${CLI_RELEASE_REPOSITORY} release v${version} or rebuild the packaged archives.`,
-              stdout: "",
-              action: "Reinstall this app, then reconnect.",
-            });
-          }
-        }
-        const archive =
-          bundledArchive ??
-          localArchive ??
-          (yield* source(
-            "https",
-            downloadRuntimeArchiveWithHttps(directory, version, platformKey),
-          ).pipe(
-            Effect.catchTags({
-              RuntimeArchiveNotPublished: () =>
-                source(
-                  "gh",
-                  downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand),
-                ).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new SshLaunchError({
-                        reason: "archive-unavailable",
-                        message: `Public HTTPS release is not published and local gh acquisition failed: ${cause.message}`,
-                        stdout: "",
-                        // A published build whose archive is gone was pruned: a newer app has one.
-                        action: isPublishableCliReleaseVersion(version)
-                          ? missAction("client-too-old", "", directory)
-                          : missAction("none", cliArchiveFileName(version, platformKey), directory),
-                        cause,
-                      }),
-                  ),
-                ),
-              RuntimeArchiveNetworkError: () =>
-                source(
-                  "gh",
-                  downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand),
-                ).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new SshLaunchError({
-                        reason: "archive-unavailable",
-                        message: `Public HTTPS release download failed and local gh acquisition failed: ${cause.message}`,
-                        stdout: "",
-                        action: missAction("unreachable", "", directory),
-                        cause,
-                      }),
-                  ),
-                ),
-            }),
-            Effect.mapError(archiveSupplyError),
-          ));
-        yield* Effect.annotateCurrentSpan(
-          "goat.runtime.acquisition",
-          bundledArchive !== null ? "bundle" : localArchive !== null ? "cache" : "https-or-gh",
-        );
-        yield* Effect.annotateCurrentSpan({
-          "goat.runtime.source": "upload",
-          "goat.runtime.upload.bytes": archive.bytes.byteLength,
-          "goat.runtime.upload.sha256": archive.sha256,
-          "goat.runtime.upload.installComplete": false,
-        });
-        const script = yield* Effect.try({
-          try: () =>
-            buildRemoteUploadScript(
-              {
-                ...runner,
-                archiveVersion: version,
-                archiveSource:
-                  bundledArchive !== null
-                    ? "bundle"
-                    : localArchive !== null
-                      ? "cache"
-                      : sourcesTried.at(-1) === "gh"
-                        ? "gh"
-                        : "https",
-              },
-              archive.sha256,
-            ),
-          catch: runtimePreparationError,
-        });
-        const { archiveOffset, archiveLength, ...uploadCommand } = remoteUploadCommand(
-          script,
-          archive.bytes,
-          probe.platform,
-        );
-        notifyRuntimePhase(target, "uploading", onPhase, {
-          sentBytes: 0,
-          totalBytes: archiveLength,
-        });
-        yield* runSshCommand(target, {
-          ...authOptions,
-          ...uploadCommand,
-          onStdinProgress: (sentBytes) => {
-            if (sentBytes <= archiveOffset) return;
-            notifyRuntimePhase(target, "uploading", onPhase, {
-              sentBytes: Math.min(sentBytes - archiveOffset, archiveLength),
-              totalBytes: archiveLength,
-            });
-          },
-          timeoutStage: "runtime-install",
-          timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
-        }).pipe(
-          // A remote reader that exits early (full disk, failed checksum) fails only
-          // this upload, with the remote's own reason. A connection failure or timeout
-          // stays an SshCommandError that names the host.
-          Effect.catchTags({
-            SshCommandError: (error) =>
-              error.exitCode === null || error.exitCode === 255
-                ? Effect.fail(error)
-                : Effect.fail(
-                    new SshLaunchError({
-                      message: `Uploading the runtime archive failed (exit ${error.exitCode}): ${error.message}`,
-                      stdout: error.stdout ?? "",
-                      cause: error,
-                    }),
-                  ),
-          }),
-        );
-        yield* Effect.annotateCurrentSpan("goat.runtime.upload.installComplete", true);
-        return { ...exact, requireInstalled: true, uploaded: true };
-      }).pipe(
-        // Error.message is non-enumerable; adding acquisition context must preserve it explicitly.
-        Effect.mapError((error) =>
-          error instanceof SshLaunchError && error.reason === "archive-unavailable"
-            ? new SshLaunchError({
-                message: error.message,
-                stdout: error.stdout,
-                reason: error.reason,
-                ...(error.cause === undefined ? {} : { cause: error.cause }),
-                ...(error.action === undefined ? {} : { action: error.action }),
-                acquisition: {
-                  requestedVersion: version,
-                  platformKey: platformKey ?? `${probe.platform}-${probe.arch}`,
-                  sourcesTried: [...sourcesTried],
-                },
-              })
-            : error,
-        ),
-      );
-    const acquireRequested = acquireVersion(version);
-    if (selectedVersion !== undefined) return yield* selectInstalled(selectedVersion);
-    // Legacy ownership must be adopted through its normal replacement path;
-    // attaching without adoption would fail the launch-time identity check.
-    const fallbackToLive = probe.liveStatus === "live" && liveCompatible && !adoptLegacy;
-    let fallbackVersion = fallbackToLive
-      ? probe.liveVersion
-      : upgradeRetained
-        ? probe.retainedVersion
-        : undefined;
-    // Disk discovery is recovery only: exact acquisition and a compatible live server win.
-    if (owningLaunch && probe.liveStatus === "none") {
-      let chosen = retainedCompatible
-        ? { version: probe.retainedVersion, commitTime: probe.retainedCommitTime }
-        : undefined;
-      for (const candidate of probe.installedCandidates ?? []) {
-        if (
-          candidate.held !== undefined ||
-          candidate.signals.serverVersion !== candidate.version ||
-          !matchesSignals(candidate.signals, version) ||
-          compareHostRuntimeBuilds(candidate, requestedBuild) === undefined
-        )
-          continue;
-        if (probe.retainedVersion !== undefined) {
-          const retainedOrder = compareHostRuntimeBuilds(candidate, {
-            version: probe.retainedVersion,
-            commitTime: probe.retainedCommitTime,
-          });
-          if (retainedOrder === undefined || retainedOrder <= 0) continue;
-        }
-        const order = chosen === undefined ? 1 : compareHostRuntimeBuilds(candidate, chosen);
-        if (order !== undefined && order > 0)
-          chosen = { version: candidate.version, commitTime: candidate.commitTime };
-      }
-      if (chosen !== undefined) fallbackVersion = chosen.version;
-    }
-    if (fallbackVersion !== undefined) {
-      yield* Effect.logInfo("ssh.runtime.upgrade.start", {
-        ...sshTargetLogFields(target),
-        installedVersion: fallbackVersion,
-        requestedVersion: version,
-      });
-      return yield* acquireRequested.pipe(
-        Effect.catchTags({
-          SshLaunchError: (error) => {
-            // An unavailable archive may cancel an optional upgrade. Upload and
-            // SSH failures retain their own error instead of being hidden by reuse.
-            if (error.reason !== "archive-unavailable") return Effect.fail(error);
-            return Effect.logWarning("ssh.runtime.upgrade.skipped", {
-              ...sshTargetLogFields(target),
-              installedVersion: fallbackVersion,
-              requestedVersion: version,
-              reason: `GOAT ${version} could not be installed; using compatible GOAT ${fallbackVersion} (${fallbackToLive ? "live server" : fallbackVersion === probe.retainedVersion ? "retained runtime; no verified newer ordered candidate" : `newest verified installed runtime with proven build order${probe.installedCandidates?.find((candidate) => candidate.version === fallbackVersion)?.unrecorded ? " (unrecorded install)" : ""}`}): ${error.message}`,
-            }).pipe(
-              Effect.andThen(selectInstalled(fallbackVersion)),
-              Effect.map((selected): PreparedRemoteRuntime => {
-                const failure = archiveFailure(error);
-                const fallback = {
-                  ...selected,
-                  // Revalidate compatibility at launch, but never refresh or adopt
-                  // an installed runtime after failing to acquire its replacement.
-                  mayUpgradeOwnedServer: false,
-                  refreshIfIdle: false,
-                  ...(failure === undefined
-                    ? {}
-                    : {
-                        upgradeFailure: {
-                          ...failure,
-                          fix: {
-                            ...failure.fix,
-                            instruction: `Using compatible GOAT ${fallbackVersion}. ${failure.fix.instruction}`,
-                          },
-                        },
-                      }),
-                };
-                delete fallback.expectedLiveVersion;
-                delete fallback.expectedLiveRunnerSha256;
-                return fallback;
-              }),
-            );
-          },
-        }),
-      );
-    }
-    // A host that has never run GOAT: nothing installed, nothing running, no data. Only such a
-    // host may get a published runtime other than the requested one, because GOAT has no way
-    // to prove that an older build can read data a newer one wrote (unknown migrations only
-    // warn). Liveness the probe could not establish is never read as stopped. Held runtimes are
-    // earlier published fallbacks that never passed verification and launch.
-    const coldHost =
-      probe.liveStatus !== "live" &&
-      probe.liveStatus !== "unknown" &&
-      (probe.retainedVersion === undefined || probe.retainedHeld !== undefined) &&
-      (probe.installedCandidates ?? []).every((candidate) => candidate.held !== undefined);
-    if (
-      runner?.publishedFallback !== true ||
-      !owningLaunch ||
-      !exact.mayUpgradeOwnedServer ||
-      !coldHost ||
-      mirror !== "" ||
-      platformKey === undefined
-    )
-      return yield* acquireRequested;
-    return yield* acquireRequested.pipe(
-      Effect.catchTags({
-        SshLaunchError: (error) =>
-          error.reason === "archive-unavailable"
-            ? installPublishedRuntime(platformKey, error)
-            : Effect.fail(error),
-      }),
-    );
-
-    function installPublishedRuntime(key: CliArchivePlatformKey, requestedError: SshLaunchError) {
-      const asset = cliArchiveFileName(version, key);
-      const giveUp = (miss: PublishedRuntimeMiss, detail: string) =>
-        Effect.logWarning("ssh.runtime.published.unavailable", {
-          ...sshTargetLogFields(target),
-          requestedVersion: version,
-          miss,
-          detail,
-        }).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new SshLaunchError({
-                message: requestedError.message,
-                stdout: requestedError.stdout,
-                reason: "archive-unavailable",
-                ...(requestedError.acquisition === undefined
-                  ? {}
-                  : { acquisition: requestedError.acquisition }),
-                action: missAction(miss, asset, directory),
-                cause: requestedError,
-              }),
-            ),
-          ),
-        );
-      return Effect.gen(function* () {
-        const gate = (mode: "fresh" | "capable" | "hold" | "reject", candidate = "") =>
-          runSshCommand(target, {
-            ...authOptions,
-            remoteCommandArgs: ["sh", "-s", "--", mode, candidate],
-            stdin: buildPublishedRuntimeGateScript(stateKey ?? REMOTE_RUNTIME_STATE_KEY),
-          }).pipe(
-            Effect.map((result) => result.stdout.trim()),
-            Effect.catchTags({
-              SshCommandError: (error) =>
-                error.exitCode === null || error.exitCode === 255
-                  ? Effect.fail(error)
-                  : Effect.succeed("no"),
-            }),
-          );
-        const raced = new SshLaunchError({
-          message: `Another GOAT client set up ${target.alias} at the same time. Reconnect to use it.`,
-          stdout: "",
-        });
-        if ((yield* gate("fresh")) !== "yes")
-          return yield* giveUp("none", "The host has GOAT data but no runtime this app can start.");
-        const search = yield* findPublishedRuntime({
-          platformKey: key,
-          requestedVersion: version,
-          exclude: new Set(
-            [
-              ...(probe.installedCandidates ?? []).map((candidate) => ({
-                version: candidate.version,
-                held: candidate.held,
-              })),
-              { version: probe.retainedVersion, held: probe.retainedHeld },
-            ].flatMap((runtime) =>
-              runtime.held === "rejected" && runtime.version !== undefined ? [runtime.version] : [],
-            ),
-          ),
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.succeed({ miss: "unreachable" as const, rejected: [Cause.pretty(cause)] }),
-          ),
-        );
-        if ("miss" in search) return yield* giveUp(search.miss, search.rejected.join("; "));
-        const published = search.found;
-        yield* Effect.logInfo("ssh.runtime.published.install", {
-          ...sshTargetLogFields(target),
-          requestedVersion: version,
-          publishedVersion: published.version,
-          channel: published.channel,
-          manifest: published.manifest !== undefined,
-          rejected: search.rejected.join("; "),
-        });
-        yield* Effect.annotateCurrentSpan("goat.runtime.published", published.version);
-        // Held from before installation until launch confirms the host still has no data, so
-        // installed-runtime recovery never starts it unverified, here or from another client.
-        // "no": data appeared since the check above; "busy": another client holds the lock.
-        if ((yield* gate("hold", published.version)) !== "yes") return yield* raced;
-        yield* acquireVersion(published.version, true).pipe(
-          Effect.catchTags({
-            SshLaunchError: (error) =>
-              error.reason === "archive-unavailable"
-                ? giveUp("unreachable", error.message)
-                : Effect.fail(error),
-          }),
-        );
-        // The installed binary, not the release, has the last word: its own protocol answer,
-        // a proven build order, and positive evidence of every required capability.
-        const after = yield* runSshCommand(target, {
-          ...authOptions,
-          remoteCommandArgs: ["sh", "-l", "-s"],
-          stdin: buildRemoteRuntimeProbeScript(
-            version,
-            stateKey,
-            runner?.keepExistingRunner ?? false,
-          ),
-        }).pipe(
-          Effect.mapError(runtimePreparationError),
-          Effect.flatMap((result) =>
-            decodeRemoteJsonOutput(result.stdout, decodeRemoteRuntimeProbe),
-          ),
-          Effect.mapError(runtimePreparationError),
-        );
-        // A launch that failed after publishing the runner left this version retained.
-        const listed = [
-          ...(after.installedCandidates ?? []),
-          ...(after.retainedVersion === undefined || after.retainedSignals === undefined
-            ? []
-            : [
-                {
-                  version: after.retainedVersion,
-                  signals: after.retainedSignals,
-                  commitTime: after.retainedCommitTime,
-                  held: after.retainedHeld,
-                },
-              ]),
-        ].find((candidate) => candidate.version === published.version);
-        // Another client set the host up meanwhile, or the probe could not see the install. Neither
-        // says anything against this runtime, so it is neither rejected nor started here.
-        if (listed === undefined || after.liveStatus === "live" || after.liveStatus === "unknown")
-          return yield* raced;
-        const order = compareRuntimeBuilds(listed, requestedBuild);
-        if (
-          listed.held === "rejected" ||
-          listed.signals.serverVersion !== listed.version ||
-          !matchesSignals(listed.signals, version) ||
-          order === undefined ||
-          (yield* gate("capable", published.version)) !== "yes"
-        ) {
-          // Stays installed but held for good: recovery skips it and the search never offers it.
-          // The gate refuses once the host has data, so a runtime another client already
-          // started is never rejected.
-          yield* gate("reject", published.version);
-          return yield* giveUp(
-            "none",
-            `GOAT ${published.version} was installed but cannot serve this app (protocol, build order or capability).`,
-          );
-        }
-        const selected = yield* selectInstalled(published.version, after);
-        // Older than this app: say so and keep retrying the requested build. Newer: nothing to wait for.
-        const failure = order < 0 ? archiveFailure(requestedError) : undefined;
-        const pinned = {
-          ...selected,
-          mayUpgradeOwnedServer: false,
-          refreshIfIdle: false,
-          requireFreshHost: true,
-          ...(failure === undefined
-            ? {}
-            : {
-                upgradeFailure: {
-                  ...failure,
-                  fix: {
-                    ...failure.fix,
-                    instruction: `Using published GOAT ${published.version}. ${failure.fix.instruction}`,
-                  },
-                },
-              }),
-        };
-        delete pinned.expectedLiveVersion;
-        delete pinned.expectedLiveRunnerSha256;
-        return pinned satisfies PreparedRemoteRuntime;
-      });
-    }
-  }).pipe(
-    Effect.tapError((error) =>
-      error instanceof SshLaunchError && error.reason === "archive-unavailable"
-        ? Effect.logWarning("ssh.runtime.acquisition.failed", {
-            ...sshTargetLogFields(target),
-            requestedVersion: runner?.archiveVersion?.trim() ?? "",
-            sourcesTried: error.acquisition?.sourcesTried.join(",") ?? "",
-            detail: error.message,
-          })
-        : Effect.void,
-    ),
-    Effect.mapError((error) =>
-      error instanceof SshLaunchError
-        ? error.reason === "archive-unavailable" && error.acquisition !== undefined
-          ? new SshLaunchError({
-              ...archiveUnavailableText(
-                target.alias,
-                error,
-                runner?.archiveDirectory?.trim() ?? "",
-              ),
-              stdout: error.stdout,
-              reason: error.reason,
-              acquisition: error.acquisition,
-              cause: error,
-            })
-          : new SshLaunchError({
-              message: `Cannot prepare GOAT ${runner?.archiveVersion?.trim() || "(node-script runner)"} on ${target.alias}: ${error.message} The existing runner and server have been left unchanged.`,
-              stdout: error.stdout,
-              ...(error.reason === undefined ? {} : { reason: error.reason }),
-              ...(error.acquisition === undefined ? {} : { acquisition: error.acquisition }),
-              cause: error,
-            })
-        : error,
-    ),
-    Effect.withSpan("ssh.prepareRemoteRuntime"),
-  );
-
-/**
- * `fresh`: prints yes when the host has no GOAT database. `capable <version>`: prints yes
- * when that installed runtime's `auth session issue --help` succeeds and lists `memory:read`
- * (#285); partial output from a failing command is not evidence.
- * `hold <version>` / `reject <version>`: marks it held (`pending`) or refused for good. The
- * probe reports the mark, installed and retained recovery skip held runtimes, and launch
- * clears a `pending` mark once the server it started on a host without data is ready.
- * Marks change only under the launch's replacement lock and only while the host has no data,
- * so a setup that lost a race to another client can never hold or reject the runtime that
- * client started.
- */
-const REMOTE_PUBLISHED_RUNTIME_GATE_SCRIPT = `set -u
-DEFAULT_SERVER_HOME="$HOME/.goat"
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-has_data() {
-  for db in "$DEFAULT_SERVER_HOME/userdata/statev2.sqlite" "$DEFAULT_SERVER_HOME/userdata/state.sqlite"; do
-    if [ -e "$db" ] || [ -L "$db" ]; then return 0; fi
-  done
-  return 1
-}
-case "$1" in
-  fresh)
-    if has_data; then echo no; else echo yes; fi ;;
-  capable)
-    exe="$HOME/.goat/runtime/goat/versions/$2/goat"
-    [ -x "$exe" ] || { echo no; exit 0; }
-    scope_help="$("$exe" auth session issue --help 2>/dev/null)" || { echo no; exit 0; }
-    case "$scope_help" in *memory:read*) echo yes ;; *) echo no ;; esac ;;
-  hold | reject)
-    case "$2" in '' | */* | . | ..) exit 2 ;; esac
-    if [ "$1" = hold ]; then state=pending; else state=rejected; fi
-    mkdir -p "$STATE_DIR"
-@@GOAT_PROTOCOL_TOKENS@@
-@@GOAT_REPLACEMENT_LOCK@@
-    trap 'release_recovery_lock; release_replacement_lock' EXIT
-    if ! acquire_replacement_lock; then
-      if ! wait_for_replacement_lock || ! acquire_replacement_lock; then echo busy; exit 0; fi
-    fi
-    if has_data; then echo no; exit 0; fi
-    held_dir="$HOME/.goat/runtime/goat/held"
-    # Replace atomically: a torn write must never read as anything but held.
-    mkdir -p "$held_dir" &&
-      printf '%s\\n' "$state" > "$held_dir/.$2.$$" &&
-      mv -f "$held_dir/.$2.$$" "$held_dir/$2" && echo yes ;;
-  *) exit 2 ;;
-esac
-`;
-
-function buildPublishedRuntimeGateScript(stateKey: string): string {
-  return applyScriptPlaceholders(REMOTE_PUBLISHED_RUNTIME_GATE_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
-    GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
-  });
-}
-
-/** The single next step for a host that has no runtime this app can start. */
-function missAction(miss: PublishedRuntimeMiss, asset: string, directory: string): string {
-  switch (miss) {
-    case "unreachable":
-      return "Check that this computer can reach github.com, then reconnect.";
-    case "client-too-old":
-      return "Update this app, then reconnect.";
-    case "none":
-      return directory === ""
-        ? "Install a published GOAT release on this computer, then reconnect."
-        : `Put ${asset} in ${directory}, then reconnect.`;
-  }
-}
-
-/** One sentence for what failed and one for the fix; the acquisition detail goes to the log. */
-function archiveUnavailableText(alias: string, error: SshLaunchError, directory: string) {
-  const acquisition = error.acquisition!;
-  const key = CLI_ARCHIVE_PLATFORM_KEYS.find((candidate) => candidate === acquisition.platformKey);
-  if (key === undefined) {
-    const action = "Use Linux, an Apple Silicon Mac, or Windows.";
-    return {
-      message: `GOAT has no runtime for ${alias} (${acquisition.platformKey}). ${action}`,
-      action,
-    };
-  }
-  const action =
-    error.action ??
-    (isPublishableCliReleaseVersion(acquisition.requestedVersion)
-      ? missAction("unreachable", "", directory)
-      : missAction("none", cliArchiveFileName(acquisition.requestedVersion, key), directory));
-  return {
-    message: `No GOAT runtime for ${key} that works with this app (GOAT ${acquisition.requestedVersion}) could be installed on ${alias}. ${action}`,
-    action,
-  };
-}
+export { decodeRemoteClientSessionOutput, decodeRemoteMcpSessionOutput } from "./remoteSessions.ts";
+export type {
+  RemoteClientSession,
+  RemoteClientSessionOptions,
+  RemoteMcpClientSession,
+  RemoteMcpClientSessionOptions,
+} from "./remoteSessions.ts";
 
 const DEFAULT_STOP_WAIT_ATTEMPTS = 20;
 const DEFAULT_STOP_WAIT_INTERVAL_SECONDS = "0.1";
@@ -4655,11 +1572,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       never,
       ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
     >,
+    /** The app server refused a credential recently, so this launch goes to the managed server. */
+    skipAppServer = false,
   ): Effect.fn.Return<
     | {
         readonly status: "ready";
         readonly remotePort: number;
-        readonly remoteServerKind: "external" | "managed" | null;
+        readonly remoteServerKind: "app" | "external" | "managed" | null;
         readonly selectedRuntime: PreparedRemoteRuntime;
         readonly refresh?: "replaced";
         readonly pending?: SshRuntimePendingReplacement;
@@ -4676,6 +1595,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           ...sshRunnerLogFields(runner),
           stateKey,
         });
+        // The host's GOAT app server comes first; see appServer.ts. It is never started, stopped,
+        // replaced or updated from here, so no launch cleanup is registered for it.
+        const app: AppServerProbe =
+          skipAppServer || runner?.attachAppServer !== true
+            ? { kind: "none" }
+            : yield* restore(probeAppServer(target, input));
+        if (app.kind === "attach") return yield* appServerLaunch(target, app, runner);
         const canFoldProbe =
           previousSelection?.reconnectProbe !== undefined &&
           previousSelection.requestedVersion === runner?.archiveVersion?.trim() &&
@@ -4920,6 +1846,7 @@ if probe_output="$(reconnect_probe capture)"; then printf 'GOAT_RECONNECT_PROBE=
           selectedRuntime: {
             ...durableSelection,
             requireInstalled: !isNodeScriptRunner(selected.runner),
+            ...(app.kind === "declined" ? { appServerDeclined: true } : {}),
           },
           ...(parsed.refresh === undefined ? {} : { refresh: parsed.refresh }),
           ...(pending === undefined ? {} : { pending }),
@@ -4928,197 +1855,6 @@ if probe_output="$(reconnect_probe capture)"; then printf 'GOAT_RECONNECT_PROBE=
     );
   },
 );
-
-export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingToken")(function* (
-  target: DesktopSshEnvironmentTarget,
-  input?: SshAuth.SshAuthOptions,
-  runner?: RemoteGoatRunnerOptions,
-  prepared?: PreparedRemoteRuntime,
-): Effect.fn.Return<
-  {
-    readonly credential: string;
-  },
-  SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
-> {
-  const stateKey = REMOTE_RUNTIME_STATE_KEY;
-  yield* Effect.logDebug("ssh.remoteServer.pairingToken.start", {
-    ...sshTargetLogFields(target),
-    stateKey,
-  });
-  const selected =
-    prepared ??
-    (yield* prepareRemoteRuntime(
-      target,
-      input ?? {},
-      { ...runner, keepExistingRunner: true },
-      stateKey,
-    ));
-  const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    timeoutStage: "pairing",
-    stdin: buildRemotePairingScript(stateKey, selected.runner, {
-      ...selected,
-      mayUpgradeOwnedServer: false,
-    }),
-    ...(isNodeScriptRunner(selected.runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
-    ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
-    ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
-    ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-  });
-  if (!getLastNonEmptyOutputLine(result.stdout)) {
-    return yield* new SshPairingError({
-      message: "SSH pairing did not return a credential.",
-      stdout: result.stdout,
-    });
-  }
-  const parsed = yield* decodeRemotePairingOutput(result.stdout).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SshPairingError({
-          message: "SSH pairing returned unparseable output.",
-          stdout: result.stdout,
-          cause,
-        }),
-    ),
-  );
-  if (parsed.credential.trim().length === 0) {
-    return yield* new SshPairingError({
-      message: "SSH pairing command returned an invalid credential.",
-      stdout: result.stdout,
-    });
-  }
-  yield* Effect.logDebug("ssh.remoteServer.pairingToken.created", {
-    selectedVersion: selected.version,
-    requestedVersion: selected.requestedVersion,
-    source: selected.source,
-    ...sshTargetLogFields(target),
-    stateKey,
-  });
-  return {
-    credential: parsed.credential,
-  };
-});
-
-export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpClientSession")(
-  function* (
-    target: DesktopSshEnvironmentTarget,
-    sessionOptions: RemoteMcpClientSessionOptions,
-    input?: SshAuth.SshAuthOptions,
-    runner?: RemoteGoatRunnerOptions,
-    prepared?: PreparedRemoteRuntime,
-  ): Effect.fn.Return<
-    RemoteMcpClientSession,
-    SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
-  > {
-    const stateKey = REMOTE_RUNTIME_STATE_KEY;
-    const selected =
-      prepared ??
-      (yield* prepareRemoteRuntime(
-        target,
-        input ?? {},
-        { ...runner, keepExistingRunner: true },
-        stateKey,
-      ));
-    const result = yield* runSshCommand(target, {
-      remoteCommandArgs: ["sh", "-s"],
-      timeoutStage: "pairing",
-      stdin: buildRemoteMcpSessionScript(stateKey, sessionOptions, selected.runner, {
-        ...selected,
-        mayUpgradeOwnedServer: false,
-      }),
-      // Like pairing, this may be the first command on a cold remote.
-      ...(isNodeScriptRunner(selected.runner)
-        ? {}
-        : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
-      ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
-      ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
-      ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-    }).pipe(
-      Effect.catchTags({
-        SshCommandError: (error) =>
-          Effect.fail(
-            memoryScopesUnsupportedError(
-              error.stdout ?? "",
-              target.alias,
-              `Stop it on the remote host when its work is done, then reconnect so ${
-                selected.requestedVersion ? `GOAT ${selected.requestedVersion}` : "this app's GOAT"
-              } replaces it.`,
-            ) ?? error,
-          ),
-      }),
-    );
-    const session = yield* decodeRemoteMcpSessionOutput(result.stdout).pipe(
-      Effect.mapError(
-        (cause) =>
-          new SshPairingError({
-            message: "The remote GOAT CLI did not return an MCP session.",
-            stdout: result.stdout,
-            cause,
-          }),
-      ),
-    );
-    if (session.token.trim().length === 0) {
-      return yield* new SshPairingError({
-        message: "The remote GOAT CLI returned an empty MCP session token.",
-        stdout: result.stdout,
-      });
-    }
-    yield* Effect.logInfo("ssh.remoteServer.mcpSession.issued", {
-      selectedVersion: selected.version,
-      requestedVersion: selected.requestedVersion,
-      source: selected.source,
-      ...sshTargetLogFields(target),
-      stateKey,
-      runtimeModeCeilingApplied: session.runtimeModeCeilingApplied,
-    });
-    return session;
-  },
-);
-
-const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
-  target: DesktopSshEnvironmentTarget,
-  sessionOptions: RemoteClientSessionOptions,
-  input?: SshAuth.SshAuthOptions,
-  runner?: RemoteGoatRunnerOptions,
-  prepared?: PreparedRemoteRuntime,
-): Effect.fn.Return<
-  RemoteClientSession,
-  SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
-> {
-  const stateKey = REMOTE_RUNTIME_STATE_KEY;
-  const selected =
-    prepared ??
-    (yield* prepareRemoteRuntime(
-      target,
-      input ?? {},
-      { ...runner, keepExistingRunner: true },
-      stateKey,
-    ));
-  const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    timeoutStage: "pairing",
-    stdin: buildRemoteClientSessionScript(stateKey, sessionOptions, selected.runner, {
-      ...selected,
-      mayUpgradeOwnedServer: false,
-    }),
-    ...(isNodeScriptRunner(selected.runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
-    ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
-    ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
-    ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-  });
-  const session = yield* decodeRemoteClientSessionOutput(result.stdout, sessionOptions.scopes);
-  yield* Effect.logInfo("ssh.remoteServer.clientSession.issued", {
-    selectedVersion: selected.version,
-    requestedVersion: selected.requestedVersion,
-    source: selected.source,
-    ...sshTargetLogFields(target),
-    stateKey,
-  });
-  return session;
-});
 
 const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   target: DesktopSshEnvironmentTarget,
@@ -5182,83 +1918,6 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   return result.stdout.trim();
 });
 
-export interface SshReadinessBudget {
-  /** Bound on the first forwarded probe; each timed-out probe doubles it up to 5 s. */
-  readonly probeTimeoutMs: number;
-  /** Overall wait for the forward to answer. */
-  readonly timeoutMs: number;
-}
-
-/**
- * Readiness budget for a forward to a host whose remote launch took `launchMs`.
- * A launch is one SSH connection plus several remote round trips, so a quarter
- * of it estimates one forwarded HTTP exchange. A fast host keeps the 1 s / 20 s
- * defaults; a slow link gets longer probes and up to 60 s overall.
- */
-export function sshReadinessBudget(launchMs: number): SshReadinessBudget {
-  const clamp = (value: number, min: number, max: number) =>
-    Math.min(max, Math.max(min, Math.ceil(Number.isFinite(value) ? value : 0)));
-  return {
-    probeTimeoutMs: clamp(launchMs / 4, SSH_READY_PROBE_TIMEOUT_MS, SSH_READY_MAX_PROBE_TIMEOUT_MS),
-    timeoutMs: clamp(launchMs * 5, SSH_READY_TIMEOUT_MS, SSH_READY_MAX_TIMEOUT_MS),
-  };
-}
-
-export const waitForHttpReady = (input: {
-  readonly baseUrl: string;
-  readonly timeoutMs?: number;
-  readonly intervalMs?: number;
-  readonly probeTimeoutMs?: number;
-  readonly maxProbeTimeoutMs?: number;
-  readonly path?: string;
-}): Effect.Effect<void, SshReadinessError, HttpClient.HttpClient> =>
-  waitForHttpReadyShared({
-    baseUrl: input.baseUrl,
-    ...(input.path === undefined ? {} : { path: input.path }),
-    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-    ...(input.intervalMs === undefined ? {} : { intervalMs: input.intervalMs }),
-    probeTimeoutMs: input.probeTimeoutMs ?? SSH_READY_PROBE_TIMEOUT_MS,
-    maxProbeTimeoutMs: input.maxProbeTimeoutMs ?? SSH_READY_MAX_PROBE_TIMEOUT_MS,
-    makeError: ({ requestUrl, probeTimeoutMs, cause }) => {
-      if (typeof cause === "object" && cause !== null && "kind" in cause) {
-        const kind = (cause as { readonly kind?: unknown }).kind;
-        if (kind === "probe-timeout") {
-          return new SshReadinessError({
-            reason: "slow",
-            message: `Backend readiness probe exceeded ${probeTimeoutMs}ms at ${requestUrl}.`,
-            cause,
-          });
-        }
-        if (kind === "overall-timeout") {
-          const overall = cause as unknown as {
-            readonly baseUrl: string;
-            readonly timeoutMs: number;
-            readonly attempts: number;
-            readonly probeTimeouts: number;
-            readonly otherFailures: number;
-            readonly lastProbeTimeoutMs: number;
-            readonly lastFailure: unknown;
-          };
-          // Every check timing out means requests reached a server that answered
-          // too late; refused or failed checks mean nothing answered at all.
-          const slow = overall.probeTimeouts > 0 && overall.otherFailures === 0;
-          return new SshReadinessError({
-            reason: slow ? "slow" : "unreachable",
-            message: slow
-              ? `Timed out waiting ${overall.timeoutMs}ms for backend readiness at ${overall.baseUrl}. The SSH tunnel is open, but the GOAT server answered none of ${overall.attempts} checks within ${overall.lastProbeTimeoutMs}ms. The network to this host is too slow (high latency); GOAT will keep retrying.`
-              : `Timed out waiting ${overall.timeoutMs}ms for backend readiness at ${overall.baseUrl}. The GOAT server did not answer through the SSH tunnel; it may have stopped on the remote host.`,
-            cause: overall.lastFailure,
-          });
-        }
-      }
-      return new SshReadinessError({
-        reason: "unreachable",
-        message: `Backend readiness probe failed at ${requestUrl}.`,
-        cause,
-      });
-    },
-  });
-
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname
     .trim()
@@ -5305,29 +1964,6 @@ const existingTunnelCheck = (entry: SshTunnelEntry, minimumMs: number) => ({
   probeTimeoutMs: entry.readiness.probeTimeoutMs,
 });
 
-const decodeForwardDescriptor = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ serverVersion: Schema.optionalKey(Schema.String) })),
-);
-
-/**
- * The version the server behind an open forward reports now. A server replaced on the same
- * port (another client's update, a self-update, a manual restart) still answers the forward,
- * so readiness alone would keep reporting the version this client attached to.
- */
-const readForwardServerVersion = (entry: SshTunnelEntry) =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* client.get(
-      new URL("/.well-known/goat/environment", entry.httpBaseUrl).toString(),
-    );
-    if (response.status !== 200) return undefined;
-    return (yield* decodeForwardDescriptor(yield* response.text)).serverVersion;
-  }).pipe(
-    Effect.timeoutOption(`${entry.readiness.probeTimeoutMs} millis`),
-    Effect.map((version) => (version._tag === "Some" ? version.value : undefined)),
-    Effect.orElseSucceed(() => undefined),
-  );
-
 const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
   readonly key: string;
@@ -5337,7 +1973,7 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   readonly httpBaseUrl: string;
   readonly wsBaseUrl: string;
   readonly authOptions: SshAuth.SshAuthOptions;
-  readonly remoteServerKind: "external" | "managed" | null;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
   readonly scope: Scope.Closeable;
   readonly readiness: SshReadinessBudget;
 }): Effect.fn.Return<
@@ -5631,161 +2267,6 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
 const startSshTunnel = (input: Parameters<typeof startSshTunnelAttempt>[0]) =>
   measureSshReconnectStep("ssh/tunnel.startSshTunnel", startSshTunnelAttempt(input));
 
-function archiveFailure(error: SshLaunchError): SshHostFailure | undefined {
-  if (error.reason !== "archive-unavailable" || error.acquisition === undefined) return undefined;
-  if (error.acquisition.platformKey === "darwin-x64") {
-    return {
-      reason: "unsupported_platform",
-      fix: { actor: "human", instruction: "Use Linux, an Apple Silicon Mac, or Windows." },
-    };
-  }
-  return {
-    reason: "archive_unavailable",
-    archive: error.acquisition,
-    fix: {
-      actor: "human",
-      instruction:
-        error.action ??
-        `GOAT ${error.acquisition.requestedVersion} runtime archive is unavailable. Install a published GOAT release, or set a release mirror.`,
-    },
-  };
-}
-
-// A timeout headline and a local proxy diagnosis outrank incidental warnings
-// and OpenSSH's trailing generic closure. Only one sanitized line is public.
-function publicSshDiagnostic(error: SshEnvironmentEffectError) {
-  return (
-    sshFailureDiagnostic(
-      error.message,
-      error instanceof SshCommandError ? error.stderr : error.message,
-    )
-      // oxlint-disable-next-line no-control-regex -- strips ANSI escape sequences
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-      .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[redacted]@")
-      .replace(
-        /((?:token|password|secret|credential|authorization|api[_-]?key)[\w-]*[\s"']*[:=][\s"']*)[^\s"'&,;]+/giu,
-        "$1[redacted]",
-      )
-      .replace(
-        /((?:--)?(?:token|password|secret|credential|api[_-]?key)[\w-]*\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/giu,
-        "$1[redacted]",
-      )
-      .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
-      .replace(/\b(?:sk-|gh[opusr]_|github_pat_)[A-Za-z0-9_-]+/gu, "[redacted]")
-      .slice(0, 500)
-  );
-}
-
-function runtimeFailureResult(
-  host: string,
-  requestedVersion: string,
-  runtimeVersion: string | null,
-  error: SshEnvironmentEffectError,
-): SshHostResult {
-  const base = { host, requestedVersion, runtimeVersion };
-  const diagnostic = publicSshDiagnostic(error);
-  const evidence = error instanceof SshCommandError ? error.stderr : error.message;
-  const failed = (failure: SshHostFailure): SshHostResult => ({
-    kind: "ok",
-    status: { ...base, state: "failed", failure },
-  });
-  if (error instanceof SshLaunchError) {
-    const failure = archiveFailure(error);
-    if (failure !== undefined) return failed(failure);
-    if (error.reason === "runtime-newer") {
-      return { kind: "ok", status: { ...base, state: "update_blocked", detail: diagnostic } };
-    }
-  }
-  if (/cannot open its data because a newer GOAT build already upgraded it/iu.test(diagnostic)) {
-    return {
-      kind: "ok",
-      status: {
-        ...base,
-        state: "failed",
-        detail: diagnostic,
-        failure: {
-          reason: "operation_failed",
-          fix: {
-            actor: "human",
-            instruction: `Update this app or the GOAT runtime on ${host}, then reconnect.`,
-          },
-        },
-      },
-    };
-  }
-  const source = `${error.message}\n${evidence}`;
-  const proxy = sshLocalProxyFailure(source);
-  if (proxy !== undefined) {
-    return {
-      kind: "error",
-      code: "operation_failed",
-      message: `${host}: ${diagnostic}`,
-      fix: { actor: "human", instruction: proxy.fix },
-    };
-  }
-  if (
-    /REMOTE HOST IDENTIFICATION HAS CHANGED|host key.*changed|offending .* key/iu.test(evidence)
-  ) {
-    return failed({
-      reason: "host_key_changed",
-      fix: {
-        actor: "human",
-        instruction: "Forget the host, then add it again to review its new fingerprint.",
-        path: "ssh.host_forget",
-      },
-    });
-  }
-  if (
-    /host key verification failed|no .* host key is known|authenticity of host/iu.test(evidence)
-  ) {
-    return { kind: "ok", status: { ...base, state: "untrusted", detail: diagnostic } };
-  }
-  if (
-    error instanceof SshPasswordPromptError ||
-    sshAuthenticationFailure(source) !== undefined ||
-    /permission denied|authentication failed|SSH authentication timed out for /iu.test(diagnostic)
-  ) {
-    return { kind: "ok", status: { ...base, state: "auth_failed", detail: diagnostic } };
-  }
-  if (
-    error instanceof SshReadinessError ||
-    /GOAT.*(?:did not become ready|(?:start|launch).*timed out)/iu.test(diagnostic)
-  ) {
-    return failed({ reason: "start_timeout", fix: { actor: "agent", instruction: "Try again" } });
-  }
-  if (/Remote host .+ has no GOAT release archive\./iu.test(diagnostic)) {
-    return failed({
-      reason: "unsupported_platform",
-      fix: { actor: "human", instruction: "Use Linux, an Apple Silicon Mac, or Windows." },
-    });
-  }
-  if (
-    /Remote host is missing node on PATH|Install shasum or sha256sum|Remote host needs curl or wget|tar(?:\.exe)?:.*(?:not found|not recognized)|[/\\]tar\.exe:\s*No such file or directory|'sh' is not recognized as an internal or external command|\bsh\s*:\s*The term 'sh' is not recognized/iu.test(
-      source,
-    )
-  ) {
-    const instruction = /missing node/iu.test(source)
-      ? `Install Node on ${host} for the source runtime, then try again.`
-      : /curl or wget/iu.test(source)
-        ? `Install curl or wget on ${host}, then try again.`
-        : /'sh' is not recognized|\bsh\s*:\s*The term 'sh' is not recognized/iu.test(source)
-          ? `Install Git for Windows on ${host} and set Git Bash as the OpenSSH DefaultShell, then try again.`
-          : /tar(?:\.exe)?:/iu.test(source)
-            ? `Install tar on ${host}, then try again.`
-            : `Install sha256sum (coreutils) on ${host}, then try again.`;
-    return failed({ reason: "missing_tools", fix: { actor: "human", instruction } });
-  }
-  return {
-    kind: "error",
-    code:
-      error instanceof SshCommandError && isSshHostUnreachable(source)
-        ? "host_unreachable"
-        : "operation_failed",
-    message: `${host}: ${diagnostic}`,
-    fix: { actor: "agent", instruction: "Try again" },
-  };
-}
-
 const withSshCost = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   message: string,
@@ -5836,6 +2317,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     masters: new Map<string, SshMasterConnection>(),
   };
   const tunnels = new Map<string, SshTunnelEntry>();
+  // Until when each target skips the GOAT app server after it refused a credential.
+  const appServerRefusals = new Map<string, number>();
   // One slot per target, consumed by the next ensure attempt.
   const reconnectSelections = new Map<string, ReconnectSelection>();
   const selectionRevisions = new Map<string, number>();
@@ -5893,79 +2376,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       setup: { operationId: setup.operationId, generation: setup.generation, stage: setup.stage },
     };
   };
-  const managedAliases = new Set<string>();
-  const observedPins = new Map<string, string>();
-  const managedDirectory = Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const env = yield* Config.all({
-      home: Config.String("HOME").pipe(Config.option),
-      profile: Config.String("USERPROFILE").pipe(Config.option),
-    });
-    const home = Option.getOrUndefined(env.home) ?? Option.getOrUndefined(env.profile);
-    return home === undefined ? undefined : path.join(home, ".ssh", "goat-hosts");
-  }).pipe(Effect.orElseSucceed(() => undefined));
-  const pinError = (changed = false) =>
-    new SshCommandError({
-      command: ["ssh", "-G"],
-      exitCode: null,
-      message: changed
-        ? "Managed SSH host key changed."
-        : "Host key verification failed. Add this host again to review its fingerprint.",
-      stderr: changed
-        ? "Managed SSH host key changed."
-        : "Host key verification failed. Add this host again to review its fingerprint.",
-    });
-  const readManagedPin = Effect.fn("ssh/tunnel.readManagedPin")(
-    function* (target: DesktopSshEnvironmentTarget) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(target.alias)) return undefined;
-      const directory = yield* managedDirectory;
-      if (directory === undefined) return undefined;
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const confPath = path.join(directory, `${target.alias}.conf`);
-      if (!(yield* fs.exists(confPath))) {
-        if (managedAliases.has(target.alias)) return yield* pinError();
-        return undefined;
-      }
-      managedAliases.add(target.alias);
-      for (const file of [
-        directory,
-        confPath,
-        path.join(directory, `${target.alias}.known_hosts`),
-      ]) {
-        const linked = yield* fs.readLink(file).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        );
-        if (linked) return yield* pinError();
-      }
-      const conf = yield* fs.readFileString(confPath);
-      const knownHostsFile = path.join(directory, `${target.alias}.known_hosts`);
-      const pin = (yield* fs.readFileString(knownHostsFile)).trim();
-      const parts = pin.split(/\s+/u);
-      if (
-        parts.length !== 3 ||
-        parts[0] !== target.alias ||
-        !/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521))$/u.test(parts[1]!) ||
-        !/^[A-Za-z0-9+/]+={0,2}$/u.test(parts[2]!)
-      )
-        return yield* pinError();
-      const stat = yield* fs.stat(confPath);
-      const mtime = Option.getOrUndefined(stat.mtime);
-      if (mtime === undefined) return yield* pinError();
-      const crypto = yield* Crypto.Crypto;
-      const digest = yield* crypto.digest("SHA-256", Buffer.from(parts[2]!, "base64"));
-      return {
-        alias: target.alias,
-        confMtimeMs: mtime.getTime(),
-        fingerprint: `SHA256:${Buffer.from(digest).toString("base64").replace(/=+$/u, "")}`,
-        conf,
-        knownHostsFile,
-        algorithm: parts[1]!,
-      };
-    },
-    Effect.mapError((error) => (error instanceof SshCommandError ? error : pinError())),
-  );
+  const {
+    managedAliases,
+    observedPins,
+    managedDirectory,
+    pinError,
+    readManagedPin,
+    samePin,
+    validateManagedPin,
+  } = makeManagedTrust();
   type ManagedPin = NonNullable<Effect.Success<ReturnType<typeof readManagedPin>>>;
   const reconnectIdentity = (
     target: DesktopSshEnvironmentTarget,
@@ -5981,175 +2400,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       runner?.nodeScriptPath,
       runner?.keepExistingRunner === true,
     ]);
-  const samePin = (left: ManagedPin | undefined, right: ManagedPin | undefined) =>
-    left === undefined
-      ? right === undefined
-      : right !== undefined &&
-        left.alias === right.alias &&
-        left.fingerprint === right.fingerprint &&
-        left.confMtimeMs === right.confMtimeMs &&
-        left.conf === right.conf;
-  const validateManagedPin = Effect.fn("ssh/tunnel.validateManagedPin")(function* (
-    target: DesktopSshEnvironmentTarget,
-  ) {
-    const pin = yield* readManagedPin(target);
-    if (pin === undefined) return undefined;
-    const output = yield* runSshCommand(target, {
-      preHostArgs: ["-G"],
-      batchMode: "yes",
-      interactiveAuth: false,
-    });
-    const values = new Map<string, string[]>();
-    for (const line of output.stdout.split(/\r?\n/u)) {
-      const [name, ...rest] = line.trim().split(/\s+/u);
-      if (name)
-        values.set(name.toLowerCase(), [...(values.get(name.toLowerCase()) ?? []), rest.join(" ")]);
-    }
-    const value = (name: string) => values.get(name)?.[0];
-    const confValue = (name: string) =>
-      new RegExp(`^\\s*${name}\\s+(.+)$`, "imu").exec(pin.conf)?.[1]?.replace(/^"|"$/gu, "");
-    const algorithms = pin.algorithm === "ssh-rsa" ? "rsa-sha2-512,rsa-sha2-256" : pin.algorithm;
-    if (
-      value("hostkeyalias") !== target.alias ||
-      value("userknownhostsfile") !== pin.knownHostsFile ||
-      value("globalknownhostsfile") !== "/dev/null" ||
-      !["yes", "true"].includes(value("stricthostkeychecking") ?? "") ||
-      !["no", "false"].includes(value("updatehostkeys") ?? "") ||
-      value("hostkeyalgorithms") !== algorithms ||
-      (confValue("ProxyJump") !== undefined && value("proxyjump") !== confValue("ProxyJump")) ||
-      (confValue("ProxyCommand") !== undefined &&
-        value("proxycommand") !== confValue("ProxyCommand")) ||
-      value("hostname") !== confValue("HostName") ||
-      value("port") !== confValue("Port") ||
-      value("user") !== confValue("User") ||
-      (confValue("IdentityFile") !== undefined &&
-        (value("identityfile") !== confValue("IdentityFile") ||
-          !["yes", "true"].includes(value("identitiesonly") ?? "")))
-    )
-      return yield* pinError();
-    const previous = observedPins.get(pin.alias);
-    if (previous !== undefined && previous !== pin.fingerprint) return yield* pinError(true);
-    observedPins.set(pin.alias, pin.fingerprint);
-    return pin;
-  });
-  const enrichFailure = Effect.fn("ssh/tunnel.enrichFailure")(function* (
-    target: DesktopSshEnvironmentTarget,
-    result: SshHostResult,
-  ) {
-    if (result.status?.failure?.reason === "missing_tools") {
-      const snapshot = result.status;
-      const failure = snapshot.failure!;
-      const tools = failure.fix.instruction.includes("curl")
-        ? "curl"
-        : failure.fix.instruction.includes("Node")
-          ? "nodejs"
-          : failure.fix.instruction.includes("Install tar")
-            ? "tar"
-            : "coreutils";
-      const probe = yield* runSshCommand(target, {
-        batchMode: "yes",
-        interactiveAuth: false,
-        preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
-        remoteCommandArgs: ["sh", "-s"],
-        timeoutMs: 10_000,
-        stdin:
-          "GOAT_TOOL_FIX_PROBE=1\nid -u\nuname -s\nif [ -r /etc/os-release ]; then cat /etc/os-release; fi\n",
-      }).pipe(Effect.option);
-      if (Option.isSome(probe)) {
-        const [uid, os, ...release] = probe.value.stdout.trim().split(/\r?\n/u);
-        const id = /^ID=["']?([a-z0-9-]+)["']?$/mu.exec(release.join("\n"))?.[1];
-        const command =
-          uid === "0" && os === "Linux"
-            ? id === "debian" || id === "ubuntu"
-              ? `apt-get update && apt-get install -y ${tools}`
-              : id === "alpine"
-                ? `apk add ${tools}`
-                : id === "fedora" || id === "rhel" || id === "rocky"
-                  ? `dnf install -y ${tools}`
-                  : undefined
-            : undefined;
-        if (command !== undefined)
-          return {
-            ...result,
-            status: { ...snapshot, failure: { ...failure, fix: { ...failure.fix, command } } },
-          };
-      }
-      return result;
-    }
-    if (
-      result.status?.state !== "auth_failed" ||
-      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(target.alias)
-    )
-      return result;
-    // Expose only GOAT's generated public key; an arbitrary IdentityFile is never disclosed.
-    const directory = yield* managedDirectory;
-    if (directory === undefined) return result;
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    for (const name of ["goat-hosts", "goat-cloud"]) {
-      const dir = path.join(path.dirname(directory), name);
-      const conf = yield* fs
-        .readFileString(path.join(dir, `${target.alias}.conf`))
-        .pipe(Effect.orElseSucceed(() => ""));
-      const identity = /^\s*IdentityFile\s+"?(.+?)"?\s*$/imu.exec(conf)?.[1];
-      if (identity === undefined) continue;
-      const expandedIdentity = identity.replace(
-        /^~(?=[/\\])/u,
-        path.dirname(path.dirname(directory)),
-      );
-      const publicPath = expandedIdentity.endsWith(".pub")
-        ? expandedIdentity
-        : `${expandedIdentity}.pub`;
-      const linked = yield* fs.readLink(publicPath).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
-      if (linked) continue;
-      const key = (yield* fs
-        .readFileString(publicPath)
-        .pipe(Effect.orElseSucceed(() => ""))).trim();
-      if (
-        !/^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,2}( .*)?$/u.test(
-          key,
-        )
-      )
-        continue;
-      const generatedKey = expandedIdentity === path.join(dir, "id_ed25519");
-      const known = resolvedTargets.get(targetConnectionKey(target)) ?? target;
-      const resolved =
-        known.username === null
-          ? yield* resolveSshTarget(target.alias, target).pipe(Effect.option)
-          : Option.none();
-      const user =
-        /^\s*User\s+(.+?)\s*$/imu.exec(conf)?.[1] ??
-        known.username ??
-        (Option.isSome(resolved) ? resolved.value.username : null);
-      const port = Number(
-        /^\s*Port\s+(\d+)\s*$/imu.exec(conf)?.[1] ??
-          known.port ??
-          (Option.isSome(resolved) ? resolved.value.port : null) ??
-          22,
-      );
-      if (user === null) {
-        if (generatedKey) return { ...result, status: { ...result.status, publicKey: key } };
-        continue;
-      }
-      const keyAuth = buildSshKeyAuthInstructions({
-        originLabel: "the computer that owns this SSH connection",
-        host: target.alias,
-        user,
-        port,
-        publicKeyPath: publicPath,
-        generatedKey,
-        ...(generatedKey ? { publicKey: key } : {}),
-      });
-      return {
-        ...result,
-        status: { ...result.status, ...(generatedKey ? { publicKey: key } : {}), keyAuth },
-      };
-    }
-    return result;
-  });
+  const { enrichFailure } = makeFailureEnrichment({ managedDirectory, resolvedTargets });
   const setupTerminalFailure = (key: string) => {
     const current = statuses.get(key)?.status;
     return (
@@ -6351,67 +2602,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   });
   const targetLocks = yield* KeyedLock.make<string>();
   const authSecrets = new Map<string, string>();
-  // Ensure and disconnect requests for one target are ordered by arrival. Both
-  // resolve the alias before taking the target lock, so a reconnect sent after a
-  // disconnect can reach the lock first. Tickets let each request see whether a
-  // newer one has replaced its intent: a disconnect yields to any newer request,
-  // and an ensure yields to a newer disconnect.
-  let requestSequence = 0;
-  const latestRequest = new Map<string, number>();
-  const latestDisconnect = new Map<string, number>();
-  interface RequestTicket {
-    readonly key: string;
-    readonly sequence: number;
-  }
-  const takeRequestTicket = (target: DesktopSshEnvironmentTarget, kind: "ensure" | "disconnect") =>
-    Effect.sync((): RequestTicket => {
-      const key = targetConnectionKey(target);
-      const sequence = ++requestSequence;
-      latestRequest.set(key, sequence);
-      if (kind === "disconnect") latestDisconnect.set(key, sequence);
-      return { key, sequence };
-    });
-  const disconnectSuperseded = (ticket: RequestTicket) =>
-    latestRequest.get(ticket.key) !== ticket.sequence;
-  const ensureSuperseded = (ticket: RequestTicket) =>
-    (latestDisconnect.get(ticket.key) ?? 0) > ticket.sequence;
-
-  const lockUsers = new Map<string, number>();
-  const releaseLockUser = (key: string) =>
-    Effect.sync(() => {
-      const count = lockUsers.get(key) ?? 0;
-      if (count <= 1) lockUsers.delete(key);
-      else lockUsers.set(key, count - 1);
-    });
-  // Count admission before any yield, so ready-only requests never queue behind installation.
-  const withTargetLock = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        lockUsers.set(key, (lockUsers.get(key) ?? 0) + 1);
-      }),
-      () => targetLocks.withLock(key, effect),
-      () => releaseLockUser(key),
-    );
-  const notReady = (target: DesktopSshEnvironmentTarget) =>
-    new SshLaunchError({
-      message: `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry goat_provider_diagnose.`,
-      stdout: "",
-    });
-  const withIdleTargetLock = <A, E, R>(
-    key: string,
-    target: DesktopSshEnvironmentTarget,
-    effect: Effect.Effect<A, E, R>,
-  ) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        if (lockUsers.has(key)) return false;
-        lockUsers.set(key, 1);
-        return true;
-      }),
-      (acquired): Effect.Effect<A, E | SshLaunchError, R> =>
-        acquired ? targetLocks.withLock(key, effect) : Effect.fail(notReady(target)),
-      (acquired) => (acquired ? releaseLockUser(key) : Effect.void),
-    );
+  const {
+    latestRequest,
+    takeRequestTicket,
+    disconnectSuperseded,
+    ensureSuperseded,
+    withTargetLock,
+    notReady,
+    withIdleTargetLock,
+  } = makeTargetAdmission(targetLocks);
 
   const closeTunnelEntry = Effect.fn("ssh/tunnel.closeTunnelEntry")(function* (
     entry: SshTunnelEntry,
@@ -6597,6 +2796,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     readonly previousSelection?: ReconnectSelection;
     readonly background?: boolean;
     readonly onPhase?: SshRuntimeProgressCallback;
+    /** A request admitted under this generation; a newer one supersedes it before any launch. */
+    readonly expectedGeneration?: number;
   }): Effect.fn.Return<
     SshTunnelEntry | DesktopSshRuntimePendingResult,
     SshEnvironmentEffectError,
@@ -6608,6 +2809,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key: input.key,
     });
     const generation = generations.get(input.key) ?? 0;
+    if (input.expectedGeneration !== undefined && input.expectedGeneration !== generation)
+      return yield* supersededPreparation();
     const previousSelection =
       input.previousSelection?.revision === (selectionRevisions.get(input.key) ?? 0)
         ? input.previousSelection
@@ -6670,6 +2873,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                   yield* stopRemoteServer(input.resolvedTarget, authOptions).pipe(Effect.ignore);
                 }),
               ).pipe(Effect.provideService(Scope.Scope, launchScope)),
+            (appServerRefusals.get(input.key) ?? 0) > (yield* Clock.currentTimeMillis),
           ),
         );
       });
@@ -6712,6 +2916,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const retainedPending = deferredIntent?.pending;
     const remoteLaunch =
       observedLaunch.status === "ready" &&
+      // A managed replacement intent never describes the app server.
+      observedLaunch.remoteServerKind !== "app" &&
       observedLaunch.pending === undefined &&
       retainedPending !== undefined &&
       deferredIntent !== undefined &&
@@ -6753,7 +2959,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // The launch round trip measures this link; the forward's readiness budget scales with it.
     const launchMs = (yield* Clock.currentTimeMillis) - launchStartedAt;
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
-      const stop = remoteLaunch.status === "ready" && remoteLaunch.pending === undefined;
+      const stop =
+        remoteLaunch.status === "ready" &&
+        remoteLaunch.remoteServerKind !== "app" &&
+        remoteLaunch.pending === undefined;
       if (!closed) {
         cancelledLaunches.set(input.key, stop);
         launchTransferred = true;
@@ -6819,7 +3028,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remoteLaunch.status === "ready" &&
       remoteLaunch.pending === undefined &&
       !needsArchiveRetry &&
-      remoteLaunch.selectedRuntime.version === remoteLaunch.selectedRuntime.requestedVersion
+      (remoteLaunch.selectedRuntime.version === remoteLaunch.selectedRuntime.requestedVersion ||
+        // The managed runtime is not in use while the app server serves this host.
+        remoteLaunch.remoteServerKind === "app")
     )
       pendingReplacements.delete(input.key);
     if (remoteLaunch.status === "pending") {
@@ -6914,7 +3125,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       yield* Scope.close(entryScope, Exit.void);
       if (!closed) {
-        cancelledLaunches.set(input.key, remoteLaunch.pending === undefined);
+        cancelledLaunches.set(
+          input.key,
+          remoteLaunch.pending === undefined && remoteLaunch.remoteServerKind !== "app",
+        );
         launchTransferred = true;
       }
       return yield* supersededPreparation();
@@ -6944,6 +3158,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           if (
             !stopRemote ||
             options.leaveRemoteServerRunning === true ||
+            // GOAT never stops the app server it only attached to.
+            tunnelEntry.remoteServerKind === "app" ||
             pendingReplacements.has(tunnelEntry.key)
           ) {
             return;
@@ -7017,6 +3233,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     key: string,
     entry: SshTunnelEntry,
     retainSelection = false,
+    // Only a caller that reconnects right away may drop a forward for the app server.
+    allowAppServerMove = false,
   ) {
     const logFields = {
       ...sshTargetLogFields(entry.target),
@@ -7040,11 +3258,23 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       );
       if (Exit.isSuccess(readinessExit)) {
         const selectedVersion = entry.selectedRuntime.version;
-        const liveVersion =
+        const descriptor =
           selectedVersion === null || selectedVersion === ""
             ? undefined
-            : yield* readForwardServerVersion(entry);
-        if (liveVersion === undefined || liveVersion === selectedVersion) {
+            : yield* readForwardDescriptor(entry.httpBaseUrl, entry.readiness.probeTimeoutMs);
+        const liveVersion = descriptor?.serverVersion;
+        const moveToAppServer =
+          allowAppServerMove &&
+          (appServerRefusals.get(key) ?? 0) <= (yield* Clock.currentTimeMillis) &&
+          (liveVersion === undefined || liveVersion === selectedVersion) &&
+          (yield* shouldMoveToAppServer({
+            descriptor,
+            remoteServerKind: entry.remoteServerKind,
+            selection: entry.selectedRuntime,
+            httpBaseUrl: entry.httpBaseUrl,
+            timeoutMs: entry.readiness.probeTimeoutMs,
+          }));
+        if ((liveVersion === undefined || liveVersion === selectedVersion) && !moveToAppServer) {
           yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
           return true;
         }
@@ -7053,7 +3283,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         runtimeChanged = true;
         yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
           ...logFields,
-          reason: "runtime-changed",
+          reason: moveToAppServer ? "app-server" : "runtime-changed",
           selectedVersion,
           liveVersion,
         });
@@ -7133,7 +3363,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         entry.attachmentInvalidated !== true &&
         entry.uncertainDrain !== true
       ) {
-        if (yield* keepAnsweringTunnel(key, entry)) {
+        if (yield* keepAnsweringTunnel(key, entry, false, true)) {
           if (
             previousSelection !== undefined &&
             selection !== undefined &&
@@ -7159,7 +3389,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.has(key) &&
         runner?.refreshOwnedRuntimeOnFirstConnection !== true
       ) {
-        if (yield* keepAnsweringTunnel(key, entry)) {
+        if (yield* keepAnsweringTunnel(key, entry, false, true)) {
           if (
             previousSelection !== undefined &&
             selection !== undefined &&
@@ -7184,7 +3414,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         entry.uncertainDrain === true ||
         pendingReplacements.has(key) ||
         runner?.refreshOwnedRuntimeOnFirstConnection === true;
-      if (!replace && (yield* keepAnsweringTunnel(key, entry))) {
+      if (!replace && (yield* keepAnsweringTunnel(key, entry, false, true))) {
         if (
           previousSelection !== undefined &&
           selection !== undefined &&
@@ -7508,7 +3738,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               target: entry.target,
               operation: (authOptions) =>
                 issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
-            })
+            }).pipe(
+              // A desktop reconnecting after this lands on the managed server.
+              Effect.tapError((error) =>
+                entry.remoteServerKind === "app" && error._tag === "SshPairingError"
+                  ? Clock.currentTimeMillis.pipe(
+                      Effect.map((now) => {
+                        appServerRefusals.set(key, now + APP_SERVER_REFUSAL_MS);
+                        entry.attachmentInvalidated = true;
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            )
           : null;
         const currentPin = yield* readManagedPin(entry.target).pipe(
           Effect.mapError(() => supersededPreparation()),
@@ -7857,7 +4099,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             yield* closeTunnelEntry(entry);
           }).pipe(Effect.uninterruptible);
         }
-        const stopRemote = cancelledLaunches.get(key) ?? !hadPending;
+        const stopRemote =
+          (cancelledLaunches.get(key) ?? !hadPending) &&
+          (entry === null || entry.remoteServerKind !== "app");
         cancelledLaunches.delete(key);
         if (options.leaveRemoteServerRunning !== true && stopRemote) {
           yield* runWithSshAuth({
@@ -7906,7 +4150,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     )
       return active;
     if (active?.status?.state === "preparing" || active?.status?.state === "update_waiting")
-      return active;
+      if (active.status.state === "update_waiting" || flights.isActive(knownKey)) return active;
     const runner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
     let key = knownKey;
@@ -7950,8 +4194,18 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         drainAttachment = { entry, intent };
       yield* validateManagedPin(resolvedTarget);
       if (observed?.status?.state === "preparing" || observed?.status?.state === "update_waiting")
-        return observed;
+        if (observed.status.state === "update_waiting" || flights.isActive(key)) return observed;
       const requestedVersion = runner?.archiveVersion?.trim() ?? "";
+      // The managed runtime probe below does not see the app server; ask it directly.
+      if (entry?.remoteServerKind === "app") {
+        const app = yield* appServerStatus(
+          resolvedTarget,
+          entry.remotePort,
+          requestedVersion,
+          observed,
+        );
+        if (app !== undefined) return app;
+      }
       const output = yield* runSshCommand(resolvedTarget, {
         batchMode: "yes",
         interactiveAuth: false,
@@ -7984,12 +4238,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           { version: probe.liveVersion, commitTime: probe.liveCommitTime },
           { version: requestedVersion, commitTime: runner?.archiveCommitTime },
         );
-        const blocked =
-          probe.liveOwned !== true ||
-          order === undefined ||
-          order > 0 ||
-          (probe.liveVersion !== requestedVersion && probe.liveDrain !== true);
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
+        const runsRequested = probe.liveVersion === requestedVersion;
+        const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
         compatibleLive =
           compatible &&
           probe.identityAbsent !== true &&
@@ -8018,7 +4269,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             ? {
                 detail:
                   order !== undefined && order > 0
-                    ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button above Settings.`
+                    ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }
             : {}),
@@ -8261,6 +4512,63 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
+  /**
+   * Issues a credential against the target's current attachment. When that is the GOAT app server
+   * and it refuses, the target moves to the managed server on the same local port, so the caller's
+   * forward stays valid, and the credential is issued once more there. Hub work never depends on
+   * an app server that can be reached but cannot sign anyone in.
+   */
+  const withAppServerFallback = <A, E, R>(
+    key: string,
+    resolvedTarget: DesktopSshEnvironmentTarget,
+    runner: RemoteGoatRunnerOptions | undefined,
+    options: {
+      /** Ready-only callers never change which server serves the host. */
+      readonly reconnect: boolean;
+      readonly keyOnly: boolean;
+    },
+    issue: (selection: PreparedRemoteRuntime | undefined) => Effect.Effect<A, E, R>,
+  ) => {
+    const entry = tunnels.get(key);
+    if (entry?.remoteServerKind !== "app") return issue(entry?.selectedRuntime);
+    const generation = generations.get(key) ?? 0;
+    const current = () =>
+      !closed && !forgotten.has(key) && (generations.get(key) ?? 0) === generation;
+    return issue(entry.selectedRuntime).pipe(
+      Effect.catchIf(
+        (error): error is E & SshPairingError => error instanceof SshPairingError,
+        (error) =>
+          Effect.gen(function* () {
+            yield* Effect.logWarning("ssh.appServer.credential.fallback", {
+              ...sshTargetLogFields(resolvedTarget),
+              cause: error.message,
+              reconnect: options.reconnect,
+            });
+            appServerRefusals.set(key, (yield* Clock.currentTimeMillis) + APP_SERVER_REFUSAL_MS);
+            entry.attachmentInvalidated = true;
+            // A disconnect or forget that arrived meanwhile wins; nothing is started for it.
+            if (!options.reconnect || !current() || tunnels.get(key) !== entry) return yield* error;
+            yield* Effect.gen(function* () {
+              tunnels.delete(key);
+              yield* closeTunnelEntry(entry);
+            }).pipe(Effect.uninterruptible);
+            const next = yield* createTunnelEntry({
+              key,
+              resolvedTarget,
+              keyOnly: options.keyOnly,
+              ...(runner === undefined ? {} : { runner }),
+              previousLocalPort: entry.localPort,
+              expectedGeneration: generation,
+            });
+            if (!current()) return yield* error;
+            yield* publishResult(key, resolvedTarget, next, runner);
+            if ("type" in next) return yield* error;
+            return yield* issue(next.selectedRuntime);
+          }),
+      ),
+    );
+  };
+
   const issueMcpClientSession = Effect.fn("ssh/tunnel.issueMcpClientSession")(function* (
     target: DesktopSshEnvironmentTarget,
     sessionOptions: RemoteMcpClientSessionOptions,
@@ -8286,19 +4594,30 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // Session preparation waits for a launch in flight and reuses its selection.
     const issue = Effect.gen(function* () {
       if (sessionOptions.requireReady === true) yield* requireReadyEntry(target, key);
-      return yield* runWithSshAuth({
+      return yield* withAppServerFallback(
         key,
-        keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
-        target: resolvedTarget,
-        operation: (authOptions) =>
-          issueRemoteMcpClientSession(
-            resolvedTarget,
-            sessionOptions,
-            authOptions,
-            runner,
-            tunnels.get(key)?.selectedRuntime,
-          ),
-      });
+        resolvedTarget,
+        runner,
+        {
+          reconnect: sessionOptions.requireReady !== true,
+          keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
+        },
+        (selection) =>
+          runWithSshAuth({
+            key,
+            keyOnly:
+              managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
+            target: resolvedTarget,
+            operation: (authOptions) =>
+              issueRemoteMcpClientSession(
+                resolvedTarget,
+                sessionOptions,
+                authOptions,
+                runner,
+                selection,
+              ),
+          }),
+      );
     });
     return yield* (
       sessionOptions.requireReady === true
@@ -8340,20 +4659,39 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     }
     return yield* withTargetLock(
       key,
-      runWithSshAuth({
-        key,
-        keyOnly: managedAliases.has(resolvedTarget.alias),
-        target: resolvedTarget,
-        operation: (authOptions) =>
-          issueRemoteClientSession(
-            resolvedTarget,
-            sessionOptions,
-            authOptions,
-            runner,
-            tunnels.get(key)?.selectedRuntime,
-          ),
-      }),
+      Effect.suspend(() =>
+        withAppServerFallback(
+          key,
+          resolvedTarget,
+          runner,
+          { reconnect: true, keyOnly: managedAliases.has(resolvedTarget.alias) },
+          (selection) =>
+            runWithSshAuth({
+              key,
+              keyOnly: managedAliases.has(resolvedTarget.alias),
+              target: resolvedTarget,
+              operation: (authOptions) =>
+                issueRemoteClientSession(
+                  resolvedTarget,
+                  sessionOptions,
+                  authOptions,
+                  runner,
+                  selection,
+                ),
+            }),
+        ),
+      ),
     );
+  });
+
+  const attachedServerKind = Effect.fn("ssh/tunnel.attachedServerKind")(function* (
+    target: DesktopSshEnvironmentTarget,
+  ) {
+    const key = targetConnectionKey(resolvedTargets.get(targetConnectionKey(target)) ?? target);
+    const kind = tunnels.get(key)?.remoteServerKind ?? null;
+    if (kind !== null) return kind;
+    // A refused app server is skipped until the refusal ends, so the managed one serves meanwhile.
+    return (appServerRefusals.get(key) ?? 0) > (yield* Clock.currentTimeMillis) ? "managed" : null;
   });
 
   const runRemoteScript = Effect.fn("ssh/tunnel.runRemoteScript")(function* (
@@ -8600,6 +4938,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
     issueClientSession: withSharing(issueClientSession),
+    attachedServerKind,
     runRemoteScript: withSharing(runRemoteScript),
   });
 });

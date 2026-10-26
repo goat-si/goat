@@ -23,8 +23,14 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import {
+  canResolveHumanStep,
+  mcpResolver,
+  type HumanStepResolver,
+} from "../handoffs/HumanStepAuthority.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { exceededDispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import { matchUserInputOption } from "../orchestration-v2/userInputAnswers.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
@@ -46,11 +52,11 @@ const FORWARD_TO_HUMAN =
   " This question needs a person: forward it to the user in your own thread, or let them answer it in the asking thread.";
 
 /**
- * Only an outside MCP client whose session holds `orchestration:approve` may
- * see and answer provider approvals; agents inside GOAT never can.
+ * Provider approvals are runtime approvals: a person, or an outside MCP client whose session
+ * holds `orchestration:approve`, may see and answer them; agents inside GOAT never can.
  */
-const canApprove = (scope: McpInvocationScope) =>
-  scope.thread === undefined && scope.client?.approvals === true;
+const canApprove = (scope: McpInvocationScope, resolver?: HumanStepResolver) =>
+  canResolveHumanStep(resolver ?? mcpResolver(scope), "runtime_approval");
 const approvalKinds: ReadonlySet<string> = new Set(ProviderRequestKind.literals);
 const isApproval = (
   request: OrchestrationV2RuntimeRequest,
@@ -78,6 +84,8 @@ export class PendingQuestionsMcpService extends Context.Service<
       scope: McpInvocationScope,
       input: OrchestratorMcpPendingRequestRespondInput,
       commandId?: CommandId,
+      /** Set only by server callers that authenticated a person, such as the decision inbox. */
+      resolver?: HumanStepResolver,
     ) => Effect.Effect<OrchestratorMcpPendingRequestRespondResult, OrchestratorMcpFailure>;
   }
 >()("goat/mcp/PendingQuestionsMcpService") {}
@@ -115,9 +123,19 @@ const make = Effect.gen(function* () {
           }),
         )
       : Effect.void;
-  const readRequest = (scope: McpInvocationScope, input: OrchestratorMcpPendingRequestReadInput) =>
+  const readRequest = (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpPendingRequestReadInput,
+    resolver?: HumanStepResolver,
+  ) =>
     Effect.gen(function* () {
-      const context = yield* readThread(input.threadId, ["runtimeRequests", "turnItems"]);
+      const context = yield* readThread(
+        input.threadId,
+        ["runtimeRequests", "turnItems"],
+        canApprove(scope, resolver)
+          ? ["user_input_request", "approval_request"]
+          : ["user_input_request"],
+      );
       const request = context.projection.runtimeRequests.find(
         (request) => request.id === input.requestId,
       );
@@ -127,7 +145,7 @@ const make = Effect.gen(function* () {
         );
         if (item?.type === "user_input_request")
           return { ...context, request, questions: item.questions, approval: undefined };
-      } else if (request !== undefined && isApproval(request) && canApprove(scope)) {
+      } else if (request !== undefined && isApproval(request) && canApprove(scope, resolver)) {
         const item = context.projection.turnItems.find(
           (item) => item.type === "approval_request" && item.requestId === input.requestId,
         );
@@ -433,7 +451,7 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
-    respond: (scope, input, commandId) =>
+    respond: (scope, input, commandId, resolver) =>
       inScope(
         scope,
         Effect.gen(function* () {
@@ -442,7 +460,8 @@ const make = Effect.gen(function* () {
             return yield* invalid(
               "Send only answers for a user-input question, or only decision ('accept' or 'decline') for an approval; omit the other field.",
             );
-          if (input.decision !== undefined && !canApprove(scope)) return yield* approvalDenied();
+          if (input.decision !== undefined && !canApprove(scope, resolver))
+            return yield* approvalDenied();
           const identity = yield* responseIdentity(input);
           if (input.host !== undefined) {
             const { caller } = yield* readCaller();
@@ -500,7 +519,7 @@ const make = Effect.gen(function* () {
                 }),
               );
           }
-          const { projection, request, questions } = yield* readRequest(scope, input);
+          const { projection, request, questions } = yield* readRequest(scope, input, resolver);
           if (input.decision !== undefined && !isApproval(request))
             return yield* invalid("This request is a question; answer it with answers.");
           if (input.answers !== undefined && request.kind !== "user_input")
@@ -535,14 +554,12 @@ const make = Effect.gen(function* () {
                 (question.multiSelect !== true && values.length !== 1) ||
                 values.some(
                   (value) =>
-                    !question.options.some(
-                      (option) =>
-                        value === (option.value ?? option.label) || value === option.label,
-                    ),
+                    typeof value !== "string" ||
+                    matchUserInputOption(question, value) === undefined,
                 )
               )
                 return yield* invalid(
-                  `Send answers["${question.id}"] as ${question.multiSelect === true ? "an array of allowed option strings" : "one allowed option string"}. Allowed options: ${question.options.map((option) => `"${option.value ?? option.label}"`).join(", ")}.`,
+                  `Send answers["${question.id}"] as ${question.multiSelect === true ? "an array of allowed option strings" : "one allowed option string"}, using an option's value or label. Allowed options: ${question.options.map((option) => (option.value === undefined || option.value === option.label ? `"${option.label}"` : `"${option.value}" (${option.label})`)).join(", ")}.`,
                 );
             }
           } else if (input.decision === undefined) {

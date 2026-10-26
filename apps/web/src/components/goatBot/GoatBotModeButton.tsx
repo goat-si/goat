@@ -2,7 +2,11 @@ import { useNavigate } from "@tanstack/react-router";
 import { GlobeIcon } from "~/components/solar";
 
 import { GOAT_BOT_PATH } from "~/globalAgentRoute";
-import { type GlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
+import {
+  type GlobalAgentMode,
+  selectGlobalAgentMode,
+  useGlobalAgentStore,
+} from "~/globalAgentStore";
 
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -12,7 +16,7 @@ import { useGoatBotEnabled } from "./useGoatBotSession";
 /** True when the logo and sidebar should lead to GOAT Bot rather than the global agent thread. */
 export function useGoatBotPreferred(): boolean {
   const { enabled } = useGoatBotEnabled();
-  const mode = useGlobalAgentStore((state) => state.mode);
+  const mode = useGlobalAgentStore(selectGlobalAgentMode);
   return enabled && mode === "bot";
 }
 

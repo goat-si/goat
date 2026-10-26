@@ -23,7 +23,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   buildDesktopBundles,
   DesktopBuildManifestRestoreError,
-  stageCuaDriverExecutable,
   BundleNotSelfContainedError,
   BuildCommandFailedError,
   parseWslRuntimeArchiveMembers,
@@ -44,7 +43,6 @@ import {
   resolveMergedStageDependencies,
   resolveBuildOptions,
   stageWslRuntimeArchive,
-  ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
   stageBrowserSecret,
@@ -83,13 +81,13 @@ import {
   SSH_RUNTIME_RESOURCE_SOURCE_DIR,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_EXTRA_RESOURCES,
-  WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
   WSL_RUNTIME_EXTRA_RESOURCES,
   parseServerVersionOutput,
   resolveDesktopBuildVersion,
   sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
+import { stageCuaDriverExecutable } from "./desktop-artifact-computer-use.ts";
 import {
   ReleasePackageManifestError,
   releasePackageFiles,
@@ -185,10 +183,10 @@ function mockProcess(exitCode: number, stdout = "") {
 
 // USTAR/gzip and DEFLATE/ZIP archives; each file contains its own name.
 const cuaArchives = {
-  mac: "H4sIAAAAAAACA+3V0QqCMBiG4V1KN6DMufJyxLZBUipMF3T3LSMiz1ti73PyzyF48O1zJjSZ9e3VefE1MjpoPc9oOaUs1Hs971eVUmInRQJhnBofPyn+k0mQP9advwl+HHw2nVznftJ/JT/7XxRSl/R/K/ljvS7tMR6B+nkF1KM95/YW9xL3v1r0X+n4Ov3fSP5Y9f//FX4/WFf70E9t5/LHQ7L+l3rR/3Iv6f9m8gcAAAAAAAAAAEA6d/qw0rcAKAAA",
+  mac: "H4sIAAAAAAAC/+3YwWqDMBwGcB+lL1D5GzNzHluhheGK9bJTcCYwWW0h6qBv37RljOWyk2nIvt8lGoQcvnxKbKdmqUz3pU0yG7IKzq+j5Y5EGfu5vs4LwViyoMSDaRgbY5dM/qfWQ/4Qdv7tZIajWY4futd36T+j3/3PMuI5+h9L/hCuffdut4C8fQLkoD5TdbJznvsvnP4zbh9H/yPJH4J+/3+HfzgqLc10GLtep5cbb/3PudP//IHQ/2jyh3C9bJ5W5W416xp/9p+c7z8Vggv0P5b8IVz1elM9y+1jVb/J8rW2u2GX9sr3+b9wz/854f9fNPkDAAAAAAAAAMD9nAFB4t6zACgAAA==",
   linux:
-    "H4sIAAAAAAACA+3ZPVKDQACGYY6SC4Twk4VWZ0xp4wUym7AzoLA4uyB6e1HHImthIwTW92mSVBQvH4RkkG+11MW2VPWzMrtgCtEoF+LzdeS+/nwfR1kWBxsRzKC3nTTj4YP/abjsP1TaqHNnb8693F2vf5rGEf3nMHbeFqZ6UWa6Y/zaP06ccyHPExFsIvp70R/L7n/ujW3NtitVo66y/8S9/sfRPmP/vvTHctXVaTwFjl+3gKMtnkLbzr//vbv/PEvYvy/9sejr/3d83RbqaHrdVY0KPz7Mtv/U3X8qopz9+9Ifq+gvT1VYLub7P/v3pj+Wy/n9t9LjHOo6tOWc+09jZ/9JlkXs35f+WE3/i/9/GtXJQnYyfLStnnL/wt2/4Pnfo/5YZ3/12iltq1aPJ8Ck93/hfv8X3P896o/V9H843N7dH8KmmPX5P3X3n8Tpnv370h8AAAAAAAAAAAAAAAAAAAB/5x055e7oAFAAAA==",
-  win: "UEsDBBQAAAAIAAAAIVxkdYIxEAAAAA4AAAAOAAAAY3VhLWRyaXZlci5leGVLLk3UTSnKLEst0kutSAUAUEsDBBQAAAAIAAAAIVw8tMWfFAAAABIAAAASAAAAY3VhLWRyaXZlci11aWEuZXhlSy5N1E0pyixLLdItzUzUS61IBQBQSwMEFAAAAAgAAAAhXJdWRtQWAAAAFAAAABQAAABjdWEtY3Vyc29yLXRoZW1lLmV4ZUsuTdRNLi0qzi/SLclIzU3VS61IBQBQSwMEFAAAAAgAAAAhXG9yJBwUAAAAEgAAABIAAABjdWFfZHJpdmVyX3Nkay5kbGxLLk2MTynKLEstii9OydZLyckBAFBLAwQUAAAACAAAACFcx8Y50BsAAAAcAAAAHAAAAGN1YV9kcml2ZXJfbm9kZV9ydW50aW1lLm5vZGVLLk2MTynKLEstis/LT0mNLyrNK8nMTdUDcQBQSwECFAMUAAAACAAAACFcZHWCMRAAAAAOAAAADgAAAAAAAAAAAAAA7YEAAAAAY3VhLWRyaXZlci5leGVQSwECFAMUAAAACAAAACFcPLTFnxQAAAASAAAAEgAAAAAAAAAAAAAA7YE8AAAAY3VhLWRyaXZlci11aWEuZXhlUEsBAhQDFAAAAAgAAAAhXJdWRtQWAAAAFAAAABQAAAAAAAAAAAAAAO2BgAAAAGN1YS1jdXJzb3ItdGhlbWUuZXhlUEsBAhQDFAAAAAgAAAAhXG9yJBwUAAAAEgAAABIAAAAAAAAAAAAAAO2ByAAAAGN1YV9kcml2ZXJfc2RrLmRsbFBLAQIUAxQAAAAIAAAAIVzHxjnQGwAAABwAAAAcAAAAAAAAAAAAAADtgQwBAABjdWFfZHJpdmVyX25vZGVfcnVudGltZS5ub2RlUEsFBgAAAAAFAAUASAEAAGEBAAAAAA==",
+    "H4sIAAAAAAAC/+3az06DMAAGcB5lLzBWKC1XF0fiEp1m28UT6UYTUP4YCk7f3k7jYTVxF2FQv9+Fcerh69dSxkG856JMpqnMX2Q9c7pAtJCxz6tmXn/+9gjnnjNhTg9a1YhaD+/8T4fT/A9ZWct9o672rZhdLn9KPYL8+6BzniZ19irr7sY4m7/nG3MhDH3mTAjytyJ/GHb++7ZWVT1tUlnIi/TfN9d/jwQc/bclfxiuPNvpKRB/bQGxSp5dVfXf/8Dsf8h99N+W/GHQ6/93+GWVyLhuyyYrpHu86a3/1Ow/ZSRE/23JH0aRv9hlbjqY53/035r8YbiM979ZqeuQ565K++w/9Yz++5wT9N+W/GE0+Z/8/1PIRiSiEe6Tqsou+8/M/jOc/y3KH8aZv3xrZKmyqtQToNP9n5nP/wz7v0X5w2jyX0fzxV3kFkmv539q9t/3aID+25I/DNft8jpabaJOxziWmgfBL99/hcb3PzzE+z978ofh2t4s14v4Yb7ePsar+62eDZs/X/3P9t/n5vt/SnD+tyZ/AAAAAAAAAAAAAAAAAAAAAOjOB0iDKKUAUAAA",
+  win: "UEsDBBQAAAAIAAAAIVxkdYIxEAAAAA4AAAAOAAAAY3VhLWRyaXZlci5leGVLLk3UTSnKLEst0kutSAUAUEsDBBQAAAAIAAAAIVw8tMWfFAAAABIAAAASAAAAY3VhLWRyaXZlci11aWEuZXhlSy5N1E0pyixLLdItzUzUS61IBQBQSwMEFAAAAAgAAAAhXJdWRtQWAAAAFAAAABQAAABjdWEtY3Vyc29yLXRoZW1lLmV4ZUsuTdRNLi0qzi/SLclIzU3VS61IBQBQSwMEFAAAAAgAAAAhXG9yJBwUAAAAEgAAABIAAABjdWFfZHJpdmVyX3Nkay5kbGxLLk2MTynKLEstii9OydZLyckBAFBLAwQUAAAACAAAACFcx8Y50BsAAAAcAAAAHAAAAGN1YV9kcml2ZXJfbm9kZV9ydW50aW1lLm5vZGVLLk2MTynKLEstis/LT0mNLyrNK8nMTdUDcQBQSwMEFAAAAAAAAAAhXAMKLWgHAAAABwAAAAcAAABMSUNFTlNFTElDRU5TRVBLAwQUAAAAAAAAACFcFmosixYAAAAWAAAAFgAAAFRISVJEX1BBUlRZX05PVElDRVMubWRUSElSRF9QQVJUWV9OT1RJQ0VTLm1kUEsBAhQDFAAAAAgAAAAhXGR1gjEQAAAADgAAAA4AAAAAAAAAAAAAAO2BAAAAAGN1YS1kcml2ZXIuZXhlUEsBAhQDFAAAAAgAAAAhXDy0xZ8UAAAAEgAAABIAAAAAAAAAAAAAAO2BPAAAAGN1YS1kcml2ZXItdWlhLmV4ZVBLAQIUAxQAAAAIAAAAIVyXVkbUFgAAABQAAAAUAAAAAAAAAAAAAADtgYAAAABjdWEtY3Vyc29yLXRoZW1lLmV4ZVBLAQIUAxQAAAAIAAAAIVxvciQcFAAAABIAAAASAAAAAAAAAAAAAADtgcgAAABjdWFfZHJpdmVyX3Nkay5kbGxQSwECFAMUAAAACAAAACFcx8Y50BsAAAAcAAAAHAAAAAAAAAAAAAAA7YEMAQAAY3VhX2RyaXZlcl9ub2RlX3J1bnRpbWUubm9kZVBLAQIUAxQAAAAAAAAAIVwDCi1oBwAAAAcAAAAHAAAAAAAAAAAAAACkgWEBAABMSUNFTlNFUEsBAhQDFAAAAAAAAAAhXBZqLIsWAAAAFgAAABYAAAAAAAAAAAAAAKSBjQEAAFRISVJEX1BBUlRZX05PVElDRVMubWRQSwUGAAAAAAcABwDBAQAA1wEAAAAA",
 };
 const makeCuaStageFixture = Effect.fn("test.makeCuaStageFixture")(function* (
   platform: "mac" | "linux" | "win",
@@ -243,7 +241,6 @@ const makeCuaStageFixture = Effect.fn("test.makeCuaStageFixture")(function* (
       repoRoot: root,
       stageRoot,
       stageResourcesDir,
-      verbose: false,
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, downloadSpawner),
       Effect.as(stageResourcesDir),
@@ -389,7 +386,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["mac", "linux", "win"] as const)(
+  it.effect("mac staging omits the in-process Cua executable (#1202)", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("mac");
+      const resources = yield* h.stage("release");
+      assert.isFalse(yield* h.fs.exists(h.path.join(resources, "cua-driver")));
+      assert.equal(h.requests(), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["linux", "win"] as const)(
     "stages the Cua %s compressed release at the desktop host path",
     (platform) =>
       Effect.gen(function* () {
@@ -398,98 +404,36 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const resources = yield* h.stage("release");
         const destination = h.path.join(resources, "cua-driver");
         assert.equal(h.requests(), 0);
-        if (platform === "mac") {
-          assert.equal(yield* h.fs.readFileString(destination), "cua-driver");
-          assert.deepStrictEqual(yield* h.fs.readDirectory(resources), ["cua-driver"]);
-        } else {
-          const companions =
-            platform === "win"
-              ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
-              : [
-                  "cua-driver",
-                  "cua-cursor-theme",
-                  "wayland-helper/README.md",
-                  "wayland-helper/install.sh",
-                  "wayland-helper/winrects@cua/metadata.json",
-                  "wayland-helper/winrects@cua/extension.js",
-                ];
-          assert.deepStrictEqual(
-            (yield* h.fs.readDirectory(destination)).sort(),
-            platform === "win"
-              ? [...companions].sort()
-              : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
-          );
-          for (const member of companions) {
-            assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
-          }
+        const companions =
+          platform === "win"
+            ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
+            : [
+                "cua-driver",
+                "cua-cursor-theme",
+                "wayland-helper/README.md",
+                "wayland-helper/install.sh",
+                "wayland-helper/winrects@cua/metadata.json",
+                "wayland-helper/winrects@cua/extension.js",
+              ];
+        assert.deepStrictEqual(
+          (yield* h.fs.readDirectory(destination)).sort(),
+          platform === "win"
+            ? [...companions].sort()
+            : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
+        );
+        for (const member of companions) {
+          assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
         }
         if ((yield* HostProcess.Platform) !== "win32" && platform !== "win") {
-          const executables =
-            platform === "mac"
-              ? [destination]
-              : [
-                  h.path.join(destination, "cua-driver"),
-                  h.path.join(destination, "cua-cursor-theme"),
-                ];
+          const executables = [
+            h.path.join(destination, "cua-driver"),
+            h.path.join(destination, "cua-cursor-theme"),
+          ];
           for (const executable of executables) {
             assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
           }
         }
       }).pipe(Effect.scoped),
-  );
-
-  it.effect("Cua SDK native libraries unpack beside the ASAR while JavaScript stays archived", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-asar-" });
-      for (const [platform, nativePackage, library] of [
-        ["mac", "darwin-arm64", "libcua_driver_sdk.dylib"],
-        ["linux", "linux-x64-gnu", "libcua_driver_sdk.so"],
-        ["win", "win32-x64-msvc", "cua_driver_sdk.dll"],
-      ] as const) {
-        const sourceDir = path.join(root, platform);
-        const natives = [
-          `node_modules/@trycua/cua-driver-${nativePackage}/${library}`,
-          `node_modules/@trycua/cua-driver-${nativePackage}/cua_driver_node_runtime.node`,
-          `node_modules/@ubjs/node-${nativePackage}/uniffi-runtime-napi.${nativePackage}.node`,
-        ];
-        const javascript = [
-          "node_modules/@trycua/cua-driver/dist/embedded.js",
-          "node_modules/@ubjs/node/typescript/dist/resolve-lib.js",
-        ];
-        for (const file of [...natives, ...javascript]) {
-          yield* fs.makeDirectory(path.dirname(path.join(sourceDir, file)), { recursive: true });
-          yield* fs.writeFileString(path.join(sourceDir, file), file);
-        }
-        const config = yield* createBuildConfig(
-          platform,
-          "dir",
-          "1.2.3",
-          false,
-          false,
-          undefined,
-          undefined,
-        );
-        const globs = config.asarUnpack as string[];
-        assert.isArray(globs, `${platform} needs explicit native unpack rules`);
-        const asarPath = path.join(root, `${platform}.asar`);
-        yield* Effect.promise(() =>
-          createPackageWithOptions(sourceDir, asarPath, {
-            unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
-          }),
-        );
-        for (const file of natives) {
-          assert.equal(yield* fs.readFileString(path.join(`${asarPath}.unpacked`, file)), file);
-          assert.isTrue(statFile(asarPath, path.normalize(file)).unpacked);
-        }
-        for (const file of javascript) {
-          assert.equal(extractFile(asarPath, path.normalize(file)).toString(), file);
-          assert.isNotTrue(statFile(asarPath, path.normalize(file)).unpacked);
-          assert.isFalse(yield* fs.exists(path.join(`${asarPath}.unpacked`, file)));
-        }
-      }
-    }).pipe(Effect.scoped),
   );
 
   it.effect("Cua Windows SDK and driver fit the packaged 80 loose-file budget", () =>
@@ -1696,7 +1640,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({
           copyUnpackedNatives: true,
-          serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
+          serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
         const error = yield* verifyPackagedBundleIsSelfContained({
           asarPath: path.join(fixture.packagedAppDir, "resources", WINDOWS_SERVER_ASAR_RESOURCE),
@@ -1704,7 +1648,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
-        assert.include(error.output, "t3code-deliberately-missing-package");
+        assert.include(error.output, "goat-deliberately-missing-package");
       }),
     ),
   );
@@ -1714,7 +1658,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({
           copyUnpackedNatives: true,
-          serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
+          serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
@@ -2101,6 +2045,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("names GOAT as the maintainer of the Linux packages", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const linux = config.linux as Record<string, unknown>;
+      assert.equal(linux.maintainer, "GOAT <jun@lidgeai.com>");
+    }),
+  );
+
   it.effect("configures only an opted-in canonical nightly feed and keeps previews off", () =>
     Effect.gen(function* () {
       const feed = yield* createBuildConfig(
@@ -2216,42 +2176,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         `${resource.from} ships via extraResources and must be excluded from app.asar`,
       );
     }
-
-    assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
-      "!**/node_modules/@cursor/sdk-*/**/*",
-      "!apps/desktop/prod-resources/cursor-sdk",
-      "!apps/desktop/prod-resources/cursor-sdk/**/*",
-      "!apps/desktop/prod-resources/resource-monitor",
-      "!apps/desktop/prod-resources/resource-monitor/**/*",
-      "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-      "!**/*.map",
-      "!**/*.d.cts",
-      "!apps/desktop/resources/browser-secret",
-      "!apps/desktop/resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/browser-secret",
-      "!apps/desktop/prod-resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/windows-server",
-      "!apps/desktop/prod-resources/windows-server/**/*",
-      "!apps/desktop/prod-resources/ssh-runtime",
-      "!apps/desktop/prod-resources/ssh-runtime/**/*",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
-      "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-      "!apps/desktop/gnome-extension",
-      "!apps/desktop/gnome-extension/**/*",
-      "!apps/desktop/prod-resources/cua-driver",
-      "!apps/desktop/prod-resources/cua-driver/**/*",
-      "!apps/desktop/resources/cua-driver",
-      "!apps/desktop/resources/cua-driver/**/*",
-    ]);
-    assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
-    assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
-      {
-        from: "apps/desktop/prod-resources/windows-server",
-        to: ".",
-        filter: ["server.asar", "server.asar.unpacked/**/*"],
-      },
-    ]);
   });
 
   it.effect("applies platform-specific packaging to the build config", () =>
@@ -2297,18 +2221,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.notProperty(mac, "asar");
       assert.notProperty(linux, "asar");
-      // Only the Cua SDK's native libraries leave the archive on macOS and Linux.
+      // macOS keeps only the helper's driver; Linux still uses the native SDK.
       const cuaNativeUnpack = [
         "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
         "**/node_modules/@ubjs/node-*/**/*.node",
       ];
-      assert.deepStrictEqual(mac.asarUnpack, cuaNativeUnpack);
+      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/@ubjs/node-*/**/*.node"]);
       assert.deepStrictEqual(linux.asarUnpack, cuaNativeUnpack);
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
       assert.deepStrictEqual(winWithoutWslRuntime.asarUnpack, win.asarUnpack);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(
+        mac.extraResources,
+        DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+      );
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -2369,6 +2296,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "toolsets");
       assert.notProperty(win, "toolsets");
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      for (const file of [
+        "node_modules/@trycua/cua-driver-darwin-arm64/libcua_driver_sdk.dylib",
+        "node_modules/@trycua/cua-driver-darwin-x64/cua_driver_node_runtime.node",
+        "node_modules/@trycua/cua-driver-linux-x64-gnu/libcua_driver_sdk.so",
+        "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll",
+        "node_modules/@trycua/cua-driver/dist/embedded.js",
+      ]) {
+        const excluded = (config: Record<string, unknown>) =>
+          (config.files as string[]).some((glob) => NodePath.matchesGlob(file, glob.slice(1)));
+        assert.isTrue(excluded(mac), file);
+        assert.isFalse(excluded(linux), file);
+        assert.isFalse(excluded(win), file);
+      }
       assert.deepStrictEqual(linux.files, [...DESKTOP_FILE_EXCLUSIONS, ...LINUX_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);
       assert.deepStrictEqual(winWithoutWslRuntime.files, win.files);
@@ -2489,22 +2429,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
-    assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
-      { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
-      {
-        from: "apps/desktop/prod-resources/cursor-sdk",
-        to: "node_modules/@cursor",
-      },
-      {
-        from: "apps/desktop/prod-resources/resource-monitor",
-        to: "resource-monitor",
-      },
-      {
-        from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-        to: "LICENSE-T3CODE.txt",
-      },
-    ]);
+  it("maps resource monitor build targets and executable names", () => {
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
       "aarch64-apple-darwin",
       "x86_64-apple-darwin",
@@ -2584,14 +2509,6 @@ it("refuses a preload that Electron's sandbox wrapper cannot parse", () => {
     sandboxedPreloadSyntaxError("(() => {\n" + effectScheduler + "\n})();"),
     undefined,
   );
-});
-
-it("keeps the prefix of a UNC path instead of going relative", () => {
-  const paths = ancestorNodeModulesPaths("\\\\server\\share\\tmp\\app", "\\");
-  for (const candidate of paths) {
-    assert.ok(candidate.startsWith("\\\\server\\share"), candidate);
-  }
-  assert.deepStrictEqual(paths[0], "\\\\server\\share\\tmp\\node_modules");
 });
 
 it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated tree", () =>

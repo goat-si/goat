@@ -10,6 +10,7 @@ import {
   useClientSettingsHydrationStatus,
 } from "../../hooks/useSettings";
 import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
+import { isLaunchLanding } from "../../launchRoute";
 import { completeOnboarding } from "../../onboarding/firstRun";
 import {
   isFirstRunWorkspaceProvenanceAuthoritative,
@@ -104,7 +105,7 @@ export function FirstRunGate({
   // A workspace still counts as fresh when its only content is the server's own
   // cwd auto-bootstrap: web mode creates a project + thread from cwd at startup
   // (`autoBootstrapProjectFromCwd` defaults on there), so "no projects at all"
-  // would mean `npx t3` users never see the wizard.
+  // would mean users of the `goat` CLI never see the wizard.
   const serverCwd = serverConfig?.cwd ?? null;
   const primaryEnvironmentId = serverConfig?.environment.environmentId ?? null;
   const workspaceFresh =
@@ -164,9 +165,8 @@ export function FirstRunGate({
     return () => window.clearTimeout(timer);
   }, [decision, enabled, hydrated]);
 
-  // Setup opens by itself only from the home route. A direct link, such as
-  // Settings, opens as asked so setup can never lock a user out of the app.
-  const wizardOwnsRoute = pathname === "/";
+  // Setup can never lock a user out of a page they linked to.
+  const wizardOwnsRoute = isLaunchLanding(pathname);
   useEffect(() => {
     if (decision === "wizard" && wizardOwnsRoute) {
       void navigate({ to: "/welcome", replace: true });

@@ -1,17 +1,8 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import {
-  HUB_TRANSPORT_LABEL,
-  hubParityLabel,
-  hubReachabilityLabel,
-  hubSnapshot,
-  hubVersionLabel,
-  type HubDevice,
-  type HubSnapshot,
-} from "@goat/client-runtime/state/hub-fleet";
-import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import { cloudAutoJoinSaveError } from "@goat/client-runtime/hub-devices";
+import { hubSnapshot, type HubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import {
   AuthOrchestrationOperateScope,
-  FLEET_LOCAL_HOST_KEY,
   type EnvironmentId,
   type GoatclawSettings,
   type GoatclawHostSyncState,
@@ -26,25 +17,18 @@ import { isElectron } from "~/env";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { HOST_STATUS_REFRESH_MS, hostStatusAtom, refreshHostStatus } from "~/state/hostStatus";
-import { fleetEnvironmentsAtom } from "~/state/fleet";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { profileLabel } from "../desktop/firstRunPrompts.logic";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  AddHubDevice,
-  HubActionResult,
-  HubDeviceActionButtons,
-  useHubActions,
-  type HubActions,
-} from "./HubDeviceActions";
+import { useHubActions } from "./HubDeviceActions";
+import { HubDeviceListSection } from "./HubDeviceList";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -53,13 +37,6 @@ const CLOUD_HOLDER_LABEL: Record<HubSettingsValue["cloudHolder"], string> = {
   hub: "On this hub",
   auto: "Wherever signed in",
 };
-
-const VERDICT_BADGE = {
-  ok: "success",
-  degraded: "warning",
-  broken: "error",
-  unproven: "outline",
-} as const;
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -152,17 +129,22 @@ function useHubSettings(environmentId: EnvironmentId) {
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const savePatch = async (
     patch:
       | { readonly hub: Partial<HubSettingsValue> }
       | { readonly goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">> },
   ) => {
-    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return;
+    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return null;
     setSaving(true);
     setError(null);
     const result = await update({ environmentId, input: { patch } });
     setSaving(false);
-    if (result._tag === "Failure") setError("Could not save the setting. Try again.");
+    if (result._tag === "Failure") {
+      setError("Could not save the setting. Try again.");
+      return null;
+    }
+    return result.value;
   };
   return {
     settings,
@@ -170,7 +152,17 @@ function useHubSettings(environmentId: EnvironmentId) {
     canConfigure,
     saving,
     error,
+    joinError,
     save: (hub: Partial<HubSettingsValue>) => savePatch({ hub }),
+    /** An older hub drops the field and answers on, since it always joins its cloud machines. */
+    saveCloudAutoJoin: async (autoJoinCloudMachines: boolean) => {
+      setJoinError(null);
+      const saved = await savePatch({ hub: { autoJoinCloudMachines } });
+      if (saved !== null)
+        setJoinError(
+          cloudAutoJoinSaveError(autoJoinCloudMachines, saved.hub.autoJoinCloudMachines),
+        );
+    },
     saveGoatclaw: (goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">>) =>
       savePatch({ goatclaw }),
   };
@@ -190,7 +182,6 @@ function HubControls({
   const atom = hostStatusAtom(environmentId);
   const result = useAtomValue(atom);
   const reachesHosts = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const [adding, setAdding] = useState(false);
   const actions = useHubActions(environmentId, () => registry.refresh(atom));
   useLiveRefresh(() => refreshHostStatus(registry, atom), {
     key: `hub:${environmentId}`,
@@ -263,6 +254,27 @@ function HubControls({
           }
         />
         <SettingsRow
+          {...searchableSetting("hub-cloud-auto-join")}
+          serverScoped
+          settingKeys={["hub"]}
+          description="A cloud machine this hub creates gets its OpenCodex and joins as a Child the first time it is used. Off: new machines stay standalone, and linked ones stay linked."
+          status={
+            hub.joinError ? (
+              <span role="alert" className="text-destructive">
+                {hub.joinError}
+              </span>
+            ) : undefined
+          }
+          control={
+            <Switch
+              aria-label="Join new cloud machines"
+              checked={hub.settings.autoJoinCloudMachines}
+              disabled={hub.saving || !hub.canConfigure || !hub.settings.enabled}
+              onCheckedChange={(checked) => void hub.saveCloudAutoJoin(checked)}
+            />
+          }
+        />
+        <SettingsRow
           {...searchableSetting("hub-permission-profiles")}
           serverScoped
           settingKeys={["goatclaw"]}
@@ -329,273 +341,26 @@ function HubControls({
             }
           />
         )}
-      </SettingsSection>
-      <SettingsSection
-        {...searchableSetting("hub-devices")}
-        title="Devices"
-        headerAction={
-          <span className="flex items-center gap-1">
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={adding || !actions.allowed}
-              onClick={() => setAdding(true)}
-            >
-              Add device to hub
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={result.waiting}
-              onClick={() => registry.refresh(atom)}
-            >
-              Refresh
-            </Button>
-          </span>
-        }
-      >
-        {adding ? (
-          <AddHubDevice
-            actions={actions}
-            suggestions={
-              snapshot?.devices
-                .filter((device) => device.transport === "standalone")
-                .map((device) => device.alias) ?? []
-            }
-            onClose={() => setAdding(false)}
+        {home?.installed ? (
+          <SettingsRow
+            title="OpenCodex models"
+            description="Load OpenCodex's current models into Codex here, then on each linked Child. Children take this Home's models and settings. GOAT also syncs after every managed OpenCodex update."
+            control={<OpenCodexSyncButton environmentId={environmentId} homeLabel={label} />}
           />
         ) : null}
-        <HubDevices
-          environmentId={environmentId}
-          snapshot={snapshot}
-          reading={result._tag === "Initial"}
-          failed={result._tag === "Failure"}
-          reachesHosts={reachesHosts}
-          actions={actions}
-          onVerified={() => registry.refresh(atom)}
-        />
       </SettingsSection>
-    </>
-  );
-}
-
-function HubDevices(props: {
-  readonly environmentId: EnvironmentId;
-  readonly snapshot: HubSnapshot | null;
-  readonly reading: boolean;
-  readonly failed: boolean;
-  readonly reachesHosts: boolean;
-  readonly actions: HubActions;
-  readonly onVerified: () => void;
-}) {
-  const message = props.reading
-    ? "Reading devices…"
-    : props.failed
-      ? "Could not read devices. Try Refresh."
-      : props.snapshot === null || props.snapshot.devices.length === 0
-        ? "No devices yet. Add one with Add device to hub."
-        : null;
-  // A device that left the hub drops out of the list; its result stays readable here.
-  const listed = new Set(props.snapshot?.devices.map((device) => device.alias) ?? []);
-  const recent = props.actions.entries.filter((entry) => !listed.has(entry.alias));
-  return (
-    <>
-      {message === null ? (
-        <ul aria-label="Hub devices" className="divide-y divide-border/50">
-          {props.snapshot!.devices.map((device) => (
-            <HubDeviceRow
-              key={device.alias}
-              environmentId={props.environmentId}
-              device={device}
-              actions={props.actions}
-              onVerified={props.onVerified}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">{message}</p>
-      )}
-      {recent.length === 0 ? null : (
-        <section aria-label="Recent actions" className="space-y-2 px-3 py-3 sm:px-4">
-          <h3 className="text-xs font-medium text-muted-foreground">Recent actions</h3>
-          {recent.map((entry) => (
-            <HubActionResult key={entry.alias} entry={entry} actions={props.actions} />
-          ))}
-        </section>
-      )}
-      {props.reachesHosts ? null : (
-        <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-          Device versions and checks show for sessions that can operate threads.
-        </p>
-      )}
-    </>
-  );
-}
-
-function HubDeviceRow({
-  environmentId,
-  device,
-  actions,
-  onVerified,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly device: HubDevice;
-  readonly actions: HubActions;
-  readonly onVerified: () => void;
-}) {
-  const canVerify = useAtomValue(serverEnvironment.verifyHubDevice.permissionAtom(environmentId));
-  const verify = useAtomCommand(serverEnvironment.verifyHubDevice, { reportFailure: false });
-  const [verifying, setVerifying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const parity = device.parity;
-  const failing = parity?.checks.filter((check) => check.status === "failed") ?? [];
-  const runVerify = async () => {
-    setVerifying(true);
-    setError(null);
-    const result = await verify({ environmentId, input: { deviceAlias: device.alias } });
-    setVerifying(false);
-    if (result._tag === "Failure") {
-      const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : String(failure));
-      return;
-    }
-    onVerified();
-  };
-  return (
-    <li data-hub-device={device.alias} className="space-y-2 px-3 py-3 sm:px-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="min-w-0 truncate text-sm font-medium">{device.alias}</h3>
-        <span className="text-xs text-muted-foreground">
-          {HUB_TRANSPORT_LABEL[device.transport]}
-        </span>
-        <Badge size="sm" variant={parity === null ? "outline" : VERDICT_BADGE[parity.verdict]}>
-          Parity {hubParityLabel(parity)}
-        </Badge>
-        <Button
-          size="xs"
-          variant="outline"
-          className="ml-auto"
-          disabled={verifying || !canVerify}
-          onClick={() => void runVerify()}
-        >
-          {verifying ? "Verifying…" : "Verify"}
-        </Button>
-        <HubDeviceActionButtons device={device} actions={actions} />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {[
-          hubVersionLabel(device),
-          device.tunnel === null ? null : `tunnel ${device.tunnel}`,
-          hubReachabilityLabel(device),
-          parity === null
-            ? "never verified"
-            : `verified ${formatRelativeTimeLabel(new Date(parity.checkedAt).toISOString())}`,
-        ]
-          .filter((part) => part !== null)
-          .join(" · ")}
-      </p>
-      {failing.length === 0 ? null : (
-        <ul className="space-y-0.5 text-xs">
-          {failing.map((check) => (
-            <li key={check.id}>
-              <span className="font-mono">{check.id}</span>{" "}
-              <span className="text-muted-foreground">{check.reason}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-      <HubActionResult entry={actions.entry(device.alias)} actions={actions} />
-      <DeviceFallback alias={device.alias} fallback={device.fallback} />
-    </li>
-  );
-}
-
-/**
- * The hub-down policy runs on the device and reads that device's own `hub.devices.local`,
- * because the hub may be the machine that is down. So the switch writes through the device's
- * GOAT connection, matched by its SSH alias or name.
- */
-function DeviceFallback({
-  alias,
-  fallback,
-}: {
-  readonly alias: string;
-  readonly fallback: HubDevice["fallback"];
-}) {
-  const environments = useAtomValue(fleetEnvironmentsAtom);
-  const device = environments.find(
-    (environment) => environment.sshAliases.includes(alias) || environment.label === alias,
-  );
-  const id = `hub-fallback-${alias}`;
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <label htmlFor={id} className="min-w-0 text-xs">
-        Use this device's own sign-in when the hub is down
-        <span className="block text-muted-foreground">
-          {device === undefined
-            ? `Connect to ${alias} in GOAT to change this; the setting lives on that device.`
-            : `OpenCodex allows it: ${FALLBACK_LABEL[fallback]}`}
-        </span>
-      </label>
-      {device === undefined ? (
-        <Switch id={id} checked={false} disabled />
-      ) : (
-        <DeviceFallbackSwitch id={id} environmentId={device.environmentId} />
-      )}
-    </div>
-  );
-}
-
-const FALLBACK_LABEL: Record<HubDevice["fallback"], string> = {
-  on: "yes",
-  off: "no",
-  unknown: "unknown",
-};
-
-function DeviceFallbackSwitch({
-  id,
-  environmentId,
-}: {
-  readonly id: string;
-  readonly environmentId: EnvironmentId;
-}) {
-  const registry = useContext(RegistryContext);
-  const devices = useEnvironmentSettings(environmentId, (value) => value.hub.devices);
-  const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
-  const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(false);
-  const save = async (localFallback: boolean) => {
-    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return;
-    setSaving(true);
-    setError(false);
-    const result = await update({
-      environmentId,
-      input: {
-        patch: { hub: { devices: { ...devices, [FLEET_LOCAL_HOST_KEY]: { localFallback } } } },
-      },
-    });
-    setSaving(false);
-    setError(result._tag === "Failure");
-  };
-  return (
-    <span className="flex items-center gap-2">
-      {error ? (
-        <span role="alert" className="text-xs text-destructive">
-          Could not save
-        </span>
-      ) : null}
-      <Switch
-        id={id}
-        checked={devices[FLEET_LOCAL_HOST_KEY]?.localFallback ?? false}
-        disabled={saving || !canConfigure}
-        onCheckedChange={(checked) => void save(checked)}
+      <HubDeviceListSection
+        environmentId={environmentId}
+        hosts={hosts}
+        snapshot={snapshot}
+        hostsState={
+          result._tag === "Initial" ? "reading" : result._tag === "Failure" ? "failed" : "read"
+        }
+        refreshing={result.waiting}
+        reachesHosts={reachesHosts}
+        actions={actions}
+        onRefresh={() => registry.refresh(atom)}
       />
-    </span>
+    </>
   );
 }

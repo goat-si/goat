@@ -22,7 +22,9 @@ import {
 } from "./baseSchemas.ts";
 import { CloudHolder } from "./cloudAgents.ts";
 import { HostComputerUse } from "./cua.ts";
+import { RuntimeProtocolRanges } from "./environment.ts";
 import { HandoffSummary } from "./handoff.ts";
+import { HostCompatibility } from "./hostStatus.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 /** Drivers whose CLI GOAT knows how to install with the vendor's own installer. */
@@ -106,8 +108,15 @@ export const ProviderHostRow = Schema.Struct({
   platform: Schema.optionalKey(TrimmedNonEmptyString),
   arch: Schema.optionalKey(TrimmedNonEmptyString),
   goatVersion: Schema.optionalKey(TrimmedNonEmptyString),
-  /** Set when the host runs another GOAT build than the machine that asked. */
+  /** Protocol ranges that machine serves. Older hosts omit it, and a malformed value decodes away. */
+  protocol: ForwardCompatibleOptional(RuntimeProtocolRanges),
+  /**
+   * Set when the host runs another GOAT build than the machine that asked. Informational: builds
+   * work together while `compatibility` is `compatible`. Kept for readers that predate it.
+   */
   versionMismatch: Schema.optionalKey(Schema.Boolean),
+  /** The machine that asked judges each reachable remote by the protocols it serves (ADR-0019). */
+  compatibility: ForwardCompatibleOptional(HostCompatibility),
   message: Schema.optionalKey(TrimmedNonEmptyString),
   providers: Schema.Array(ProviderHostProviderState),
   /** Present when this GOAT can say whether the machine launches cloud runs. */
@@ -248,11 +257,27 @@ export type ProviderSyncStatusInput = typeof ProviderSyncStatusInput.Type;
 export const ProviderSyncCancelInput = Schema.Struct({ syncId: SyncId });
 export type ProviderSyncCancelInput = typeof ProviderSyncCancelInput.Type;
 
+/**
+ * declined, expired and cancelled: the approval handoff ended that way, so no sync will start.
+ * start_failed: the person approved but the sync could not start.
+ */
+export const ProviderHostSyncErrorCode = Schema.Literals([
+  "not_found",
+  "invalid_request",
+  "unavailable",
+  "denied",
+  "declined",
+  "expired",
+  "cancelled",
+  "start_failed",
+]);
+export type ProviderHostSyncErrorCode = typeof ProviderHostSyncErrorCode.Type;
+
 /** Safe text only: never installer output, credentials, or sign-in URLs. */
 export class ProviderHostSyncError extends Schema.TaggedError<ProviderHostSyncError>()(
   "ProviderHostSyncError",
   {
-    code: Schema.Literals(["not_found", "invalid_request", "unavailable", "denied"]),
+    code: ProviderHostSyncErrorCode,
     detail: Schema.String,
   },
 ) {

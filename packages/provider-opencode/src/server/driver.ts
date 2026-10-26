@@ -81,7 +81,7 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
 
 /**
  * OpenCode 1.x ships as `opencode-ai` and 2.x as `@opencode/cli`. An install is
- * only ever updated within its own package: T3 never moves a 1.x install onto
+ * only ever updated within its own package: GOAT never moves a 1.x install onto
  * 2.x or back, since 2.x converts the shared database in place.
  */
 export const openCodeUpdateFor = (generation: ProbedOpenCode["generation"]) =>
@@ -394,6 +394,9 @@ export const OpenCodeDriver: ProviderDriver<
           host.paths.cwd,
           runtimeProbe.refresh,
           loadOpenCode2Models,
+        ).pipe(
+          Effect.annotateLogs({ providerInstanceId: instanceId }),
+          Effect.annotateSpans({ providerInstanceId: instanceId }),
         ),
         usageLimits: readOpenCodeGoUsageLimits({
           enabled: effectiveConfig.enabled,
@@ -484,7 +487,13 @@ export const OpenCodeDriver: ProviderDriver<
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       checkProviderOnSettingsChange: () => false,
-      refreshOnInterval: false,
+      // A failed or still-loading catalog must recover without a manual
+      // refresh. Healthy instances need no recurring server starts.
+      refreshOnInterval: (snapshot) =>
+        snapshot.enabled &&
+        snapshot.installed &&
+        snapshot.status !== "ready" &&
+        snapshot.auth.status === "unknown",
       initialSnapshot: (settings) =>
         makePendingOpenCodeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider,

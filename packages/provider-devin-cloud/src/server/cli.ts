@@ -21,6 +21,15 @@ const decodeInstanceId = Schema.decodeUnknownOption(ProviderInstanceId);
 // The native-ref contract trims fingerprints; JSON preserves empty profile slots across persistence.
 const encodeBinding = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
+const STAGE_MESSAGES = {
+  sibling: "Devin Cloud could not find your Devin CLI. Install it, then refresh providers.",
+  resolve: "Devin Cloud could not start your Devin CLI.",
+  probe: "Devin Cloud could not run your Devin CLI.",
+  version: "Update the Devin CLI to 3000.11.1 or newer.",
+  auth: "Sign in to Devin to use Devin Cloud.",
+  relay: "This Devin CLI does not support cloud sessions. Update it.",
+} as const;
+
 export function selectSiblingInstanceId(
   settings: Pick<ServerSettings, "providerInstances">,
   configuredId: string,
@@ -66,9 +75,12 @@ export class DevinCloudCliError extends Schema.TaggedError<DevinCloudCliError>()
   },
 ) {
   override get message() {
-    return (
-      this.detail ?? `Devin Cloud ${this.stage} failed. Check the selected Devin ACP instance.`
-    );
+    if (this.detail) return this.detail;
+    if (this.stage === "sibling" && this.reason === "disabled")
+      return "The Devin provider that Devin Cloud uses is off. Turn it on in Settings.";
+    if (this.stage === "sibling" && this.reason !== undefined && this.reason !== "missing")
+      return "The provider Devin Cloud uses does not run the Devin CLI. Choose another under Advanced.";
+    return STAGE_MESSAGES[this.stage];
   }
 }
 
@@ -102,6 +114,11 @@ export type CliResult = {
   readonly stdout: string;
   readonly stderr: string;
 };
+export type DevinCliReadiness = {
+  readonly version: string;
+  /** The signed-in account, shown to the person; never logged. */
+  readonly email: string | undefined;
+};
 
 /** Read-only readiness; never starts ACP or a cloud session. */
 export const probeCli = Effect.fn("DevinCloud.probeCli")(function* (
@@ -120,7 +137,8 @@ export const probeCli = Effect.fn("DevinCloud.probeCli")(function* (
   if (auth.exitCode !== 0 || !/^Logged in \(via Devin\)\./mu.test(auth.stdout)) {
     return yield* new DevinCloudCliError({ stage: "auth" });
   }
-  return cloudVersion(version.stdout)!;
+  const email = /^\s*Email:\s*(\S+@\S+)\s*$/mu.exec(auth.stdout)?.[1];
+  return { version: cloudVersion(version.stdout)!, email } satisfies DevinCliReadiness;
 });
 
 export class DevinCloudCli extends Context.Service<
@@ -130,7 +148,9 @@ export class DevinCloudCli extends Context.Service<
       siblingId: string,
       cwd: string,
     ) => Effect.Effect<DevinCloudLaunch, DevinCloudCliError>;
-    readonly probe: (launch: DevinCloudLaunch) => Effect.Effect<string, DevinCloudCliError>;
+    readonly probe: (
+      launch: DevinCloudLaunch,
+    ) => Effect.Effect<DevinCliReadiness, DevinCloudCliError>;
   }
 >()("@goat/provider-devin-cloud/server/cli/DevinCloudCli") {}
 

@@ -243,7 +243,10 @@ export const installArchivePsDouble = Effect.fn("test.installArchivePsDouble")(f
   yield* fs.writeFileString(
     `${bin}/ps`,
     `#!/bin/sh
-if [ "$1 $2 $3 $4" = '-o command= -p ${pid}' ]; then
+if [ "$1 $2 $3 $4" = '-o uid= -p ${pid}' ] && [ -f "$HOME/.test/foreign-uid" ]; then
+  # A test hands the server to another user by naming that user's uid here.
+  exec cat "$HOME/.test/foreign-uid"
+elif [ "$1 $2 $3 $4" = '-o command= -p ${pid}' ]; then
   # A test hands the server to a foreign owner by naming another command here.
   if [ -f "$HOME/.test/foreign-command" ]; then exec cat "$HOME/.test/foreign-command"; fi
   printf '%s\\n' "${command}"

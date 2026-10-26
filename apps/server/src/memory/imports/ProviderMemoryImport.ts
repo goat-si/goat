@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as Renderer from "@goat/provider-core/server/memoryContext";
-import { scanMemoryValue } from "../MemorySecretScanner.ts";
+import { redactMemoryText, scanMemoryValue } from "../MemorySecretScanner.ts";
 import { MemoryAccessError } from "../MemoryService.ts";
 import { MemoryStoreConflict } from "../MemoryStore.ts";
 import type {
@@ -69,6 +69,30 @@ const fitsTurnStart = (text: string, address: { readonly environmentId: M.Enviro
   );
 const validateOutput = Schema.decodeUnknownEffect(M.MemoryImportProviderResult);
 const validPayload = Schema.is(M.MemoryPayload);
+
+/**
+ * A parsed candidate as it is committed: its text redacted of GOAT credentials (an agent's note can
+ * hold its thread credential, and imported memories sync, #1297) and import evidence attached. The
+ * parser's fingerprints stay those of the raw source, so a re-import is still matched.
+ */
+export const attachImportEvidence = (
+  candidate: ImportCandidate,
+  sourceId: M.MemoryImportSourceId,
+) => {
+  const payload: M.MemoryPayload = {
+    ...redactMemoryText(candidate.payload),
+    evidence: [{ origin: "import", importSourceId: sourceId, messageIds: [] }],
+  };
+  return {
+    candidate: { ...candidate, payload },
+    issue:
+      !validPayload(payload) || bytes(json(payload)) > M.MEMORY_PAYLOAD_MAX_UTF8_BYTES
+        ? ("limit_exceeded" as const)
+        : scanMemoryValue(json(payload)).kind === "blocked"
+          ? ("secret_detected" as const)
+          : undefined,
+  };
+};
 const validCapacity = Schema.is(M.MemoryCapacityExceeded);
 
 /** Closed coordinator. Reader acquisition and Service/Sync ownership stay with the composition root. */
@@ -131,21 +155,6 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
         return yield* new M.MemoryImportRpcError({ issue: "unsupported_format" });
       return { s, rows };
     });
-  const attach = (candidate: ImportCandidate, sourceId: M.MemoryImportSourceId) => {
-    const payload: M.MemoryPayload = {
-      ...candidate.payload,
-      evidence: [{ origin: "import", importSourceId: sourceId, messageIds: [] }],
-    };
-    return {
-      candidate: { ...candidate, payload },
-      issue:
-        !validPayload(payload) || bytes(json(payload)) > M.MEMORY_PAYLOAD_MAX_UTF8_BYTES
-          ? ("limit_exceeded" as const)
-          : scanMemoryValue(json(payload)).kind === "blocked"
-            ? ("secret_detected" as const)
-            : undefined,
-    };
-  };
   // Receipt status needs no source or public memory:read capability. The passed permit owns both grants.
   const finish = (action: "apply" | "status", receipt: M.MemoryImportReceipt, permit: Permit) =>
     ports.syncStatus({}, permit).pipe(
@@ -288,7 +297,7 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
                 )
               : null;
             const suppressed = match && match.kind !== "none" && match.kind !== "live";
-            const { issue } = attach(c, r.sourceId);
+            const { issue } = attachImportEvidence(c, r.sourceId);
             items.push({
               sourceItemKey: c.sourceItemKey,
               sourceFingerprint: c.sourceFingerprint,
@@ -485,7 +494,7 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
                   },
                   byteCount: 0,
                 };
-          const attached = attach(raw, r.sourceId);
+          const attached = attachImportEvidence(raw, r.sourceId);
           if (attached.issue === "secret_detected")
             return yield* new M.MemoryImportRpcError({ issue: "secret_detected" });
           const c = attached.candidate;

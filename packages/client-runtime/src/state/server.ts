@@ -1,6 +1,5 @@
 import {
   type EnvironmentId,
-  type DecisionListInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -40,6 +39,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
+import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
 import {
   isRpcClientError,
   request,
@@ -50,6 +50,7 @@ import {
 } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -99,7 +100,7 @@ export class ServerUpdateResumeTimeoutError extends Schema.TaggedError<ServerUpd
   },
 ) {
   override get message(): string {
-    return `The server did not resume on t3@${this.targetVersion}.`;
+    return `The server did not resume on GOAT ${this.targetVersion}.`;
   }
 }
 
@@ -110,7 +111,7 @@ export class ServerUpdateProgressIncompleteError extends Schema.TaggedError<Serv
   },
 ) {
   override get message(): string {
-    return `The t3@${this.targetVersion} update ended before the server accepted the restart.`;
+    return `The GOAT ${this.targetVersion} update ended before the server accepted the restart.`;
   }
 }
 
@@ -123,7 +124,7 @@ export class ServerUpdateTerminalError extends Schema.TaggedError<ServerUpdateTe
   },
 ) {
   override get message(): string {
-    return this.reason ?? `The t3@${this.targetVersion} update ${this.status}.`;
+    return this.reason ?? `The GOAT ${this.targetVersion} update ${this.status}.`;
   }
 }
 
@@ -905,10 +906,18 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:worktrees-directory-setting:${environmentId}`),
     ),
   );
-  const computerUseSettingAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get) => get(settingsValueAtom(environmentId))?.enableCua ?? false).pipe(
-      Atom.withLabel(`environment-data:server:computer-use-setting:${environmentId}`),
-    ),
+  const computerUseStatusChanges = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:server:computer-use-status-changes",
+    tag: WS_METHODS.computerUseStatusChanges,
+    idleTtlMs: 0,
+  });
+  const computerUseRefreshAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const status = get(computerUseStatusChanges({ environmentId, input: {} }));
+      // Older servers may reject the subscription; the status query still works on its own.
+      const revision = AsyncResult.isSuccess(status) ? status.value.revision : null;
+      return JSON.stringify([get(settingsValueAtom(environmentId))?.enableCua ?? false, revision]);
+    }).pipe(Atom.withLabel(`environment-data:server:computer-use-refresh:${environmentId}`)),
   );
   const usagePricesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
@@ -1051,28 +1060,9 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: refreshCloudMachines,
     });
 
-  const listDecisions = createEnvironmentRpcCommand(runtime, {
-    label: "environment-data:decision:list",
-    tag: WS_METHODS.decisionList,
-  });
-  const queryDecisions = Effect.fn("DecisionInbox.list")(function* (target: {
-    environmentId: EnvironmentId;
-    input: DecisionListInput;
-  }) {
-    const registry = yield* AtomRegistry.AtomRegistry;
-    const result = yield* Effect.promise(() => listDecisions.run(registry, target));
-    return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
-  });
-  const decisionItems = createEnvironmentQueryAtomFamily(runtime, {
-    label: "environment-data:decision:list:query",
-    idleTtlMs: 0,
-    execute: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
-      queryDecisions(target),
-    refreshTrigger: (target) => listDecisions.permissionAtom(target.environmentId),
-  });
-
   return {
     cloudMachines,
+    ...createOpenCodexSyncAtoms(runtime),
     cloudAgentRuns,
     configureCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesConfigure),
     disconnectCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesDisconnect),
@@ -1118,12 +1108,23 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
       refreshTrigger: ({ environmentId }) => worktreesDirectorySettingAtom(environmentId),
     }),
-    /** Driver readiness on the host; rechecked whenever computer use is turned on or off. */
+    /** Driver readiness on the host, refreshed by helper reports and the computer use setting. */
     computerUse: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:computer-use",
       tag: WS_METHODS.serverCheckComputerUse,
       idleTtlMs: 0,
-      refreshTrigger: ({ environmentId }) => computerUseSettingAtom(environmentId),
+      refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
+    }),
+    /**
+     * The host's running apps with names and icons (computerUse.apps), for the composer's @ list
+     * and the icons beside computer use calls. Refreshes with the computer use readiness.
+     */
+    computerUseApps: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-use-apps",
+      tag: WS_METHODS.computerUseApps,
+      idleTtlMs: 0,
+      staleTimeMs: 15_000,
+      refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
     }),
     updateStateAtom,
     settingsValueAtom,
@@ -1235,15 +1236,16 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.remoteLaunchesList,
       staleTimeMs: 5_000,
     }),
-    decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
-      decisionItems({ environmentId: target.environmentId, input: target }),
-    answerDecision: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:decision:answer",
-      tag: WS_METHODS.decisionAnswer,
-    }),
+    ...createDecisionEnvironmentAtoms(runtime),
     verifyHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-verify",
       tag: WS_METHODS.hubDeviceVerify,
+    }),
+    /** Asks this machine's managed OpenCodex update to check now, from the update dialog. */
+    checkOpenCodexUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-opencodex-update",
+      tag: WS_METHODS.serverCheckOpenCodexUpdate,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
     joinHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-join",
@@ -1256,6 +1258,11 @@ export function createServerEnvironmentAtoms<R, E>(
     repairHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-repair",
       tag: WS_METHODS.hubDeviceRepair,
+    }),
+    /** A person's standing consent to join an SSH host as the hub's OpenCodex Child. */
+    setHubDeviceChildOptIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-child-opt-in",
+      tag: WS_METHODS.hubDeviceChildOptIn,
     }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",

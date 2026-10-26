@@ -45,6 +45,7 @@ export interface UpdatesHarnessOptions {
   readonly readOnlyPaths?: ReadonlyArray<string>;
   readonly packageType?: string | undefined;
   readonly installRecord?: string | undefined;
+  readonly appVersion?: string;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -196,7 +197,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/goat-desktop-updates-home-${process.pid}`,
     platform: options.platform ?? "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: options.appPath ?? "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",
@@ -224,6 +225,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layerSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
     get: Effect.sync(() => testSettings),
     load: Effect.sync(() => testSettings),
+    setPreviewSessionStackPoppedOut: () => Effect.die("unexpected stack popout preference change"),
     setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
@@ -265,6 +267,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+    setHeadlessServerAttachEnabled: () => Effect.die("unexpected headless server toggle"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
@@ -375,9 +378,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         0,
       ),
     sentStates,
-    emit: (eventName: string, payload?: unknown) => {
+    emit: (eventName: string, ...payload: ReadonlyArray<unknown>) => {
       for (const listener of listeners.get(eventName) ?? []) {
-        listener(payload);
+        listener(...payload);
       }
     },
   };

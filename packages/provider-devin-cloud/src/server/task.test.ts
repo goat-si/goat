@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Acp from "effect-acp/compat";
+import { AcpRequestError } from "effect-acp/errors";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
 import { DevinCloudCliError } from "./cli.ts";
 import { makeTaskObserver, matchingPr, sourcePrompt } from "./task.ts";
@@ -207,6 +208,50 @@ it.effect(
     }),
 );
 // Transport-level assertions only; the real persistence cases below remain mandatory.
+it.effect("a sign-in refusal of the prompt stays unknown and tells the user to sign in again", () =>
+  Effect.gen(function* () {
+    const events: Adapter.ProviderAdapterV2Event[] = [];
+    let prompts = 0;
+    const observer = yield* makeTaskObserver(
+      (event) =>
+        Effect.sync(() => {
+          events.push(event);
+        }),
+      () => Effect.void,
+    );
+    yield* observer.bind(taskInput, false);
+    yield* observer.run(
+      relay({
+        prompt: () =>
+          Effect.suspend(() => {
+            prompts += 1;
+            return Effect.fail(
+              new DevinCloudCliError({
+                stage: "relay",
+                cause: AcpRequestError.fromProtocolError(
+                  { code: -32000, message: "Authentication required" },
+                  { method: "session/prompt" },
+                ),
+              }),
+            );
+          }),
+      }),
+      "task",
+    );
+    const updated = events.findLast((event) => event.type === "provider_thread.updated");
+    const task =
+      updated?.type === "provider_thread.updated" ? updated.providerThread.cloudTask : undefined;
+    assert.equal(task?.status, "unknown");
+    assert.equal(
+      task?.error,
+      "Devin asked you to sign in again (run `devin auth login`). GOAT could not confirm whether this prompt reached Devin, so it was not resent.",
+    );
+    const terminal = events.find((event) => event.type === "turn.terminal");
+    assert.equal(terminal?.type === "turn.terminal" ? terminal.status : "", "failed");
+    assert.equal(terminal?.type === "turn.terminal" ? terminal.threadDisposition : "", "broken");
+    assert.equal(prompts, 1);
+  }),
+);
 it.effect("retains early metadata and sends late blocked metadata through the base port", () =>
   Effect.gen(function* () {
     const events: Adapter.ProviderAdapterV2Event[] = [];

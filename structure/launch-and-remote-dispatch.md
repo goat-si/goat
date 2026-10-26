@@ -60,9 +60,9 @@ wait follows it into the joined run, and the follower reports that run under its
 
 `RemoteDispatchCoordinator` in `apps/server/src/remoteReports/RemoteDispatchCoordinator.ts` inserts
 a row in `remote_dispatches` and then calls `SshRemoteDispatch.launchThread`. Migration
-`apps/server/src/persistence/Migrations/070_RemoteDispatches.ts` creates that table. Reports use
-`apps/server/src/persistence/Migrations/069_RemoteReports.ts` and `RemoteReportService`.
-`apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts` adds
+`apps/server/src/persistence/Migrations/071_RemoteDispatches.ts` creates that table. Reports use
+`apps/server/src/persistence/Migrations/070_RemoteReports.ts` and `RemoteReportService`.
+`apps/server/src/persistence/Migrations/073_RemoteDispatchQuestions.ts` adds
 `pending_request_ids`, a JSON array of the launched run's open question ids. The coordinator
 writes that column from the host's observed `pendingRequestIds` before it announces questions.
 When delivery is `wake` and the remote thread id is set, it dispatches one notice per question
@@ -73,7 +73,7 @@ Two callers launch this way:
 
 - `goat_ssh_thread_launch`, when the MCP caller has a thread scope, calls `coordinator.launch`
   with `kind: "thread"`. Without a thread scope it calls `SshRemoteDispatch.launchThread` directly.
-- `delegate_task` with `target.host` and a remote cwd calls `coordinator.launch` with
+- `goat_task_create` with `target.host` and a remote cwd calls `coordinator.launch` with
   `kind: "task"` from `apps/server/src/mcp/OrchestratorMcpService.ts`.
 
 The remote agent reports with `goat_origin_report` (`apps/server/src/mcp/toolkits/remoteReport/tools.ts`).
@@ -93,7 +93,7 @@ launch. The coordinator declares it for `kind: "thread"` dispatches only, so del
 older origins, which never declare it, keep the error that names the origin and suggests
 `goat_origin_report`. Every other host tool keeps that error too. The remote caller must still be
 a live thread in default interaction mode. Migration
-`apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts` stores the flag on the binding
+`apps/server/src/persistence/Migrations/075_RemoteReportRelay.ts` stores the flag on the binding
 and the send on its report row, which travels as `RemoteReport.relay` and answers the agent with
 `delivery: "relayed"`. A retry with the same `clientRequestId` returns the same report, even
 after the origin collected it. Report retention never prunes a relay the origin has not collected;
@@ -116,8 +116,11 @@ whether to send it itself. The relay does not change the dispatch's latest repor
 ## Fleet goals
 
 Fleet goals and their controller (`apps/server/src/fleet/goals/`, tools `goat_goal_*`) launch and
-follow workers through the same launch services as the tools above, as the goal's owner thread and
-never above its ceiling. They are off unless `fleet.controllerEnabled` is set. Host cordon,
+follow workers on this machine through the same launch services as the tools above, and workers on
+other hosts directly over `SshRemoteDispatch` (`GoalRemoteWorkers.ts`, rechecking before each
+write), as the goal's owner (its GOAT
+thread, or the outside MCP client session whose live grant `auth/McpClientAuthority.ts` reads
+again by session id) and never above its ceiling. They are off unless `fleet.controllerEnabled` is set. Host cordon,
 placement limits and fallback chains do not exist yet; the controller reaches them through the
 `goat/fleet/*` service tags, whose defaults are local-only. Design and current differences:
 [agentic-k8s.md](../docs/internals/agentic-k8s.md).
@@ -130,28 +133,29 @@ placement limits and fallback chains do not exist yet; the controller reaches th
 
 ## Permission profiles
 
-With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
+goatclaw is open by default: `enabled` decodes to false and `defaultProfile` to the widest
+built-in, `owner`. With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
 under the profiles in `packages/contracts/src/permissionProfiles.ts`. Current named settings
 intersect the inherited launch snapshot and the caller's runtime ceiling; changing the default
 does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
 existing paths.
 
-`apps/server/src/persistence/Migrations/097_PermissionProfiles.ts` stores bindings and lane
+`apps/server/src/persistence/Migrations/098_PermissionProfiles.ts` stores bindings and lane
 reservations outside the orchestration event log. Admission commits before launch; pending and
 uncertain reservations retain capacity across restart. Local run projections and durable remote
-dispatches determine completion, so removing a launch watch grants no capacity. SSH requires
-a destination that accepts and enforces the inherited ceiling. goatclaw is on or off fleet-wide:
+dispatches determine completion, so removing a launch watch grants no capacity. An SSH launch requires
+a destination that accepts the inherited ceiling. goatclaw is on or off fleet-wide:
 `apps/server/src/goatclaw/FleetSync.ts` exchanges the policy with every connected host through
-`goat_goatclaw_sync` and keeps the newest change, and launches and follow-up sends sync their
-destination first. A remote follow-up send forwards the caller's ceiling and takes a lane that
-rides the target thread's dispatch; it is refused only when the destination has not shown it
-enforces ceilings. Bulk creation and remote cloud-holder forwarding refuse while enabled until
+`goat_permission_profile_sync` and keeps the newest change. Launches and follow-up sends go through one rule,
+`syncBeforeForwarding`: sync the destination first and never refuse because that sync is pending or
+outdated, so hub steering cannot stall on it. A remote follow-up send forwards the caller's ceiling
+and takes a lane that rides the target thread's dispatch. Bulk creation and remote cloud-holder forwarding refuse while enabled until
 they preserve the same policy and accounting. Provider-native limits are outside this admission
 service.
 
 Role templates (`apps/server/src/goatclaw/RoleTemplates.ts`) are launch presets over these
 profiles: `goatclawRole` on `goat_thread_launch` and `goat_ssh_thread_launch` puts the role's
-preamble and shared report protocol in front of the message and has `claim` bind the child under
+preamble, lane defaults and shared report protocol in front of the message and has `claim` bind the child under
 the role's stored profile intersected with the caller's, so a role only narrows. The role-to-profile
 map lives in contracts beside the built-ins. Role launches refuse while goatclaw is off, which is how
 turning it off stops new managers while running ones finish. GOAT Bot turns start outside any MCP
@@ -174,12 +178,20 @@ placement refuses a critical host. Settings: `fleet.pressure` in
 
 ## Durable decisions
 
-`apps/server/src/goatclaw/DecisionInbox.ts` and `packages/contracts/src/decisions.ts` keep durable
-requests alongside projections of pending provider questions. Projections retain the existing response
+`apps/server/src/goatclaw/DecisionService.ts` routes Settings and MCP decision reads and answers
+through `HostThreadsMcpService`; `DecisionInbox.ts` remains local and owns state and delivery.
+Discovery queries direct launch lineage for the origin environment, while an explicit host reads
+that host's local inbox. Foreign transport filters never fan out, and unavailable or older hosts
+remain partial results rather than being retried without a filter.
+
+Origin grants and profile ceilings are rechecked at every dispatch authorization milestone. The
+destination intersects its transport grant with the forwarded profile for classification and
+execution; person-only questions cannot cross this boundary, and linked hosts cannot approve.
+`packages/contracts/src/decisions.ts` keeps durable requests alongside pending provider questions. Projections retain the existing response
 path and its dispatch-time mode guard; approvals and questions above an agent's ceiling remain human-only.
 A client's owner override requires authenticated settings-write and orchestration-operate scopes.
 
-`apps/server/src/persistence/Migrations/098_DecisionInbox.ts` keeps decision state and append-only audit
+`apps/server/src/persistence/Migrations/099_DecisionInbox.ts` keeps decision state and append-only audit
 metadata outside the orchestration log. Answer delivery commits to an outbox before sending a stable
 thread message; the shared Scheduler retries each delivery independently. Projected answers keep an
 audit intent before dispatch and reconcile it from the committed command receipt, so restart cannot

@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { PreviewSessionStack } from "../components/preview/sessions/PreviewSessionStack";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -40,7 +41,7 @@ function ChatRouteGlobalShortcuts() {
     AuthPreviewOperateScope,
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const legacySidebarEnabled = useLegacySidebarEnabled();
+  const projectsSidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -121,7 +122,7 @@ function ChatRouteGlobalShortcuts() {
           // on every thread update.
           const threads = readThreadShells();
           if (await startNewThreadFromLastWork({ threads, projects, handleNewThread })) return;
-          if (legacySidebarEnabled === false && projectGroupCount > 1) {
+          if (projectsSidebarEnabled === false && projectGroupCount > 1) {
             openCommandPalette({ open: "new-thread-in" });
             return;
           }
@@ -197,7 +198,7 @@ function ChatRouteGlobalShortcuts() {
     selectedThreadKeysSize,
     startScratchThread,
     projects,
-    legacySidebarEnabled,
+    projectsSidebarEnabled,
     terminalOpen,
   ]);
 
@@ -208,9 +209,16 @@ function ChatRouteLayout() {
   // Both thread routes render here, not in their own leaf components, so the
   // draft-to-thread promotion keeps one ChatView mounted across the swap.
   const threadTarget = useThreadRouteTarget();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const sessionsEnvironmentId =
+    threadTarget?.kind === "server" ? threadTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      <PreviewSessionStack
+        environmentId={sessionsEnvironmentId}
+        threadRef={threadTarget?.kind === "server" ? threadTarget.threadRef : null}
+      />
       {threadTarget?.kind === "server" ? (
         <ThreadLinkPrompt threadRef={threadTarget.threadRef} />
       ) : null}

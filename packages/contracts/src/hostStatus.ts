@@ -17,8 +17,13 @@ import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
-import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
+import {
+  OpenCodexChildBootstrapStatus,
+  OpenCodexInventorySnapshot,
+  OpenCodexUpdateStatus,
+} from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
 import { GoatclawHostSync } from "./permissionProfiles.ts";
 
 /**
@@ -67,6 +72,17 @@ export const HostThreadCounts = Schema.Struct({
   subagentsRunning: Schema.optional(
     NonNegativeInt.annotate({
       description: "Subagent threads running a turn. Older hosts omit it.",
+    }),
+  ),
+  activity: Schema.optional(
+    Schema.Literals(["idle", "busy"]).annotate({
+      description:
+        "Whether runtime updates on that machine wait for work, from the same check they use. Older hosts omit it.",
+    }),
+  ),
+  blockers: Schema.optional(
+    Schema.Array(ServerActivityBlocker).annotate({
+      description: "The oldest threads that keep activity busy, at most five. Older hosts omit it.",
     }),
   ),
 });
@@ -237,6 +253,13 @@ export const HostStatusEntry = Schema.Struct({
   parity: ForwardCompatibleOptional(HubParityResult),
   /** Managed OpenCodex updates this machine coordinates. Only the answering machine sets it. */
   opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
+  /** This Home's progress joining a cloud machine it created as its Child. Set by the Home. */
+  opencodexChild: ForwardCompatibleOptional(OpenCodexChildBootstrapStatus),
+  /**
+   * Whether this hub joins the SSH host as its OpenCodex Child after each successful setup. Set by
+   * the hub for SSH hosts GOAT manages while it is a hub; older hubs omit it.
+   */
+  opencodexChildOptIn: Schema.optional(Schema.Boolean),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
   /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */

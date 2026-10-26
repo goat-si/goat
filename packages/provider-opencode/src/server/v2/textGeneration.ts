@@ -216,7 +216,7 @@ const runOnServer = Effect.fn("Opencode2TextGeneration.runOnServer")(function* (
     Effect.forkScoped,
   );
   const session = yield* client.session.create({
-    title: `T3 Code ${input.operation}`,
+    title: `GOAT ${input.operation}`,
     location: Location.PublicRef.make(location),
     model: Model.Ref.make({
       providerID: Provider.ID.make(parsed.providerID),

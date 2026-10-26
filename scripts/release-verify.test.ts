@@ -24,6 +24,7 @@ import {
   ReleaseVerificationError,
   renderSha256Sums,
   requiredReleaseAssets,
+  scanBuildLinks,
   scanReleasePayload,
   writePayloadReport,
   writeReleaseReport,
@@ -39,6 +40,7 @@ import {
 import { finalizeMacosDmgs, rewriteDmgManifest } from "./finalize-macos-dmg.ts";
 import { verifyMacPayload, verifyReleaseDirectory } from "./verify-release-artifacts.ts";
 import { mergeUpdateManifestFiles } from "./merge-update-manifests.ts";
+import { buildNpmLauncher } from "./build-npm-launcher.ts";
 import {
   parseUpdateManifest,
   serializeUpdateManifest,
@@ -142,6 +144,11 @@ describe("release payload helpers", () => {
       expect(exposureProblems("main.js", content).length).toBeGreaterThan(0);
     // Clients and the CLI ship this link; a source-repository URL here blocks every nightly.
     expect(exposureProblems("main.js", GOAT_CONNECT_COMING_SOON.guideUrl)).toEqual([]);
+    // The web bundle's privacy link (apps/web/src/legalLinks.ts); a source-repository URL there
+    // failed nightly 271.
+    expect(
+      exposureProblems("main.js", "https://goat-si.github.io/goat/privacy-policy/#usage-data"),
+    ).toEqual([]);
     expect(exposureProblems("node_modules/pkg/types.d.ts")).toEqual([]);
     expect(
       exposureProblems(
@@ -246,6 +253,7 @@ describe("release payload helpers", () => {
   });
   it("checks required assets, explicit dry-run globs and unexpected files", () => {
     const names = requiredReleaseAssets(version);
+    expect(names).toContain("goat-npm.tgz");
     expect(checkReleaseAssetSet(names, version)).toEqual([]);
     expect(
       checkReleaseAssetSet(
@@ -398,11 +406,32 @@ describe("release payload filesystem verification", () => {
           const problems = yield* scanReleasePayload(root, runner);
           expect(problems.join("\n")).toContain("server.asar!/bad.js: inline source map");
           expect(problems.join("\n")).toContain("main.map: source map");
-          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: private repository URL");
+          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: source repository URL");
           expect(commands).toEqual(["tar -tf", "tar -xf"]);
           yield* Effect.sync(uncacheAll);
         }),
       ),
+  );
+  // CI runs this over its build output so a nightly never meets a link the verifier rejects.
+  it.effect("finds the source repository links the release verifier rejects in build output", () =>
+    run(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-s1-test-" });
+        const link = "https://github.com/goat-si/goat/blob/dev/docs/user/telemetry.md";
+        yield* fs.makeDirectory(path.join(root, "client/assets"), { recursive: true });
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js"), `"${link}"`);
+        // CI builds keep source maps, which carry comments a release never ships.
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js.map"), link);
+        const releases = "https://github.com/goat-si/goat-releases/releases";
+        yield* fs.writeFileString(path.join(root, "index.js"), `"${releases}"`);
+        const problems = yield* scanBuildLinks([root]);
+        expect(problems).toEqual([
+          `${path.join(root, "client/assets/legal.js")}: source repository URL`,
+        ]);
+      }),
+    ),
   );
   it.effect("hashes only distributables in builder reports and fails on exposure", () =>
     run(
@@ -605,6 +634,8 @@ it.effect.each(releaseChannels)(
         yield* fs.makeDirectory(reportsDir);
         for (const name of requiredReleaseAssets(version).filter((name) => !name.endsWith(".yml")))
           yield* fs.writeFileString(path.join(dir, name), `payload ${name}`);
+        const npm = yield* buildNpmLauncher({ version, outputDir: path.join(root, "npm") });
+        yield* fs.copyFile(npm.tarball, path.join(dir, "goat-npm.tgz"));
         const all = yield* releaseInputs(dir);
         for (const key of new Set(all.map((entry) => releaseAssetKey(entry.name)))) {
           const payloads = all.filter((entry) => releaseAssetKey(entry.name) === key);

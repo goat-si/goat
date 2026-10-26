@@ -456,7 +456,7 @@ describe("saved SSH row semantic status", () => {
       true,
       entryWithAlternate,
     );
-    expect(result.text).toBe("Installing GOAT runtime — first setup can take a few minutes");
+    expect(result.text).toBe("Installing GOAT runtime. First setup can take a few minutes");
     expect(result.preparationPhase).toBe("uploading");
     expect(result.tone).toBe("muted");
     expect(result.tooltipText).not.toContain("did not respond");
@@ -535,7 +535,7 @@ describe("saved SSH row semantic status", () => {
       },
       { ...readyRuntime, state: "preparing", phase: "checking" },
     );
-    expect(result.text).toBe("Installing GOAT runtime — first setup can take a few minutes");
+    expect(result.text).toBe("Installing GOAT runtime. First setup can take a few minutes");
     expect(result.tone).toBe("muted");
     expect(result.runtimeText).toBeNull();
     expect(result.tooltipText).toBe(result.text);

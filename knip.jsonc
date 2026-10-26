@@ -17,37 +17,53 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly. release-desktop.yml bundles the
+      // Knip loads its preprocessor through a CLI option; native verification,
+      // worktree setup (from t3.json) and worktree creation run directly. release-desktop.yml bundles the
       // Windows verify script with esbuild through a path knip does not trace, and
       // electron-builder loads the macOS signer by path.
       "entry": [
+        // These fixture scripts are injected into a browser page by path.
+        "fixtures/*/*.js",
         "knip-schemas.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
+        "worktree-add.ts",
         "bench-ssh-post-connect.mjs",
         "export-brand-icons.ts",
         "goat-rename.ts",
         "sign-macos.ts",
+        // Local Linux computer use helper build and its live check.
+        "build-computer-use-helper-linux.ts",
+        "computer-use-linux-smoke.ts",
         "verify-windows-desktop-artifact.ts",
+        // Run by hand on a Windows desktop against the built computer use helper.
+        "computer-use-windows-smoke.ts",
+        "computer-use-windows-capture-guard-smoke.ts",
       ],
       "ignoreDependencies": ["esbuild"],
       // The `t3` npm package's files: copied into the package, never imported.
-      "ignore": ["npm-launcher/**"],
+      // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
+      // knip run beside it in check:changed must not report.
+      "ignore": ["npm-launcher/**", ".knip-test-*/**"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
       "entry": [
         "src/bin.ts!",
         "src/claude-history-worker.ts!",
+        // The Linux computer use helper, bundled on its own by scripts/build-computer-use-helper-linux.ts.
+        "src/cua/linuxHelper/main.ts!",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",
         "scripts/measure-pr-preview.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
+        "scripts/sync-mcp-client-skill.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
+        // sshRuntimeSpawn.test.ts spawns it by path as a separate process.
+        "src/cloud/sshRuntimeSpawn.fixture.ts",
         // graphqlgen reads its config.
         "graphql.config.ts",
       ],
@@ -75,6 +91,8 @@
         "src/preview-pip-preload.ts!",
         "src/mac-permission-preload.ts!",
         "src/preview/Annotation.css!",
+        // The desktop test config aliases "electron" to this module.
+        "src/testing/electronStub.ts",
       ],
       // The injected runtime resolves Playwright by string; release tooling runs
       // electron-builder from this workspace, outside its package scripts.
@@ -126,6 +144,10 @@
     },
     "infra/relay": {
       "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
+    },
+    "infra/ingest": {
+      // Wrangler loads the Worker's default export by path (wrangler.jsonc "main").
+      "entry": ["src/worker.ts!"],
     },
     "packages/*": {
       // These workspace packages are private to this monorepo.

@@ -22,6 +22,13 @@ import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
+import {
+  computerUseAppName,
+  computerUseAppToolIcon,
+  computerUseObservedApp,
+  computerUseRun,
+  computerUseRunStatus,
+} from "@goat/client-runtime/work-log/computer-use";
 import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { memo, use, useState, type KeyboardEvent } from "react";
 import {
@@ -47,6 +54,7 @@ import { cn } from "~/lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { FetchedToolOutput, V2ItemInspector, fileChangeDiffTarget } from "./V2ItemInspector";
 import { FileChangeInlineDiff } from "./FileChangeInlineDiff";
+import { ComputerUseRunCard } from "./ComputerUseRunCard";
 import { fileChangeTargetPaths } from "@goat/client-runtime/work-log/file-change-diff";
 import { fileChangeRowLabel } from "./fileChangeInlineDiff.logic";
 import { fileChangeLineCounts } from "@goat/client-runtime/work-log/line-counts";
@@ -250,6 +258,16 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             {failureItem.failure.message}
           </p>
         ) : null}
+        {failureItem.failure.log ? (
+          <details className="ms-7 pb-1 text-xs text-muted-foreground">
+            <summary className="w-fit cursor-pointer rounded-sm -outline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+              Show log
+            </summary>
+            <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/40 p-2 font-mono text-xs">
+              {failureItem.failure.log}
+            </pre>
+          </details>
+        ) : null}
         {retryRunId !== null && onRetryWorkspacePreparation ? (
           <div className="ms-7 pb-1">
             <Button
@@ -276,11 +294,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     (workEntrySignalsSevereFailure(workEntry) || !workLogEntryIsToolLike(workEntry));
   const entryIconName =
     showWarningIndicator || showDestructiveRowStyle ? "circle-alert" : workEntryIconName(workEntry);
+  const isReasoning = workEntry.itemType === "reasoning";
+  const computerUse = computerUseRun(workEntry.projectedItem?.item);
+  // A pid-only call names its app in its observation's output, which the wire item carries.
+  const wireItem = workEntry.projectedItem?.item;
+  const observedApp =
+    computerUse && wireItem?.type === "dynamic_tool"
+      ? computerUseObservedApp(wireItem.output)
+      : null;
+  const computerUseApp = computerUse ? computerUseAppName(computerUse.app, observedApp) : null;
   const entryToolIcon =
     showWarningIndicator || showDestructiveRowStyle
       ? undefined
-      : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
-  const isReasoning = workEntry.itemType === "reasoning";
+      : (workEntry.toolIcon ??
+        workEntry.toolSource?.icon ??
+        (computerUse ? computerUseAppToolIcon(computerUse.app, observedApp) : undefined));
   const questionHeading = workEntry.questionAnswer
     ? getQuestionTextPreview(workEntry.questionAnswer)
     : "";
@@ -290,7 +318,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         ? "Thinking"
         : "Thought"
       : questionHeading ||
-        (displayLabel ??
+        (computerUse?.summary ??
+          displayLabel ??
           // Like Codex: verb and file name; the tooltip keeps every full path.
           (workEntry.projectedItem?.item.type === "file_change"
             ? fileChangeRowLabel(workEntry.projectedItem.item)
@@ -309,7 +338,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       : null;
   // Expanded edit rows carry Open diff themselves, so the inspector below skips its summary.
   const fileChangeDiff =
-    expanded && projectedFileChange !== null ? fileChangeDiffTarget(projectedFileChange) : null;
+    expanded && workEntry.projectedItem ? fileChangeDiffTarget(workEntry.projectedItem) : null;
   // The label truncates and "+N more" hides the rest; the tooltip names every edited file.
   const tooltipPaths =
     workEntry.changedFiles !== undefined && workEntry.changedFiles.length > 0
@@ -437,8 +466,14 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       icon={
         <span
           className={iconWrapperClass}
-          role={showFailedIndicator ? "img" : undefined}
-          aria-label={showFailedIndicator ? "Tool call failed" : undefined}
+          role={showFailedIndicator || computerUseApp !== null ? "img" : undefined}
+          aria-label={
+            showFailedIndicator
+              ? computerUseApp === null
+                ? "Tool call failed"
+                : `${computerUseApp}: tool call failed`
+              : (computerUseApp ?? undefined)
+          }
         >
           <ToolActivityIconView
             icon={entryToolIcon}
@@ -534,7 +569,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             <InlineButton
               onClick={(event) => {
                 event.stopPropagation();
-                ctx.onOpenTurnDiff(fileChangeDiff.runId, fileChangeDiff.filePath);
+                ctx.onOpenTurnDiff(
+                  fileChangeDiff.runId,
+                  fileChangeDiff.filePath,
+                  fileChangeDiff.sourceItem,
+                );
               }}
               onKeyDown={stopRowToggle}
             >
@@ -556,14 +595,28 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           >
             <ChevronRightIcon
               className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-90",
+                "size-3 shrink-0 text-icon-muted transition-transform duration-200",
+                // Like Codex: the chevron appears on hover or focus and stays while open.
+                expanded
+                  ? "rotate-90 opacity-70"
+                  : "opacity-0 group-hover/timeline-row:opacity-70 group-focus-within/timeline-row:opacity-70 pointer-coarse:opacity-70",
               )}
             />
           </span>
         </>
       }
     >
+      {computerUse && workEntry.projectedItem && (expanded || computerUse.observes) ? (
+        // Expanded, the inspector below shows the screenshots with the rest of the output.
+        <ComputerUseRunCard
+          run={computerUse}
+          status={computerUseRunStatus(workEntry.toolLifecycleStatus)}
+          projectedItem={workEntry.projectedItem}
+          environmentId={ctx.activeThreadEnvironmentId}
+          showScreenshots={!expanded}
+          onImageExpand={onImageExpand}
+        />
+      ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
           <ChatMarkdownAssetImage

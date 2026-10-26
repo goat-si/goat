@@ -340,8 +340,43 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
+      expect(second.capabilities.devDisciplineSkill).toBe(true);
       expect(second.capabilities.automaticServerUpdates).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+    }),
+  );
+
+  it.effect("servers on one machine name the same machine under their own environment ids", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const describe = Effect.fn(function* (home?: string) {
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-server-environment-test-",
+        });
+        const described = Effect.gen(function* () {
+          const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* serverEnvironment.getDescriptor;
+        }).pipe(Effect.provide(layerServerEnvironment(baseDir)));
+        return yield* home === undefined
+          ? described
+          : described.pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+      });
+      // The desktop app's server and the headless server SSH launches keep in ~/.goat.
+      const desktop = yield* describe();
+      const headless = yield* describe();
+      const otherAccount = yield* describe("/Users/someone-else");
+
+      expect(desktop.environmentId).not.toBe(headless.environmentId);
+      expect(desktop.machineId).toBe(headless.machineId);
+      // One account's servers share an SSH config; another account on the machine has its own.
+      expect(desktop.machineUserId).toBe(headless.machineUserId);
+      expect(otherAccount.machineId).toBe(desktop.machineId);
+      // Every host GOAT CI and its developers run on exposes an OS machine identifier.
+      const platform = yield* HostProcess.Platform;
+      if (platform === "darwin" || platform === "linux") {
+        expect(desktop.machineId).toMatch(/^[0-9a-f]{32}$/);
+        expect(otherAccount.machineUserId).not.toBe(desktop.machineUserId);
+      }
     }),
   );
 

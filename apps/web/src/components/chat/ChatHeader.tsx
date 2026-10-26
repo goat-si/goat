@@ -31,6 +31,8 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { GoatBotModeButton } from "../goatBot/GoatBotModeButton";
+import { ThreadNotesButton } from "../../notes/ThreadNotesButton";
+import { AgentScreenCardsToggle } from "../preview/sessions/AgentScreenCardsToggle";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -480,6 +482,14 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <AgentScreenCardsToggle />
+      {isServerThread ? (
+        <ThreadNotesButton
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          projectTitle={activeProject && !activeProject.isScratch ? activeProject.title : null}
+        />
+      ) : null}
       {onToggleSideChat ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>

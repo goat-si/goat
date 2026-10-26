@@ -16,6 +16,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  type ModelSelection,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -239,8 +240,9 @@ export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
 /** A provider account on this machine as placement sees it: signed in, with one weekly window. */
 export interface FakeProviderInstance {
   readonly instanceId: string;
-  readonly models?: ReadonlyArray<{ readonly slug: string }>;
   readonly displayName?: string;
+  /** Advertised model slugs; absent lists none, so any model counts as offered. */
+  readonly models?: ReadonlyArray<string>;
   /** The weekly window's use; absent when the account reports no quota. */
   readonly weeklyUsedPercent?: number;
   readonly resetsAt?: string;
@@ -264,8 +266,8 @@ const fakeInstance = (instance: FakeProviderInstance) =>
           : { supportedRuntimeModes: instance.supportedRuntimeModes }),
         status: instance.ready === false ? "error" : "ready",
         auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
-        // No models listed, so any model counts as offered.
-        models: instance.models ?? [],
+        // Absent means no models listed, so any model counts as offered.
+        models: (instance.models ?? []).map((slug) => ({ slug })),
         ...(instance.weeklyUsedPercent === undefined
           ? {}
           : {
@@ -297,6 +299,16 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    /**
+     * Real directory as the work project's root. A .git inside it makes the dispatcher give the
+     * task its own worktree; the default is a path that does not exist.
+     */
+    readonly workspaceRoot?: string;
+    /**
+     * Every project shell's default model: undefined keeps the shared modelSelection, a value
+     * sets it, and null sets no default so resolution falls through to the server settings.
+     */
+    readonly shellDefaultModel?: ModelSelection | null;
     /** Settings overrides, including a publisher for live home changes. */
     readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
     /** The channel services under test; defaults to the assembled core without background loops. */
@@ -631,12 +643,17 @@ export function makeHarness(
       }),
   });
 
+  const shellDefault =
+    options.shellDefaultModel === undefined ? modelSelection : options.shellDefaultModel;
   const shells = [
     ...Array.from({ length: options.projects ?? 1 }, (_, index) => ({
       id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
       title: index === 0 ? "Channel work" : "Other work " + index,
-      workspaceRoot: "/nonexistent/channel-work-" + index,
-      defaultModelSelection: modelSelection,
+      workspaceRoot:
+        index === 0
+          ? (options.workspaceRoot ?? "/nonexistent/channel-work-0")
+          : "/nonexistent/channel-work-" + index,
+      defaultModelSelection: shellDefault,
       scripts: [],
       createdAt: "2026-10-12T00:00:00.000Z",
       updatedAt: "2026-10-12T00:00:00.000Z",
@@ -647,7 +664,7 @@ export function makeHarness(
             id: scratchProjectId,
             title: "Scratch",
             workspaceRoot: "/nonexistent/scratch",
-            defaultModelSelection: modelSelection,
+            defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
             updatedAt: "2026-10-12T00:00:00.000Z",
@@ -812,7 +829,8 @@ export function makeHarness(
   /** Renames a project in this machine's catalog. */
   const renameProject = (id: ProjectId, title: string) => {
     const index = shells.findIndex((shell) => shell.id === id);
-    if (index !== -1) shells[index] = { ...shells[index]!, title };
+    const shell = shells[index];
+    if (shell !== undefined) shells[index] = { ...shell, title };
   };
 
   return {
@@ -928,6 +946,13 @@ export const botMessages = Effect.gen(function* () {
   const records = yield* threads.getThreadRecords(botThreadId, ["messages", "runs", "turnItems"]);
   return records;
 });
+
+/** The newest task card in the bot; a GOAT Bot task's result lives there. */
+export const latestCard = Effect.map(botMessages, (records) =>
+  records.turnItems
+    .flatMap((item) => (item.type === "notification" && item.ledgerTask ? [item.ledgerTask] : []))
+    .at(-1),
+);
 
 export const onlyTask = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

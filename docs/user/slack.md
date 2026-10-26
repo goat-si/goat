@@ -39,8 +39,10 @@ GOAT Bot screen shows only a chip for the work and its final report.
   disk, what several threads concluded, something on the web), GOAT Bot says
   it is on it and looks into it itself, then answers in the same conversation.
   Messages you send while it works are added to what it is doing. It uses the
-  model chosen under **Settings → GOAT Bot** (by default, the default model for
-  new threads). It runs with full access, never more than the person who asked
+  model shown at the top of the GOAT Bot screen, which you can change there or
+  under **Settings → GOAT Bot** (by default, the default model for new
+  threads). Turn off the model switch in Settings to follow the default again.
+  It runs with full access, never more than the person who asked
   may use, so it can read files, logs, and status anywhere on the machine
   without asking. It is told to change nothing itself and to start a coding
   task or ask you when something needs changing. That rule is part of its
@@ -124,7 +126,7 @@ GOAT Bot screen shows only a chip for the work and its final report.
   stops answering on every machine and its screen says so. Use **Move GOAT Bot
   to …** there, or pick another machine in **Settings → Integrations → GOAT
   Bot**. An agent with full access can do the same on the machine it runs on
-  with the `channel_bot_home_claim` tool. Other machines follow the move once
+  with `goat_call {path:"channel.bot_home_claim"}`. Other machines follow the move once
   a GOAT app connected to them is open.
 - When GOAT Bot can't read a message, its reply says why, such as a model that
   needs you to sign in again or a usage limit, so you know whether resending

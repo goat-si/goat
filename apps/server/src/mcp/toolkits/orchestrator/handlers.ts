@@ -127,12 +127,15 @@ const handlers = {
     }),
   ),
   update_scheduled_task: McpToolAccess.destructive(
-    McpToolAccess.writes((input) =>
-      Effect.gen(function* () {
-        const scope = yield* McpInvocationContext.McpInvocationContext;
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.updateScheduledTask(scope, input);
-      }),
+    McpToolAccess.writes(
+      (input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          // The service checks the task's modes and project before it may be changed.
+          return yield* service.updateScheduledTask(scope, input, McpToolAccess.admit(input));
+        }),
+      { admission: "handler" },
     ),
   ),
   delete_scheduled_task: McpToolAccess.destructive(
@@ -220,6 +223,13 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* HostThreadsMcpService.HostThreadsMcpService;
       return yield* service.threadStatus(scope, input);
+    }),
+  ),
+  goat_thread_retry: McpToolAccess.writesThreads(localTargets, (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.retryThread(scope, input);
     }),
   ),
   goat_thread_replication_set: McpToolAccess.writesEnvironment((input) =>

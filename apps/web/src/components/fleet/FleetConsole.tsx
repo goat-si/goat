@@ -3,7 +3,7 @@ import {
   BOAT_MACHINE_STATUS_LABEL,
   type BoatMachineIdentity,
 } from "@goat/client-runtime/cloud-machines";
-import type { FleetSnapshot } from "@goat/client-runtime/state/fleet";
+import { fleetSshConfigScopes, type FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { FleetHeatTier, FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
 import {
   presentConnectionWait,
@@ -42,6 +42,7 @@ import { FleetUncountedHosts } from "./FleetUncountedHosts";
 import { fleetQuota } from "./fleetQuota";
 import {
   fleetAlerts,
+  fleetChildSetups,
   fleetThroughput,
   fleetHostRows,
   hottestHost,
@@ -444,11 +445,20 @@ function FleetConsoleExpanded(props: {
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const throughput = useAtomValue(fleetThroughputAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
+  const scopes = fleetSshConfigScopes(environments);
+  const primaryScope = primaryEnvironmentId === null ? null : scopes.get(primaryEnvironmentId);
   const rows = fleetHostRows({
     machines: snapshot.machines,
     sshAliases: new Map(environments.map((env) => [env.environmentId, env.sshAliases] as const)),
     reports: status.reports,
     primaryEnvironmentId,
+    sharedSshConfigEnvironmentIds: new Set(
+      environments.flatMap((env) =>
+        primaryScope !== undefined && scopes.get(env.environmentId) === primaryScope
+          ? [env.environmentId]
+          : [],
+      ),
+    ),
   });
   const unreadable = status.failed.map((environmentId) => ({
     key: environmentId,
@@ -476,6 +486,7 @@ function FleetConsoleExpanded(props: {
     environmentOf,
     pendingSince: status.pendingSince,
     stalls,
+    childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
   });
   // A host that is not answering takes its alert's color on the row, so both say the same.
   const answeringLate = new Map(
@@ -598,7 +609,9 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
-          {hub === null ? null : <FleetHubSummary hub={hub} />}
+          {hub === null ? null : (
+            <FleetHubSummary hub={hub} homeEnvironmentId={environmentOf.get(hub.homeKey) ?? null} />
+          )}
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-baseline justify-between gap-2">

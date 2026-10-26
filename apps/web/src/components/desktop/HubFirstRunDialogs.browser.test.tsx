@@ -23,7 +23,7 @@ it("answers the OpenCodex question with Connect or standalone, and closing is la
     />,
   );
   await expect.element(screen.getByText(/linked to the Home on jun-mbp/)).toBeVisible();
-  await press(screen.getByRole("button", { name: "Connect" }));
+  await press(screen.getByRole("button", { name: "Connect Codex" }));
   await press(screen.getByRole("button", { name: "Run standalone" }));
   await userEvent.keyboard("{Escape}");
   expect(onClose.mock.calls).toEqual([["connect"], ["standalone"], ["later"]]);

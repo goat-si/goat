@@ -34,6 +34,8 @@ export const CHANNEL_COPY = {
   agentCannotMoveWork: "Only people with access to run work can move it to another machine.",
   agentCannotStopWork: "Only the people who may run this work can stop it.",
   answerForwarded: "Thanks. I passed your answer on.",
+  questionAlreadyAnswered:
+    "That question was already answered, so I didn't pass this on. Send it as a new message if it still matters.",
   answerNotAllowed:
     "I can't pass that on: answering this task's question needs the same access as the person who asked for it.",
   approvalNotAllowed:

@@ -6,10 +6,56 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 
 import * as HostProcess from "./HostProcess.ts";
-import { resolveNodeExecutable, resolveSelfInvocation, selfInvocationArgs } from "./nodeRuntime.ts";
+import {
+  resolveNodeExecutable,
+  resolveSelfInvocation,
+  resolveSelfInvocationCommand,
+  selfInvocationArgs,
+} from "./nodeRuntime.ts";
 import { symlinksSupported } from "./testing/symlinks.ts";
 
 describe("Self invocation", () => {
+  it.effect(
+    "readiness and the lease proxy choose the same executable, so a check proves the agents' parent",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const executable = path.join(directory, "GOAT.app", "Contents", "MacOS", "GOAT");
+        const helper = path.join(
+          directory,
+          "GOAT.app",
+          "Contents",
+          "Frameworks",
+          "GOAT Helper.app",
+          "Contents",
+          "MacOS",
+          "GOAT Helper",
+        );
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(helper), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(path.dirname(path.dirname(helper)), "Info.plist"),
+          "<plist><dict><key>LSUIElement</key><true/></dict></plist>",
+        );
+        for (const platform of ["darwin", "win32", "linux"] as const) {
+          const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            effect.pipe(
+              Effect.provideService(HostProcess.ExecutablePath, executable),
+              Effect.provideService(HostProcess.IsExecutable, false),
+              Effect.provideService(HostProcess.Platform, platform),
+              Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs"]),
+            );
+          const proxy = yield* provide(resolveSelfInvocation());
+          const readiness = yield* provide(resolveSelfInvocationCommand());
+          expect(readiness).toBe(proxy.command);
+          // Only macOS swaps in the background helper; the Windows helper accepts only GOAT.exe.
+          expect(readiness).toBe(platform === "darwin" ? helper : executable);
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("runs the entrypoint script with the current runtime", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -25,6 +71,86 @@ describe("Self invocation", () => {
         "acp-mcp-bridge",
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the bundled background helper for macOS Electron children", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      for (const [name, executableName, helperName] of [
+        ["GOAT (Nightly)", "GOAT (Nightly)", "GOAT (Nightly) Helper"],
+        ["GOAT (Dev)", "Electron", "Electron Helper"],
+      ] as const) {
+        const executable = path.join(directory, `${name}.app`, "Contents", "MacOS", executableName);
+        const helper = path.join(
+          directory,
+          `${name}.app`,
+          "Contents",
+          "Frameworks",
+          `${helperName}.app`,
+          "Contents",
+          "MacOS",
+          helperName,
+        );
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(helper), { recursive: true });
+        yield* fs.writeFileString(executable, "app", { flag: "wx" });
+        yield* fs.writeFileString(helper, "helper", { flag: "wx" });
+        yield* fs.writeFileString(
+          path.join(path.dirname(path.dirname(helper)), "Info.plist"),
+          "<plist><dict><key>NSHighResolutionCapable</key><true/><key>LSUIElement</key>\n<true/></dict></plist>",
+          { flag: "wx" },
+        );
+        const invocation = yield* resolveSelfInvocation().pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs", "serve"]),
+        );
+        expect(invocation.command).toBe(helper);
+        expect(invocation.entrypoint).toBe(path.resolve("dist/bin.mjs"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the current executable without a background Electron helper", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const executable = path.join(directory, "App.app", "Contents", "MacOS", "node");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.writeFileString(executable, "node", { flag: "wx" });
+      for (const plist of [
+        undefined,
+        "<plist><dict><key>LSUIElement</key><false/><key>NSHighResolutionCapable</key><true/></dict></plist>",
+      ]) {
+        if (plist !== undefined) {
+          const contents = path.join(
+            directory,
+            "App.app",
+            "Contents",
+            "Frameworks",
+            "node Helper.app",
+            "Contents",
+          );
+          yield* fs.makeDirectory(path.join(contents, "MacOS"), { recursive: true });
+          yield* fs.writeFileString(path.join(contents, "Info.plist"), plist, { flag: "wx" });
+          yield* fs.writeFileString(path.join(contents, "MacOS", "node Helper"), "helper", {
+            flag: "wx",
+          });
+        }
+        const invocation = yield* resolveSelfInvocation().pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs", "serve"]),
+        );
+        expect(invocation.command).toBe(executable);
+        expect(invocation.entrypoint).toBe(path.resolve("dist/bin.mjs"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("passes subcommands straight to the standalone executable", () =>

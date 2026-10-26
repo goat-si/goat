@@ -51,6 +51,60 @@ to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
+## Files panel and open files
+
+These shortcuts work while the Files panel or an open file has the keyboard. They
+never run while you type in a field, and the ones that act on the selected item
+also stay out of a file's editor. The shortcuts list button (keyboard icon) in the
+Files panel and in a file's header shows every key with its current binding.
+Search Settings for “Files:” to change them.
+
+| Keys                             | Action                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `↑` `↓` `Home` `End`             | Move between rows                                                        |
+| `PageUp` `PageDown`              | Move a page of rows                                                      |
+| `→` `←`                          | Open or close a folder, or step into or out of it                        |
+| `Enter`, `Space`                 | Open a file or toggle a folder                                           |
+| `mod+↓`                          | Open the file and move to it, or open the folder                         |
+| `alt+→` `alt+←`, or Option-click | Open or close a folder with its subfolders                               |
+| `mod+→` `mod+←`                  | Expand or collapse all folders                                           |
+| Type a letter                    | Start a search in Search files                                           |
+| `mod+f`                          | Search files in the panel, or find in an open file's editor              |
+| `ctrl+g`                         | Go to a line in the open file (`42` or `42:7`)                           |
+| `mod+alt+e`                      | Switch between the Files panel and the open file                         |
+| `mod+alt+r`                      | Reveal the item in Finder or File Explorer                               |
+| `mod+alt+y`                      | Refresh: in the panel, its files and the open file; in a file, that file |
+| `mod+alt+c`                      | Copy the full path                                                       |
+| `mod+alt+shift+c`                | Copy the path relative to the thread's workspace                         |
+| Not set                          | Copy name, Copy contents                                                 |
+
+`Shift` with the arrows or a click, and `mod`-click, select several rows. Path
+and name copies then put one item per line. A folder you just opened or closed is
+still the item the shortcuts act on. Paths on a remote environment are that
+machine's paths.
+
+`mod+alt+r` works where the environment supports revealing files, and is the
+same action as the row menu's reveal item.
+
+Copy contents copies the whole file and refuses a file that is too large to read
+completely, a binary file, or text in an encoding GOAT cannot decode. Copy name
+and Copy contents have no default keys; set them in Settings, or use the row menu
+and the copy button beside a file's breadcrumbs.
+
+`ctrl+g` opens Go to line from anywhere in an open file, including its header,
+even while the editor's find bar is open. Inside the editor text and its find bar,
+the find-next key keeps its meaning (`cmd+g` on macOS, `ctrl+g` on Windows and
+Linux).
+
+`mod+f` in a file's editor opens the editor's own find; in the Files panel it
+moves to Search files, where `↓` returns to the rows. A rendered Markdown, HTML or
+table view, and a file shown read-only (for example one too large to load
+completely), has no find of its own; in a browser, `mod+f` there opens the
+browser's find. A rendered HTML page also keeps its own keys while it has focus.
+
+If you bind a file shortcut to keys another command already uses, move that
+command as well; otherwise the other command can run first.
+
 ## Find in a diff
 
 Click into a diff in the Diff panel or a pull request's Code tab, then press
@@ -110,9 +164,11 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
-`turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
+`turnRunning`, `editableFocus`, `fileViewFocus`, `fileTreeFocus`, `isWeb`, and
+`isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
-the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
+the keyboard. `fileViewFocus` is true while the Files panel or an open file has
+the keyboard, and `fileTreeFocus` while the Files panel has it. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the

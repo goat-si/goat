@@ -402,6 +402,9 @@ export function summarizeGoatToolCalls(
         quantity(countEntities(entityIds("attachmentId")), "attachment upload"),
       );
       break;
+    case "attachment-list":
+      label = phrase("Listed", "list", `pending attachment uploads ${times}`);
+      break;
     case "attachment-discard":
       label = phrase(
         "Discarded",
@@ -495,6 +498,9 @@ export function summarizeGoatToolCalls(
       break;
     case "html-preview":
       label = phrase("Previewed", "preview", quantity(selected.length, "HTML page"));
+      break;
+    case "html-list":
+      label = phrase("Listed", "list", `saved HTML pages ${times}`);
       break;
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));

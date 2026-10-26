@@ -11,7 +11,7 @@ import {
   type HtmlRenderReference,
 } from "./htmlRender.ts";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference, type McpAppReference } from "./mcpApp.ts";
-import { resolveGoatMcpToolId } from "./goatMcpToolPresentation.ts";
+import { resolveGoatMcpItemCall, resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -44,6 +44,97 @@ interface CompactToolOutput {
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
+  settle?: ToolOutputSettle;
+}
+
+export interface ToolOutputSettle {
+  readonly outcome: string;
+  readonly reason: string;
+}
+
+const SETTLE_PREFIX = "Notification settle: ";
+// A reason can name an AX notification (notification_unsupported:AXMoved) or list several privacy
+// problems separated by commas.
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([A-Za-z0-9_:,]{0,640})\)/;
+const MAX_SETTLE_TEXTS = 32;
+
+function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
+  if (!Predicate.isObject(value) || depth > MAX_ENVELOPE_DEPTH) return undefined;
+  const settle = value.settle;
+  if (
+    Predicate.isObject(settle) &&
+    typeof settle.outcome === "string" &&
+    settle.outcome.length <= 32
+  )
+    return {
+      outcome: settle.outcome,
+      reason: typeof settle.reason === "string" ? settle.reason.slice(0, 640) : "",
+    };
+  for (const key of ["structuredContent", "result", "value"] as const) {
+    const nested = settleRecord(value[key], depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+/** Text a provider kept from a tool result: a plain string, MCP and Cursor parts, ACP wrappers. */
+function resultTexts(value: unknown, texts: string[], depth = 0): void {
+  if (depth > MAX_ENVELOPE_DEPTH || texts.length >= MAX_SETTLE_TEXTS) return;
+  if (typeof value === "string") {
+    texts.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, MAX_CONTENT_BLOCKS)) resultTexts(entry, texts, depth + 1);
+    return;
+  }
+  if (!Predicate.isObject(value)) return;
+  const text = Predicate.isObject(value.text) ? value.text.text : value.text;
+  if (typeof text === "string") resultTexts(text, texts, depth + 1);
+  for (const key of ["content", "result", "value"] as const)
+    if (value[key] !== undefined) resultTexts(value[key], texts, depth + 1);
+}
+
+/**
+ * The outcome of a computer-use settle wait (#1506), which completes as a tool call whether or
+ * not the window settled. Providers keep its structured fields, fold them into a JSON text block,
+ * or keep only the helper's own "Notification settle: <outcome> (<reason>)" line.
+ */
+export function toolOutputSettle(value: unknown): ToolOutputSettle | undefined {
+  const direct = settleRecord(value);
+  if (direct !== undefined) return direct;
+  const texts: string[] = [];
+  resultTexts(value, texts);
+  for (const text of texts) {
+    // A provider may join the summary after a folded sample far larger than the parse budget, so
+    // the line is found by search, and only small text is parsed as JSON.
+    for (let at = text.indexOf(SETTLE_PREFIX); at >= 0; at = text.indexOf(SETTLE_PREFIX, at + 1)) {
+      // The same words inside a sample (a window title) are not the helper's line.
+      if (at > 0 && text[at - 1] !== "\n") continue;
+      const summary = SETTLE_SUMMARY.exec(text.slice(at, at + 720));
+      if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
+    }
+    if (text.length > MAX_PARSED_BYTES || !text.trimStart().startsWith("{")) continue;
+    try {
+      const folded = settleRecord(JSON.parse(text));
+      if (folded !== undefined) return folded;
+    } catch {
+      // Plain text that only looks like JSON.
+    }
+  }
+  return undefined;
+}
+
+const ENVELOPE_KEYS: ReadonlySet<PropertyKey> = new Set(["status", "value", "meta"]);
+
+function isOkEnvelope(
+  value: Record<PropertyKey, unknown>,
+): value is { readonly status: "ok"; readonly value: unknown } {
+  return (
+    value.status === "ok" &&
+    "value" in value &&
+    Object.keys(value).every((key) => ENVELOPE_KEYS.has(key))
+  );
 }
 
 function readResult(value: unknown, budget: ResultReadBudget, depth = 0): ResultEnvelope {
@@ -89,6 +180,8 @@ function readResult(value: unknown, budget: ResultReadBudget, depth = 0): Result
     return { ...(data === undefined ? {} : { data }), failed };
   }
   if (!Predicate.isObject(value)) return { failed: false };
+  // goat_call's envelope, which `goat call` and `goat acp-mcp-call` print: an ok result is its value.
+  if (isOkEnvelope(value)) return readResult(value.value, budget, depth + 1);
   const failed =
     value.isError === true ||
     value.is_error === true ||
@@ -117,6 +210,8 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
   };
   const result = readResult(value, budget);
   const output: CompactToolOutput = result.failed ? { isError: true } : {};
+  const settle = toolOutputSettle(value);
+  if (settle !== undefined) output.settle = settle;
   const data = budget.exceeded ? undefined : result.data;
   if (data !== undefined) {
     for (const key of ["threadId", "messageId", "taskId", "scheduledTaskId"] as const) {
@@ -183,9 +278,11 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
 
 export function htmlRenderFromToolItem(item: {
   readonly toolName: string | null | undefined;
+  readonly input?: unknown;
   readonly output?: unknown;
 }): HtmlRenderReference | undefined {
-  if (resolveGoatMcpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
+  const { toolName } = resolveGoatMcpItemCall(item);
+  if (resolveGoatMcpShippedToolId(toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
 }
@@ -268,6 +365,50 @@ export function toolOutputImageBlocks(value: unknown): ReadonlyArray<unknown> {
  */
 export function toolOutputImages(value: unknown): ReadonlyArray<ToolOutputImage> {
   return toolOutputImageBlocks(value).flatMap((block) => readToolOutputImage(block) ?? []);
+}
+
+/**
+ * Readers prefer an MCP result's structured output, but an image such as a computer-use
+ * screenshot travels only in `content`, so that content stays beside it.
+ */
+export function mcpToolResultOutput(result: {
+  readonly content?: unknown;
+  readonly structuredContent?: unknown;
+}): unknown {
+  const { content, structuredContent } = result;
+  if (structuredContent === undefined || structuredContent === null) {
+    return content ?? undefined;
+  }
+  return toolOutputImageBlocks(content).length === 0
+    ? structuredContent
+    : { content, structuredContent };
+}
+
+const BASE64_IMAGE_DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
+
+/**
+ * A harness that reports an MCP result as its text and structured output, as Claude does,
+ * leaves the images in the raw tool result, so those blocks come back beside that output.
+ */
+export function mcpToolResultWithRawImages(output: unknown, rawContent: unknown): unknown {
+  if (toolOutputImageBlocks(output).length > 0 || toolOutputImageBlocks(rawContent).length === 0) {
+    return output;
+  }
+  const structuredContent =
+    Predicate.isObject(output) && output.structuredContent != null
+      ? output.structuredContent
+      : output;
+  return { content: rawContent, structuredContent };
+}
+
+/** An image a provider sent as a base64 data URL, as the image block the parser reads. */
+export function imageBlockFromDataUrl(
+  url: string,
+): { readonly type: "image"; readonly mimeType: string; readonly data: string } | undefined {
+  const [, mimeType, data] = BASE64_IMAGE_DATA_URL.exec(url) ?? [];
+  if (mimeType === undefined || data === undefined) return undefined;
+  const block = { type: "image" as const, mimeType, data };
+  return readToolOutputImage(block) === null ? undefined : block;
 }
 
 export function omitToolOutputImageData(value: unknown): unknown {

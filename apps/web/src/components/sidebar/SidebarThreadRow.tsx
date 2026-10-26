@@ -1363,8 +1363,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             // oxlint-enable shadcn/no-raw-colors
                             <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />
                           )}
+                          {/* The open thread announces its own status, so its row
+                            stays quiet instead of saying everything twice. */}
                           <span
-                            role="status"
+                            role={props.isRouteThread ? undefined : "status"}
                             className={
                               topStatus.icon === "approval" || topStatus.icon === "input"
                                 ? undefined

@@ -8,22 +8,19 @@ import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import { channelDispatcherIdleServices } from "../channels/testkit/channelDispatcherIdleServices.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
 import * as ChannelReviewCleanup from "../channels/ChannelReviewCleanup.ts";
-import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
 import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as ProjectStore from "./ProjectStore.ts";
-import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as Path from "effect/Path";
@@ -103,6 +100,8 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
+import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -548,7 +547,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
-  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver>;
+  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver | ComputerUseTestkit.Leases>;
   readonly projectionReads?: { getThread: number; getThreadShell: number };
   readonly beforeGetThread?: Ref.Ref<Effect.Effect<void>>;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -747,6 +746,7 @@ function runBrowserAccessScenario(input: {
   readonly deviceOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
+  readonly turnCapabilities?: ReadonlyArray<MemoryContracts.TurnCapability>;
 }) {
   return Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -778,8 +778,9 @@ function runBrowserAccessScenario(input: {
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now, projectId })],
         });
       }
+      const { turnCapabilities = [] } = input;
       yield* manager
-        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy, turnCapabilities })
         .pipe(Effect.ignore);
     }).pipe(
       Effect.provide(
@@ -1789,26 +1790,22 @@ it.effect(
     }),
 );
 
-it.effect("ProviderSessionManagerV2 honors a project browser-access opt-out", () =>
+it.effect.each([
+  { name: "honors a project browser-access opt-out", expected: false },
+  { name: "withholds browser tools without the project", projectExists: false, expected: false },
+  {
+    name: "opens preview tools for an @browser turn",
+    turnCapabilities: ["browser"],
+    expected: true,
+  },
+] as const)("ProviderSessionManagerV2 $name", ({ name: _, expected, ...scenario }) =>
   Effect.gen(function* () {
     const captured = yield* runBrowserAccessScenario({
       enableAgentBrowserAccess: true,
       projectOverride: false,
+      ...scenario,
     });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
-  }),
-);
-
-it.effect("ProviderSessionManagerV2 fails browser access closed for a missing project", () =>
-  Effect.gen(function* () {
-    const captured = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-      projectExists: false,
-    });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
+    assert.equal(captured?.browserToolsAvailable, expected);
   }),
 );
 
@@ -5246,12 +5243,8 @@ it.effect.each(turnStartMemoryCases)(
                         })
                         .pipe(Effect.as({ threadId } as never)),
                   }),
-                  Layer.mock(ProjectStore.ProjectStoreV2)({}),
-                  Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-                  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
-                  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
                   Layer.mock(ChannelReviewCleanup.ChannelReviewCleanup)({}),
-                  Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
+                  channelDispatcherIdleServices,
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
                   ServerConfig.layerTest(process.cwd(), { prefix: "memory-channel-" }).pipe(
@@ -5976,9 +5969,12 @@ it.effect(
 
         // Opened while computer use is off.
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
-        // Enabled later: the same session's next turn carries the driver.
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy. The
+        // thread is in full access, so that turn's control covers every app without a grant (D16).
         yield* Ref.set(enabled, true);
-        assert.deepEqual((yield* turn(runtimePolicy))?.cuaDriver, cuaDriver);
+        const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
+        assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
+        assert.isTrue(enabledDriver?.args.includes("control:every-app"));
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
@@ -5986,6 +5982,9 @@ it.effect(
           (yield* turn({ ...runtimePolicy, sandboxPolicy: "read-only" }))?.cuaDriver,
         );
         assert.equal(yield* Ref.get(acquires), 1);
+        // Settings switched the skill off, and a turn that asks for @computer still loads it.
+        yield* askComputer(manager, { threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.isTrue(carriesSkill(yield* mcpSessions.read(threadId)));
         // Disabled again: the next turn drops it.
         yield* Ref.set(enabled, false);
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
@@ -5998,19 +5997,10 @@ it.effect(
           layerTest({
             state,
             idleTimeoutMs: 1_000,
-            cuaDriverLayer: Layer.succeed(
-              CuaDriver.CuaDriver,
-              CuaDriver.CuaDriver.of({
-                enabled: Ref.get(enabled),
-                acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(
-                  Effect.as(Option.some(cuaDriver)),
-                ),
-                lastFailure: Effect.succeed(Option.none()),
-                status: Effect.succeed({ platform: "darwin", running: true }),
-                computerUse: Effect.die("unused"),
-                admitEnable: Effect.die("unused"),
-              }),
-            ),
+            cuaDriverLayer: ComputerUseTestkit.layerInteractive({
+              enabled: Ref.get(enabled),
+              acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
+            }),
           }),
         ),
       );

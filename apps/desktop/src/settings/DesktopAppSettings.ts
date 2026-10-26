@@ -31,9 +31,12 @@ import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
   readonly localEnvironmentEnabled: boolean;
+  /** Whether this app shows the loopback headless `goat serve` (~/.goat) as an environment. */
+  readonly headlessServerAttachEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
+  readonly previewSessionStackPoppedOut: boolean;
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -72,9 +75,11 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   localEnvironmentEnabled: true,
+  headlessServerAttachEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
+  previewSessionStackPoppedOut: false,
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
@@ -96,9 +101,11 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 
 const DesktopSettingsDocument = Schema.Struct({
   localEnvironmentEnabled: Schema.optionalKey(Schema.Boolean),
+  headlessServerAttachEnabled: Schema.optionalKey(Schema.Boolean),
   linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  previewSessionStackPoppedOut: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
@@ -156,6 +163,12 @@ export class DesktopAppSettings extends Context.Service<
     readonly get: Effect.Effect<DesktopSettings>;
     readonly setLocalEnvironmentEnabled: (
       enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setHeadlessServerAttachEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setPreviewSessionStackPoppedOut: (
+      poppedOut: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
@@ -233,6 +246,8 @@ function normalizeDesktopSettingsDocument(
 
   return {
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
+    headlessServerAttachEnabled: parsed.headlessServerAttachEnabled !== false,
+    previewSessionStackPoppedOut: parsed.previewSessionStackPoppedOut === true,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
@@ -262,11 +277,18 @@ function toDesktopSettingsDocument(
     document.localEnvironmentEnabled = settings.localEnvironmentEnabled;
   }
 
+  if (settings.headlessServerAttachEnabled !== defaults.headlessServerAttachEnabled) {
+    document.headlessServerAttachEnabled = settings.headlessServerAttachEnabled;
+  }
+
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
     document.linuxPasswordStore = settings.linuxPasswordStore;
   }
   if (settings.mainWindowBounds !== null) {
     document.mainWindowBounds = settings.mainWindowBounds;
+  }
+  if (settings.previewSessionStackPoppedOut) {
+    document.previewSessionStackPoppedOut = true;
   }
   if (settings.mainWindowMaximized) {
     document.mainWindowMaximized = true;
@@ -387,6 +409,15 @@ function setWslOnly(settings: DesktopSettings, enabled: boolean): DesktopSetting
         ...settings,
         wslOnly: enabled,
       };
+}
+
+function setHeadlessServerAttachEnabled(
+  settings: DesktopSettings,
+  enabled: boolean,
+): DesktopSettings {
+  return settings.headlessServerAttachEnabled === enabled
+    ? settings
+    : { ...settings, headlessServerAttachEnabled: enabled };
 }
 
 function setLocalEnvironmentEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
@@ -545,6 +576,12 @@ export const make = Effect.gen(function* () {
       );
       return yield* SynchronizedRef.setAndGet(settingsRef, settings);
     }).pipe(Effect.withSpan("desktop.settings.load")),
+    setPreviewSessionStackPoppedOut: (poppedOut) =>
+      persist((settings) =>
+        settings.previewSessionStackPoppedOut === poppedOut
+          ? settings
+          : { ...settings, previewSessionStackPoppedOut: poppedOut },
+      ),
     setMainWindowBounds: (bounds, isMaximized) =>
       persist((settings) => setMainWindowBounds(settings, bounds, isMaximized)).pipe(
         Effect.withSpan("desktop.settings.setMainWindowBounds", {
@@ -600,6 +637,12 @@ export const make = Effect.gen(function* () {
       persist((settings) => setLocalEnvironmentEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setLocalEnvironmentEnabled", { attributes: { enabled } }),
       ),
+    setHeadlessServerAttachEnabled: (enabled) =>
+      persist((settings) => setHeadlessServerAttachEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setHeadlessServerAttachEnabled", {
+          attributes: { enabled },
+        }),
+      ),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -631,6 +674,12 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
       return DesktopAppSettings.of({
         get: SynchronizedRef.get(settingsRef),
         load: SynchronizedRef.get(settingsRef),
+        setPreviewSessionStackPoppedOut: (poppedOut) =>
+          update((settings) =>
+            settings.previewSessionStackPoppedOut === poppedOut
+              ? settings
+              : { ...settings, previewSessionStackPoppedOut: poppedOut },
+          ),
         setMainWindowBounds: (bounds, isMaximized) =>
           update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
         setServerExposureMode: (mode) =>
@@ -656,6 +705,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setWslOnly: (enabled) => update((settings) => setWslOnly(settings, enabled)),
         setLocalEnvironmentEnabled: (enabled) =>
           update((settings) => setLocalEnvironmentEnabled(settings, enabled)),
+        setHeadlessServerAttachEnabled: (enabled) =>
+          update((settings) => setHeadlessServerAttachEnabled(settings, enabled)),
         applyWslWindowsFallback: update(applyWslWindowsFallback),
         applyWslWindowsFallbackInMemory: update(applyWslWindowsFallback),
       });

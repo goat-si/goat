@@ -7,9 +7,18 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { isWindowsRenameLock } from "@goat/shared/atomicWrite";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+
+// Windows refuses to replace a secret while another handle holds it open without
+// delete sharing (a concurrent reader, the search indexer, a virus scanner). About
+// 2 seconds, so a denial that never clears still surfaces to the caller.
+const lockedRenameRetry = Schedule.spaced("100 millis").pipe(Schedule.upTo({ times: 20 }));
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -139,6 +148,8 @@ export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
   {
     readonly directory?: string;
+    /** Undefined disables caching when external changes cannot be observed. */
+    readonly revision?: Effect.Effect<number | undefined>;
     readonly get: (name: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
     readonly set: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
     readonly create: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
@@ -156,6 +167,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const platform = yield* HostProcess.Platform;
 
   yield* fileSystem.makeDirectory(serverConfig.secretsDir, { recursive: true });
   yield* fileSystem.chmod(serverConfig.secretsDir, 0o700).pipe(
@@ -167,6 +179,29 @@ export const make = Effect.gen(function* () {
         }),
     ),
   );
+
+  let revision = 0;
+  let watching = false;
+  const invalidate = Effect.sync(() => {
+    revision++;
+  });
+  yield* fileSystem
+    .watch(serverConfig.secretsDir, {
+      onReady: () => {
+        watching = true;
+      },
+    })
+    .pipe(
+      Stream.runForEach(() => invalidate),
+      Effect.ensuring(
+        Effect.sync(() => {
+          watching = false;
+          revision++;
+        }),
+      ),
+      Effect.ignoreCause({ log: true }),
+      Effect.forkScoped({ startImmediately: true }),
+    );
 
   const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
 
@@ -201,7 +236,10 @@ export const make = Effect.gen(function* () {
         return Effect.gen(function* () {
           yield* fileSystem.writeFile(tempPath, value);
           yield* fileSystem.chmod(tempPath, 0o600);
-          yield* fileSystem.rename(tempPath, secretPath);
+          const rename = fileSystem.rename(tempPath, secretPath);
+          yield* platform === "win32"
+            ? rename.pipe(Effect.retry({ schedule: lockedRenameRetry, while: isWindowsRenameLock }))
+            : rename;
           yield* fileSystem.chmod(secretPath, 0o600);
         }).pipe(
           Effect.catch((cause) =>
@@ -219,6 +257,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       }),
+      Effect.ensuring(invalidate),
       Effect.withSpan("ServerSecretStore.set"),
     );
   };
@@ -258,6 +297,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       }),
+      Effect.ensuring(invalidate),
     );
   };
 
@@ -315,11 +355,13 @@ export const make = Effect.gen(function* () {
               }),
             ),
       ),
+      Effect.ensuring(invalidate),
       Effect.withSpan("ServerSecretStore.remove"),
     );
 
   return ServerSecretStore.of({
     directory: serverConfig.secretsDir,
+    revision: Effect.sync(() => (watching ? revision : undefined)),
     get,
     set,
     create,

@@ -65,7 +65,7 @@ export function sshRuntimePhaseText(phase: SshRuntimePhase): string {
     case "checking":
       return "Checking GOAT runtime";
     case "uploading":
-      return "Installing GOAT runtime — first setup can take a few minutes";
+      return "Installing GOAT runtime. First setup can take a few minutes";
     case "starting":
       return "Starting GOAT";
   }
@@ -132,7 +132,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
               { version: status.requestedVersion },
             );
       return order !== undefined && order > 0
-        ? `${status.host} runs a newer GOAT (${version}). Update this app from the update button above Settings.`
+        ? `${status.host} runs a newer GOAT (${version}). Update this app from the update button next to Settings.`
         : `A GOAT server that this app didn't start is running on ${status.host}. Stop it on the host, then reconnect.`;
     }
     case "providers_not_ready":

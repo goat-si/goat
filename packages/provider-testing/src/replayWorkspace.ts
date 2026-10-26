@@ -1,4 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.remove has no retry option.
+import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -29,7 +32,9 @@ function runGit(
 > {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const exitCode = yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }));
+    const exitCode = yield* spawner.exitCode(
+      ChildProcess.make("git", ["-C", cwd, ...args], { cwd, env: isolatedGitEnv() }),
+    );
     if (Number(exitCode) !== 0) {
       return yield* new ReplayFixtureGitCommandError({
         command: `git ${args.join(" ")}`,
@@ -51,8 +56,9 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
     prefix: `goat-orchestrator-v2-${fixtureName}-`,
   });
   yield* runGit(cwd, ["init"]);
-  yield* runGit(cwd, ["config", "user.name", "T3 Code Test"]);
-  yield* runGit(cwd, ["config", "user.email", "t3code-test@example.com"]);
+  const gitConfig = path.join(cwd, ".git", "config");
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "GOAT Test"]);
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.email", "goat-test@example.com"]);
   yield* fs.writeFileString(path.join(cwd, "README.md"), `# ${fixtureName}\n`);
   for (const [relativePath, contents] of Object.entries(files)) {
     const filePath = path.join(cwd, relativePath);
@@ -67,8 +73,10 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
 const removeCheckpointWorkspaceEffect = Effect.fn("removeCheckpointWorkspace")(function* (
   cwd: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.remove(cwd, { recursive: true });
+  // No EBUSY retry: Windows refuses to remove a directory that is still a process's cwd, so
+  // a replay agent outliving server shutdown fails here instead of passing unnoticed.
+  // The release already dies on failure, so a rejection is a defect here.
+  yield* Effect.promise(() => NodeFS.promises.rm(cwd, { recursive: true }));
 });
 
 export const checkpointWorkspace = (fixtureName: string, files?: ReplayWorkspaceFiles) =>

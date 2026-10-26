@@ -1,49 +1,60 @@
-import type { OrchestrationV2CloudTask } from "@goat/contracts";
-import { presentCloudTask } from "@goat/client-runtime/state/cloud-task";
+import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
+import { formatDuration } from "@goat/shared/orchestrationTiming";
 import { Alert, Linking, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 
-export function CloudTaskStatus({ task }: { readonly task: OrchestrationV2CloudTask }) {
-  const view = presentCloudTask(task);
+/** The latest cloud run: its current stage while it works, then one result line and actions. */
+export function CloudTaskStatus({
+  card,
+  onRetry,
+}: {
+  readonly card: CloudRunCard;
+  readonly onRetry: (() => void) | null;
+}) {
   const openLink = (url: string) => {
     void Linking.openURL(url).catch(() =>
       Alert.alert("Could not open link", "Try opening the task from your browser."),
     );
   };
+  const current = card.stages.find((stage) => stage.status === "running");
+  const total =
+    card.endedAt === null || card.startedAt === null
+      ? null
+      : Math.max(0, Date.parse(card.endedAt) - Date.parse(card.startedAt));
+  const actions = [
+    onRetry ? { label: "Retry", onPress: onRetry } : null,
+    card.prUrl ? { label: "Open pull request", onPress: () => openLink(card.prUrl!) } : null,
+    card.taskUrl
+      ? { label: "Open in " + card.provider, onPress: () => openLink(card.taskUrl!) }
+      : null,
+  ].filter((action) => action !== null);
   return (
-    <View accessibilityLabel="Cloud task" className="mx-4 my-2 rounded-lg border p-3">
-      <Text accessibilityLiveRegion="polite">{view.label}</Text>
-      {task.title ? <Text>{task.title}</Text> : null}
-      <Text>Project files and terminal show the local source, not cloud changes.</Text>
-      <Text>
-        {task.source.repository} · {task.source.branch}
+    <View accessibilityLabel={card.provider + " run"} className="mx-4 my-2 rounded-lg border p-3">
+      <Text accessibilityLiveRegion="polite">
+        {card.title}
+        {total !== null && Number.isFinite(total) ? " · " + formatDuration(total) : ""}
       </Text>
-      {view.localChangesNotice ? <Text>{view.localChangesNotice}</Text> : null}
-      {task.progress ? <Text>{task.progress}</Text> : null}
-      {task.summary ? <Text>{task.summary}</Text> : null}
-      {task.error ? <Text accessibilityRole="alert">{task.error}</Text> : null}
-      {task.branch ? <Text>Branch: {task.branch}</Text> : null}
-      {view.taskUrl ? (
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel="Open cloud task"
-          onPress={() => {
-            openLink(view.taskUrl!);
-          }}
-        >
-          <Text>Open cloud task</Text>
-        </Pressable>
+      {current ? (
+        <Text>{current.detail ? current.label + " · " + current.detail : current.label}</Text>
       ) : null}
-      {view.prUrl ? (
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel="Open pull request"
-          onPress={() => {
-            openLink(view.prUrl!);
-          }}
-        >
-          <Text>Open pull request</Text>
-        </Pressable>
+      {card.message ? (
+        <Text accessibilityRole={card.phase === "failed" ? "alert" : undefined}>
+          {card.message}
+        </Text>
+      ) : null}
+      {actions.length > 0 ? (
+        <View className="mt-1 flex-row flex-wrap gap-4">
+          {actions.map((action) => (
+            <Pressable
+              key={action.label}
+              accessibilityRole={action.label === "Retry" ? "button" : "link"}
+              accessibilityLabel={action.label}
+              onPress={action.onPress}
+            >
+              <Text>{action.label}</Text>
+            </Pressable>
+          ))}
+        </View>
       ) : null}
     </View>
   );

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import * as Electron from "electron";
+import { MAC_PERMISSION_HELPER_CHANNEL } from "../ipc/channels.ts";
 import { MacPermissionHelper } from "./MacPermissionHelper.ts";
 import type { SettingsWindow } from "./MacSettingsWindow.ts";
 
 const mocks = vi.hoisted(() => ({
   granted: false,
   createFromPath: vi.fn(),
+  createThumbnailFromPath: vi.fn(),
   startDrag: vi.fn(),
   showItemInFolder: vi.fn(),
   send: vi.fn(),
@@ -61,7 +64,10 @@ vi.mock("electron", async () => {
     app: {
       getPath: () => "/Applications/T3 Code (Nightly).app/Contents/MacOS/T3 Code",
     },
-    nativeImage: { createFromPath: mocks.createFromPath },
+    nativeImage: {
+      createFromPath: mocks.createFromPath,
+      createThumbnailFromPath: mocks.createThumbnailFromPath,
+    },
     BrowserWindow: class extends MockWindow {},
     ipcMain: new EventEmitter(),
     screen: {
@@ -97,6 +103,7 @@ beforeEach(() => {
   mocks.granted = false;
   const icon = { toDataURL: () => "data:image/png;base64,abc" };
   mocks.createFromPath.mockReturnValue({ isEmpty: () => false, resize: () => icon });
+  mocks.createThumbnailFromPath.mockResolvedValue({ isEmpty: () => false, resize: () => icon });
   mocks.loadURL.mockResolvedValue(undefined);
   windows.length = 0;
   helper = new MacPermissionHelper();
@@ -123,4 +130,27 @@ it("does not reopen a superseded helper when its initial probe completes", async
   await first;
   expect(windows).toHaveLength(1);
   expect(windows[0]!.destroyed).toBe(false);
+});
+
+it("offers the helper app, under its own name, as the file dragged into System Settings", async () => {
+  const helperApp = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+  await helper.show(
+    "screen-recording",
+    "/bundle/mac-permission-preload.cjs",
+    null,
+    iconPaths,
+    () => false,
+    { bundlePath: helperApp, name: "GOAT Computer Use" },
+  );
+  const page = decodeURIComponent(String(mocks.loadURL.mock.calls[0]?.[0]));
+  expect(page).toContain("Drag GOAT Computer Use into the list, then turn it on");
+  expect(page).not.toContain("Drag GOAT into");
+  expect(mocks.createThumbnailFromPath).toHaveBeenCalledWith(helperApp, expect.anything());
+
+  const window = windows[0]!;
+  const sender = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  Electron.ipcMain.emit(MAC_PERMISSION_HELPER_CHANNEL, sender, "drag");
+  expect(mocks.startDrag).toHaveBeenCalledWith(expect.objectContaining({ file: helperApp }));
+  Electron.ipcMain.emit(MAC_PERMISSION_HELPER_CHANNEL, sender, "finder");
+  expect(mocks.showItemInFolder).toHaveBeenCalledWith(helperApp);
 });

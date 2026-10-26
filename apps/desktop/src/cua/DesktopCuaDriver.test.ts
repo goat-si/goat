@@ -1,275 +1,122 @@
-import * as NodePath from "@effect/platform-node/NodePath";
-import { assert, describe, it } from "@effect/vitest";
-import type { DesktopCuaDriverReport, DesktopCuaDriverRequest } from "@goat/contracts";
-import type { ToolResult } from "@trycua/cua-driver";
-import * as Deferred from "effect/Deferred";
+// @effect-diagnostics nodeBuiltinImport:off -- Manifest tests use a trap driver script on a real temporary directory.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
-import * as DesktopConfig from "../app/DesktopConfig.ts";
-import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
-import { bitmapHasContent, make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
+import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
 
-// The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
-const privacyEnvironment = [
-  { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
-  { name: "CUA_TELEMETRY_ENABLED", value: "false" },
-  { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
-];
-
-const descriptor = {
-  command: "/native/driver",
-  args: ["mcp", "--session", "opaque-session"],
-  environment: [{ name: "CUA_SESSION", value: "private-session-token" }],
-  socketPath: "/private/driver.sock",
-};
-
-const HOST_PID = 4242;
-
-const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
-  text: "",
-  images,
-  structuredJson: JSON.stringify(structured),
-  isError: false,
-  degraded: false,
-  rawJson: "{}",
-});
-
-// Shapes recorded from the pinned 0.37.0 daemon, trimmed to the fields the verifier reads.
-const healthyTools = (): Record<string, ToolResult> => ({
-  check_permissions: toolResult({
-    accessibility: true,
-    screen_recording: true,
-    source: { attribution: "host", embedded: true, host_bundle_id: "codes.t3.host-test" },
-  }),
-  health_report: toolResult({
-    checks: [
-      {
-        name: "bundle_identity",
-        status: "pass",
-        data: {
-          bundle_identifier: "codes.t3.host-test",
-          identity_source: "parent_application",
-          parent_process_id: HOST_PID,
-        },
-      },
-    ],
-  }),
-  list_windows: toolResult({ windows: [{ app_name: "GOAT", pid: HOST_PID, window_id: 77 }] }),
-  get_window_state: toolResult({ app_name: "GOAT", element_count: 42 }, [
-    { mimeType: "image/png", dataBase64: "cGl4ZWxz" },
-  ]),
-});
-
-const fixture = Effect.fn(function* (
-  options: {
-    platform?: NodeJS.Platform;
-    isPackaged?: boolean;
-    denyPermissions?: boolean;
-    failFirstStart?: boolean;
-    hold?: "start" | "stop" | "monitor";
-    tools?: Record<string, ToolResult>;
-    blankCapture?: boolean;
-    refuseStart?: boolean;
-  } = {},
-) {
-  const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
-  const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
-  const starting = yield* Deferred.make<void>();
-  const stopping = yield* Deferred.make<void>();
-  const destroyed = yield* Queue.unbounded<void>();
-  const gate = Promise.withResolvers<void>();
-  const constructors: Array<{
-    path: string;
-    bundleId: string;
-    environment: ReadonlyArray<{ name: string; value: string }>;
-  }> = [];
-  const exits: Array<() => void> = [];
-  const launches: Array<{
-    scope: string;
-    hostBundleIds: ReadonlyArray<string>;
-    manifestPath: string | undefined;
-    permissionMode: number | undefined;
-    approved: boolean;
-  }> = [];
-  const prepared = new Map<string, { scope: string; hostBundleIds: ReadonlyArray<string> }>();
-  const holdMonitor = options.hold === "monitor";
-  let allowed = !options.denyPermissions;
-  let starts = 0;
-  let stops = 0;
-  let destroys = 0;
-  const toolCalls: Array<{ name: string; input: unknown }> = [];
-  let clientsOpen = 0;
-  const dependencies: DesktopCuaDriverDependencies = {
-    connect: async () => {
-      clientsOpen++;
-      return {
-        callTool: async (name, input) => {
-          toolCalls.push({ name, input: JSON.parse(input) });
-          const result = (options.tools ?? healthyTools())[name];
-          if (!result) throw new Error(`unexpected tool ${name}`);
-          return result;
-        },
-        uniffiDestroy: () => {
-          clientsOpen--;
-        },
-      };
-    },
-    checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
-    imageHasContent: async () => !options.blankCapture,
-    prepareManifest: async (input) => {
-      const path = `${input.directory}/${input.scope}.yaml`;
-      prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
-      return path;
-    },
-    processId: HOST_PID,
-    loadElectron: async () => ({
-      requestMacOSPermissions: () => ({ accessibility: allowed, screenRecording: allowed }),
-      hasRequiredMacOSPermissions: (permissions) =>
-        permissions.accessibility && permissions.screenRecording,
-    }),
-    loadEmbedded: async () => ({
-      EmbeddedCuaDriverHost: class {
-        static withOptions(options: {
-          binaryPath: string;
-          hostBundleId: string;
-          environment: ReadonlyArray<{ name: string; value: string }>;
-          capabilityManifestPath?: string;
-          permissionMode?: number;
-          approveCapabilityManifest: boolean;
-        }) {
-          constructors.push({
-            path: options.binaryPath,
-            bundleId: options.hostBundleId,
-            environment: options.environment,
-          });
-          const manifest = prepared.get(options.capabilityManifestPath ?? "");
-          launches.push({
-            scope: manifest?.scope ?? "none",
-            hostBundleIds: manifest?.hostBundleIds ?? [],
-            manifestPath: options.capabilityManifestPath,
-            permissionMode: options.permissionMode,
-            approved: options.approveCapabilityManifest,
-          });
-          return new this();
-        }
-        readonly exit = Promise.withResolvers<{ generation: string; success: boolean }>();
-        readonly first = constructors.length === 1;
-        async start() {
-          starts++;
-          Deferred.doneUnsafe(starting, Exit.void);
-          if (this.first && options.hold === "start") await gate.promise;
-          if (this.first && options.failFirstStart) throw new Error("private native failure");
-          if (options.refuseStart)
-            throw new Error("embedded cua-driver exited before readiness (code=Some(64))");
-          return {
-            socketPath: descriptor.socketPath,
-            pid: 123,
-            generation: String(starts),
-            driverVersion: "0.34.1",
-            contractVersion: "1",
-            mcpProtocolVersion: "1",
-            mcp: {
-              command: descriptor.command,
-              args: descriptor.args,
-              environment: descriptor.environment,
-            },
-          };
-        }
-        async stop() {
-          stops++;
-          Deferred.doneUnsafe(stopping, Exit.void);
-          if (this.first && options.hold === "stop") await gate.promise;
-        }
-        waitForExit(generation: string, operation?: { signal: AbortSignal }) {
-          const finish = () => this.exit.resolve({ generation, success: false });
-          exits.push(finish);
-          operation?.signal.addEventListener("abort", finish, { once: true });
-          return this.first && holdMonitor
-            ? gate.promise.then(() => ({ generation, success: false }))
-            : this.exit.promise;
-        }
-        uniffiDestroy() {
-          destroys++;
-          Queue.offerUnsafe(destroyed, undefined);
-        }
-      },
-    }),
-  };
-  const publisher = DesktopTelemetryPublisher.of({
-    latest: Effect.succeedNone,
-    changes: Stream.empty,
-    encoded: Stream.empty,
-    encodedForSource: () => Stream.empty,
-    handleControlForSource: () => Effect.void,
-    removeControlSource: () => Effect.void,
-    updateRequests: Stream.empty,
-    updateCommits: Stream.empty,
-    updateCancellations: Stream.empty,
-    publishUpdateReport: () => Effect.void,
-    cuaRequests: Stream.fromQueue(requests),
-    publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
-  });
-  const environment = DesktopEnvironment.layer({
-    dirname: "/app",
-    homeDirectory: "/home/test",
-    platform: options.platform ?? "linux",
-    processArch: "x64",
-    appVersion: "1.0.0",
-    appPath: "/app",
-    isPackaged: options.isPackaged ?? true,
-    resourcesPath: "/resources",
-    runningUnderArm64Translation: false,
-  }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        NodePath.layerPosix,
-        DesktopConfig.layerTest({ GOAT_DESKTOP_APP_USER_MODEL_ID: "codes.t3.host-test" }),
-      ),
-    ),
-  );
-  const driver = yield* make(dependencies).pipe(
-    Effect.provideService(DesktopTelemetryPublisher, publisher),
-    Effect.provide(environment),
-  );
-  yield* driver.listen;
-  return {
-    restart: driver.restart,
-    verify: driver.verify,
-    toolCalls,
-    clientsOpen: () => clientsOpen,
-    request: (requestId: string, enabled = true) =>
-      Queue.offer(requests, { version: 1, type: "cuaDriverRequest", requestId, enabled }),
-    next: Queue.take(reports),
-    pendingReports: Queue.size(reports),
-    starting: Deferred.await(starting),
-    stopping: Deferred.await(stopping),
-    destroyed: Queue.take(destroyed),
-    release: Effect.sync(() => gate.resolve()),
-    grantPermissions: Effect.sync(() => {
-      allowed = true;
-    }),
-    denyPermissions: Effect.sync(() => {
-      allowed = false;
-    }),
-    crash: Effect.sync(() => exits.at(-1)!()),
-    constructors,
-    launches,
-    counts: () => ({ starts, stops, destroys }),
-  };
-});
+import {
+  privacyEnvironment,
+  descriptor,
+  HOST_PID,
+  HELPER_ID,
+  HELPER_BUNDLE,
+  toolResult,
+  healthyTools,
+  fixture,
+  VERIFICATION_IDS,
+} from "./DesktopCuaDriver.testkit.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe("DesktopCuaDriver", () => {
+  it.effect.each(["darwin", "win32"] as const)(
+    "answers fresh app-list requests through the %s helper, and refuses disabled or failed listings",
+    (platform) =>
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform, helper: { granted: true } });
+        yield* test.listApps([
+          { bundle_id: " com.example.Editor ", name: "Editor window" },
+          { name: "fixture.exe", executable: "C:\\Apps\\fixture.exe" },
+          { bundle_id: HELPER_ID, name: "GOAT Computer Use" },
+          { bundle_id: "codes.t3.host-test", name: "GOAT" },
+          { bundle_id: "com.apple.Passwords", name: "Passwords" },
+        ]);
+        yield* test.requestApps("apps-1");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "apps-1",
+          status: "listed",
+          apps: ["C:\\Apps\\fixture.exe", "com.example.Editor", "fixture.exe"],
+          // Sorted by name; a Windows program's executable path is its id.
+          catalog: [
+            { id: "com.example.Editor", name: "Editor window" },
+            { id: "C:\\Apps\\fixture.exe", name: "fixture.exe" },
+          ],
+        });
+        yield* test.listApps([{ name: "New app" }]);
+        yield* test.requestApps("apps-2");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "apps-2",
+          status: "listed",
+          apps: ["New app"],
+          catalog: [],
+        });
+        assert.equal(test.helperAppListings.length, 2);
+        yield* test.setComputerUseEnabled(false);
+        yield* test.requestApps("off");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "off",
+          status: "unavailable",
+        });
+        assert.equal(
+          test.helperAppListings.length,
+          2,
+          "disabled requests do not run the helper listing",
+        );
+        yield* test.setComputerUseEnabled(true);
+        yield* test.failAppListing;
+        yield* test.requestApps("failed");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "failed",
+          status: "unavailable",
+        });
+        assert.equal(test.helperAppListings.length, 3);
+        assert.equal(test.constructors.length, 0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("starts an updated helper after the running generation is restarted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+        });
+        yield* test.request("before-update");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.applyHelperUpdate;
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+        yield* test.request("after-update");
+        assert.equal((yield* test.next).status, "ready");
+        assert.deepEqual(
+          test.helperLaunches.map(({ driverPath }) => driverPath),
+          [
+            HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
+            HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
+          ],
+        );
+      }),
+    ),
+  );
+
   it.effect("hosts with the app identity, preserves the descriptor, reuses and releases once", () =>
     Effect.gen(function* () {
       vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/ignored-in-packaged-app");
@@ -313,45 +160,59 @@ describe("DesktopCuaDriver", () => {
     }),
   );
 
-  it.effect("requires a development override and uses it to host without a bundled driver", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        vi.stubEnv("GOAT_CUA_DRIVER_PATH", " ");
-        const missing = yield* fixture({ isPackaged: false });
-        yield* missing.request("unconfigured");
-        assert.equal((yield* missing.next).status, "unavailable");
-        assert.isEmpty(missing.constructors);
+  it.effect.each(["linux", "darwin"] as const)(
+    "requires a %s development override to host without a bundled driver",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", " ");
+          const missing = yield* fixture({ platform, isPackaged: false });
+          yield* missing.request("unconfigured");
+          assert.equal((yield* missing.next).status, "unavailable");
+          assert.isEmpty(missing.constructors);
 
-        vi.stubEnv("GOAT_CUA_DRIVER_PATH", " /dev/cua-driver ");
-        const configured = yield* fixture({ isPackaged: false });
-        yield* configured.request("configured");
-        assert.equal((yield* configured.next).status, "ready");
-        assert.deepEqual(configured.constructors, [
-          {
-            path: "/dev/cua-driver",
-            bundleId: "codes.t3.host-test",
-            environment: privacyEnvironment,
-          },
-        ]);
-      }),
-    ),
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", " /dev/cua-driver ");
+          const configured = yield* fixture({ platform, isPackaged: false });
+          yield* configured.request("configured");
+          assert.equal((yield* configured.next).status, "ready");
+          assert.deepEqual(configured.constructors, [
+            {
+              path: "/dev/cua-driver",
+              bundleId: "codes.t3.host-test",
+              environment: privacyEnvironment,
+            },
+          ]);
+        }),
+      ),
   );
 
   it.effect("denies missing macOS permissions and restarts the host after permission changes", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin", denyPermissions: true });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({
+          platform: "darwin",
+          isPackaged: false,
+          denyPermissions: true,
+        });
         yield* test.request("denied");
         const denied = yield* test.next;
         assert.equal(denied.status, "unavailable");
-        if (denied.status !== "ready")
+        if (denied.status !== "ready") {
           assert.match(denied.message ?? "", /Accessibility|Screen Recording/);
+          // The typed reason the tile, Settings and the agent name (#1399).
+          assert.deepEqual(denied.block, {
+            reason: "permissionsNotGranted",
+            missing: ["accessibility", "screenRecording"],
+            holder: "app",
+          });
+        }
         assert.isEmpty(test.constructors);
         yield* test.grantPermissions;
         yield* test.restart;
         yield* test.request("granted");
         assert.equal((yield* test.next).status, "ready");
-        assert.equal(test.constructors[0]?.path, "/resources/cua-driver");
+        assert.equal(test.constructors[0]?.path, "/dev/cua-driver");
         yield* test.restart;
         assert.deepEqual(yield* test.next, {
           version: 1,
@@ -449,34 +310,26 @@ describe("DesktopCuaDriver", () => {
   );
 });
 
-const VERIFICATION_IDS = [
-  "grants",
-  "restart",
-  "permissions",
-  "identity",
-  "capture",
-  "accessibility",
-] as const;
-
 describe("DesktopCuaDriver verification", () => {
   it.effect("gives agents the general manifest and the grant check one that admits only GOAT", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin" });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "ready");
         assert.isTrue((yield* test.verify).verified);
         assert.deepEqual(test.launches, [
           {
             scope: "agents",
-            hostBundleIds: ["codes.t3.host-test"],
+            hostBundleIds: ["codes.t3.host-test", "com.github.Electron"],
             manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/agents.yaml",
             permissionMode: 0,
             approved: true,
           },
           {
             scope: "verify",
-            hostBundleIds: ["codes.t3.host-test"],
+            hostBundleIds: ["codes.t3.host-test", "com.github.Electron"],
             manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/verify.yaml",
             permissionMode: 0,
             approved: true,
@@ -505,7 +358,8 @@ describe("DesktopCuaDriver verification", () => {
     Effect.gen(function* () {
       const test = yield* Effect.scoped(
         Effect.gen(function* () {
-          const test = yield* fixture({ platform: "darwin" });
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+          const test = yield* fixture({ platform: "darwin", isPackaged: false });
           yield* test.request("agent");
           assert.equal((yield* test.next).status, "ready");
           assert.deepEqual(yield* test.verify, {
@@ -646,7 +500,8 @@ describe("DesktopCuaDriver verification", () => {
   it.effect.each(failures)("stops at $failedAt when $name", (failure) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin", ...failure.options });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false, ...failure.options });
         const result = yield* test.verify;
         const index = VERIFICATION_IDS.indexOf(failure.failedAt);
         assert.isFalse(result.verified);
@@ -665,7 +520,8 @@ describe("DesktopCuaDriver verification", () => {
   it.effect("an early failure leaves the agent's running driver alone", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin" });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "ready");
         // Grants revoked after the driver started: the check stops before its own restart.
@@ -685,13 +541,15 @@ describe("DesktopCuaDriver verification", () => {
     ),
   );
 
-  it.effect("reports that only macOS has grants to verify", () =>
+  it.effect("reports that only macOS and Windows have readiness to verify", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const test = yield* fixture({ platform: "linux" });
         assert.deepEqual(yield* test.verify, {
           verified: false,
-          steps: [{ id: "grants", ok: false, detail: "Permission checks run on macOS only." }],
+          steps: [
+            { id: "grants", ok: false, detail: "Readiness checks run on macOS and Windows." },
+          ],
         });
         assert.isEmpty(test.constructors);
       }),
@@ -706,4 +564,105 @@ describe("DesktopCuaDriver verification", () => {
     for (let offset = 0; offset < content.length; offset += 4 * 20) content[offset + 1] = 200;
     assert.isTrue(bitmapHasContent(content));
   });
+});
+
+describe("DesktopCuaDriver app listing for the agents' manifest", () => {
+  it.effect(
+    "lists apps through the macOS helper, so its driver never runs outside the helper's seal check",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.deepEqual(test.manifestListings, [
+            { scope: "agents", through: "helper", apps: 1 },
+          ]);
+          assert.deepEqual(test.helperAppListings, [HELPER_ID]);
+        }),
+      ),
+  );
+
+  it.effect.each([
+    {
+      name: "a development build without the helper",
+      platform: "darwin" as const,
+      helper: undefined,
+    },
+  ])("keeps listing by running the driver for $name", ({ platform, helper }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform, isPackaged: false, ...(helper ? { helper } : {}) });
+        yield* test.request("agent");
+        yield* test.next;
+        assert.deepEqual(
+          test.manifestListings.map(({ through }) => through),
+          ["driver"],
+        );
+        assert.isEmpty(test.helperAppListings);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver manifest preparation", () => {
+  const trap = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "goat-cu-desktop-manifest-"),
+    );
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    const marker = NodePath.join(directory, "ran");
+    const binaryPath = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(binaryPath, "#!/bin/sh\ntouch '" + marker + "'\nexit 3\n", {
+      mode: 0o755,
+    });
+    return { directory, binaryPath, ran: () => NodeFS.existsSync(marker) };
+  };
+
+  it("hands the helper's listing to the shared manifest, so the driver never runs here", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "agents",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+      listApplications: async () => [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }],
+    });
+    expect(driver.ran()).toBe(false);
+    expect(NodeFS.readFileSync(path, "utf8")).toContain("com.apple.TextEdit");
+  });
+
+  it("writes the grant check's manifest without listing anything", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "verify",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+    });
+    expect(driver.ran()).toBe(false);
+  });
+});
+
+describe("DesktopCuaDriver when the helper cannot list apps", () => {
+  it.effect("stays off instead of starting a driver or listing another way", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          helperAppsFail: true,
+        });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.isEmpty(test.helperLaunches);
+        assert.isEmpty(test.constructors);
+      }),
+    ),
+  );
 });

@@ -3,13 +3,25 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./built-in-skill-settings": {
+      "types": "./src/builtInSkillSettings.ts",
+      "default": "./src/builtInSkillSettings.ts"
+    },
     "./hub-nodes": {
       "types": "./src/hubNodes.ts",
       "default": "./src/hubNodes.ts"
     },
+    "./hub-devices": {
+      "types": "./src/hubDevices.ts",
+      "default": "./src/hubDevices.ts"
+    },
     "./cloud-machines": {
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
+    },
+    "./computer-use-linux-setup": {
+      "types": "./src/computerUseLinuxSetup.ts",
+      "default": "./src/computerUseLinuxSetup.ts"
     },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
@@ -59,6 +71,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composerCapabilityItems": {
+      "types": "./src/composerCapabilityItems.ts",
+      "default": "./src/composerCapabilityItems.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"
@@ -66,6 +82,10 @@
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
+    },
+    "./computerUse/readinessSteps": {
+      "types": "./src/computerUse/readinessSteps.ts",
+      "default": "./src/computerUse/readinessSteps.ts"
     },
     "./computerUseGrant": {
       "types": "./src/computerUseGrant.ts",
@@ -78,6 +98,10 @@
     "./device/hub-access": {
       "types": "./src/device/hubAccess.ts",
       "default": "./src/device/hubAccess.ts"
+    },
+    "./state/preview-sessions": {
+      "types": "./src/state/previewSessions.ts",
+      "default": "./src/state/previewSessions.ts"
     },
     "./preview/server-browser-stream": {
       "types": "./src/preview/serverBrowserStream.ts",
@@ -450,6 +474,10 @@
     "./work-log/item-detail": {
       "types": "./src/work-log/itemDetail.ts",
       "default": "./src/work-log/itemDetail.ts"
+    },
+    "./work-log/computer-use": {
+      "types": "./src/work-log/computerUse.ts",
+      "default": "./src/work-log/computerUse.ts"
     },
     "./work-log/file-change-diff": {
       "types": "./src/work-log/fileChangeDiff.ts",

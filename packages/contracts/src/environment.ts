@@ -144,6 +144,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       nothing; clients hide it instead of sending a patch that goes nowhere.
    */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server delivers the goat-discipline built-in skill to a turn that names it and honors a
+   * project's `builtInSkills` switch. Older servers would leave the mention as plain text and drop
+   * the switch, so clients list the skill and show its settings only when this is true.
+   */
+  devDisciplineSkill: Schema.optionalKey(Schema.Boolean),
   threadSnooze: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.promote. Same version-skew contract as threadSettlement. */
   threadPromotion: Schema.optionalKey(Schema.Boolean),
@@ -202,6 +208,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server answers `POST /.well-known/goat/runtime/drain`: it can stop admitting turns, drain,
       and exit on its own for a replacement. Servers without it are attach-only. */
   drainRestart: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `POST /.well-known/goat/runtime/session`, so an SSH client can attach to it
+      without starting its own server. The GOAT app's server is attached this way. */
+  runtimeSessions: Schema.optionalKey(Schema.Boolean),
   /** Server runs the channel ledger and the GOAT bot gateway (`channel.*` RPCs). Absent on
       older servers, so clients keep the bot inert instead of sending to a legacy agent. */
   channelLedger: Schema.optionalKey(Schema.Boolean),
@@ -243,6 +252,23 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   protocol: Schema.optionalKey(RuntimeProtocolRanges),
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The same for every GOAT server on one machine, whatever its base directory, so clients
+   * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it
+   * and on servers that predate it.
+   */
+  machineId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Like `machineId`, but the same only for servers one OS account runs there. They read the
+   * same SSH config, so an SSH alias names the same host on each of them.
+   */
+  machineUserId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Set by the server GOAT runs for SSH clients (`~/.goat`) while the GOAT app's own server runs
+   * on the same host. New SSH work belongs on the app's server, so a client attached here
+   * reconnects once this server is idle. Absent otherwise and on older servers.
+   */
+  appServerLive: Schema.optionalKey(Schema.Boolean),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

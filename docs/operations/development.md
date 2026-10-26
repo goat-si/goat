@@ -2,8 +2,15 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24;
-Bun is optional. From the repository root:
+Install `vp` using the [root README](../../README.md#install-vp). The checkout pins the exact Node 26
+release in the root `package.json` `engines.node`, and `vp` installs and uses it in its default managed mode.
+CI and the standalone `goat` executable use the same version, so change it there and nowhere else. The server's
+own `engines.node` stays wider because the desktop app runs it on Electron's Node 24. Bun is optional.
+
+When `vp env current` reports `Mode system_first`, `vp` runs the `node` on `PATH` instead. If that is
+another major or older than the pin, `vp run dev` and `vp test` stop with a message naming the pinned release.
+Run `vp env on node` to let `vp` manage Node again, or prefix one command with
+`vp env exec --node <pinned version> --`. From the repository root:
 
 ```sh
 vp i
@@ -28,6 +35,23 @@ Git reads the hook from the checkout that runs `git worktree add`, so that check
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
 
+Agents running in GOAT use GOAT-managed worktrees for extra checkouts: `worktree.handoff`
+for the current thread (check `worktree.status` first), `thread.launch` with
+`workspaceStrategy:{type:"worktree"}` for a separate thread, or `task.create` with
+`isolation:"worktree"` for a bounded child lane. Do not create ad-hoc worktrees or clones for lanes,
+or ask children to create them; a shell-created checkout does not bind a GOAT thread.
+
+For humans or when GOAT is unavailable, create worktrees with
+`node scripts/worktree-add.ts <worktrees-directory>/goat/<name> -b <branch> origin/dev`.
+Use GOAT's configured worktrees directory, which defaults to `<GOAT home>/worktrees`
+(normally `~/.goat/desktop/worktrees` for the desktop app). Placing a checkout there does not
+bind it to a thread; use `thread.launch` with `workspaceStrategy:{type:"existing_worktree",worktreePath:"<absolute-path>",branch:"<branch>"}` when GOAT is available.
+When GOAT is checked out as a submodule with `extensions.worktreeConfig` on, a plain
+`git worktree add` inherits the submodule's `core.worktree`: the new worktree resolves to the git
+directory, the hook finds no setup script there, and `git status` reports the git directory's
+files. The script gives the new worktree its own `core.worktree` before checking out and running
+the hook, as GOAT does for its thread worktrees, and runs a plain `git worktree add` everywhere else.
+
 GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
 same script as the `goat.json` setup action, with its output in the launch view. They also leave
 `.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
@@ -40,17 +64,21 @@ Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron cl
 `dev:server` and `dev:web` start those processes separately.
 See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.
 
-Flags go directly after the task name, for example `vp run dev --home-dir /tmp/t3code-dev`.
+Flags go directly after the task name, for example `vp run dev --home-dir /tmp/goat-dev`.
 Add `--browser` to open a browser automatically.
 
 ### State and ports
 
 Linked worktrees default to their own `.goat/userdata` (one created earlier keeps `.t3`), even when `GOAT_HOME` is set.
 The main checkout defaults to `~/.goat/dev` (`~/.t3/dev` while only that exists). An explicit `--home-dir` wins in both cases.
+The first start in a worktree seeds its empty database from a read-only copy of
+`~/.goat/userdata` (`~/.t3/userdata` when that database is absent); `--no-seed` or `GOAT_DEV_SEED=0` skips that.
 Never run a development server against the live `~/.goat/userdata` or `~/.t3/userdata`.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
-When an unsigned `vp run dev:desktop` instance launched from a terminal or agent has no OS keyring access (`safeStorage` encryption unavailable) and cannot save connections, set `GOAT_DEV_INSECURE_SECRET_STORAGE=1` alongside an isolated home (such as a worktree default or `--home-dir <path>` outside `~/.goat` and `~/.t3`). Packaged builds and default homes ignore this flag and refuse to read its development-plaintext blobs.
+An unsigned `vp run dev:desktop` build has a different code identity in each worktree and after each launcher rebuild, so macOS asks for the login keychain password whenever it reads the shared `GOAT Dev Safe Storage` item, and a build started from a terminal or agent may have no keyring access at all. To start without the OS key store, for example for automated UI checks, set `GOAT_DEV_INSECURE_SECRET_STORAGE=1` with an isolated home (a worktree default or `--home-dir <path>` outside `~/.goat` and `~/.t3`). GOAT's own secret storage then leaves the macOS Keychain and Linux Secret Service alone: it saves secrets as development-plaintext blobs and skips the startup key migration and sibling-key recovery. Importing cookies from another browser still reads that browser's key from the OS key store, and only when you start the import.
+
+Secrets saved through the keychain before you set the flag stay on disk but do not open; unset the flag to read them. With the flag on, enter the connections again: GOAT copies the unreadable catalog to a `connection-catalog.unreadable-<hash>.backup.json` file before it saves the new one. One case blocks saving: a saved-environment registry from builds before the connection catalog cannot be migrated while the flag is on. Start once without the flag so the catalog is created, then turn the flag back on and enter the connections again. Packaged builds and default homes ignore the flag and refuse to read development-plaintext blobs.
 
 Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,
 but occupied ports can shift them. `GOAT_PORT_OFFSET` or `GOAT_DEV_INSTANCE` can select a
@@ -135,8 +163,15 @@ for the security model.
 changed files, `knip:check` when code or a manifest changes, the generated GraphQL checks, typecheck
 of the affected packages and their dependents, and the test files beside the changed files. It maps
 files to packages with [ci-changes.cjs](../../.github/scripts/ci-changes.cjs), as CI does. It
-compares against the merge base with `origin/main`, or with a ref you pass. CI still runs the full
-test suites and the jobs the summary lists, so a local pass does not promise a green CI run.
+compares against the merge base with `origin/dev`, or with a ref you pass. A pull request's CI run
+is quick too: the whole-repository check and typecheck plus the same tests beside the changes. The
+full test suites and the jobs the summary lists run with the `ci:full` label, a manual `goat-ci`
+run, and the full runs on `dev`, so a local pass does not promise a green full run.
+
+The steps run side by side, so a run takes about as long as its slowest step, usually knip's
+exports pass at about 10 s. When the files are exactly those of the last passing run, it prints that
+run's summary instead of running again. Any change to a file, the install, or a generated file runs
+the checks again.
 
 While you iterate, run single checks:
 
@@ -155,7 +190,6 @@ Install that browser once before running the browser suite locally, as CI does:
 TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
 `@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
 refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
-Marketing keeps `astro check` for Astro files.
 
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.
@@ -242,6 +276,76 @@ For a cross-architecture or universal build, add the requested Rust targets:
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
+
+### macOS computer use helper
+
+On a Mac, computer use runs Cua Driver under `GOAT Computer Use.app` so its permissions belong
+to the helper, not to GOAT or your terminal. To try it from a dev checkout, build it and point the
+dev app at it:
+
+```sh
+node scripts/build-computer-use-helper.ts --channel dev
+GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
+```
+
+The script signs with the keychain's Developer ID Application identity and pins the helper's
+designated requirement to its bundle id and team, so a rebuild keeps its Accessibility and
+Screen Recording grants. Signing needs the login keychain of the signed-in user: over SSH or
+from an agent session that cannot use it (`errSecInternalComponent`), the build stops and says
+so. Run it from Terminal on the Mac and allow codesign to use the key.
+
+`--ad-hoc` signs a throwaway dev build without a certificate. Each ad-hoc build gets a new code
+hash, so its grants stop applying after a rebuild and System Settings adds another
+"GOAT Computer Use" row to both lists; remove the old rows before allowing the new build. Only
+`--channel dev` may be ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the
+same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
+
+A signed macOS package always carries the Developer ID helper in `GOAT.app/Contents/Helpers`.
+An unsigned one keeps computer use off unless built with an ad-hoc helper:
+
+```sh
+node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
+```
+
+That helper serves any parent, sits inside an ad-hoc GOAT.app and is never notarized. It has the
+same row problem as `--ad-hoc` and prints the same warning. Either
+way, electron-builder leaves the helper's signature alone, and the build fails when the embedded
+helper's code hash differs from the one built, when a signed GOAT.app and its helper carry
+different teams, or when an unsigned one carries any team.
+
+### Windows computer use helper
+
+On Windows, computer use runs Cua Driver under `GOAT Computer Use.exe`, which checks that the
+session has a usable desktop, runs only the driver files whose SHA-256 it was built with, and
+ends the driver with itself. Build it on Windows (the C# compiler ships with Windows) and point
+the dev app at the folder:
+
+```powershell
+node scripts/build-computer-use-helper-windows.ts --channel dev
+$env:GOAT_CUA_HELPER_PATH = "$PWD\apps\desktop\.computer-use-helper\computer-use-helper"; vp run dev
+```
+
+Start the dev app from the signed-in desktop. A shell reached over SSH or a service runs in
+Session 0, where the helper reports that there is no desktop and the driver refuses to start.
+Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
+executable installed two folders above them and signed by the same publisher.
+
+### Linux computer use helper
+
+On Linux, computer use runs Cua Driver under `goat-computer-use`, a Node helper
+(`apps/server/src/cua/linuxHelper`) that speaks the computer use protocol on stdio and owns the
+driver as its child. Build it, then run the live check, which starts its own Xvfb display,
+D-Bus session, AT-SPI bus and fixture window and stops each by the pid it started:
+
+```sh
+node scripts/build-computer-use-helper-linux.ts
+node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
+```
+
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), `dbus-daemon`, at-spi2-core,
+python3 with GTK 3 introspection and `xdotool`. Without a writable `/dev/uinput` and an X server
+that accepts new input devices, which Xvfb is not, background keys and pixel clicks are refused
+with `backgroundUnavailable`; AT-SPI clicks and value writes still run in the background.
 
 ### Windows installer prerequisites
 

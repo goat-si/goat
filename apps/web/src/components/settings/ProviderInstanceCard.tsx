@@ -23,6 +23,7 @@ import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  isCloudSiblingDriver,
   defaultInstanceIdForDriver,
   implicitDefaultInstance,
   resolveProviderInstanceEnabled,
@@ -187,6 +188,13 @@ export function deriveProviderModelsForDisplay(input: {
   );
   return [...serverModels, ...customModels];
 }
+
+/** Whose CLI sign-in each automatic cloud provider borrows. */
+const CLOUD_VENDOR_NAMES: ReadonlyMap<string, string> = new Map([
+  ["cursorCloud", "Cursor"],
+  ["claudeCloud", "Claude"],
+  ["devinCloud", "Devin"],
+]);
 
 function ProviderAuthEmail(props: { readonly email: string | undefined }) {
   const email = props.email?.trim();
@@ -670,6 +678,8 @@ export function ProviderInstanceCard({
     ? getProviderSummary(effectiveProvider)
     : { headline: "Disabled", detail: null };
   const authEmail = liveProvider?.auth.email?.trim();
+  const cloudVendor = CLOUD_VENDOR_NAMES.get(instance.driver);
+  const cloudSignInLabel = cloudVendor ? `Uses your ${cloudVendor} sign-in` : undefined;
   const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
   const authLabel =
     enabled && liveProvider?.auth.status === "authenticated"
@@ -884,12 +894,17 @@ export function ProviderInstanceCard({
     isAuthenticated && authEmail ? (
       <>
         {needsAttention ? statusDotNode : null}
-        <span>Authenticated as</span>
+        <span>{cloudSignInLabel ?? "Authenticated as"}</span>
         <ProviderAuthEmail email={authEmail} />
         {authLabel ? <span>· {authLabel}</span> : null}
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
         ) : null}
+      </>
+    ) : isAuthenticated && cloudSignInLabel ? (
+      <>
+        {needsAttention ? statusDotNode : null}
+        <span>{cloudSignInLabel}</span>
       </>
     ) : (
       <>
@@ -913,7 +928,7 @@ export function ProviderInstanceCard({
                   size={mode === "list" ? "icon-micro" : "icon-xs"}
                   variant="ghost-muted"
                   className={mode === "list" ? "pointer-events-auto relative shrink-0" : undefined}
-                  aria-label={`${updateProgress ? "Updating" : versionAdvisory.title} — view details`}
+                  aria-label={`${updateProgress ? "Updating" : versionAdvisory.title}, view details`}
                 >
                   {updateProgress ? (
                     <Spinner tone="muted" {...(mode === "list" ? { size: "sm" as const } : {})} />
@@ -1257,6 +1272,26 @@ export function ProviderInstanceCard({
             {runtime ?? runtimeFields}
           </FoldedSettingsSection>
         </div>
+      ) : isCloudSiblingDriver(instance.driver) ? (
+        // Cloud providers set themselves up from the vendor CLI; overrides stay out of the way.
+        <div
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <FoldedSettingsSection
+            key={instanceId}
+            id={`provider-instance-${instanceId}-advanced`}
+            title="Advanced"
+            headerPlacement="outside"
+          >
+            {runtimeFields}
+            <ProviderEnvironmentSection
+              environment={genericEnvironment}
+              onChange={updateGenericEnvironment}
+            />
+          </FoldedSettingsSection>
+        </div>
       ) : !driverOption || deriveProviderSettingsFields(driverOption).length > 0 ? (
         <SettingsSection
           title="Runtime"
@@ -1268,17 +1303,19 @@ export function ProviderInstanceCard({
         </SettingsSection>
       ) : null}
 
-      <SettingsSection
-        title="Environment"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        <ProviderEnvironmentSection
-          environment={genericEnvironment}
-          onChange={updateGenericEnvironment}
-        />
-      </SettingsSection>
+      {isCloudSiblingDriver(instance.driver) ? null : (
+        <SettingsSection
+          title="Environment"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <ProviderEnvironmentSection
+            environment={genericEnvironment}
+            onChange={updateGenericEnvironment}
+          />
+        </SettingsSection>
+      )}
       {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
         <AcpSessionManagementSection
           environmentId={environmentId}

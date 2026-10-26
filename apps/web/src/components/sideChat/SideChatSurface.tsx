@@ -15,11 +15,25 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { findSideChatThread } from "./sideChat.logic";
+import {
+  findSideChatThread,
+  sideChatParentStatus,
+  type SideChatParentTone,
+} from "./sideChat.logic";
 import { useSideChatStore } from "./sideChatStore";
 
 // ChatView imports this surface through its right panel, so load it lazily to break the cycle.
 const ChatView = lazy(() => import("../ChatView"));
+
+const PARENT_TONE_CLASSES: Record<SideChatParentTone, { text: string; dot: string }> = {
+  active: { text: "text-sky-600 dark:text-sky-300/80", dot: "bg-sky-500 dark:bg-sky-300/80" },
+  attention: {
+    text: "text-amber-600 dark:text-amber-300/90",
+    dot: "bg-amber-500 dark:bg-amber-300/90",
+  },
+  idle: { text: "text-muted-foreground", dot: "bg-muted-foreground/60" },
+  error: { text: "text-red-600 dark:text-red-300/90", dot: "bg-red-500 dark:bg-red-300/90" },
+};
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], fallback: string) {
   const error = squashAtomCommandFailure(result);
@@ -28,8 +42,8 @@ function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], 
 
 /**
  * The side chat tab in a thread's right panel. Its thread is forked from the parent's latest
- * settled turn, so the side agent sees the conversation while nothing it says reaches the
- * parent's history, and it renders with the ordinary chat view and composer.
+ * completed turn when there is one, and the server adds the parent's live state to every side
+ * prompt, so the side agent follows the parent while nothing it says reaches the parent's history.
  */
 export function SideChatSurface({
   parent,
@@ -71,7 +85,8 @@ export function SideChatSurface({
         return;
       }
       if (isAtomCommandInterrupted(forked)) return;
-      // No settled turn to fork yet (the first one may still be running): start fresh.
+      // No completed turn to fork yet: start empty and rely on the parent's live state, which
+      // the server sends with every side prompt.
     }
     const threadId = newThreadId();
     const created = await createThread({
@@ -144,12 +159,34 @@ export function SideChatSurface({
     setError(null);
   };
 
+  const parentStatus = sideChatParentStatus(parent);
+  const parentTone = PARENT_TONE_CLASSES[parentStatus.tone];
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-side-chat-surface>
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-3">
-        <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          Not added to {parent.title}
-        </p>
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <p className="flex min-w-0 flex-1 items-baseline gap-1 text-xs text-muted-foreground" />
+            }
+          >
+            <span className="shrink-0">Side chat of</span>
+            <span className="min-w-0 truncate font-medium text-foreground">{parent.title}</span>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            Sees the main thread's latest messages and status. Nothing said here is added to it.
+          </TooltipPopup>
+        </Tooltip>
+        <span
+          role="status"
+          aria-label={`Main thread: ${parentStatus.label}`}
+          className={`inline-flex shrink-0 items-center gap-1 text-2xs ${parentTone.text}`}
+          data-side-chat-parent-status={parentStatus.tone}
+        >
+          <span aria-hidden className={`size-1.5 rounded-full ${parentTone.dot}`} />
+          {parentStatus.label}
+        </span>
         <Tooltip>
           <TooltipTrigger
             render={

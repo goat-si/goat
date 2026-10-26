@@ -1,12 +1,119 @@
 import type {
+  ComputerUseReadiness,
   CuaHostStatus,
   CuaVerificationStepId,
+  DesktopBridge,
+  DesktopCuaGrants,
   DesktopCuaVerification,
   HostComputerUse,
 } from "@goat/contracts";
 
 export type CuaPermission = "accessibility" | "screen-recording";
 export const CUA_PERMISSIONS: readonly CuaPermission[] = ["accessibility", "screen-recording"];
+
+export const CUA_DESKTOP_UPDATE_NEEDED =
+  "Update GOAT on this Mac to set up computer use: this version cannot tell which app needs the permissions.";
+
+/**
+ * The grants of the app computer use runs as. A desktop without this call may already run computer
+ * use through the helper, so its own grants prove nothing; it is asked to update instead.
+ */
+export function readCuaGrants(
+  bridge: Pick<DesktopBridge, "checkCuaGrants"> | undefined,
+): Promise<DesktopCuaGrants> {
+  return (
+    bridge?.checkCuaGrants?.() ??
+    Promise.resolve({ principal: "unusable", message: CUA_DESKTOP_UPDATE_NEEDED })
+  );
+}
+
+/** The grants of an app that can hold them; an unusable helper has none to show. */
+export type CuaGrantHolder = Exclude<DesktopCuaGrants, { principal: "unusable" }>;
+
+export const cuaGranted = (grants: CuaGrantHolder, permission: CuaPermission) =>
+  permission === "accessibility" ? grants.accessibility : grants.screenRecording;
+
+/**
+ * allowed: macOS answers yes. next: the step to do now. waiting: its System Settings pane is
+ * open and the switch is not on yet. later: after the step in progress.
+ */
+export type CuaGrantStepState = "allowed" | "next" | "waiting" | "later";
+
+export interface CuaGrantStep {
+  readonly id: CuaPermission;
+  readonly title: string;
+  readonly description: string;
+  readonly state: CuaGrantStepState;
+}
+
+const GRANT_STEP_COPY: Record<CuaPermission, { title: string; description: string }> = {
+  accessibility: {
+    title: "Accessibility",
+    description: "Click, type, and read controls in other apps.",
+  },
+  "screen-recording": {
+    title: "Screen & System Audio Recording",
+    description: "See windows to decide what to do next.",
+  },
+};
+
+/** The grant's name as System Settings lists it. */
+export const cuaGrantTitle = (permission: CuaPermission) => GRANT_STEP_COPY[permission].title;
+
+/** One step per grant, in the order macOS is asked; only the first missing one is actionable. */
+export function cuaGrantSteps(
+  grants: CuaGrantHolder,
+  opened: CuaPermission | null,
+): readonly CuaGrantStep[] {
+  let current: CuaPermission | undefined;
+  return CUA_PERMISSIONS.map((id) => {
+    const copy = GRANT_STEP_COPY[id];
+    if (cuaGranted(grants, id)) return { id, ...copy, state: "allowed" };
+    if (current !== undefined) return { id, ...copy, state: "later" };
+    current = id;
+    return { id, ...copy, state: opened === id ? "waiting" : "next" };
+  });
+}
+
+/**
+ * Remedies for the ways a grant goes missing: an older copy's entry left on, the wrong app
+ * switched on, no entry at all, and a rebuilt app. macOS lists each copy as its own row under
+ * the same name, so a switch that reads on can belong to a copy that is gone (#1333).
+ * GOAT shows the reset command and never runs it.
+ */
+export function cuaGrantTroubleshooting(grants: CuaGrantHolder): readonly string[] {
+  const name = grants.name;
+  return [
+    `${name} is already on in the list but setup still waits: that row belongs to an older copy, and macOS can show several rows with the same name. In both Accessibility and Screen & System Audio Recording, select every ${name} row and remove it with the − button, then drag ${name} in again and turn it on.`,
+    ...(grants.principal === "helper"
+      ? [
+          `Only the switch for ${name} counts. Turning on GOAT, Terminal, or another app does not let agents use this Mac.`,
+        ]
+      : []),
+    `If ${name} is not in the list, drag it in from the panel next to System Settings, or show it in Finder and drag it from there.`,
+    `After an update or a new development build, macOS can treat ${name} as a new app and list it twice. Remove the old rows from both lists and allow it again.`,
+    `To clear every entry for it, run these in Terminal, then allow it again: tccutil reset Accessibility ${grants.bundleId} and tccutil reset ScreenCapture ${grants.bundleId}`,
+  ];
+}
+
+/**
+ * Whether quitting and reopening GOAT is the remedy. GOAT reads its own grants once per
+ * process, so a grant to GOAT can stay unseen until it restarts; a helper is read fresh each
+ * check, so only a check whose restarted driver still lacks the grants calls for it.
+ */
+export function cuaNeedsRelaunch(input: {
+  readonly grants: CuaGrantHolder | null;
+  readonly opened: CuaPermission | null;
+  readonly verification: DesktopCuaVerification | null;
+}): boolean {
+  const failed = input.verification?.steps.find((step) => !step.ok)?.id;
+  if (failed === "permissions" || failed === "capture") return true;
+  return (
+    input.grants?.principal === "app" &&
+    input.opened !== null &&
+    !cuaGranted(input.grants, input.opened)
+  );
+}
 
 /** What the person at a host must provide when this client cannot grant macOS permissions. */
 export function cuaHostRequirements(
@@ -36,6 +143,7 @@ export function computerUseUnavailable(status: CuaHostStatus | null): boolean {
 const VERIFICATION_ORDER: readonly CuaVerificationStepId[] = [
   "grants",
   "restart",
+  "agentRoute",
   "permissions",
   "identity",
   "capture",
@@ -43,10 +151,11 @@ const VERIFICATION_ORDER: readonly CuaVerificationStepId[] = [
 ];
 
 const VERIFICATION_LABELS: Record<CuaVerificationStepId, string> = {
-  grants: "Permissions allowed for GOAT",
+  grants: "Permissions allowed",
   restart: "Computer use restarted with them",
+  agentRoute: "Agents can start computer use",
   permissions: "Computer use sees both permissions",
-  identity: "Computer use runs inside GOAT",
+  identity: "Computer use runs as the allowed app",
   capture: "Captured a GOAT window",
   accessibility: "Read the window's controls",
 };
@@ -76,19 +185,12 @@ export function computerUseStatusText(input: {
   readonly enabled: boolean;
   readonly status: CuaHostStatus | null;
   readonly error: string | null;
-  readonly missingGrants: readonly CuaPermission[];
 }): string | null {
   if (input.error) return `Could not check computer use: ${input.error}`;
   if (input.status === null) return "Checking this host…";
   if (input.status.platform === "other") return "Computer use is not available on this host.";
   const display = input.status.display;
   if (!input.enabled) return display && display.capability !== "available" ? display.reason : null;
-  if (input.missingGrants.length > 0) {
-    const names = input.missingGrants.map((permission) =>
-      permission === "accessibility" ? "Accessibility" : "Screen Recording",
-    );
-    return `${names.join(" and ")} ${names.length > 1 ? "are" : "is"} off. Choose Set up to allow it again.`;
-  }
   if (input.status.running)
     return display?.capability === "partial" ? `Running with limits. ${display.reason}` : "Running";
   return input.status.failure ?? "Starts with the next agent turn";
@@ -104,4 +206,25 @@ export function hostComputerUseText(computerUse: HostComputerUse | undefined): s
   return computerUse.display && computerUse.display !== "console"
     ? `${state} (${computerUse.display})`
     : state;
+}
+
+/**
+ * The host's last readiness report with this Mac's live grant reads laid over it. The report is
+ * as old as the helper's last check, so a grant revoked since then would still read granted; a
+ * live read only ever takes a grant away, since granting also stands for proofs it cannot make.
+ */
+export function withLiveGrants(
+  readiness: ComputerUseReadiness | undefined,
+  live: CuaGrantHolder | null,
+): ComputerUseReadiness | undefined {
+  if (!readiness || !live) return readiness;
+  const revoke = (reported: ComputerUseReadiness["grants"]["accessibility"], granted: boolean) =>
+    !granted && reported === "granted" ? "denied" : reported;
+  return {
+    ...readiness,
+    grants: {
+      accessibility: revoke(readiness.grants.accessibility, live.accessibility),
+      screenCapture: revoke(readiness.grants.screenCapture, live.screenRecording),
+    },
+  };
 }

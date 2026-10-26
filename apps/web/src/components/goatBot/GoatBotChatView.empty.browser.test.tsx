@@ -7,6 +7,7 @@ vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
 vi.mock("./GoatBotModeButton", () => ({ GoatBotModeButton: () => null }));
+vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
 vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 
 import { GoatBotChatView } from "./GoatBotChatView";

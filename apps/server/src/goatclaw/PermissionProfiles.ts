@@ -1,4 +1,6 @@
 import {
+  GOATCLAW_ROLE_PROFILES,
+  GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -16,6 +18,10 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { clientRuntimeModeCeiling, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { goatclawRoleTemplate, missingRoleCapabilities, roleRefusal } from "./RoleTemplates.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
+/** The goatclaw brief a delegated task starts with, reached through the profile service's module. */
+export { goatclawDelegatedTaskBrief as childBrief } from "./RoleTemplates.ts";
 
 const modes: ReadonlyArray<RuntimeMode> = [
   "approval-required",
@@ -60,6 +66,10 @@ interface CheckContext {
   readonly lanesRunning?: number | undefined;
   readonly runtimeMode?: RuntimeMode | undefined;
 }
+interface RecheckContext extends CheckContext {
+  /** The role the launch claimed, so the recheck compares the same grant claim made. */
+  readonly role?: GoatclawRole | undefined;
+}
 interface ClaimInput {
   readonly id: string;
   readonly runtimeMode: RuntimeMode;
@@ -67,16 +77,53 @@ interface ClaimInput {
   readonly host?: string | undefined;
   readonly worktree?: boolean | undefined;
   readonly forwarded?: PermissionProfile | undefined;
-  /** A stored profile the child runs under, narrowed by the caller's; role launches set it. */
-  readonly profileId?: string | undefined;
+  /**
+   * A role launch: the child runs under the role's stored profile narrowed by the caller's, and
+   * is refused when that lacks a capability the role's work uses.
+   */
+  readonly role?: GoatclawRole | undefined;
   /**
    * A follow-up send to a thread on `host`. Its lane is that thread: a lane it already holds is
    * not counted twice, and no local profile binding is written for a thread that lives elsewhere.
    */
   readonly remoteThreadId?: string | undefined;
 }
-type CheckResult =
-  | { readonly ok: true; readonly effective: PermissionProfileView }
+/**
+ * The stored profile a thread runs under and the ceilings that narrowed it, so a refusal names
+ * whichever one refused. Server-side only: strip it before a view leaves this process.
+ */
+export interface ProfileNarrowing {
+  readonly named: PermissionProfile;
+  readonly ceilings: ReadonlyArray<PermissionProfile>;
+}
+export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
+
+/**
+ * What a role launch grants: the role's stored profile within the caller's, plus what the role
+ * keeps (RoleTemplates `keeps`) when the caller may launch and only its own stored profile lacked
+ * it. A launch snapshot or forwarded ceiling that lacks the capability still removes it.
+ */
+export const roleProfile = (
+  role: GoatclawRole,
+  named: PermissionProfile,
+  caller: EffectiveProfile,
+): PermissionProfile => {
+  const profile = intersectProfiles(named, caller.profile);
+  const ceilings = caller.narrowing?.ceilings;
+  if (ceilings === undefined || !caller.profile.capabilities.includes("threads.launch"))
+    return profile;
+  const kept = goatclawRoleTemplate(role).keeps.filter(
+    (capability) =>
+      named.capabilities.includes(capability) &&
+      !profile.capabilities.includes(capability) &&
+      ceilings.every((ceiling) => ceiling.capabilities.includes(capability)),
+  );
+  return kept.length === 0
+    ? profile
+    : { ...profile, capabilities: [...profile.capabilities, ...kept] };
+};
+export type CheckResult =
+  | { readonly ok: true; readonly effective: EffectiveProfile }
   | { readonly ok: false; readonly reason: string };
 interface CloudApprovalInput {
   readonly decisionId?: string | undefined;
@@ -91,7 +138,7 @@ export class PermissionProfiles extends Context.Service<
       scope: McpInvocationScope,
       runtimeMode?: RuntimeMode,
       forwarded?: PermissionProfile,
-    ) => Effect.Effect<PermissionProfileView, OrchestratorMcpFailure>;
+    ) => Effect.Effect<EffectiveProfile, OrchestratorMcpFailure>;
     readonly check: (
       scope: McpInvocationScope,
       capability: PermissionCapability,
@@ -101,7 +148,7 @@ export class PermissionProfiles extends Context.Service<
       scope: McpInvocationScope,
       capability: PermissionCapability,
       context?: CheckContext,
-    ) => Effect.Effect<PermissionProfileView, OrchestratorMcpFailure>;
+    ) => Effect.Effect<EffectiveProfile, OrchestratorMcpFailure>;
     readonly assertTarget: (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -112,7 +159,7 @@ export class PermissionProfiles extends Context.Service<
     readonly recheck: (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context?: CheckContext,
+      context?: RecheckContext,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     /**
      * A cloud launch bills a paid account, so with goatclaw on the `cloud.launch` capability is
@@ -178,25 +225,39 @@ const ownerOf = (scope: McpInvocationScope) =>
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
 
-const checkProfile = (
-  effective: PermissionProfileView,
+/** Names the stored profile when it refuses, else the first ceiling that narrowed it to refusal. */
+const refuser = (effective: EffectiveProfile, refuses: (profile: PermissionProfile) => boolean) => {
+  const named = effective.narrowing?.named ?? effective.profile;
+  if (refuses(named)) return `Profile ${named.id}`;
+  const ceiling = effective.narrowing?.ceilings.find(refuses);
+  if (ceiling === undefined) return `Profile ${effective.profile.id}`;
+  return ceiling.id === named.id
+    ? `Profile ${named.id} as this thread was launched with it`
+    : `Ceiling ${ceiling.id} (narrowing ${named.id})`;
+};
+
+export const checkProfile = (
+  effective: EffectiveProfile,
   capability: PermissionCapability,
   context: CheckContext,
 ): CheckResult => {
   if (!effective.enabled) return { ok: true, effective };
   const { profile } = effective;
   if (!profile.capabilities.includes(capability))
-    return { ok: false, reason: `Profile ${profile.id} does not allow ${capability}.` };
-  if (
-    context.host !== undefined &&
-    profile.hosts !== undefined &&
-    !profile.hosts.includes(context.host)
-  )
-    return { ok: false, reason: `Profile ${profile.id} does not allow host ${context.host}.` };
-  if (context.lanesRunning !== undefined && context.lanesRunning >= profile.maxLanes)
     return {
       ok: false,
-      reason: `Profile ${profile.id} permits at most ${profile.maxLanes} running lanes.`,
+      reason: `${refuser(effective, (p) => !p.capabilities.includes(capability))} does not allow ${capability}.`,
+    };
+  const { host, lanesRunning } = context;
+  if (host !== undefined && profile.hosts !== undefined && !profile.hosts.includes(host))
+    return {
+      ok: false,
+      reason: `${refuser(effective, (p) => p.hosts !== undefined && !p.hosts.includes(host))} does not allow host ${host}.`,
+    };
+  if (lanesRunning !== undefined && lanesRunning >= profile.maxLanes)
+    return {
+      ok: false,
+      reason: `${refuser(effective, (p) => lanesRunning >= p.maxLanes)} permits at most ${profile.maxLanes} running lanes.`,
     };
   return { ok: true, effective };
 };
@@ -228,12 +289,14 @@ export const layer = Layer.effect(
       const named = policy.profiles[profileId];
       if (named === undefined)
         return yield* refusal(`Permission profile ${profileId} no longer exists.`);
-      return binding === undefined
-        ? named
-        : intersectProfiles(
-            named,
-            yield* decodeProfile(binding.ceiling_json).pipe(Effect.mapError(storageFailure)),
-          );
+      if (binding === undefined) return { profile: named, narrowing: { named, ceilings: [] } };
+      const ceiling = yield* decodeProfile(binding.ceiling_json).pipe(
+        Effect.mapError(storageFailure),
+      );
+      return {
+        profile: intersectProfiles(named, ceiling),
+        narrowing: { named, ceilings: [ceiling] },
+      };
     });
     const resolve = Effect.fn("PermissionProfiles.resolve")(function* (
       scope: McpInvocationScope,
@@ -259,8 +322,16 @@ export const layer = Layer.effect(
         };
       }
       const sql = yield* sqlEffect;
-      let profile = yield* threadProfile(policy, threadId);
-      if (forwarded !== undefined) profile = intersectProfiles(profile, forwarded);
+      const bound = yield* threadProfile(policy, threadId);
+      const profile =
+        forwarded === undefined ? bound.profile : intersectProfiles(bound.profile, forwarded);
+      const narrowing: ProfileNarrowing = {
+        named: bound.narrowing.named,
+        ceilings:
+          forwarded === undefined
+            ? bound.narrowing.ceilings
+            : [...bound.narrowing.ceilings, forwarded],
+      };
       let callerMode =
         runtimeMode === undefined
           ? clientRuntimeModeCeiling(scope.client)
@@ -280,6 +351,7 @@ export const layer = Layer.effect(
         enabled: true,
         profile: { ...profile, runtimeModeCeiling: narrowed },
         runtimeMode: narrowed,
+        narrowing,
       };
     });
     const check = Effect.fn("PermissionProfiles.check")(function* (
@@ -300,6 +372,34 @@ export const layer = Layer.effect(
     ) {
       return yield* admit(yield* check(scope, capability, context));
     });
+    /** What a role launch holds under the caller's current profile; claim and recheck share it. */
+    const roleGrant = Effect.fn("PermissionProfiles.roleGrant")(function* (
+      role: GoatclawRole,
+      caller: EffectiveProfile,
+    ) {
+      const { profileId } = goatclawRoleTemplate(role);
+      const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+      const named = policy.profiles[profileId];
+      if (named === undefined)
+        return yield* refusal(`Permission profile ${profileId} does not exist.`);
+      // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
+      return { named, profile: roleProfile(role, named, caller) };
+    });
+    /**
+     * What a caller grants a thread bound under `profileId` when it reaches that thread without
+     * launching it, as a send does: a role thread that keeps capabilities gets the role's grant,
+     * so a kept capability is neither read as exceeding the caller nor stripped on rebinding.
+     */
+    const reachGrant = Effect.fn("PermissionProfiles.reachGrant")(function* (
+      profileId: string | undefined,
+      caller: EffectiveProfile,
+    ) {
+      const role = GoatclawRole.literals.find(
+        (role) =>
+          GOATCLAW_ROLE_PROFILES[role] === profileId && goatclawRoleTemplate(role).keeps.length > 0,
+      );
+      return role === undefined ? caller.profile : (yield* roleGrant(role, caller)).profile;
+    });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -310,18 +410,16 @@ export const layer = Layer.effect(
       const caller = yield* resolve(scope, callerMode, forwarded);
       if (!caller.enabled) return;
       const target = yield* resolve(scope, targetMode, undefined, threadId);
-      if (
-        encodeProfile(intersectProfiles(target.profile, caller.profile)) !==
-        encodeProfile(target.profile)
-      )
-        return yield* refusal(
-          "The target thread's permission profile exceeds the caller's ceiling.",
-        );
+      const within = (ceiling: PermissionProfile) =>
+        encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
+      if (within(caller.profile)) return;
+      if (within(yield* reachGrant(target.narrowing?.named.id, caller))) return;
+      return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context: CheckContext = {},
+      { role, ...context }: RecheckContext = {},
     ) {
       if (!initial.enabled) return;
       const current = yield* require(scope, "threads.launch", {
@@ -330,8 +428,10 @@ export const layer = Layer.effect(
       });
       if (!current.enabled) return;
       if (context.host !== undefined) yield* require(scope, "threads.remote", context);
+      const granted =
+        role === undefined ? current.profile : (yield* roleGrant(role, current)).profile;
       if (
-        encodeProfile(intersectProfiles(initial.profile, current.profile)) !==
+        encodeProfile(intersectProfiles(initial.profile, granted)) !==
         encodeProfile(initial.profile)
       )
         return yield* refusal(
@@ -367,9 +467,11 @@ export const layer = Layer.effect(
         .withTransaction(
           Effect.gen(function* () {
             if (input.decisionId === undefined) {
+              // Only goat_cloud_launch takes a decisionId or handoffId; the thread and task
+              // launches that also land here cannot, so the advice names a route they can take.
               if (threadId === undefined || !(yield* personStartedRun(sql, threadId)))
                 return yield* refusal(
-                  'A cloud launch bills a paid account. Launch it in a turn a person started, or ask with goat_decision_request offering an option with id "approve" and pass decisionId once a person approves.',
+                  `A cloud launch bills a paid account, so with goatclaw on it needs a turn a person started. Ask a person to start that turn, or launch with ${goatCallText("cloud_agent.launch")} from a thread on the machine that holds the cloud account; it asks a person to approve this exact launch.`,
                 );
             } else {
               const decision = (yield* sql<{
@@ -411,19 +513,19 @@ export const layer = Layer.effect(
     ) {
       const effective = yield* resolve(scope, input.runtimeMode, input.forwarded);
       if (!effective.enabled) {
-        if (input.profileId !== undefined)
+        if (input.role !== undefined)
           return yield* refusal("goatclaw is off, so role launches are unavailable.");
         return effective;
       }
       let granted = effective;
-      if (input.profileId !== undefined) {
-        const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
-        const named = policy.profiles[input.profileId];
-        if (named === undefined)
-          return yield* refusal(`Permission profile ${input.profileId} does not exist.`);
-        // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
-        const profile = intersectProfiles(named, effective.profile);
+      // The profile the child is bound under before any ceiling narrows it.
+      let base = effective.narrowing?.named ?? effective.profile;
+      if (input.role !== undefined) {
+        const { named, profile } = yield* roleGrant(input.role, effective);
+        const missing = missingRoleCapabilities(input.role, profile);
+        if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
+        base = named;
       }
       const sql = yield* sqlEffect;
       return yield* sql
@@ -440,11 +542,35 @@ export const layer = Layer.effect(
               yield* admit(checkProfile(effective, "threads.remote", input));
             if (input.worktree) yield* admit(checkProfile(effective, "worktree.create", input));
             if (existing === undefined) {
+              const ancestors =
+                scope.thread === undefined
+                  ? []
+                  : yield* sql<{ thread_id: ThreadId }>`
+                WITH RECURSIVE ancestors(thread_id) AS (
+                  SELECT ${scope.thread.threadId}
+                  UNION
+                  SELECT s.thread_id FROM orchestration_v2_projection_subagents s
+                  JOIN ancestors a ON s.child_thread_id = a.thread_id WHERE s.origin = 'app_owned'
+                )
+                SELECT a.thread_id FROM ancestors a WHERE NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_subagents s
+                  WHERE s.child_thread_id = a.thread_id AND s.origin = 'app_owned')`;
+              const root = ancestors[0]?.thread_id;
+              if (scope.thread !== undefined && root === undefined)
+                return yield* refusal("The delegated task's caller ancestry is unavailable.");
+              const rootProfile =
+                root === undefined ? effective : yield* resolve(scope, undefined, undefined, root);
               // Pending/unknown launches consume a slot across restarts. Watches and cancellation requests are not terminal evidence.
               const counts = yield* sql<{
                 count: number;
-              }>`SELECT COUNT(DISTINCT COALESCE(l.host, 'local') || ':' || COALESCE(l.child_thread_id, l.id)) AS count FROM goatclaw_lane_reservations l
-          WHERE l.owner_key = ${owner}
+              }>`WITH RECURSIVE callers(thread_id) AS (
+            SELECT ${root ?? null}
+            UNION
+            SELECT s.child_thread_id FROM orchestration_v2_projection_subagents s
+            JOIN callers c ON s.thread_id = c.thread_id
+            WHERE s.origin = 'app_owned' AND s.child_thread_id IS NOT NULL)
+          SELECT COUNT(DISTINCT COALESCE(l.host, 'local') || ':' || COALESCE(l.child_thread_id, l.id)) AS count FROM goatclaw_lane_reservations l
+          WHERE (l.owner_key = ${owner} OR l.owner_key IN (SELECT 'thread:' || thread_id FROM callers))
           AND (${input.remoteThreadId ?? null} IS NULL OR l.host IS NOT ${input.host ?? null} OR l.child_thread_id IS NOT ${input.remoteThreadId ?? null})
           AND (
             (l.host IS NULL AND (EXISTS (SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.thread_id = l.child_thread_id AND r.status IN ('preparing','queued','starting','running','waiting'))
@@ -452,27 +578,41 @@ export const layer = Layer.effect(
             OR (l.host IS NOT NULL AND (l.pending = 1 OR EXISTS (SELECT 1 FROM remote_dispatches d
               WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
               AND d.state IN ('launching','running','lost')))))`;
-              // Native subagents share the caller's session and never reserve, so count the live
-              // ones it and its native descendants started. Nested Codex v2 records sit on the
-              // spawning child thread; UNION keeps the walk finite.
+              // Keep reservation ownership on the actual caller for retries. Its delegation
+              // family shares capacity, including natives below delegated children; UNION
+              // keeps both ancestry walks finite even if a projection contains a cycle.
               const natives =
                 scope.thread === undefined
                   ? []
                   : yield* sql<{
                       count: number;
-                    }>`WITH RECURSIVE native(subagent_id, child_thread_id, status, run_id) AS (
-            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
-            WHERE s.thread_id = ${scope.thread.threadId} AND s.origin = 'provider_native'
+                    }>`WITH RECURSIVE native(subagent_id, child_thread_id, status, run_id, origin) AS (
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id, s.origin FROM orchestration_v2_projection_subagents s
+            WHERE s.thread_id = ${root}
             UNION
-            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
-            JOIN native n ON s.thread_id = n.child_thread_id WHERE s.origin = 'provider_native')
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id, s.origin FROM orchestration_v2_projection_subagents s
+            JOIN native n ON s.thread_id = n.child_thread_id)
           SELECT COUNT(DISTINCT n.subagent_id) AS count FROM native n
-          WHERE n.status IN ('pending','running','waiting') AND NOT EXISTS (
+          WHERE n.origin = 'provider_native' AND n.status IN ('pending','running','waiting') AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.run_id = n.run_id AND r.status = 'rolled_back')`;
               yield* admit(
-                checkProfile(effective, "threads.launch", {
-                  lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
-                }),
+                checkProfile(
+                  {
+                    ...effective,
+                    profile: {
+                      ...effective.profile,
+                      maxLanes: Math.min(effective.profile.maxLanes, rootProfile.profile.maxLanes),
+                    },
+                    narrowing: {
+                      named: effective.narrowing?.named ?? effective.profile,
+                      ceilings: [...(effective.narrowing?.ceilings ?? []), rootProfile.profile],
+                    },
+                  },
+                  "threads.launch",
+                  {
+                    lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
+                  },
+                ),
               );
               yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, host) VALUES (${input.id}, ${owner}, ${input.childThreadId ?? input.remoteThreadId ?? null}, ${input.host ?? null})`;
             }
@@ -482,14 +622,35 @@ export const layer = Layer.effect(
                 profile_id: string;
                 ceiling_json: string;
               }>`SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${input.childThreadId}`)[0];
+              // A first binding's snapshot carries the id of what narrowed it, so the child's
+              // refusals name that ceiling rather than the profile it is bound under. The
+              // snapshot holds one id for every field, so a source is named only when it is
+              // within the base and every other source: then whatever the snapshot refuses,
+              // that source refuses too.
+              const sources = [
+                ...(effective.narrowing?.ceilings ?? []),
+                ...(input.role === undefined ? [] : [effective.profile]),
+              ];
+              const withinAll = (source: PermissionProfile) =>
+                [base, ...sources].every(
+                  (other) =>
+                    encodeProfile(intersectProfiles(source, other)) === encodeProfile(source),
+                );
+              const narrower = sources.findLast(
+                (source) => source.id !== granted.profile.id && withinAll(source),
+              );
+              // A send rebinds an existing role thread under the grant assertTarget admitted it
+              // with, so the capabilities its role keeps survive the narrowing.
               const inherited =
                 previous === undefined
-                  ? granted.profile
+                  ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
                   : intersectProfiles(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
                       ),
-                      granted.profile,
+                      input.role === undefined
+                        ? yield* reachGrant(previous.profile_id, granted)
+                        : granted.profile,
                     );
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
           VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})
@@ -565,7 +726,7 @@ export const layer = Layer.effect(
       const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
       if (!policy.enabled) return undefined;
       return yield* threadProfile(policy, threadId).pipe(
-        Effect.map((profile) => profile.maxLanes),
+        Effect.map(({ profile }) => profile.maxLanes),
         Effect.catchIf(
           (error) => error.code === "capability_denied",
           () => Effect.succeed(0),

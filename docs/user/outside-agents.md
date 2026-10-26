@@ -57,24 +57,24 @@ Then choose what the agent may do:
 ## Claude Code
 
 ```sh
-claude mcp add --transport http t3 https://<environment-address>/mcp
-claude mcp login t3
+claude mcp add --transport http goat https://<environment-address>/mcp
+claude mcp login goat
 ```
 
 `claude mcp login` opens the sign-in page in your browser. On a machine
 without a browser, add `--no-browser`, open the printed URL elsewhere, and
-paste the final URL back when asked. `claude mcp list` shows `t3` as connected
+paste the final URL back when asked. `claude mcp list` shows `goat` as connected
 once you approve.
 
 ## Codex
 
 ```sh
-codex mcp add t3 --url https://<environment-address>/mcp
-codex mcp login t3
+codex mcp add goat --url https://<environment-address>/mcp
+codex mcp login goat
 ```
 
 `codex mcp login --no-browser` prints the sign-in URL instead of opening it.
-`codex mcp list` shows `t3` with OAuth once you approve.
+`codex mcp list` shows `goat` with OAuth once you approve.
 
 ## ChatGPT
 
@@ -93,6 +93,29 @@ Any agent that supports remote MCP servers over HTTP with OAuth can connect. Giv
 it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
 Agents without OAuth support can use a client token instead.
 
+The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
+`goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
+
+## Set up a client with the goat-mcp skill
+
+The `goat-mcp` skill is a step-by-step guide an agent can follow to connect its
+own client: finding the MCP URL, signing in or using a client token, the
+settings for Claude Code, Claude Desktop, Codex, Cursor, VS Code, OpenCode,
+Gemini CLI, ChatGPT and Grok, checking the connection, and fixing common
+errors. Clients that only start local stdio servers connect through the
+`mcp-remote` bridge it describes.
+
+`goat mcp skill` prints the skill. To install it for Claude Code or Codex:
+
+```sh
+mkdir -p ~/.claude/skills/goat-mcp && goat mcp skill > ~/.claude/skills/goat-mcp/SKILL.md
+mkdir -p ~/.codex/skills/goat-mcp && goat mcp skill > ~/.codex/skills/goat-mcp/SKILL.md
+```
+
+On a machine without GOAT, copy
+[skills/goat-mcp/SKILL.md](https://github.com/goat-si/goat/blob/dev/skills/goat-mcp/SKILL.md)
+from the GOAT repository into the client's skills folder.
+
 ## Long-running orchestrators
 
 A bot or script that drives GOAT for weeks, such as an orchestrator on another
@@ -107,8 +130,32 @@ Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
 days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
 you choose on the sign-in page. Without it, the client gets **Supervised**.
 
+### Give a client its token
+
+Keep the token in an environment variable, such as
+`export GOAT_MCP_TOKEN="$(goat auth client create --name "Cursor" --token-only)"`,
+and let the client read it when it starts, so the token stays out of its
+config file. Replace `<url>` with the MCP URL:
+
+| Client               | Setting                                                                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code          | `claude mcp add-json --scope user goat '{"type":"http","url":"<url>","headers":{"Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'`               |
+| Codex                | `codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN`                                                                       |
+| Cursor               | `"url": "<url>"` and `"headers": { "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }` in `mcp.json`                                          |
+| VS Code              | `"type": "http"`, `"url": "<url>"` and the same `headers` under `servers` in `mcp.json`                                                      |
+| OpenCode             | `"type": "remote"`, `"oauth": false` and `"headers": { "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }`                                     |
+| Gemini CLI           | `gemini mcp add --scope user --transport http --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat <url>`                                 |
+| Clients without HTTP | `npx -y mcp-remote <url> --header "Authorization:${GOAT_MCP_AUTH}"`, with `GOAT_MCP_AUTH` set to `Bearer <token>` (Node.js 20.18.1 or newer) |
+| xAI API              | `"authorization": "Bearer <token>"` in an `mcp` tool; the URL must be public `https`                                                         |
+
+Restart the client after changing the variable. The
+[goat-mcp skill](#set-up-a-client-with-the-goat-mcp-skill) has full config files
+and fixes for common errors.
+
+### Sessions and revoking
+
 Initialize MCP once and reuse the `mcp-session-id` header from that response
-for later calls, including long `goat_thread_wait` polls. End the session with
+for later calls, including long `thread.wait` polls. End the session with
 an HTTP `DELETE` when the bot shuts down.
 
 `goat auth client list` shows each token's name and when it was last used.
@@ -126,8 +173,8 @@ goat auth client create --name "Grok Bot" \
   --scope orchestration:read --scope orchestration:operate --scope orchestration:approve
 ```
 
-The client can then list approvals with `goat_pending_request_list`, read them
-with `goat_pending_request_read`, and answer with `goat_pending_request_respond`
+Through `goat_call`, the client can then list approvals with `pending_request.list`, read them
+with `pending_request.read`, and answer with `pending_request.respond`
 and `decision` set to `accept` or `decline`. It can only answer approvals in
 threads that run within its ceiling. Each answer records the client's name and
 reason, and the approval shows who answered it. This also works for threads on
@@ -141,12 +188,12 @@ and create one without `orchestration:approve`.
 ## Cloud agents from any machine
 
 Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
-that service. An agent can call `goat_cloud_holders` to see which connected environments hold a
-login, and `goat_cloud_launch` to start a run there. Add `dryRun: true` to see which environment
+that service. Through `goat_call`, an agent can call `cloud_agent.holders` to see which connected environments hold a
+login, and `cloud_agent.launch` to start a run there. Add `dryRun: true` to see which environment
 would run it. The environment needs a project for the repository, and the run starts from that
 project's pushed branch. Launching needs **Full access**.
 
-A bot that starts cloud runs on its own can show them in GOAT with `goat_cloud_run_register`:
+A bot that starts cloud runs on its own can show them in GOAT with `goat_call {path:"cloud_agent.run_register", args}`, where `args` is:
 
 ```json
 {
@@ -163,14 +210,15 @@ environment signed in to the same account can see the run, GOAT follows it and r
 ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
 started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
 following it: the run keeps going, and you cancel it from its page in the provider.
-`goat_cloud_run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+`cloud_agent.run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
 
 ## Scripts on the host
 
-On the machine that runs the environment, `goat thread` uses the same tools
-without a sign-in:
+On the machine that runs the environment, sign the terminal in once with
+`goat login`, and `goat thread` then uses the same tools:
 
 ```sh
+goat login
 id=$(goat thread start . "Find why the tests are slow")
 goat thread send "$id" "Now fix it" --wait
 goat thread show "$id"
@@ -186,6 +234,25 @@ the message to read it from stdin.
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
+
+Every other capability is a command too. `goat describe` lists them, `goat describe thread`
+shows one resource, and `goat describe thread.read` prints its arguments. Run one as
+`goat thread read -f threadId=$id` or `goat call thread.read '{"threadId":"…"}'`: `-f key=value`
+passes a string and `-F key=value` passes `true`, `false`, `null`, or a whole number. `--json` prints
+a result with `status` `ok`, `error`, or `needs_human`. The exit code is 0 for ok, 1 for an
+error, 2 for a mistyped command, 3 when you need to act in the app, 4 when retrying is safe, and 5
+when a change may have happened, so check before retrying. Work that keeps running after the
+command returns prints an operation id; `goat operation wait <id>` follows it and exits 0 when it
+succeeded, 1 when it failed or was cancelled, 3 when it waits for you, and 6 when it is still
+running at the deadline.
+
+`goat login` stores a client session for this environment that lasts 30 days. It
+appears under **Settings → Connections** as "goat CLI", and threads it starts or
+changes run at most `approval-required` unless you pass `--access`. `goat whoami`
+shows which credential the terminal uses, and `goat logout` revokes it. Inside a
+GOAT thread whose agent has a GOAT credential in its environment, `goat` uses
+that thread's own access instead, and `goat login`, `goat pair`, and the
+`goat auth` commands that create credentials refuse to run.
 
 ## Remove an agent
 

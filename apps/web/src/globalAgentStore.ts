@@ -6,7 +6,7 @@ import type { DraftId } from "./composerDraftStore";
 import { resolveStorage } from "./lib/storage";
 
 export const GLOBAL_AGENT_STORAGE_KEY = "goat:global-agent:v1";
-const GLOBAL_AGENT_STORAGE_VERSION = 2;
+const GLOBAL_AGENT_STORAGE_VERSION = 3;
 
 /**
  * The one projectless thread GOAT opens on launch and from the sidebar logo.
@@ -24,6 +24,9 @@ export interface GlobalAgentRef {
  */
 export type GlobalAgentMode = "bot" | "thread";
 
+/** What the logo opens until someone picks a mode on this client. */
+const DEFAULT_GLOBAL_AGENT_MODE: GlobalAgentMode = "thread";
+
 export interface GlobalAgentStoreState {
   ref: GlobalAgentRef | null;
   /**
@@ -31,7 +34,8 @@ export interface GlobalAgentStoreState {
    * survives archive and delete; whether the bot can take messages is decided per connection.
    */
   botRef: ChannelBotRef | null;
-  mode: GlobalAgentMode;
+  /** The mode someone picked here, or null to follow `DEFAULT_GLOBAL_AGENT_MODE`. */
+  mode: GlobalAgentMode | null;
   setRef: (ref: GlobalAgentRef) => void;
   setBotRef: (botRef: ChannelBotRef) => void;
   setMode: (mode: GlobalAgentMode) => void;
@@ -75,18 +79,32 @@ function readPersistedBotRef(persisted: unknown): ChannelBotRef | null {
   return isChannelBotRef(botRef) ? botRef : null;
 }
 
-function readPersistedMode(persisted: unknown): GlobalAgentMode {
+function readPersistedMode(persisted: unknown): GlobalAgentMode | null {
   const mode = (persisted as { mode?: unknown } | null | undefined)?.mode;
-  return mode === "thread" ? "thread" : "bot";
+  return mode === "thread" || mode === "bot" ? mode : null;
+}
+
+export function selectGlobalAgentMode(state: Pick<GlobalAgentStoreState, "mode">): GlobalAgentMode {
+  return state.mode ?? DEFAULT_GLOBAL_AGENT_MODE;
 }
 
 /** Hydration from another storage version. Versions before GOAT Bot had no bot to keep. */
-export function migratePersistedGlobalAgent(persisted: unknown): {
+export function migratePersistedGlobalAgent(
+  persisted: unknown,
+  version: number,
+): {
   ref: GlobalAgentRef | null;
   botRef: ChannelBotRef | null;
-  mode: GlobalAgentMode;
+  mode: GlobalAgentMode | null;
 } {
-  return { ref: readPersistedRef(persisted), botRef: null, mode: "bot" };
+  const ref = readPersistedRef(persisted);
+  if (version < 2) return { ref, botRef: null, mode: null };
+  // Version 2 saved its "bot" default with every write, so only "thread" is known to be a choice.
+  return {
+    ref,
+    botRef: readPersistedBotRef(persisted),
+    mode: readPersistedMode(persisted) === "thread" ? "thread" : null,
+  };
 }
 
 /** Same-version hydration: zustand skips migrate here, so validate again. */
@@ -107,7 +125,7 @@ export const useGlobalAgentStore = create<GlobalAgentStoreState>()(
     (set) => ({
       ref: null,
       botRef: null,
-      mode: "bot",
+      mode: null,
       setRef: (ref) => set({ ref }),
       setBotRef: (botRef) => set({ botRef }),
       setMode: (mode) => set({ mode }),
@@ -126,7 +144,8 @@ export const useGlobalAgentStore = create<GlobalAgentStoreState>()(
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
       version: GLOBAL_AGENT_STORAGE_VERSION,
-      migrate: (persisted) => migratePersistedGlobalAgent(persisted) as GlobalAgentStoreState,
+      migrate: (persisted, version) =>
+        migratePersistedGlobalAgent(persisted, version) as GlobalAgentStoreState,
       merge: (persisted, current) => mergePersistedGlobalAgent(persisted, current),
       partialize: ({ ref, botRef, mode }) => ({ ref, botRef, mode }),
     },

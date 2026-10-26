@@ -81,7 +81,10 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
     ? {}
     : { placementReason: task.target.placementReason }),
   ...(task.movedFrom === undefined ? {} : { movedFrom: task.movedFrom }),
-  ...(task.resultSummary === undefined ? {} : { summary: task.resultSummary }),
+  // A turn's summary is GOAT Bot's answer, which the conversation already shows as a message.
+  ...(task.resultSummary === undefined || task.kind === "turn"
+    ? {}
+    : { summary: task.resultSummary }),
   openQuestionCount: task.openQuestions.length,
   ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),
   ...(task.observed === undefined ? {} : { observed: task.observed }),
@@ -93,12 +96,15 @@ export const botAddress = (bot: ChannelBotRef): ChannelReplyAddress => ({
   threadId: bot.threadId,
 });
 
-/** The chip delivery for one task version; re-committing the same version adds nothing. */
+/**
+ * The chip delivery for one task version; re-committing the same version adds nothing. A
+ * different `causeKey` delivers the same card for another reason, such as being a task's outcome.
+ */
 export const chipDelivery = (
   task: ChannelTask,
   bot: ChannelBotRef,
+  causeKey = "chip:" + task.taskId + ":" + task.version,
 ): ChannelLedger.ChannelOutboxInsert => {
-  const causeKey = "chip:" + task.taskId + ":" + task.version;
   const deliveryId = deliveryIdFor(causeKey);
   return {
     deliveryId,

@@ -21,6 +21,7 @@ import {
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown from "../ChatMarkdown";
 import { ThreadContextChip } from "../ThreadContextChip";
+import { CapabilityContextChip } from "../CapabilityContextChip";
 import { MessageCircleIcon, MousePointerClickIcon, PaintbrushIcon } from "~/components/solar";
 import type { ComposerContextId, KnownComposerContextRecord } from "@goat/contracts";
 import { buildExpandedImagePreview } from "./ExpandedImagePreview";
@@ -328,6 +329,21 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
       render: (record, context) =>
         record.kind === "thread" ? (
           <ThreadContextChip record={record} copyMarkdown={context.copyMarkdown} />
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
+      kind: "capability",
+      canRender: (record) => record.kind === "capability",
+      render: (record, context) =>
+        record.kind === "capability" ? (
+          <CapabilityContextChip
+            capability={record.capability}
+            label={record.label}
+            app={record.app !== undefined}
+            copyMarkdown={context.copyMarkdown}
+          />
         ) : (
           <UnavailableUserMessageContextChip {...context} />
         ),

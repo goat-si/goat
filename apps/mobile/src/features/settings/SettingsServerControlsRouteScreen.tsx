@@ -1,10 +1,12 @@
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
-import { AuthSettingsWriteScope } from "@goat/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
 import {
+  DEFAULT_SERVER_SETTINGS,
+  resolveProjectBuiltInSkillEnabled,
   type ResponseStreamingMode,
   type ServerSettings,
   type ServerSettingsPatch,
@@ -13,7 +15,8 @@ import {
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
 } from "@goat/contracts";
-import { useRef, useState } from "react";
+import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
+import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -29,10 +32,16 @@ import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import {
+  ComputerUseAdvancedRow,
+  useComputerUseAdvanced,
+} from "./computerUse/ComputerUseAdvancedRow";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
 import {
+  planMobileBuiltInSkillToggle,
+  planMobileBuiltInSkillProjectPatch,
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
@@ -72,7 +81,7 @@ const SUBMODULE_CHOICES: ReadonlyArray<{
   {
     mode: null,
     label: "Inherit",
-    description: "Use the repository's t3.json, or initialize recursively.",
+    description: "Use the repository's goat.json, or initialize recursively.",
   },
   { mode: "recursive", label: "Recursive", description: "Initialize nested submodules too." },
   {
@@ -91,7 +100,7 @@ const WORKSPACE_CHOICES: ReadonlyArray<{
   {
     mode: null,
     label: "Inherit",
-    description: "Use the repository's t3.json, or Local.",
+    description: "Use the repository's goat.json, or Local.",
   },
   {
     mode: "local",
@@ -122,6 +131,23 @@ const STREAMING_CHOICES: ReadonlyArray<{
   },
 ];
 
+const TOOL_LISTING_CHOICES: ReadonlyArray<{
+  readonly listing: AgentToolListing;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    listing: "core",
+    label: "Core",
+    description: "Two GOAT tools that look up and run the rest.",
+  },
+  {
+    listing: "full",
+    label: "All tools",
+    description: "Every tool up front. Can make each agent's first prompt much larger.",
+  },
+];
+
 export function SettingsEnvironmentNewThreadsRouteScreen() {
   return <ServerSettingsDetail page="new-threads" />;
 }
@@ -130,18 +156,32 @@ export function SettingsEnvironmentSourceControlRouteScreen() {
   return <ServerSettingsDetail page="source-control" />;
 }
 
-export function SettingsEnvironmentAgentBehaviorRouteScreen() {
-  return <ServerSettingsDetail page="agent-behavior" />;
+export function SettingsEnvironmentAgentBehaviorRouteScreen({
+  route,
+}: Partial<StaticScreenProps<{ readonly environmentId?: EnvironmentId } | undefined>>) {
+  return (
+    <ServerSettingsDetail page="agent-behavior" focusEnvironmentId={route?.params?.environmentId} />
+  );
 }
 
 export function SettingsEnvironmentMaintenanceRouteScreen() {
   return <ServerSettingsDetail page="maintenance" />;
 }
 
-function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
+function ServerSettingsDetail(props: {
+  readonly page: SettingsPage;
+  /** Set when the composer's computer use setup link opens this page for its environment. */
+  readonly focusEnvironmentId?: EnvironmentId | undefined;
+}) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
+  const { selectedTargets, projectGroups, selectedProjectKey, focusEnvironment } =
+    useSettingsEnvironmentFilter();
+  const { focusEnvironmentId } = props;
+  useEffect(() => {
+    if (focusEnvironmentId !== undefined) focusEnvironment(focusEnvironmentId);
+    // Focus once per link; later filter changes by the user must stick.
+  }, [focusEnvironmentId]);
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
   const projectSelected = selectedProjectKey !== null;
@@ -172,6 +212,37 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
+  const skillOn = (entry: { settings: ServerSettings }) =>
+    !entry.settings.disabledBuiltInSkills.includes("computer-use");
+  const computerUseAdvanced = useComputerUseAdvanced();
+  const supportsDiscipline =
+    targets.length > 0 &&
+    targets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities.devDisciplineSkill === true,
+    );
+  const disciplineValues = displayTargets.map((target) => ({
+    enabled: resolveProjectBuiltInSkillEnabled(
+      target.environment.serverConfig.settings,
+      target.projectId,
+      "goat-discipline",
+    ),
+    override:
+      target.projectId === null
+        ? undefined
+        : target.environment.serverConfig.settings.projectSettingsOverrides[target.projectId]
+            ?.builtInSkills?.["goat-discipline"]?.enabled,
+  }));
+  const disciplineReference = disciplineValues[0];
+  const disciplineMixed = disciplineValues.some(
+    (value) =>
+      value.enabled !== disciplineReference?.enabled ||
+      value.override !== disciplineReference?.override,
+  );
+  const computerUseSkillOn =
+    reference !== null && displayTargets.every((entry) => skillOn(entry) === skillOn(reference))
+      ? skillOn(reference)
+      : null;
   const writeSettings = useSettingsWriter();
   const write = (patch: ServerSettingsPatch) => {
     if (writeInFlight.current) {
@@ -205,7 +276,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
       if (queued?.key === targetsKey) write({ ...patch, ...queued.patch });
     });
   };
-  const clearProjectOverrides = () => {
+  // Each environment gets its own patch; a draft queued over these targets would undo them.
+  const writeEach = (writes: Parameters<typeof writeSettings>[1]) => {
     if (
       writeInFlight.current ||
       !targets.every((target) =>
@@ -213,19 +285,25 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
       )
     )
       return;
-    const writes = planMobileScopedSettingsClear(targets, PAGE_PROJECT_KEYS[props.page]);
     if (writes.length === 0) return;
     writeInFlight.current = true;
     setPendingTargets(targets);
     setPendingWrites((count) => count + 1);
     void writeSettings(targets, writes).finally(() => {
       writeInFlight.current = false;
-      // Resending a draft over these pre-clear targets would undo the clear.
       queuedPatch.current = null;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
     });
   };
+  const clearProjectOverrides = () =>
+    writeEach(
+      planMobileScopedSettingsClear(
+        targets,
+        PAGE_PROJECT_KEYS[props.page],
+        props.page === "agent-behavior" && supportsDiscipline ? ["goat-discipline"] : [],
+      ),
+    );
   const supportsProjectOverrides = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
@@ -275,8 +353,17 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
               {projectSelected ? (
                 <SettingsProjectOverridesSection
                   projectLabel={selectedProject?.label ?? "Unavailable project"}
-                  hasOverrides={targets.some((target) =>
-                    PAGE_PROJECT_KEYS[props.page].some((key) => target.sources[key] === "project"),
+                  hasOverrides={targets.some(
+                    (target) =>
+                      PAGE_PROJECT_KEYS[props.page].some(
+                        (key) => target.sources[key] === "project",
+                      ) ||
+                      (props.page === "agent-behavior" &&
+                        supportsDiscipline &&
+                        target.projectId !== null &&
+                        target.environment.serverConfig.settings.projectSettingsOverrides[
+                          target.projectId
+                        ]?.builtInSkills?.["goat-discipline"]?.enabled !== undefined),
                   )}
                   supportsOverrides={supportsProjectOverrides}
                   pending={pendingWrites > 0}
@@ -404,6 +491,57 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
               {props.page === "agent-behavior" ? (
                 <>
+                  {supportsDiscipline ? (
+                    <SettingsSection
+                      title="Development discipline skill"
+                      trailing={
+                        disciplineMixed ? (
+                          <MixedValuesLabel projectSelected={projectSelected} />
+                        ) : null
+                      }
+                    >
+                      {projectSelected ? (
+                        ([undefined, true, false] as const).map((enabled, index) => (
+                          <SettingsChoiceRow
+                            key={String(enabled)}
+                            label={enabled === undefined ? "Inherit" : enabled ? "On" : "Off"}
+                            description={
+                              enabled === undefined
+                                ? "Follow the environment."
+                                : enabled
+                                  ? "Load it in this project when a message names $goat-discipline."
+                                  : "Keep it out of this project's $ menu and turns."
+                            }
+                            selected={!disciplineMixed && disciplineReference?.override === enabled}
+                            separated={index > 0}
+                            disabled={!canWriteSettings || pendingWrites > 0}
+                            onPress={() =>
+                              writeEach(
+                                planMobileBuiltInSkillProjectPatch(
+                                  targets,
+                                  "goat-discipline",
+                                  enabled,
+                                ),
+                              )
+                            }
+                          />
+                        ))
+                      ) : (
+                        <SettingsSwitchRow
+                          icon="hammer"
+                          label="Development discipline skill"
+                          subtitle="Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
+                          value={disciplineMixed ? null : (disciplineReference?.enabled ?? null)}
+                          disabled={!canWriteSettings || pendingWrites > 0}
+                          onValueChange={(enabled) =>
+                            writeEach(
+                              planMobileBuiltInSkillToggle(targets, "goat-discipline", enabled),
+                            )
+                          }
+                        />
+                      )}
+                    </SettingsSection>
+                  ) : null}
                   <SettingsSection
                     title="Response streaming"
                     trailing={
@@ -438,11 +576,50 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     <SettingsSwitchRow
                       icon="desktopcomputer"
                       label="Computer use"
-                      subtitle="Allow agents to see and use apps on the selected environments' computers. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
+                      subtitle="Allow agents to see and use apps on the selected environments' computers. Threads in full access mode use every app without asking; other threads ask you first. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
                       value={uniform("enableCua")}
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                    <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
+                    {computerUseAdvanced.expanded ? (
+                      <>
+                        <SettingsSwitchRow
+                          icon="desktopcomputer"
+                          label="Computer Use skill"
+                          subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+                          value={computerUseSkillOn}
+                          disabled={disabledFor("disabledBuiltInSkills")}
+                          onValueChange={(value) =>
+                            writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
+                          }
+                        />
+                      </>
+                    ) : null}
+                  </SettingsSection>
+                  <SettingsSection
+                    title="GOAT tools agents see"
+                    trailing={
+                      pendingWrites === 0 && uniform("agentToolListing") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {TOOL_LISTING_CHOICES.map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.listing}
+                        label={
+                          choice.listing === DEFAULT_SERVER_SETTINGS.agentToolListing
+                            ? `${choice.label} (default)`
+                            : choice.label
+                        }
+                        description={choice.description}
+                        selected={uniform("agentToolListing") === choice.listing}
+                        separated={index > 0}
+                        disabled={disabledFor("agentToolListing")}
+                        onPress={() => write({ agentToolListing: choice.listing })}
+                      />
+                    ))}
                   </SettingsSection>
                   <StandingInstructionsSettings
                     key={targets

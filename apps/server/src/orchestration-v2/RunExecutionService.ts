@@ -1,6 +1,7 @@
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { continuationOrigin } from "./ContinuationChain.ts";
+import { runTurnCapabilities } from "./TurnCapabilities.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
-import { framePendingReports } from "../remoteReports/reportFrame.ts";
+import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -19,6 +20,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
+  type OrchestrationV2RunTerminationCause,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
@@ -60,6 +62,12 @@ import {
   makeProviderFailureTurnItem,
 } from "@goat/provider-core/server/failure";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import {
+  makeInterruptResultTurnItem,
+  providerProcessExitCause,
+  terminalTerminationCause,
+} from "./runTerminationCause.ts";
+export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
@@ -577,21 +585,9 @@ export function runMemoryPrepareInput(input: {
     "runs" | "messages"
   >;
 }): RunMemoryPrepareInput {
-  let { run, message } = input;
-  let depth = 0;
-  for (;;) {
-    const sourceId = run.restartContinuationOfRunId ?? run.usageLimitContinuationOfRunId;
-    if (sourceId === undefined) break;
-    if (depth >= MAX_CONTINUATION_CHAIN) return { memoryGrantCeiling: "none" };
-    const source = input.projection.runs.find((candidate) => candidate.id === sourceId);
-    const sourceMessage = input.projection.messages.find(
-      (candidate) => candidate.id === source?.userMessageId,
-    );
-    if (source === undefined || sourceMessage === undefined) return { memoryGrantCeiling: "none" };
-    run = source;
-    message = sourceMessage;
-    depth++;
-  }
+  const origin = continuationOrigin(input);
+  if (origin === undefined) return { memoryGrantCeiling: "none" };
+  const { run, message } = origin;
   const ordinary =
     message.createdBy === "user" &&
     (message.creationSource === "web" || message.creationSource === "mobile") &&
@@ -599,6 +595,11 @@ export function runMemoryPrepareInput(input: {
     run.delegatedTaskId === undefined;
   return { memoryGrantCeiling: ordinary ? null : (run.memoryGrantCeiling ?? "none") };
 }
+
+/** Everything prepare reads from the run: its memory ceiling and its capability chips. */
+export const runPrepareInput = (
+  input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnCapabilities>[0],
+) => ({ ...runMemoryPrepareInput(input), turnCapabilities: runTurnCapabilities(input) });
 
 export interface RunExecutionServiceV2StartRootRunInput {
   readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];
@@ -626,6 +627,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -677,9 +679,11 @@ export const layer: Layer.Layer<
         readonly attempt: OrchestrationV2RunAttempt;
         readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
         readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+        readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
         readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
         readonly interruptedProviderTurn?: OrchestrationV2ProviderTurn;
         readonly terminal: ProviderTerminalEvent;
+        readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
         readonly completedAt?: DateTime.Utc;
         readonly failureItemPersisted: boolean;
         /** A reported terminal preserves the adapter's acknowledged task state. */
@@ -710,6 +714,10 @@ export const layer: Layer.Layer<
                 ? false
                 : yield* input.hasUnpairedRunInterruptRequest();
             if (hasUnpairedRequest) {
+              const reason =
+                input.loadRunInterruptReason === undefined
+                  ? undefined
+                  : yield* input.loadRunInterruptReason();
               yield* eventSink.writeWithEffects({
                 effects: [],
                 events: [
@@ -726,6 +734,7 @@ export const layer: Layer.Layer<
                       run: input.run,
                       rootNode: input.rootNode,
                       providerThread: input.providerThread,
+                      reason,
                       completedAt,
                     }),
                   },
@@ -737,6 +746,18 @@ export const layer: Layer.Layer<
           return;
         }
         const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
+        const reason =
+          (input.terminal.status === "interrupted" || input.terminal.status === "cancelled") &&
+          input.loadRunInterruptReason !== undefined
+            ? yield* input.loadRunInterruptReason()
+            : undefined;
+        const terminationCause: OrchestrationV2RunTerminationCause | undefined =
+          terminalTerminationCause(
+            input.terminal,
+            reason,
+            input.terminationCause,
+            USER_STOP_REASON,
+          );
         const open = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
         const hasOpenSubagentProjection =
           open.subagents.size > 0 ||
@@ -768,6 +789,9 @@ export const layer: Layer.Layer<
           ...runWithoutDelegatedCompletion,
           checkpointId: input.checkpointScope === null ? null : input.run.checkpointId,
           status: persistedStatus,
+          ...(persistedStatus === "waiting" || terminationCause === undefined
+            ? {}
+            : { terminationCause }),
           completedAt: persistedStatus === "waiting" ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
@@ -815,7 +839,7 @@ export const layer: Layer.Layer<
                 nodeId: input.rootNode.id,
                 providerThreadId: input.providerThread.id,
                 providerTurnId: input.terminal.providerTurnId,
-                text: cloudTaskResultText(finalizedProviderThread.cloudTask),
+                text: cloudTaskResultText(finalizedProviderThread.cloudTask, input.terminal),
                 completedAt,
                 allocateEventId,
               });
@@ -891,6 +915,7 @@ export const layer: Layer.Layer<
                       run: input.run,
                       rootNode: input.rootNode,
                       providerThread: input.providerThread,
+                      reason,
                       completedAt,
                     }),
                   },
@@ -1222,6 +1247,9 @@ export const layer: Layer.Layer<
               : {
                   hasUnpairedRunInterruptRequest: input.hasUnpairedRunInterruptRequest,
                 }),
+            ...(input.loadRunInterruptReason === undefined
+              ? {}
+              : { loadRunInterruptReason: input.loadRunInterruptReason }),
             openRunOwnedSubagents: openSubagents,
             terminal,
             providerReportedTerminal: true,
@@ -1702,6 +1730,9 @@ export const layer: Layer.Layer<
                   openRunOwnedSubagents: openSubagents,
                   ...(interruptedProviderTurn === null ? {} : { interruptedProviderTurn }),
                   completedAt,
+                  terminationCause: providerProcessExitCause(Cause.squash(cause))
+                    ? "provider_process_exit"
+                    : "provider_error",
                   terminal: makeFailedTerminalEvent(
                     makeProviderFailure({ cause: Cause.squash(cause), class: "unknown" }),
                     latestItemOrdinal + 1,
@@ -1781,17 +1812,16 @@ export const layer: Layer.Layer<
         }));
         const inbox =
           input.reattach === true
-            ? { texts: [] as ReadonlyArray<string>, throughId: null as number | null }
-            : yield* remoteReportInbox.pending(input.run.threadId).pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("Failed to read remote report inbox.", { cause }).pipe(
-                    Effect.as({
-                      texts: [] as ReadonlyArray<string>,
-                      throughId: null as number | null,
-                    }),
+            ? { texts: [], reports: [], throughId: null }
+            : yield* remoteReportInbox
+                .pending(input.run.threadId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to read remote report inbox.", { cause }).pipe(
+                      Effect.as({ texts: [], reports: [], throughId: null }),
+                    ),
                   ),
-                ),
-              );
+                );
         const compact =
           input.message.attachments.length === 0 &&
           input.message.text.trim().toLowerCase() === "/compact";
@@ -1913,7 +1943,7 @@ export const layer: Layer.Layer<
               ? input.message
               : {
                   ...input.message,
-                  text: `${framePendingReports(inbox.texts)}\n\n${input.message.text}`,
+                  text: turnText(input.message, inbox.reports),
                 },
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,
@@ -2056,6 +2086,9 @@ export const layer: Layer.Layer<
                                 expectedStatus: "running",
                               },
                               openRunOwnedSubagents: openSubagents,
+                              terminationCause: providerProcessExitCause(Cause.squash(cause))
+                                ? "provider_process_exit"
+                                : "provider_error",
                               terminal: makeFailedTerminalEvent(
                                 makeProviderFailure({
                                   cause: Cause.squash(cause),
@@ -2089,35 +2122,8 @@ export const layer: Layer.Layer<
   }),
 );
 
-export function makeInterruptResultTurnItem(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly run: OrchestrationV2Run;
-  readonly rootNode: OrchestrationV2ExecutionNode;
-  readonly providerThread: OrchestrationV2ProviderThread;
-  readonly completedAt: DateTime.Utc;
-}): OrchestrationV2TurnItem {
-  return {
-    id: input.idAllocator.derive.runSignalTurnItem({
-      runId: input.run.id,
-      signal: "interrupt-result",
-    }),
-    threadId: input.run.threadId,
-    runId: input.run.id,
-    nodeId: input.rootNode.id,
-    providerThreadId: input.providerThread.id,
-    providerTurnId: input.rootNode.providerTurnId,
-    nativeItemRef: null,
-    parentItemId: input.idAllocator.derive.runSignalTurnItem({
-      runId: input.run.id,
-      signal: "interrupt-request",
-    }),
-    ordinal: input.run.ordinal * 100 + 98,
-    status: "interrupted",
-    title: "Interrupted",
-    startedAt: input.completedAt,
-    completedAt: input.completedAt,
-    updatedAt: input.completedAt,
-    type: "run_interrupt_result",
-    message: "Run interrupted by user",
-  };
-}
+/**
+ * Clients send Stop without a reason; server callers acting for an agent
+ * always set one, so a missing reason means a person stopped the run.
+ */
+export const USER_STOP_REASON = "Stopped by user";

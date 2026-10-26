@@ -72,12 +72,12 @@ const make = Effect.gen(function* () {
   }>({ since: null, last: null, running: null });
 
   // The notice shows this verbatim; quote for the host's shell. Desktop
-  // installs have no `t3` on PATH, so the command names their launcher.
+  // installs have no `goat` on PATH, so the command names their launcher.
   const { command: compactCommand } = yield* resolveHostCliCommand("doctor", [
     "--base-dir",
     config.baseDir,
   ]);
-  // `t3 doctor --base-dir` repairs <baseDir>/userdata. A dev server without
+  // `goat doctor --base-dir` repairs <baseDir>/userdata. A dev server without
   // an explicit home keeps its state in <baseDir>/dev instead, so there the
   // command would target the live install; publish no status at all.
   const doctorTargetsThisDatabase =

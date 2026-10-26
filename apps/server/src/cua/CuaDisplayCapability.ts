@@ -127,7 +127,7 @@ export function ldconfigLibraries(output: string): ReadonlySet<string> {
 }
 
 /** What the pinned Linux driver binary links against, with the Debian/Ubuntu package for each. */
-export const LINUX_DRIVER_LIBRARIES = [
+const LINUX_DRIVER_LIBRARIES = [
   { soname: "libX11.so.6", package: "libx11-6" },
   { soname: "libXi.so.6", package: "libxi6" },
   { soname: "libxkbcommon.so.0", package: "libxkbcommon0" },
@@ -135,6 +135,12 @@ export const LINUX_DRIVER_LIBRARIES = [
 
 export interface LinuxDisplayFacts {
   readonly user: string;
+  /**
+   * The DISPLAY this server was started with. When it names one, that display is the only one
+   * computer use may use: a session reachable some other way, such as an inherited Wayland
+   * socket, may be another desktop (#1358).
+   */
+  readonly requestedDisplay?: string;
   /** The session's Wayland socket, when the environment names one, and whether it accepts. */
   readonly wayland: {
     readonly display: string;
@@ -168,6 +174,14 @@ const missingLibrariesReason = (missing: ReturnType<typeof missingLibraries>) =>
   `Computer use needs ${missing.map((library) => library.soname).join(", ")} on this computer (Debian/Ubuntu: apt install ${missing.map((library) => library.package).join(" ")}).`;
 
 export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
+  // The driver is handed DISPLAY=:N, which is screen 0 of that display.
+  const screen = /\.(\d+)$/u.exec(facts.requestedDisplay?.trim() ?? "")?.[1];
+  if (screen !== undefined && Number(screen) !== 0)
+    return {
+      capability: "unavailable",
+      reason: `This server was started with DISPLAY=${facts.requestedDisplay}, screen ${Number(screen)} of that X display. Computer use works on screen 0 only; start GOAT with DISPLAY set to screen 0.`,
+      environment: [],
+    };
   const reachable = facts.displays.find((entry) => entry.outcome === "ok");
   const session: CuaDisplayVariable[] = [
     ...(facts.sessionBus ? [{ name: "DBUS_SESSION_BUS_ADDRESS", value: facts.sessionBus }] : []),
@@ -176,6 +190,18 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   const wayland = facts.wayland?.reachable ? facts.wayland : null;
   // The binary links the X client libraries even on Wayland, so it cannot start without them.
   const missing = missingLibraries(facts);
+  if (!reachable && facts.requestedDisplay) {
+    const requested = facts.requestedDisplay;
+    const refused = facts.displays.some((entry) => entry.outcome === "refused");
+    return {
+      capability: "unavailable",
+      reason:
+        localDisplayNumber(requested) === null
+          ? `This server was started with DISPLAY=${requested}, a forwarded or remote X display, which computer use cannot use. Start GOAT with a local display, or without DISPLAY to use the desktop signed in on this computer.`
+          : `This server was started with DISPLAY=${requested}, and that X display ${refused ? `refused ${facts.user}'s connection` : "is not answering"}. Start that display, or start GOAT without DISPLAY to use the desktop signed in on this computer.`,
+      environment: [],
+    };
+  }
   if (!reachable) {
     if (wayland) {
       const environment = [
@@ -241,6 +267,14 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
 export const MAC_GRANTS_REASON = "Accessibility and Screen Recording must be granted at this Mac.";
 
 /**
+ * macOS grants Accessibility and Screen Recording to the app at the top of the driver's launch
+ * chain. Under a standalone server that is whatever terminal or launchd job started GOAT, so the
+ * grants would land on the wrong app; the desktop app runs the driver under its own helper.
+ */
+export const MAC_STANDALONE_REASON =
+  "On a Mac, computer use runs through the GOAT desktop app. Open GOAT on this Mac to use it.";
+
+/**
  * The driver needs this user's GUI session, which exists only while they own the console. The
  * grants can only be read by the driver itself, so owning the console is partial until
  * `withMacGrants` sees the running driver report both.
@@ -249,7 +283,11 @@ export function classifyDarwin(input: {
   readonly uid: number | undefined;
   readonly consoleUid: number | null;
   readonly user: string;
+  /** A server without the desktop app, such as `goat serve` started from a terminal. */
+  readonly standalone?: boolean;
 }): CuaDisplayProbe {
+  if (input.standalone)
+    return { capability: "unavailable", reason: MAC_STANDALONE_REASON, environment: [] };
   if (input.consoleUid === null || input.uid === undefined)
     return {
       capability: "partial",
@@ -355,7 +393,7 @@ export function classifyWindows(
 const MAX_DISPLAYS = 8;
 const MAX_PROC_ENTRIES = 4_096;
 
-export const x11Handshake = (socketPath: string, cookie: Uint8Array | null) =>
+const x11Handshake = (socketPath: string, cookie: Uint8Array | null) =>
   Effect.callback<X11Outcome>((resume) => {
     let settled = false;
     const finish = (outcome: X11Outcome) => {
@@ -444,6 +482,39 @@ export const probeAccessibilityBuses = Effect.fnUntraced(function* (
   };
 });
 
+/**
+ * The X displays to try. A server given a DISPLAY uses that display or none: trying the others
+ * would hand computer use whichever desktop answers, such as the person signed in at the seat
+ * when the server was meant for its own Xvfb (#1358). A server given a Wayland session and no
+ * DISPLAY has no X display: any X socket it found belongs to another session, which the probe
+ * would then report as this session's XWayland (#1581). Only a server with neither, such as one
+ * started over SSH, looks for the local desktop.
+ */
+export function linuxDisplayCandidates(
+  display: string | undefined,
+  sockets: ReadonlyArray<number>,
+  waylandDisplay?: string,
+): ReadonlyArray<number> {
+  if (display?.trim()) {
+    const named = localDisplayNumber(display);
+    return named === null ? [] : [named];
+  }
+  if (waylandDisplay?.trim()) return [];
+  return sockets.slice(0, MAX_DISPLAYS);
+}
+
+/**
+ * The session buses to try, on the same rule: a named bus or none, else the bus in this
+ * session's runtime directory, which is the user's own when the server names none (#1581).
+ */
+export function linuxBusCandidates(
+  address: string | undefined,
+  runtimeDir: string | null,
+): ReadonlyArray<string> {
+  if (address?.trim()) return [address.trim()];
+  return runtimeDir ? [`unix:path=${runtimeDir}/bus`] : [];
+}
+
 const probeLinux = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -455,13 +526,15 @@ const probeLinux = Effect.fnUntraced(function* () {
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
 
   const preferred = localDisplayNumber(environment.DISPLAY);
+  // The Wayland session this server belongs to, named or the one its session type implies. It
+  // is settled before any X socket is tried: a server in a Wayland session never looks for X.
+  const waylandName =
+    environment.WAYLAND_DISPLAY?.trim() ||
+    (environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ? "wayland-0" : "");
   const sockets = x11SocketDisplays(
     yield* fs.readDirectory("/tmp/.X11-unix").pipe(Effect.orElseSucceed(() => [])),
   );
-  const candidates = [...new Set([...(preferred === null ? [] : [preferred]), ...sockets])].slice(
-    0,
-    MAX_DISPLAYS,
-  );
+  const candidates = linuxDisplayCandidates(environment.DISPLAY, sockets, waylandName);
 
   // Xvfb and display managers keep the cookie in a file named only on their command line.
   const serverAuth = new Map<number, string>();
@@ -506,14 +579,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const runtimeDir =
     environment.XDG_RUNTIME_DIR?.trim() ||
     (userRuntime && (yield* exists(userRuntime)) ? userRuntime : null);
-  const busCandidates = [
-    ...new Set(
-      [
-        environment.DBUS_SESSION_BUS_ADDRESS?.trim(),
-        userRuntime ? `unix:path=${userRuntime}/bus` : undefined,
-      ].filter((address): address is string => typeof address === "string" && address !== ""),
-    ),
-  ];
+  const busCandidates = linuxBusCandidates(environment.DBUS_SESSION_BUS_ADDRESS, runtimeDir);
   const buses =
     uid === undefined
       ? { sessionBus: null, atSpi: false, issues: ["this user's id is unknown"] }
@@ -530,9 +596,6 @@ const probeLinux = Effect.fnUntraced(function* () {
   );
 
   // A variable left from a session that ended names a socket nobody listens on.
-  const waylandName =
-    environment.WAYLAND_DISPLAY?.trim() ||
-    (environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ? "wayland-0" : "");
   const waylandSocket = waylandName.startsWith("/")
     ? waylandName
     : runtimeDir && waylandName
@@ -551,6 +614,7 @@ const probeLinux = Effect.fnUntraced(function* () {
 
   return classifyLinux({
     user,
+    ...(environment.DISPLAY?.trim() ? { requestedDisplay: environment.DISPLAY.trim() } : {}),
     wayland,
     displays,
     libraries,
@@ -561,13 +625,14 @@ const probeLinux = Effect.fnUntraced(function* () {
   });
 });
 
-const probeDarwin = Effect.fnUntraced(function* () {
+const probeDarwin = Effect.fnUntraced(function* (standalone: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat("/dev/console").pipe(Effect.orElseSucceed(() => null));
   return classifyDarwin({
     uid: yield* HostProcess.UserId,
     consoleUid: info?.uid._tag === "Some" ? info.uid.value : null,
     user: (yield* HostProcess.Username) ?? "this user",
+    standalone,
   });
 });
 
@@ -587,11 +652,16 @@ const probeWindows = Effect.fnUntraced(function* () {
   return classifyWindows(tasklistSession(output));
 });
 
-/** Checks this host's screen now. Results go stale, so callers probe again before each start. */
-export const probeDisplay = Effect.fn("CuaDisplayCapability.probe")(function* () {
+/**
+ * Checks this host's screen now. Results go stale, so callers probe again before each start.
+ * `server` says whether the desktop app hosts this server; only it can run the Mac driver.
+ */
+export const probeDisplay = Effect.fn("CuaDisplayCapability.probe")(function* (
+  server: "desktop" | "standalone",
+) {
   const platform = yield* HostProcess.Platform;
   if (platform === "linux") return yield* probeLinux();
-  if (platform === "darwin") return yield* probeDarwin();
+  if (platform === "darwin") return yield* probeDarwin(server === "standalone");
   if (platform === "win32") return yield* probeWindows();
   return {
     capability: "unavailable",

@@ -1,4 +1,8 @@
-import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
+import {
+  cloudRetryAllowed,
+  deriveCloudTaskState,
+  presentCloudRun,
+} from "@goat/client-runtime/state/cloud-task";
 import { useComposerAttachmentActions } from "./use-composer-attachment-actions";
 import * as Dialog from "../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
@@ -250,13 +254,19 @@ export function useThreadComposerState() {
   // cannot be an either/or with the loaded messages.
   const pendingCreationMessage = selectedThreadCreation?.message ?? null;
   const [feedCache] = useState(createThreadFeedCache);
+  const cloudRun = presentCloudRun(selectedThreadProjection?.projection);
   const selectedThreadFeed = (() => {
     const pendingCreation =
       pendingCreationMessage !== null &&
       !selectedThreadMessages?.some((message) => message.id === pendingCreationMessage.messageId)
         ? [pendingThreadCreationMessage(pendingCreationMessage)]
         : [];
-    const feed = buildThreadFeed(selectedThreadVisibleTurnItems, {
+    // The cloud run card above the composer already says what these rows repeat.
+    const visibleTurnItems =
+      cloudRun === null
+        ? selectedThreadVisibleTurnItems
+        : selectedThreadVisibleTurnItems.filter((row) => !cloudRun.hiddenItemIds.has(row.item.id));
+    const feed = buildThreadFeed(visibleTurnItems, {
       anchoredMessages: pendingCreation,
       attempts: selectedThreadAttempts,
       nodes: selectedThreadNodes,
@@ -318,6 +328,11 @@ export function useThreadComposerState() {
     (provider) => provider.instanceId === modelSelection?.instanceId,
   );
   const cloudState = deriveCloudTaskState(selectedThreadProjection?.projection, selectedProvider);
+  const cloudRunRetryAllowed = cloudRetryAllowed(
+    cloudRun,
+    selectedThreadProjection?.projection,
+    serverConfig?.providers ?? [],
+  );
   const interactionMode = selectedThread
     ? resolveProviderInteractionMode(
         selectedProvider,
@@ -528,7 +543,10 @@ export function useThreadComposerState() {
 
   const onSendMessage = async (
     followUpOverride?: ActiveTurnComposerAction,
-    beforeDispatch?: () => Promise<boolean>,
+    beforeDispatch?: (
+      text: string,
+      hasAttachmentsOrContext: boolean,
+    ) => Promise<boolean | "responded">,
   ) => {
     if (
       selectedThreadShell &&
@@ -647,7 +665,11 @@ export function useThreadComposerState() {
     }
 
     if (beforeDispatch !== undefined) {
-      if (!(await beforeDispatch())) return null;
+      const response = await beforeDispatch(
+        text,
+        attachments.length > 0 || draft.context !== undefined,
+      );
+      if (!response) return null;
       // A context paste still landing, or any draft or settings change while approvals were
       // declined, means this snapshot is no longer what the user sent.
       if (appAtomRegistry.get(composerContextImportsAtom)[threadKey]) return null;
@@ -662,6 +684,10 @@ export function useThreadComposerState() {
         current.attachments.some((attachment, index) => attachment.id !== attachments[index]?.id)
       )
         return null;
+      if (response === "responded") {
+        clearComposerDraftContent(threadKey);
+        return null;
+      }
     }
 
     // Resolved here rather than at drain time: the outbox can deliver minutes
@@ -881,6 +907,8 @@ export function useThreadComposerState() {
 
   return {
     cloudState,
+    cloudRun,
+    cloudRunRetryAllowed,
     feedbackSubmissions,
     dismissFeedback,
     selectedThreadFeed,

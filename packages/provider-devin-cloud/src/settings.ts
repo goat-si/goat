@@ -11,10 +11,11 @@ export const DevinCloudSettings = makeProviderSettingsSchema(
     siblingInstanceId: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
-        title: "Devin ACP instance ID",
-        description: "Reuse this environment's existing Devin ACP Registry executable and sign-in.",
+        title: "Devin provider",
+        description:
+          "Which Devin provider's CLI and sign-in Devin Cloud uses. Leave empty to use your Devin sign-in automatically.",
         providerSettingsForm: {
-          placeholder: "ACP Registry instance ID",
+          placeholder: "Automatic",
           clearWhenEmpty: "persist",
         },
       }),

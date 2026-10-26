@@ -9,9 +9,9 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function ThreadContextChip(props: {
-  record: Pick<ThreadContextRecord, "environmentId" | "threadId" | "title">;
+  record: Pick<ThreadContextRecord, "environmentId" | "threadId" | "title" | "host">;
   copyMarkdown?: string;
-  unreadable?: boolean;
+  state?: "readable" | "unavailable" | "invalid";
 }) {
   const { environmentId, threadId } = props.record;
   const shell = useThreadShell({ environmentId, threadId });
@@ -23,27 +23,34 @@ export function ThreadContextChip(props: {
         render={
           <ContextChip
             kind="thread"
-            {...(props.unreadable ? { state: "invalid" as const } : {})}
+            {...(props.state === "invalid" || props.state === "unavailable"
+              ? { state: props.state }
+              : {})}
             render={<Link to="/$environmentId/$threadId" params={{ environmentId, threadId }} />}
             aria-label={`Thread, ${title}`}
             data-markdown-copy={props.copyMarkdown}
-            className="no-underline"
           >
             {project ? (
-              <ProjectFavicon project={project} className="size-[1.17em] self-center" />
+              <ProjectFavicon project={project} className="size-[1em] self-center" />
             ) : (
               <MessagesSquareIcon />
             )}
-            <ContextChipLabel>{title}</ContextChipLabel>
+            <ContextChipLabel>
+              {title}
+              {props.record.host ? ` · ${props.record.host}` : ""}
+              {props.state === "unavailable" ? " · Host not connected" : ""}
+            </ContextChipLabel>
           </ContextChip>
         }
       />
       <TooltipPopup side="top">
-        {props.unreadable
+        {props.state === "invalid"
           ? "On another machine, so this machine's agent can't read it. Remove it or switch back to send."
-          : shell
-            ? "Open thread"
-            : "Thread no longer available"}
+          : props.state === "unavailable"
+            ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it over SSH.`
+            : shell
+              ? "Open thread"
+              : "Thread no longer available"}
       </TooltipPopup>
     </Tooltip>
   );

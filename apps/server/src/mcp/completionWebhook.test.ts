@@ -815,7 +815,7 @@ describe("CompletionWebhook notify targets", () => {
           })
           .pipe(Effect.flip),
       );
-      expect(error.message).toContain("request_secret");
+      expect(error.message).toContain('goat_call {path:"handoff.create"}');
       expect(h.secrets.size).toBe(0);
     }),
   );

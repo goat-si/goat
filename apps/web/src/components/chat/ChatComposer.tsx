@@ -182,6 +182,12 @@ import {
   threadContextRecord,
   threadContextReference,
 } from "~/lib/composerContextRecords";
+import {
+  composerCapabilityTargetDrivers,
+  composerComputerSetupLocation,
+  selectComposerCapability,
+} from "./composerCapabilitySelection";
+import { useNavigate } from "@tanstack/react-router";
 import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
 import { readThreadShell } from "~/state/entities";
@@ -272,10 +278,8 @@ import {
   type ComposerDispatchMode,
 } from "@goat/client-runtime/state/composer-dispatch";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
-import {
-  resolveProviderSkillsForCwd,
-  resolveProviderSlashCommandsForCwd,
-} from "@goat/client-runtime/providerSkills";
+import { resolveProviderSlashCommandsForCwd } from "@goat/client-runtime/providerSkills";
+import { useOfferedSkills } from "./providerSkillsWithBuiltIns";
 import { useDelayedStatus } from "../../hooks/useDelayedStatus";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
@@ -292,6 +296,10 @@ import { useComposerImageGroups } from "./useComposerImageGroups";
 import { useComposerStash } from "./useComposerStash";
 import { useComposerContextImport } from "./useComposerContextImport";
 import { useComposerAttachmentIntake } from "./useComposerAttachmentIntake";
+import {
+  countPreparingComposerImages,
+  usePreparingComposerImages,
+} from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { useComposerCommandKey } from "./useComposerCommandKey";
 
@@ -349,6 +357,7 @@ export interface ChatComposerHandle {
     previewAnnotations: PreviewAnnotationPayload[];
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
+    threadContextRoutingEnvironmentId: EnvironmentId;
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
     selectedModelSelection: ModelSelection;
@@ -532,7 +541,6 @@ export interface ChatComposerProps {
   onFileOpen: (attachment: ChatFileAttachment) => void;
 }
 
-const NO_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
@@ -752,6 +760,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     uncommittedSnapShotIds,
     standaloneComposerImages,
   } = useComposerImageGroups(attachmentDraftTarget, composerImages, composerPreviewAnnotations);
+  const preparingComposerImages = usePreparingComposerImages(attachmentTargetKey);
   const nonPersistedComposerImageIds = attachmentDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const openPrLink = useOpenPrLink(routeThreadRef);
@@ -1001,9 +1010,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
-  const selectedProviderSkills = selectedProviderStatus
-    ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
-    : NO_PROVIDER_SKILLS;
+  const selectedProviderSkills = useOfferedSkills(selectedProviderStatus, gitCwd, settings, {
+    environmentId,
+    projectId: activeProjectId,
+  });
   const selectedProviderSlashCommands = selectedProviderStatus
     ? resolveProviderSlashCommandsForCwd(selectedProviderStatus, gitCwd)
     : NO_PROVIDER_SLASH_COMMANDS;
@@ -1130,7 +1140,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerScrollCollapseEligibleRef = useRef(false);
   const windowRefocusInFlightRef = useRef(false);
   const composerScrollGestureRef = useRef(createComposerScrollGestureState());
-  const pendingImageCompressionsRef = useRef<Map<string, number>>(new Map());
   const pendingThreadImportsRef = useRef<Map<string, number>>(new Map());
   const isRevertingCheckpointRef = useRef(isRevertingCheckpoint);
   useLayoutEffect(() => {
@@ -1216,6 +1225,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSkills,
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
+    interactionMode,
+    capabilityTargetDrivers: composerCapabilityTargetDrivers(
+      multipleModelSelections ?? [selectedModelSelection],
+      providerInstanceEntries,
+    ),
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1442,7 +1456,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerContextRecords,
     composerImages,
     composerFilesRef,
-    pendingImageCompressionsRef,
     pendingThreadImportsRef,
     addComposerFilesToDraft,
   });
@@ -1926,6 +1939,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const { onUsageLimitsCommand } = props;
+  const navigate = useNavigate();
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
     composerSelectLockRef.current = true;
@@ -1934,17 +1948,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
-    if (item.type === "path") {
-      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
-      const replacement = `${serializeComposerFileLink(item.path)} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+    // Replaces the typed trigger, swallowing one following space so chips never double it.
+    const replaceTriggerWith = (replacement: string) => {
+      const end = extendReplacementRangeForTrailingSpace(
         snapshot.value,
         trigger.rangeEnd,
         replacement,
       );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+      return applyPromptReplacement(trigger.rangeStart, end, replacement, {
+        expectedText: snapshot.value.slice(trigger.rangeStart, end),
       });
+    };
+    if (item.type === "capability") {
+      if (trigger.kind !== "path") return;
+      return selectComposerCapability({
+        item,
+        replaceTriggerWith,
+        onReplaced: () => setComposerHighlightedItemId(null),
+        openSetup: () => void navigate(composerComputerSetupLocation(environmentId)),
+      });
+    }
+    if (item.type === "path") {
+      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
+      const replacement = `${serializeComposerFileLink(item.path)} `;
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -1993,14 +2020,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       const replacement = `/${item.command.name} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -2008,14 +2028,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     if (item.type === "skill") {
       const replacement = `$${item.skill.name} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -2032,14 +2045,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const replacement = `${formatInlineContextReference(
         reviewCommentContextReference(comment),
       )} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         addComposerDraftReviewComment(composerDraftTarget, comment, {
           appendReference: false,
@@ -2052,16 +2058,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (trigger.kind !== "path") return;
       const shell = readThreadShell(item.thread);
       if (!shell) return;
-      const record = threadContextRecord(item.thread, shell.title);
+      const [record] = routeThreadContexts([threadContextRecord(item.thread, shell.title)]);
+      if (!record) return;
       const replacement = `${formatInlineContextReference(threadContextReference(record))} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         addComposerDraftThreadContexts(attachmentDraftTarget, [record], {
           appendReference: false,
@@ -2139,7 +2139,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // A send while a pasted image is still compressing would strand that image:
     // the turn snapshot wouldn't include it, and it would surface in the *next*
     // draft instead.
-    if (activeThreadId && (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) > 0) {
+    if (activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0) {
       event?.preventDefault();
       toastManager.add({
         type: "info",
@@ -2377,7 +2377,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     composerSubmissionError !== null ||
     providerInputSubmissionError !== null ||
-    hasImageAttachmentAttention;
+    hasImageAttachmentAttention ||
+    preparingComposerImages.length > 0;
   const isComposerResting = shouldUseRestingComposerLayout({
     isExistingThread: routeKind === "server" && activeThreadId !== null,
     isMobileViewport,
@@ -2695,7 +2696,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerFilesRef,
       composerEditorRef,
       isRevertingCheckpointRef,
-      pendingImageCompressionsRef,
       setThreadError,
       countReservedAttachments,
       addComposerImage,
@@ -3186,7 +3186,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       addDroppedFolders: addComposerFoldersStable,
       hasPendingAttachments: () =>
-        (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) > 0 ||
+        countPreparingComposerImages(attachmentTargetKey) > 0 ||
         pendingDraftWork.has(attachmentTargetKey),
       insertTextAtEnd: insertComposerTextAtEndStable,
       pasteTextAtEnd: (text: string, options) => {
@@ -3359,6 +3359,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             isDesktopRenderer: window.desktopBridge !== undefined,
           }),
         ],
+        threadContextRoutingEnvironmentId: environmentId,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
         selectedModelSelection,
@@ -3458,10 +3459,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     !isComposerCollapsedMobile &&
     (uncommittedSnapShotIds.length > 0 ||
       composerVideos.length > 0 ||
-      expandedComposerImages.length > 0) ? (
+      expandedComposerImages.length > 0 ||
+      preparingComposerImages.length > 0) ? (
       <ComposerAttachmentMediaRow
         images={composerImages}
         expandedImages={expandedComposerImages}
+        preparingImages={preparingComposerImages}
         videos={composerVideos}
         pendingSnapShotAnimations={pendingSnapShotAnimations}
         pendingSnapShotIds={pendingSnapShotIds}
@@ -3882,7 +3885,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPasteStable}
                     placeholder={
                       isComposerApprovalState
-                        ? "Send a message to decline and redirect the agent"
+                        ? activePendingApproval?.supportsFeedback
+                          ? "Send feedback to decline this request"
+                          : "Send a message to decline and redirect the agent"
                         : activePendingProgress
                           ? isChoiceOnlyPendingQuestion
                             ? "Choose an option above"

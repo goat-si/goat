@@ -5,6 +5,8 @@ import {
   type OrchestrationV2RunStatus,
   ProjectId,
   ModelSelection,
+  OrchestrationV2ProviderFailureClass,
+  OrchestratorMcpRunFailure,
   RunId,
   RuntimeMode,
   ThreadId,
@@ -102,6 +104,15 @@ export const LaunchWatch = Schema.Struct({
   pendingRuns: Schema.Array(RunId),
   /** The most recently reported runs, so a run is never reported twice. */
   reportedRuns: Schema.Array(RunId),
+  /**
+   * When each reported run ended (its completedAt). A run retried in place keeps its id, so
+   * this tells a later end from the one already reported, and that end gets ids of its own.
+   */
+  reportedEnds: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /** Runs retried while their end was still owed, followed once more after it is reported. */
+  followAgain: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** The most recently reported pending requests, keyed by questionKey. */
   reportedQuestions: Schema.Array(Schema.String),
   /** Number of the last outage episode that ended; the next one counts from it. */
@@ -162,12 +173,41 @@ export const LaunchWatchDocument = Schema.Struct({
 });
 export type LaunchWatchDocument = typeof LaunchWatchDocument.Type;
 
+/** What a follower reads about a run that ended, for its report. */
+export interface LaunchWatchRunDetails {
+  readonly title: string | null;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly excerpt: string | null;
+  readonly prUrl: string | null;
+  /**
+   * A registered cloud run GOAT could only link: its attach run ends without a result, so
+   * the completion webhook is not told it completed. The launching thread still hears why.
+   */
+  readonly linkOnlyRegistration: boolean;
+  /** Why the run failed before its agent's first message, when it did. */
+  readonly failure: OrchestratorMcpRunFailure | null;
+}
+
+export const noRunDetails: LaunchWatchRunDetails = {
+  title: null,
+  branch: null,
+  worktreePath: null,
+  excerpt: null,
+  prUrl: null,
+  linkOnlyRegistration: false,
+  failure: null,
+};
+
 const REPORTED_LIMIT = 20;
 /** Failed contacts in a row before the launcher hears that the host is unavailable. */
 export const OUTAGE_NOTICE_FAILURES = 3;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_MAX_MS = 15 * 60_000;
 export const EXCERPT_MAX_CHARS = 1_500;
+/** A wake quotes only the start of the last message; the thread holds the rest. */
+const WAKE_EXCERPT_LINES = 4;
+const WAKE_EXCERPT_MAX_CHARS = 400;
 const SUMMARY_MAX_CHARS = 120;
 
 /** Run statuses after which a run does no more work. */
@@ -231,6 +271,8 @@ export function newLaunchWatch(input: {
     title: input.title,
     pendingRuns: [],
     reportedRuns: [],
+    reportedEnds: {},
+    followAgain: [],
     reportedQuestions: [],
     lastEpisode: 0,
     outage: null,
@@ -287,9 +329,96 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
     ...watch,
     pendingRuns: watch.pendingRuns.filter((pending) => pending !== runId),
     reportedRuns: keepRecent(watch.reportedRuns, runId),
+    followAgain: watch.followAgain.filter((again) => again !== runId),
     updatedAt: now,
   };
 }
+
+/**
+ * Follows a run again after a retry moved it back to preparing under the same id. A reported
+ * run is owed again; one still owed is followed once more after the end it is owed for, which
+ * the retry replaces. Nothing tells a replayed retry from a new one, and nothing needs to: an
+ * end already reported settles without a second report.
+ */
+export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  if (watch.pendingRuns.includes(runId)) {
+    return watch.followAgain.includes(runId)
+      ? watch
+      : { ...watch, followAgain: [...watch.followAgain, runId], updatedAt: now };
+  }
+  if (!watch.reportedRuns.includes(runId)) return watch;
+  return {
+    ...watch,
+    pendingRuns: [...watch.pendingRuns, runId],
+    reportedRuns: watch.reportedRuns.filter((reported) => reported !== runId),
+    // A run reported before ends were recorded (by an earlier server) has used its first ids.
+    reportedEnds: { ...watch.reportedEnds, [runId]: watch.reportedEnds[runId] ?? "reported" },
+    armedAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Whether this end of a run is the one the watch already reported. An end that could not be
+ * read (from a host that predates wait results carrying it) never matches, so it is reported.
+ */
+export const endReported = (watch: LaunchWatch, runId: RunId, end: string | null) =>
+  end !== null && watch.reportedEnds[runId] === end;
+
+/** A name for the next end of a run that could not be read, distinct from earlier ones. */
+const unreadEnd = (watch: LaunchWatch, runId: RunId) => {
+  const previous = watch.reportedEnds[runId];
+  const count = previous?.startsWith("unknown:") ? Number(previous.slice(8)) : 0;
+  return `unknown:${count + 1}`;
+};
+
+/**
+ * Settles a run whose end was just reported, remembering that end. A run retried while it was
+ * owed stays owed once more, to follow the retry to an end of its own.
+ */
+export function settleEnd(
+  watch: LaunchWatch,
+  runId: RunId,
+  end: string | null,
+  now: number,
+): LaunchWatch {
+  const ended = {
+    ...watch,
+    reportedEnds: { ...watch.reportedEnds, [runId]: end ?? unreadEnd(watch, runId) },
+  };
+  if (watch.followAgain.includes(runId)) {
+    return { ...ended, followAgain: watch.followAgain.filter((again) => again !== runId) };
+  }
+  const settled = settleRun(ended, runId, now);
+  const known: ReadonlySet<string> = new Set([...settled.pendingRuns, ...settled.reportedRuns]);
+  const kept = Object.entries(settled.reportedEnds).filter(([id]) => known.has(id));
+  return { ...settled, reportedEnds: Object.fromEntries(kept) };
+}
+
+/** A dormant watch is dropped this long after its last change. */
+const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/**
+ * A launcherless watch has no thread that could unwatch it, so it is dropped
+ * this long after it was last armed even while its run is still owed, for
+ * example when the host never comes back or a question is never answered.
+ */
+const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
+
+export const launcherlessExpired = (watch: LaunchWatch, now: number) =>
+  watch.launcherThreadId === null &&
+  now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
+
+/** A watch past its retention, which every operation treats as gone. */
+export const watchExpired = (watch: LaunchWatch, now: number) =>
+  watch.recovery === undefined &&
+  (launcherlessExpired(watch, now) ||
+    (watch.pendingRuns.length === 0 &&
+      watch.outage === null &&
+      now - watch.updatedAt >= DORMANT_RETENTION_MS));
+
+/** An expired watch with nothing owed. One still owed is left to its follower to drop. */
+export const dormantExpired = (watch: LaunchWatch, now: number) =>
+  watch.pendingRuns.length === 0 && watch.outage === null && watchExpired(watch, now);
 
 export const questionKey = (runId: RunId, requestId: string) => `${runId}/${requestId}`;
 
@@ -383,21 +512,47 @@ const toolArgs = (watch: LaunchWatch) =>
     ? `{threadId: "${watch.threadId}"}`
     : `{threadId: "${watch.threadId}", host: "${watch.host}"}`;
 
-const STOP_HINT =
-  "Stop these reports with goat_thread_unwatch; goat_thread_watch_list shows every watch.";
+/** The goat_call form, which works whether or not the target tool is listed. */
+const call = (path: string, args: string) => `goat_call {path: "${path}", args: ${args}}`;
+
+const stopHint = (watch: LaunchWatch) =>
+  `Stop these reports with ${call("thread.unwatch", toolArgs(watch))}.`;
+
+/** The first lines of a message, cut at a line or word; says when it left text out. */
+function briefExcerpt(text: string): { readonly text: string; readonly cut: boolean } {
+  const lines = text
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  const head = lines.slice(0, WAKE_EXCERPT_LINES).join("\n");
+  const short = truncate(head, WAKE_EXCERPT_MAX_CHARS);
+  return { text: short, cut: short !== lines.join("\n") };
+}
 
 /**
  * Command and message ids derive from the watch and the event, so a wake
  * replayed after a crash between dispatch and the state write is a receipt
  * replay, not a second message.
  */
-const wakeIds = (watch: LaunchWatch, event: string) => {
-  const key = `launch-watch:${watch.id}:${event}`;
-  return {
-    commandId: CommandId.make(`server:${key}`),
-    messageId: MessageId.make(`message:${key}`),
-  };
-};
+/** Every launch-watch wake's message id starts here; TurnDigest reads the lane from it. */
+export const LAUNCH_WATCH_MESSAGE_PREFIX = "message:launch-watch:";
+
+const wakeIds = (watch: LaunchWatch, event: string) => ({
+  commandId: CommandId.make(`server:launch-watch:${watch.id}:${event}`),
+  messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
+});
+
+/**
+ * A run's end. The first keeps the ids it always had; a later end of a run retried in place
+ * is named by when it ended.
+ */
+const runWakeIds = (watch: LaunchWatch, runId: RunId, end: string | null | undefined) =>
+  wakeIds(
+    watch,
+    watch.reportedEnds[runId] === undefined
+      ? `run:${runId}`
+      : `run:${runId}:end:${end ?? unreadEnd(watch, runId)}`,
+  );
 
 export function finishedWake(input: {
   readonly watch: LaunchWatch;
@@ -407,29 +562,160 @@ export function finishedWake(input: {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly excerpt: string | null;
+  /** Why the run failed before its agent's first message, when it did. */
+  readonly failure?: OrchestratorMcpRunFailure | null;
+  /** When the run ended, if known; a run retried in place reports each end under its own ids. */
+  readonly end?: string | null;
 }): LaunchWatchWake {
   const { watch } = input;
+  if (input.status === "failed" && input.excerpt === null && input.failure != null) {
+    return launchFailedWake({ ...input, failure: input.failure });
+  }
   const name = named(watch, input.title);
+  // The UI shows the longer detail; the agent reads the rest from the thread when it needs it.
   const excerpt = input.excerpt === null ? null : truncate(input.excerpt, EXCERPT_MAX_CHARS);
+  const brief = input.excerpt === null ? null : briefExcerpt(input.excerpt);
   const place = [
     input.branch === null ? null : `branch ${input.branch}`,
     input.worktreePath === null ? null : `worktree ${input.worktreePath}`,
   ].filter((part) => part !== null);
+  const read = call("thread.read", toolArgs(watch));
   const lines = [
-    `${name} (${identity(watch)}) finished run ${input.runId} with status ${input.status}.`,
-    ...(place.length === 0 ? [] : [`It ran on ${place.join(", ")}.`]),
-    ...(excerpt === null ? [] : ["", "Last assistant message of that run:", excerpt]),
-    "",
-    `Read it with goat_thread_read ${toolArgs(watch)}. A goat_thread_send to it is reported the same way when that run ends. ${STOP_HINT}`,
+    `${name} (${identity(watch)}) finished run ${input.runId} with status ${input.status}${place.length === 0 ? "" : ` on ${place.join(", ")}`}.`,
+    ...(brief === null ? [] : ["Last message:", brief.text]),
+    `${brief?.cut === true ? `The message continues; read it with ${read}.` : `Read the thread with ${read}.`} ${stopHint(watch)}`,
   ];
   return {
-    ...wakeIds(watch, `run:${input.runId}`),
+    ...runWakeIds(watch, input.runId, input.end),
     text: lines.join("\n"),
     notification: {
       source: { kind: "background_task" },
       outcome: notificationOutcome(input.status),
       summary: truncate(`${name} ${input.status.replace("_", " ")}`, SUMMARY_MAX_CHARS),
       ...(excerpt === null ? {} : { detail: excerpt }),
+    },
+  };
+}
+
+/**
+ * What a host's goat_thread_status says about a failed run. A host from before
+ * `failure` existed still names the thread's last error, so its launcher hears that much.
+ */
+export const RemoteRunFailureStatus = Schema.Struct({
+  run: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
+  lastError: Schema.NullOr(Schema.String),
+  lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
+  failure: Schema.optional(Schema.NullOr(OrchestratorMcpRunFailure)),
+});
+export type RemoteRunFailureStatus = typeof RemoteRunFailureStatus.Type;
+
+const OLDER_HOST_PREPARATION_PREFIX = "Workspace preparation failed";
+
+export function failureFromRemoteStatus(
+  status: RemoteRunFailureStatus,
+  runId: RunId,
+): OrchestratorMcpRunFailure | null {
+  if (status.run?.runId !== runId) return null;
+  if (status.failure !== undefined) return status.failure;
+  if (status.lastError === null) return null;
+  return {
+    runId,
+    stage: status.lastError.startsWith(OLDER_HOST_PREPARATION_PREFIX)
+      ? "workspace_preparation"
+      : "before_first_message",
+    errorClass: status.lastErrorClass ?? "unknown",
+    retryable: null,
+    message: status.lastError,
+    log: null,
+    canRetry: false,
+  };
+}
+
+const AUTH_FAILURE = /authenticat|credential|permission denied|could not read username/i;
+
+/** One concrete next step for a run that failed before its agent started. */
+function suggestedAction(failure: OrchestratorMcpRunFailure, host: string | null): string {
+  const machine = host === null ? "this machine" : host;
+  if (failure.stage === "workspace_preparation") {
+    if (failure.retryable === true || /timed out|no progress|stalled/i.test(failure.message))
+      return `Git on ${machine} was slow or stuck, which a retry usually gets past. If the retry fails the same way, run the same git fetch in that repository on ${machine} to see whether the remote or the local repository is slow.`;
+    if (AUTH_FAILURE.test(failure.message))
+      return `Fix Git credentials or SSH access for that repository on ${machine}, then retry.`;
+    if (/setup script/i.test(failure.message))
+      return "Fix the project's setup script (its output is in the log), then retry.";
+    return `Check the base ref, branch and repository named in the error on ${machine}, then retry or launch again with a corrected workspace.`;
+  }
+  switch (failure.errorClass) {
+    case "usage_limit":
+      return "The provider's usage limit is reached. Launch again after it resets, or with another model.";
+    case "permission_error":
+      return `The provider refused to start. Check its sign-in and permissions on ${machine}, then launch again.`;
+    case "transport_error":
+      return `The provider could not be reached from ${machine}. Launch again once it is reachable.`;
+    case "validation_error":
+      return "The provider rejected the request, often the model or its options. Launch again with a supported model.";
+    default:
+      return "Read the thread, then send it a new message or launch again.";
+  }
+}
+
+/** Keeps the end of a log, where a failure shows. */
+const tail = (text: string, max: number) =>
+  text.length <= max ? text : `…${text.slice(text.length - max + 1)}`;
+
+function launchFailedWake(input: {
+  readonly watch: LaunchWatch;
+  readonly runId: RunId;
+  readonly status: LaunchWatchTerminalStatus;
+  readonly title: string | null;
+  readonly failure: OrchestratorMcpRunFailure;
+  readonly end?: string | null;
+}): LaunchWatchWake {
+  const { watch, failure } = input;
+  const name = named(watch, input.title);
+  const stage =
+    failure.stage === "workspace_preparation"
+      ? "while GOAT prepared its workspace"
+      : "before its agent's first message";
+  const kind = [
+    `error class ${failure.errorClass}`,
+    failure.retryable === null ? null : failure.retryable ? "retryable" : "not retryable",
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
+  const retry = failure.canRetry
+    ? watch.host === null
+      ? `Retry with ${call("thread.retry", toolArgs(watch))}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
+      : `Retry with ${call("thread.retry", toolArgs(watch))}, and this watch reports the retried run. A Retry pressed in that thread on ${watch.host} is not reported here.`
+    : failure.stage === "workspace_preparation"
+      ? `Retry it from a GOAT client connected to ${watch.host ?? "this environment"} (Retry on the failure in that thread), or launch again.`
+      : null;
+  const log = failure.log === null ? null : tail(failure.log, EXCERPT_MAX_CHARS * 2);
+  const lines = [
+    `${name} (${identity(watch)}) failed ${stage}, in run ${input.runId} (${kind}).`,
+    "",
+    truncate(failure.message, EXCERPT_MAX_CHARS),
+    ...(log === null ? [] : ["", "Preparation log (last lines, redacted):", log]),
+    "",
+    `Suggested action: ${suggestedAction(failure, watch.host)}`,
+    ...(retry === null ? [] : [retry]),
+    `${call("thread.status", toolArgs(watch))} shows the same failure. ${stopHint(watch)}`,
+  ];
+  const detail = truncate(
+    log === null ? failure.message : `${failure.message}\n\n${tail(log, EXCERPT_MAX_CHARS / 2)}`,
+    EXCERPT_MAX_CHARS,
+  );
+  return {
+    ...runWakeIds(watch, input.runId, input.end),
+    text: lines.join("\n"),
+    notification: {
+      source: { kind: "background_task" },
+      outcome: "failed",
+      summary: truncate(
+        `${name} failed ${failure.stage === "workspace_preparation" ? "preparing its workspace" : "before starting"}`,
+        SUMMARY_MAX_CHARS,
+      ),
+      detail,
     },
   };
 }
@@ -448,8 +734,8 @@ export function questionWake(input: {
   const answer =
     input.kind === "user_input"
       ? watch.host !== null
-        ? `Read it with goat_pending_request_read {host: "${watch.host}", threadId: "${watch.threadId}", requestId: "${input.requestId}"} and answer with goat_pending_request_respond using the same host, threadId, and requestId (reason required) if you can decide, or forward it to the user.`
-        : `Read it with goat_pending_request_read {threadId: "${watch.threadId}", requestId: "${input.requestId}"} and answer with goat_pending_request_respond if you can decide, or leave it to the user.`
+        ? `Read it with ${call("pending_request.read", `{host: "${watch.host}", threadId: "${watch.threadId}", requestId: "${input.requestId}"}`)} and answer with ${call("pending_request.respond", "{host, threadId, requestId, reason}")} with the same values if you can decide, or forward it to the user.`
+        : `Read it with ${call("pending_request.read", `{threadId: "${watch.threadId}", requestId: "${input.requestId}"}`)} and answer with ${call("pending_request.respond", "{threadId, requestId, reason}")} with the same values if you can decide, or leave it to the user.`
       : watch.host !== null
         ? `It can be answered in that thread from a client connected to ${watch.host}.`
         : input.kind === null
@@ -457,7 +743,7 @@ export function questionWake(input: {
           : "An approval can only be given in that thread from a GOAT client, so tell the user.";
   return {
     ...wakeIds(watch, `question:${questionKey(input.runId, input.requestId)}`),
-    text: `${name} (${identity(watch)}) is waiting on ${request} (${input.requestId}) in run ${input.runId} and cannot continue until it is answered. ${answer} ${STOP_HINT}`,
+    text: `${name} (${identity(watch)}) is waiting on ${request} (${input.requestId}) in run ${input.runId} and cannot continue until it is answered. ${answer} ${stopHint(watch)}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "updated",
@@ -473,7 +759,7 @@ export function outageWake(input: {
   const { watch, outage } = input;
   return {
     ...wakeIds(watch, `outage:${watch.incarnation}:${outage.episode}`),
-    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_thread_handoff_host; the disconnected source can still produce external side effects.`} ${STOP_HINT}`,
+    text: `host_unavailable: GOAT cannot reach ${where(watch)} to follow ${named(watch, null).toLowerCase()} (${identity(watch)}). ${outage.failures} attempts failed, the last with: ${truncate(outage.lastError, 500)} It keeps retrying with backoff and reports the run once it reaches the host again; the thread itself may still be running there. ${watch.replica === undefined ? "No checkpoint copy is available." : `A checkpoint from ${watch.replica.capturedAt} (${watch.replica.bytes} bytes) is retained. Explicit recovery is available through goat_call {path: "thread.handoff_host"}, whose arguments goat_describe lists; the disconnected source can still produce external side effects.`} ${stopHint(watch)}`,
     notification: {
       source: { kind: "background_task" },
       outcome: "unknown",

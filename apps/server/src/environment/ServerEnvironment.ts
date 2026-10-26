@@ -32,7 +32,11 @@ import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
-import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
+import { makeAppServerLive } from "./hostAppServer.ts";
+import {
+  detectServerEnvironmentMachineKind,
+  detectServerMachineIdentity,
+} from "./ServerEnvironmentMachine.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -206,6 +210,7 @@ export const make = Effect.gen(function* () {
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
   const machine = yield* detectServerEnvironmentMachineKind();
+  const { machineId, machineUserId } = yield* detectServerMachineIdentity();
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -218,6 +223,7 @@ export const make = Effect.gen(function* () {
 
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+  const appServerLive = yield* makeAppServerLive();
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -229,6 +235,8 @@ export const make = Effect.gen(function* () {
     },
     serverVersion: packageJson.version,
     instanceId,
+    ...(machineId === null ? {} : { machineId }),
+    ...(machineUserId === null ? {} : { machineUserId }),
     protocol: servedRuntimeProtocolRanges(),
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
@@ -268,6 +276,7 @@ export const make = Effect.gen(function* () {
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
+      devDisciplineSkill: true,
       threadSnooze: true,
       threadPromotion: true,
       environmentThemes: true,
@@ -301,6 +310,7 @@ export const make = Effect.gen(function* () {
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,
+      runtimeSessions: true,
       channelLedger: true,
       goatBotHome: true,
       goatBotStatus: true,
@@ -312,7 +322,7 @@ export const make = Effect.gen(function* () {
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // The publish opt-in and relay link change at runtime (`t3 connect
+    // The publish opt-in and relay link change at runtime (`goat connect
     // publish`, the client settings toggle), so the capability is read per
     // descriptor request rather than baked in at startup.
     getDescriptor: Effect.gen(function* () {
@@ -327,6 +337,7 @@ export const make = Effect.gen(function* () {
         hubSettings.success.memoryHub.memorySpaceId !== null;
       return {
         ...descriptor,
+        ...((yield* appServerLive) ? { appServerLive: true } : {}),
         capabilities: {
           ...descriptor.capabilities,
           ...(hubReady && Option.isSome(hubRoutes)

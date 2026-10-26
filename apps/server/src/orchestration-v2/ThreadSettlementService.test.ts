@@ -40,6 +40,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
+import { settlementSweepCacheTests } from "./ThreadSettlementService.cache-test-cases.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -400,7 +401,7 @@ function makeProject(
   };
 }
 
-function makeThread(id: string, overrides: Partial<SettlementShell> = {}): SettlementShell {
+export function makeThread(id: string, overrides: Partial<SettlementShell> = {}): SettlementShell {
   return shell({
     id: ThreadId.make(id),
     projectId: PROJECT_ID,
@@ -416,7 +417,7 @@ type SettlementSnapshot = Omit<OrchestrationV2ShellSnapshot, "threads"> & {
   readonly threads: ReadonlyArray<SettlementShell>;
 };
 
-function makeSnapshot(
+export function makeSnapshot(
   threads: ReadonlyArray<SettlementShell>,
   projects: ReadonlyArray<OrchestrationProjectShell> = [makeProject()],
 ): SettlementSnapshot {
@@ -479,7 +480,9 @@ interface HarnessOptions {
   readonly currentThreads?: ReadonlyArray<OrchestrationV2AppThread>;
 }
 
-const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options: HarnessOptions) {
+export const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (
+  options: HarnessOptions,
+) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make(options.snapshot);
   const snapshotReadCount = yield* Ref.make(0);
@@ -653,7 +656,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   };
 });
 
-const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
+export const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
   reactor: ThreadSettlementService.ThreadSettlementServiceV2["Service"],
   activation: Deferred.Deferred<void>,
   snapshotReads: Queue.Queue<number>,
@@ -665,6 +668,8 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementServiceV2 worker", () => {
+  settlementSweepCacheTests({ makeHarness, makeThread, makeSnapshot, startHarness });
+
   it.effect("settles a merged pull request stored only in the thread links", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -700,9 +705,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
         yield* Effect.gen(function* () {
           const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
           yield* startHarness(service, fixture.activation, fixture.snapshotReads);
-          expect((yield* Ref.get(fixture.commands)).map((command) => command.threadId)).toEqual([
-            thread.id,
-          ]);
+          expect(yield* Ref.get(fixture.commands)).toMatchObject([{ threadId: thread.id }]);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
@@ -776,16 +779,13 @@ describe("ThreadSettlementServiceV2 worker", () => {
         yield* Effect.gen(function* () {
           const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
           yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
-          yield* fixture.updateSettings({ sidebarAutoSettleAfterDays: 4 });
+          yield* TestClock.adjust("2 minutes");
           yield* Deferred.await(periodicLookupStarted);
 
           yield* fixture.publishMerge;
           yield* Deferred.await(mergedThreadSettled);
 
-          assert.deepStrictEqual(
-            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
-            [ThreadId.make("merged-in-app")],
-          );
+          expect(yield* Ref.get(fixture.commands)).toMatchObject([{ threadId: "merged-in-app" }]);
           yield* Deferred.succeed(releasePeriodicLookup, undefined);
           yield* reactor.drain;
         }).pipe(Effect.provide(fixture.layer));

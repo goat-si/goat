@@ -16,15 +16,15 @@ import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
-import migration from "../persistence/Migrations/076_Memory.ts";
-import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
-import threadIndexMigration from "../persistence/Migrations/095_MemorySummaryWorkThreadIndex.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
+import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
+import threadIndexMigration from "../persistence/Migrations/096_MemorySummaryWorkThreadIndex.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation } from "./MemoryDecider.ts";
@@ -354,32 +354,16 @@ describe("MemoryWorker", () => {
       [5000, 30000, 120000, 600000, 600000],
     );
   });
-  it.effect("refuses generic claim execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("claim")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic resolution execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("resolve")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic pending revert execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("revert_intent")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
+  it.effect.each(["claim", "resolve", "revert_intent"] as const)(
+    "refuses generic %s execution",
+    (kind) =>
+      Effect.gen(function* () {
+        const worker = yield* Worker.MemoryWorker;
+        assert.strictEqual(
+          (yield* worker.execute(work(kind)).pipe(Effect.flip)).code,
+          "unsupported_operation",
+        );
+      }).pipe(Effect.provide(live())),
   );
   it.effect("refuses a foreign runtime owner", () =>
     Effect.gen(function* () {

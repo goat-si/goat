@@ -15,6 +15,7 @@ import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotBubble, GoatBotTypingIndicator } from "./GoatBotBubble";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
+import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -35,6 +36,9 @@ const availabilityCopy = {
 };
 
 type GoatBotTaskRow = Extract<GoatBotRow, { kind: "task" }>;
+const SUMMARY_LINES = 4;
+/** About four lines of body text in a card at its narrowest. */
+const SUMMARY_CHARS = 160;
 
 /** A piece of work GOAT Bot started; remote work names its machine and waits for it to connect. */
 function GoatBotTaskCard(props: {
@@ -93,9 +97,7 @@ function GoatBotTaskCard(props: {
             </Text>
           ) : null}
           {card.summary ? (
-            <Text numberOfLines={3} style={{ color: textColor, ...bodyText }}>
-              {card.summary}
-            </Text>
+            <GoatBotTaskSummary summary={card.summary} textColor={textColor} />
           ) : null}
           {card.pullRequests.length > 0 ? (
             <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
@@ -104,7 +106,7 @@ function GoatBotTaskCard(props: {
             </Text>
           ) : null}
           {card.evidenceLabels?.map((label) => (
-            <Text key={label} className="text-xs" style={{ color: textColor }}>
+            <Text key={label} className="text-xs" style={{ color: textColor, opacity: 0.8 }}>
               {label}
             </Text>
           ))}
@@ -114,6 +116,37 @@ function GoatBotTaskCard(props: {
         </Pressable>
       )}
     </GoatBotBubble>
+  );
+}
+
+/** The card is the task's result, so a long summary opens in place instead of staying cut off. */
+function GoatBotTaskSummary(props: { readonly summary: string; readonly textColor: string }) {
+  const bodyText = useScaledTextRole("body");
+  const [expanded, setExpanded] = useState(false);
+  // Counted from the text: line metrics under numberOfLines differ between iOS and Android.
+  const long =
+    props.summary.length > SUMMARY_CHARS || props.summary.split("\n").length > SUMMARY_LINES;
+  return (
+    <View className="gap-0.5">
+      <Text
+        numberOfLines={expanded ? undefined : SUMMARY_LINES}
+        style={{ color: props.textColor, ...bodyText }}
+      >
+        <GoatBotLinkedText text={props.summary} />
+      </Text>
+      {long ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          onPress={() => setExpanded((open) => !open)}
+          hitSlop={8}
+        >
+          <Text className="text-xs font-medium" style={{ color: props.textColor, opacity: 0.8 }}>
+            {expanded ? "Show less" : "Show more"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -202,7 +235,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
               style={row.tone === "failure" ? bodyText : { color: textColor, ...bodyText }}
               accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
             >
-              {row.text}
+              <GoatBotLinkedText text={row.text} />
             </Text>
           </View>
         )}

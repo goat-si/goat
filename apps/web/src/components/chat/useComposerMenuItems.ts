@@ -1,12 +1,23 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { ConnectionCatalogEntry } from "@goat/client-runtime/connection";
+import { environmentCatalog } from "~/connection/catalog";
+import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadMayRunUnattended,
+  matchComposerAppItems,
+  matchComposerCapabilityItems,
+} from "@goat/client-runtime/composerCapabilityItems";
 import type {
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   PullRequestListInput,
+  ProviderInteractionMode,
   ServerProvider,
   ThreadId,
   ThreadPullRequestLink,
+  ComputerUseApp,
 } from "@goat/contracts";
 import {
   composerPullRequestsFromLinks,
@@ -28,12 +39,14 @@ import {
   type EnvironmentQueryTarget,
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
+import { serverEnvironment } from "~/state/server";
 import { useComposerPathSearch, useDebouncedValue } from "~/state/queries";
 import {
   matchesPullRequestQuery,
   rankPullRequestMatches,
 } from "../pullRequest/pullRequestList.logic";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
+import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import {
   searchSlashCommandItems,
   slashCommandItemsForPromptPosition,
@@ -43,6 +56,36 @@ const COMPOSER_PULL_REQUEST_LIST_LIMIT = 99;
 const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
 const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> =
   [];
+
+const EMPTY_SSH_HOSTS: ReadonlyMap<EnvironmentId, string> = new Map();
+const EMPTY_COMPUTER_USE_APPS: ReadonlyArray<ComputerUseApp> = [];
+
+function threadContextSshHosts(
+  entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>,
+  agentEnvironmentId: EnvironmentId,
+  isDesktopRenderer: boolean,
+) {
+  const hosts = new Map<EnvironmentId, string>();
+  for (const threadEnvironmentId of entries.keys()) {
+    const route = resolveThreadContextRoute({
+      agentEnvironmentId,
+      threadEnvironmentId,
+      entries,
+      isDesktopRenderer,
+    });
+    if (route.kind === "ssh") hosts.set(threadEnvironmentId, route.host);
+  }
+  return hosts;
+}
+
+// Keep the source hook with the derivation so the compiler can cache it across composer renders.
+function useThreadContextSshHosts(environmentId: EnvironmentId, active: boolean) {
+  const entries = useAtomValue(environmentCatalog.catalogValueAtom).entries;
+  const isDesktopRenderer = window.desktopBridge !== undefined;
+  return active
+    ? threadContextSshHosts(entries, environmentId, isDesktopRenderer)
+    : EMPTY_SSH_HOSTS;
+}
 
 /** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
@@ -60,6 +103,8 @@ export function useComposerMenuItems({
   selectedProviderSkills,
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
+  interactionMode,
+  capabilityTargetDrivers,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -75,6 +120,9 @@ export function useComposerMenuItems({
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
+  readonly interactionMode: ProviderInteractionMode;
+  /** The drivers of every provider this send goes to, so @computer judges the real targets. */
+  readonly capabilityTargetDrivers: ReadonlyArray<string>;
 }) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
@@ -91,6 +139,24 @@ export function useComposerMenuItems({
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
+  const sshHostsByEnvironment = useThreadContextSshHosts(environmentId, isPathTrigger);
+  const activeShell = environmentThreadShells.find(
+    (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
+  );
+  const capabilityContext = useComposerCapabilityContext({
+    environmentId,
+    active: isPathTrigger,
+    turn: {
+      interactionMode,
+      providerDrivers: capabilityTargetDrivers,
+      mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.source),
+    },
+  });
+  // The host's running apps, asked for only while the @ list is open.
+  const computerUseAppsQuery = useEnvironmentQuery(
+    isPathTrigger ? serverEnvironment.computerUseApps({ environmentId, input: {} }) : null,
+  );
+  const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -159,8 +225,11 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
+        ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
+        ...matchComposerAppItems(composerTrigger.query, capabilityContext, computerUseApps),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
+          sshHostsByEnvironment,
           environmentId,
           excludeThreadId: activeThreadId,
           query: composerTrigger.query,

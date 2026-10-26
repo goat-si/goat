@@ -136,7 +136,7 @@ export const layer = Layer.effect(
                 Ref.set(
                   preflightErrorRef,
                   Option.some(
-                    "Another GOAT server is using this distro's GOAT home, or an older background service is set up for it. Stop that server or pair with it, or try `goat update` in the distro. If the older launcher cannot update, run `goat service uninstall` and optionally reinstall with `goat service install` from a current CLI in the distro. Use `npx goat@latest` if `goat` is missing or outdated, and pass `--base-dir` with the service's GOAT home to each command.",
+                    "Another GOAT server is using this distro's GOAT home, or an older background service is set up for it. Stop that server or pair with it, or try `goat update` in the distro. If the older launcher cannot update, run `goat service uninstall` and optionally reinstall with `goat service install` from a current CLI in the distro. Install the CLI from https://github.com/goat-si/goat-releases/releases if `goat` is missing or outdated, and pass `--base-dir` with the service's GOAT home to each command.",
                   ),
                 ),
               ),

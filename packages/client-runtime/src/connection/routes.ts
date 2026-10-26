@@ -165,7 +165,7 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
   switch (connectionRouteKind(route)) {
     case "relay":
       return isGoatConnectEnabled()
-        ? "T3 Connect"
+        ? "GOAT Connect"
         : `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
     case "loopback":
       return "This device";
@@ -426,7 +426,7 @@ export function isLearned(route: ConnectionRoute): boolean {
 
 /**
  * A learned route borrows the credential of the route it was learned over, so
- * it cannot outlive that route: removing T3 Connect also removes routes learned
+ * it cannot outlive that route: removing GOAT Connect also removes routes learned
  * through it, and removing a paired address removes routes that borrow its
  * token.
  */

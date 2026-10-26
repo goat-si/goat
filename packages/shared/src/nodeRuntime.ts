@@ -37,12 +37,39 @@ export interface SelfInvocation {
 }
 
 /**
+ * The executable GOAT starts itself with as Node. On macOS that is Electron's background helper
+ * when the app ships one: it carries LSUIElement, and launching the app executable as Node
+ * otherwise registers each child as another app in the Dock's recent items (#1548). Desktop
+ * readiness starts its agent-route check with this same command, so the computer-use helper's
+ * parent check sees the parent agents give it.
+ */
+export const resolveSelfInvocationCommand = Effect.fn("nodeRuntime.resolveSelfInvocationCommand")(
+  function* () {
+    const command = yield* HostProcess.ExecutablePath;
+    if (yield* HostProcess.IsExecutable) return command;
+    if ((yield* HostProcess.Platform) !== "darwin" || !command.includes("/Contents/MacOS/"))
+      return command;
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const prefix = command.slice(0, command.indexOf("/Contents/MacOS/"));
+    const executableName = path.basename(command);
+    for (const name of new Set([executableName, "Electron"])) {
+      const helper = `${prefix}/Contents/Frameworks/${name} Helper.app/Contents`;
+      const info = yield* fs.readFileString(`${helper}/Info.plist`).pipe(Effect.option);
+      if (Option.isSome(info) && /<key>LSUIElement<\/key>\s*<true\/>/.test(info.value))
+        return `${helper}/MacOS/${name} Helper`;
+    }
+    return command;
+  },
+);
+
+/**
  * `process.execPath` plus `argv[1]` only works for a script run by Node; the
  * single-executable has no entrypoint script (Node repeats the binary at
  * argv[1]), so callers must not assemble the pair themselves.
  */
 export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocation")(function* () {
-  const command = yield* HostProcess.ExecutablePath;
+  const command = yield* resolveSelfInvocationCommand();
   if (yield* HostProcess.IsExecutable)
     return { command, entrypoint: undefined } satisfies SelfInvocation;
   const path = yield* Path.Path;

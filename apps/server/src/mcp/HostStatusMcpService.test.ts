@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import { expect, it } from "@effect/vitest";
@@ -10,6 +11,7 @@ import {
   ThreadId,
   type ServerProvider,
   type ServerProviderUsageLimits,
+  type OpenCodexChildBootstrapStatus,
   type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -25,6 +27,7 @@ import * as TestClock from "effect/testing/TestClock";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -139,6 +142,9 @@ const run = <A, E>(
     readonly refreshFails?: ReadonlySet<string>;
     readonly listFails?: boolean;
     readonly shell?: ReturnType<typeof liveThreadShell>;
+    readonly children?: Readonly<Record<string, OpenCodexChildBootstrapStatus>>;
+    /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
+    readonly optIns?: Readonly<Record<string, boolean>>;
     readonly hostCall?: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -190,7 +196,7 @@ const run = <A, E>(
         projectProviders: (providers) => Effect.succeed(providers),
       }),
     ),
-    Layer.provide(HostThreadsMcpService.layer),
+    Layer.provide(HostThreadsMcpService.layer.pipe(Layer.provide(layerNoFleetSync))),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
         forRun: () => Effect.succeed(null),
@@ -262,6 +268,12 @@ const run = <A, E>(
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(
+      Layer.mock(OpenCodexChildBootstrap.OpenCodexChildBootstrap)({
+        status: (alias) => Effect.succeed(options.children?.[alias]),
+        sshOptIn: (alias) => Effect.succeed(options.optIns?.[alias]),
+      }),
+    ),
+    Layer.provide(
       Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
         Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
       ),
@@ -320,6 +332,53 @@ it.effect("includes this machine's OpenCodex pool in its decoded host metrics", 
     expect(value._tag).toBe("Success");
     if (value._tag !== "Success") return;
     expect(decode(value.success).hosts[0]?.metrics?.quotaPool).toEqual(pool);
+  }),
+);
+
+it.effect("shows this Home's Child setup on the cloud machine it is joining", () =>
+  Effect.gen(function* () {
+    const blocked: OpenCodexChildBootstrapStatus = {
+      state: "blocked",
+      checkedAt: 7,
+      reason: "npm_missing",
+      message: "npm is not installed there.",
+    };
+    const { value } = yield* run(
+      {
+        hosts: ["boat-builder", "box"],
+        children: { "boat-builder": blocked },
+        hostCall: () => Effect.succeed(remoteOk(9)),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const hosts = decode(value.success).hosts;
+    expect(hosts.find((host) => host.host === "boat-builder")?.opencodexChild).toEqual(blocked);
+    expect(hosts.find((host) => host.host === "box")?.opencodexChild).toBeUndefined();
+    expect(hosts.find((host) => host.host === null)?.opencodexChild).toBeUndefined();
+  }),
+);
+
+it.effect("says which SSH hosts this hub joins as Children after their setup", () =>
+  Effect.gen(function* () {
+    const { value } = yield* run(
+      {
+        hosts: ["boat-builder", "box", "lab"],
+        optIns: { box: true, lab: false },
+        hostCall: () => Effect.succeed(remoteOk(9)),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const hosts = decode(value.success).hosts;
+    expect(hosts.map((host) => [host.host, host.opencodexChildOptIn])).toEqual([
+      [null, undefined],
+      ["boat-builder", undefined],
+      ["box", true],
+      ["lab", false],
+    ]);
   }),
 );
 

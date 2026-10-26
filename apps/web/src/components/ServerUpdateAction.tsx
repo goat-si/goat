@@ -26,7 +26,7 @@ import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { manualServerUpdateCommand } from "~/versionSkew";
+import { manualServerUpdateInstructions } from "~/versionSkew";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -66,12 +66,18 @@ export type ServerUpdateOutcome =
   | { readonly status: "updated" | "skipped" }
   | { readonly status: "failed"; readonly message: string };
 
-/** Toasts its success or failure unless `quiet`; never rejects. */
+/**
+ * Toasts its success or failure unless `quiet`; never rejects. `whenIdle` lets the server refuse
+ * while turns run instead of replacing them; the update dialog then waits and tries again.
+ */
 export function useServerUpdate() {
   const updateServer = useAtomCommand(serverEnvironment.updateServer, { reportFailure: false });
   return async (
     target: ServerUpdateTarget,
-    { quiet = false }: { readonly quiet?: boolean } = {},
+    {
+      quiet = false,
+      whenIdle = false,
+    }: { readonly quiet?: boolean; readonly whenIdle?: boolean } = {},
   ): Promise<ServerUpdateOutcome> => {
     const { environmentId, serverLabel, selfUpdate, targetVersion } = target;
     if (
@@ -84,8 +90,8 @@ export function useServerUpdate() {
       environmentId,
       input: {
         targetVersion,
-        // A person pressed Update, so running work may be replaced; omitting this waits for idle.
-        confirmReplacement: true,
+        // A person pressed Update on this server, so running work may be replaced.
+        ...(whenIdle ? {} : { confirmReplacement: true }),
         ...(target.threadContinuation && target.continueThreadsAfterServerUpdate
           ? { continueRunningThreads: true }
           : {}),
@@ -226,23 +232,21 @@ export function ServerUpdateAction({
     (settings) => settings.continueThreadsAfterServerUpdate,
   );
   const update = useServerUpdate();
-  const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
-    onCopy: ({ command }) => {
+  const { copyToClipboard } = useCopyToClipboard<{ instructions: string }>({
+    target: "update instructions",
+    onCopy: ({ instructions }) => {
       toastManager.add({
         type: "success",
-        title:
-          installation?.kind === "npm-global" ? "Update command copied" : "Relaunch command copied",
-        description:
-          installation?.kind === "npm-global"
-            ? `Run \`${command}\` on ${serverLabel}, then restart goat with your usual options.`
-            : `Stop goat on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed goat command.`,
+        title: "Update instructions copied",
+        description: installation
+          ? `On ${serverLabel}: ${instructions}`
+          : `Run \`${instructions}\` on ${serverLabel}, then restart GOAT with your usual options.`,
       });
     },
     onError: (error) => {
       toastManager.add({
         type: "error",
-        title: "Could not copy update command",
+        title: "Could not copy update instructions",
         description: error.message,
       });
     },
@@ -284,17 +288,12 @@ export function ServerUpdateAction({
     );
   }
 
-  const manualCommand =
-    selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
-  const actionLabel =
-    manualCommand !== null
-      ? installation?.kind === "npm-global"
-        ? "Copy update command"
-        : "Copy relaunch command"
-      : label;
+  const manualInstructions =
+    selfUpdate === null ? manualServerUpdateInstructions(targetVersion, installation) : null;
+  const actionLabel = manualInstructions !== null ? "Copy update instructions" : label;
   const onClick =
-    manualCommand !== null
-      ? () => copyToClipboard(manualCommand, { command: manualCommand })
+    manualInstructions !== null
+      ? () => copyToClipboard(manualInstructions, { instructions: manualInstructions })
       : () => void handleUpdate();
 
   if (appearance === "icon") {
@@ -307,7 +306,7 @@ export function ServerUpdateAction({
               variant="ghost-muted"
               className={className}
               aria-label={`${actionLabel} for ${serverLabel}`}
-              disabled={manualCommand === null && !canUpdate}
+              disabled={manualInstructions === null && !canUpdate}
               onClick={onClick}
             />
           }
@@ -324,7 +323,7 @@ export function ServerUpdateAction({
       size={size}
       variant={variant}
       className={className}
-      disabled={manualCommand === null && !canUpdate}
+      disabled={manualInstructions === null && !canUpdate}
       onClick={onClick}
     >
       {actionLabel}

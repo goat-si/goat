@@ -9,6 +9,7 @@ import {
 } from "../../previewMiniPlayerStore";
 import type { ThreadPreviewState } from "../../previewStateStore";
 import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
+import { openPreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 const selectAutoShowFloatingPreview = (settings: { browserAutoShowFloatingPreview: boolean }) =>
   settings.browserAutoShowFloatingPreview;
@@ -123,6 +124,15 @@ export function useAgentOpenedPreviews(input: {
       );
       if (surface && requested?.force === true) {
         useRightPanelStore.getState().activateSurface(threadRef, surface.id);
+      } else if (!surface && session.automationOwner !== undefined) {
+        // An agent's tab opens as the large agents-on-screen card, where computer use shows too.
+        // A tab this desktop draws shows its own webview in that card.
+        openPreviewSessionStack({
+          environmentId: threadRef.environmentId,
+          focus: { kind: "browser", threadId: threadRef.threadId, tabId: session.tabId },
+          expand: true,
+          automatic: requested?.force !== true,
+        });
       } else if (!surface) {
         usePreviewMiniPlayerStore
           .getState()

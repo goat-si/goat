@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vp test run --config ../vite.config.ts --dir ."
+    "test": "vp test run --config ../vite.config.ts --dir .",
+    "update-code-budgets": "node update-code-budgets.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

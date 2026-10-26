@@ -1,5 +1,6 @@
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
+import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
 import {
   deriveAvailableRevertTurnCounts,
   deriveThreadPendingBackgroundTasks,
@@ -222,7 +223,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
-import { resolveProviderSkillsForCwd } from "@goat/client-runtime/providerSkills";
+import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
 import { vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
@@ -260,7 +261,7 @@ import { ThreadTimeline } from "./chat/ThreadTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
-import { CloudTaskStatus } from "./chat/CloudTaskStatus";
+import { useCloudRun } from "./chat/useCloudRun";
 import {
   overlayComposerIsResting,
   resolveComposerTimelineInset,
@@ -396,7 +397,6 @@ const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
-const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
@@ -1521,6 +1521,23 @@ export default function ChatView(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
+  const { cloudRun, onRetryCloudRun } = useCloudRun({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    projection: serverProjection,
+    canOperate: canOperateThread && !isSendBusy,
+    providers: providerStatuses,
+    runtimeMode,
+    interactionMode,
+    setThreadError,
+  });
+  // A finished cloud run's card already states its failure; the runtime error banner repeats it.
+  const cloudRunShowsThreadError =
+    cloudRun !== null &&
+    cloudRun.phase !== "running" &&
+    threadErrorIsServerRuntimeError &&
+    timelineThreadError !== null;
+  const timelineBannerError = cloudRunShowsThreadError ? null : timelineThreadError;
   const optimisticCompactionMessage = optimisticUserMessages.at(-1);
   const latestServerUserItem = serverVisibleTurnItems.findLast(
     (row) => row.item.type === "user_message",
@@ -1807,7 +1824,7 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(timelineThreadError) || visibleProviderStatus !== null;
+  const hasTimelineTopBanner = Boolean(timelineBannerError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -1817,9 +1834,15 @@ export default function ChatView(props: ChatViewProps) {
     activeTurnInProgress: isWorking || !latestRunSettled,
     isCompacting,
     awaitingUser:
-      activePendingApproval !== null ||
-      activePendingUserInput !== null ||
-      activeThreadShell?.hasPendingUserInput === true,
+      activePendingApproval !== null
+        ? ("approval" as const)
+        : activePendingUserInput !== null ||
+            // A secret request has no runtime request; the shell carries it.
+            activeThreadShell?.hasPendingUserInput === true
+          ? ("input" as const)
+          : null,
+    awaitingRequestId:
+      activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null,
     activeTurnStartedAt: activeWorkStartedAt,
     latestRun: activeActivityRun,
     runningRunId: activeRuntime?.activeRunId ?? null,
@@ -2926,9 +2949,8 @@ export default function ChatView(props: ChatViewProps) {
     isDesktop: isElectron,
   });
   const getShortcutContextStable = useStableCallback(getShortcutContext);
-  const timelineSkills = activeProviderStatus
-    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
-    : EMPTY_PROVIDER_SKILLS;
+  const skillScope = { environmentId, projectId: activeThreadProjectId };
+  const timelineSkills = useOfferedSkills(activeProviderStatus, gitCwd, settings, skillScope);
   const threadFindControlsRef = useRef<ThreadFindControls | null>(null);
   const [isThreadFindActive, setIsThreadFindActive] = useState(false);
   const openThreadFind = () => threadFindControlsRef.current?.open();
@@ -3577,7 +3599,7 @@ export default function ChatView(props: ChatViewProps) {
               setDismissedProviderStatusBannerKey={setDismissedProviderStatusBannerKey}
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
-              threadError={timelineThreadError}
+              threadError={timelineBannerError}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }
@@ -3611,6 +3633,10 @@ export default function ChatView(props: ChatViewProps) {
                 {...((paintOnlyDisplayedTimeline ? heldPaintContext?.activity : null) ??
                   timelineActivity)}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}
+                cloudRun={paintOnlyDisplayedTimeline ? null : cloudRun}
+                {...(paintOnlyDisplayedTimeline || onRetryCloudRun === null
+                  ? {}
+                  : { onRetryCloudRun })}
                 onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                 {...(paintOnlyDisplayedTimeline
                   ? {}
@@ -3643,6 +3669,15 @@ export default function ChatView(props: ChatViewProps) {
                 listRef={legendListRef}
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
+                announcedRun={
+                  paintOnlyDisplayedTimeline
+                    ? null
+                    : announcedRun(activeActivityRun, serverProjection?.runs ?? [])
+                }
+                detailBehindShell={
+                  !paintOnlyDisplayedTimeline &&
+                  isDetailBehindShell(activeLatestRun, activeThreadShell?.latestRun ?? null)
+                }
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
@@ -3653,6 +3688,7 @@ export default function ChatView(props: ChatViewProps) {
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 paintOnly={paintOnlyDisplayedTimeline}
+                announceTurnStatus={!isProviderSubagent}
                 onOpenTurnDiff={
                   paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiffStable
                 }
@@ -3812,9 +3848,6 @@ export default function ChatView(props: ChatViewProps) {
                                 <p role="status" className="px-4 text-sm">
                                   {cloudState.launchSourceNotice}
                                 </p>
-                              ) : null}
-                              {cloudState.cloudTask ? (
-                                <CloudTaskStatus task={cloudState.cloudTask} />
                               ) : null}
                               {cloudState.composerBlockReason ? (
                                 <p role="status" className="px-4 text-sm">

@@ -136,7 +136,11 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
  */
 export function threadHtmlRenderAttachmentIds(
   threadId: string,
-  items: Iterable<{ readonly toolName: string | null | undefined; readonly output?: unknown }>,
+  items: Iterable<{
+    readonly toolName: string | null | undefined;
+    readonly input?: unknown;
+    readonly output?: unknown;
+  }>,
 ) {
   const segment = toSafeThreadAttachmentSegment(threadId);
   if (segment === null) return [];
@@ -180,32 +184,35 @@ export function resolveAttachmentPath(input: {
   });
 }
 
+/** Where an attachment id's file would be, whether or not it exists. */
+export function attachmentPathCandidatesById(input: {
+  readonly attachmentsDir: string;
+  readonly attachmentId: string;
+}): ReadonlyArray<string> {
+  const normalizedId = normalizeAttachmentRelativePath(input.attachmentId);
+  if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
+    return [];
+  }
+  const fileExtension = parseAttachmentFileExtension(normalizedId);
+  const relativePaths = fileExtension
+    ? [`${normalizedId}.${fileExtension.toLowerCase()}`]
+    : ATTACHMENT_FILENAME_EXTENSIONS.map((extension) => `${normalizedId}${extension}`);
+  return relativePaths.flatMap((relativePath) => {
+    const filePath = resolveAttachmentRelativePath({
+      attachmentsDir: input.attachmentsDir,
+      relativePath,
+    });
+    return filePath ? [filePath] : [];
+  });
+}
+
 export function resolveAttachmentPathById(input: {
   readonly attachmentsDir: string;
   readonly attachmentId: string;
 }): string | null {
-  const normalizedId = normalizeAttachmentRelativePath(input.attachmentId);
-  if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
-    return null;
-  }
-  const fileExtension = parseAttachmentFileExtension(normalizedId);
-  if (fileExtension) {
-    const filePath = resolveAttachmentRelativePath({
-      attachmentsDir: input.attachmentsDir,
-      relativePath: `${normalizedId}.${fileExtension.toLowerCase()}`,
-    });
-    return filePath && NodeFS.existsSync(filePath) ? filePath : null;
-  }
-  for (const extension of ATTACHMENT_FILENAME_EXTENSIONS) {
-    const maybePath = resolveAttachmentRelativePath({
-      attachmentsDir: input.attachmentsDir,
-      relativePath: `${normalizedId}${extension}`,
-    });
-    if (maybePath && NodeFS.existsSync(maybePath)) {
-      return maybePath;
-    }
-  }
-  return null;
+  return (
+    attachmentPathCandidatesById(input).find((filePath) => NodeFS.existsSync(filePath)) ?? null
+  );
 }
 
 export type AttachmentClaimPlan =

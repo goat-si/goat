@@ -14,6 +14,7 @@ export const PermissionCapability = Schema.Literals([
   "boat.start",
   "settings.write",
   "goals.apply",
+  "providers.manage",
 ]);
 export type PermissionCapability = typeof PermissionCapability.Type;
 
@@ -53,7 +54,7 @@ export const BUILTIN_PERMISSION_PROFILES: Readonly<Record<string, PermissionProf
   },
 };
 
-const DEFAULT_GOATCLAW_PROFILE = "worker";
+const DEFAULT_GOATCLAW_PROFILE = "owner";
 
 export const GoatclawSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -139,6 +140,19 @@ export const GoatclawHostSync = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 export type GoatclawHostSync = typeof GoatclawHostSync.Type;
+
+/**
+ * On a launch or send that forwarded a goatclaw ceiling to a host that has not yet shown it
+ * enforces one. The call went through anyway, so this only tells the caller the ceiling may not
+ * bind there until that host's sync is applied.
+ */
+export const GoatclawCeilingAdvice = Schema.Struct({
+  enforcement: Schema.Literal("unconfirmed"),
+  host: Schema.String,
+  sync: GoatclawHostSync,
+  message: Schema.String,
+});
+export type GoatclawCeilingAdvice = typeof GoatclawCeilingAdvice.Type;
 
 export const PermissionProfileView = Schema.Struct({
   enabled: Schema.Boolean,

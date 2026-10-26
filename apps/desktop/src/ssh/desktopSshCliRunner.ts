@@ -40,6 +40,7 @@ export const resolveDesktopSshCliRunner = (
     ...archiveOptions,
     hostDownload: true,
     publishedFallback: true,
+    attachAppServer: true,
     ...(environment.isPackaged ? { refreshOwnedRuntimeOnFirstConnection: true } : {}),
   };
 };

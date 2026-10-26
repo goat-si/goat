@@ -39,6 +39,11 @@ import {
   checkpointWorkspace,
   makeCheckpointWorkspace,
 } from "@goat/provider-testing/replayWorkspace";
+import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// Started from a git hook, this run inherits GIT_DIR, which would point git in its fixture
+// workspace, and in every server or provider child it starts, at the developer's checkout (#1114).
+removeInheritedGitEnv(process.env);
 
 const CLOCK_TICK = Duration.millis(20);
 
@@ -58,7 +63,7 @@ if (fixture === undefined || variant === undefined) {
 }
 
 const museBinary = process.env.GOAT_MUSE_BIN ?? "muse";
-// Started as T3 starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
+// Started as GOAT starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
 const museStart = Effect.runSync(museLaunch(museBinary));
 const home = process.env.HOME ?? "";
 

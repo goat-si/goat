@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -74,6 +75,7 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
@@ -83,6 +85,7 @@ const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provide(
@@ -146,7 +149,7 @@ const callTool = (name: string, args: Record<string, unknown>) =>
       );
   });
 
-const callSnapshot = (args: Record<string, unknown>) => callTool("preview_snapshot", args);
+const callSnapshot = (args: Record<string, unknown>) => callTool("goat_preview_snapshot", args);
 
 // Real tool definitions with handlers that record what they decoded.
 const layerRecordingTools = (calls: Array<unknown>) => {
@@ -172,6 +175,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
       goat_project_update: record,
     }),
   ).pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(
       Layer.mergeAll(
@@ -215,7 +219,7 @@ it.effect.each([{}, { includeImage: false }])(
         yield* Effect.yieldNow;
 
         const snapshot = yield* server
-          .callTool({ name: "preview_snapshot", arguments: input })
+          .callTool({ name: "goat_preview_snapshot", arguments: input })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
             Effect.provideService(McpSchema.McpServerClient, client),
@@ -282,7 +286,9 @@ it.effect.each([
           tabId: alternateTabId,
           threadId,
         });
-        expect(event.request.input).toEqual({});
+        // Only a shown or saved image needs the browser to capture one.
+        // The seventh call is a default one after six in this mode.
+        expect(event.request.input).toEqual({ captureImage: requests <= 6 && images });
         return broker.respond({
           clientId: "mcp-image-option-client",
           connectionId: event.connectionId,
@@ -300,7 +306,7 @@ it.effect.each([
       for (const call of [1, 2, 3, 4, 5, 6]) {
         const snapshot = yield* server
           .callTool({
-            name: "preview_snapshot",
+            name: "goat_preview_snapshot",
             arguments: { ...input, tabId: alternateTabId },
           })
           .pipe(
@@ -309,11 +315,12 @@ it.effect.each([
           );
         const metadata = { ...page, title: `Snapshot ${call}`, screenshot };
         const { accessibilityTree: _tree, ...boundedMetadata } = metadata;
+        const omitted =
+          "accessibilityTree (use interactiveElements locators or goat_preview_evaluate)";
         expect(snapshot.isError).toBe(false);
-        expect(snapshot.structuredContent).toEqual({
-          ...boundedMetadata,
-          omitted: ["accessibilityTree (use interactiveElements locators or preview_evaluate)"],
-        });
+        expect(snapshot.structuredContent).toEqual(
+          images ? undefined : { ...boundedMetadata, omitted: [omitted] },
+        );
         const [identity, text, ...rest] = snapshot.content;
         expect(identity?.type === "text" ? decodeJsonText(identity.text) : null).toEqual({
           url: page.url,
@@ -322,7 +329,7 @@ it.effect.each([
         expect(rest).toEqual([
           {
             type: "text",
-            text: "Snapshot text was bounded. Omitted: accessibilityTree (use interactiveElements locators or preview_evaluate).",
+            text: `Snapshot text was bounded. Omitted: ${omitted}.`,
           },
           ...(images
             ? [
@@ -338,7 +345,7 @@ it.effect.each([
 
       const nextDefault = yield* server
         .callTool({
-          name: "preview_snapshot",
+          name: "goat_preview_snapshot",
           arguments: { tabId: alternateTabId },
         })
         .pipe(
@@ -363,7 +370,7 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
       client: { sessionId: "session-1", label: "Claude Code", access: "read-only" as const },
     };
     const click = yield* server
-      .callTool({ name: "preview_click", arguments: { locator: "text=Send" } })
+      .callTool({ name: "goat_preview_click", arguments: { locator: "text=Send" } })
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, readOnly),
         Effect.provideService(McpSchema.McpServerClient, client),
@@ -386,7 +393,7 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       const inputs = yield* serveSnapshots("mcp-fullpage-client", fullPage);
       const saved = yield* callSnapshot({ fullPage: true, save: true });
       expect(saved.isError).toBe(false);
-      expect(inputs).toEqual([{ fullPage: true }]);
+      expect(inputs).toEqual([{ fullPage: true, captureImage: true }]);
       expect(saved.content.map((content) => content.type)).toEqual(["text"]);
       expect(saved.structuredContent).toEqual({
         url: snapshotResult.url,
@@ -406,10 +413,8 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       );
       const image = yield* callSnapshot({ fullPage: true, includeImage: true });
       expect(image.content.map((content) => content.type)).toContain("image");
-      expect(image.structuredContent).toMatchObject({
-        screenshot: { fullPage: true, clipped: true, byteLength: 3 },
-      });
-      expect(image.structuredContent).not.toHaveProperty("screenshot.data");
+      expect(image.structuredContent).toBeUndefined();
+      expect(JSON.stringify(image.content)).toContain('\\"clipped\\":true,\\"byteLength\\":3');
     }),
   ).pipe(Effect.provide(layerTest)),
 );
@@ -431,8 +436,8 @@ it.effect("decodes null optional arguments the way it decodes omitted ones", () 
     const thread = { threadId: "thread-null-arguments" };
     yield* callTool("goat_thread_read", thread);
     yield* callTool("goat_thread_read", { ...thread, afterPosition: null, view: null });
-    yield* callTool("delegate_task", { task: "Inspect", target: {} });
-    yield* callTool("delegate_task", { task: "Inspect", title: null, target: { model: null } });
+    yield* callTool("goat_task_create", { task: "Inspect", target: {} });
+    yield* callTool("goat_task_create", { task: "Inspect", title: null, target: { model: null } });
     // A null the schema declares keeps its meaning: here it clears the project icon.
     yield* callTool("goat_project_update", { projectId: "project-1", projectIcon: null });
 
@@ -498,18 +503,18 @@ it.effect(
       const names = server.tools.map(({ tool }) => tool.name);
       expect(names).toEqual(
         expect.arrayContaining([
-          "link_pull_request",
-          "unlink_pull_request",
-          "list_thread_pull_requests",
+          "goat_pull_request_link",
+          "goat_pull_request_unlink",
+          "goat_pull_request_list",
         ]),
       );
-      const linkTool = server.tools.find(({ tool }) => tool.name === "link_pull_request");
+      const linkTool = server.tools.find(({ tool }) => tool.name === "goat_pull_request_link");
       expect(linkTool?.tool.annotations?.idempotentHint).toBe(true);
       expect(linkTool?.tool.annotations?.openWorldHint).toBe(false);
       expect(linkTool?.tool.description).toContain("Register every pull request you open");
 
       const denied = yield* server
-        .callTool({ name: "list_thread_pull_requests", arguments: {} })
+        .callTool({ name: "goat_pull_request_list", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -821,17 +826,17 @@ it.effect("registers annotated tools and preserves authenticated request context
       }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
 
-      const statusTool = server.tools.find(({ tool }) => tool.name === "preview_status");
+      const statusTool = server.tools.find(({ tool }) => tool.name === "goat_preview_status");
       expect(statusTool?.tool.annotations?.readOnlyHint).toBe(true);
       expect(statusTool?.tool.annotations?.idempotentHint).toBe(true);
       expect(statusTool?.tool.annotations?.destructiveHint).toBe(false);
 
-      const snapshotTool = server.tools.find(({ tool }) => tool.name === "preview_snapshot");
+      const snapshotTool = server.tools.find(({ tool }) => tool.name === "goat_preview_snapshot");
       expect(snapshotTool?.tool.annotations?.readOnlyHint).toBe(true);
       expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
       expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
 
-      const clickTool = server.tools.find(({ tool }) => tool.name === "preview_click");
+      const clickTool = server.tools.find(({ tool }) => tool.name === "goat_preview_click");
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
       expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
       expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
@@ -841,12 +846,12 @@ it.effect("registers annotated tools and preserves authenticated request context
         description: "The preview action completed successfully.",
       });
 
-      const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
+      const navigateTool = server.tools.find(({ tool }) => tool.name === "goat_preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
       expect(navigateTool?.tool.annotations?.openWorldHint).toBe(true);
 
       const status = yield* server
-        .callTool({ name: "preview_status", arguments: {} })
+        .callTool({ name: "goat_preview_status", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -857,7 +862,7 @@ it.effect("registers annotated tools and preserves authenticated request context
         tabId,
       });
 
-      const logsTool = server.tools.find(({ tool }) => tool.name === "preview_logs");
+      const logsTool = server.tools.find(({ tool }) => tool.name === "goat_preview_logs");
       expect(logsTool?.tool.annotations).toMatchObject({
         readOnlyHint: true,
         idempotentHint: true,
@@ -866,7 +871,7 @@ it.effect("registers annotated tools and preserves authenticated request context
       const beforeLogs = routedRequests.length;
       const logs = yield* server
         .callTool({
-          name: "preview_logs",
+          name: "goat_preview_logs",
           arguments: { tabId: alternateTabId, consoleLevels: ["warning"] },
         })
         .pipe(
@@ -882,7 +887,7 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(routedRequests.length).toBe(beforeLogs + 1);
 
       const malformed = yield* server
-        .callTool({ name: "preview_click", arguments: { selector: "" } })
+        .callTool({ name: "goat_preview_click", arguments: { selector: "" } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -892,7 +897,7 @@ it.effect("registers annotated tools and preserves authenticated request context
 
       const snapshot = yield* server
         .callTool({
-          name: "preview_snapshot",
+          name: "goat_preview_snapshot",
           arguments: { tabId: alternateTabId, includeImage: true },
         })
         .pipe(
@@ -901,19 +906,18 @@ it.effect("registers annotated tools and preserves authenticated request context
         );
       expect(snapshot.isError).toBe(false);
       expect(snapshot.content.some((content) => content.type === "image")).toBe(true);
-      expect(snapshot.structuredContent).toMatchObject({
-        screenshot: { mimeType: "image/png", width: 10, height: 5 },
-      });
+      expect(snapshot.structuredContent).toBeUndefined();
+      expect(JSON.stringify(snapshot.content)).toContain('\\"width\\":10,\\"height\\":5');
       expect(routedRequests.find(({ operation }) => operation === "snapshot")?.tabId).toBe(
         alternateTabId,
       );
 
       // Arrays and primitives are wrapped so structuredContent stays a JSON object.
       // Claude Code rejects the whole result otherwise.
-      const evaluateTool = server.tools.find(({ tool }) => tool.name === "preview_evaluate");
+      const evaluateTool = server.tools.find(({ tool }) => tool.name === "goat_preview_evaluate");
       expect(evaluateTool?.tool.outputSchema).toMatchObject({ type: "object" });
       const evaluated = yield* server
-        .callTool({ name: "preview_evaluate", arguments: { expression: "buttons()" } })
+        .callTool({ name: "goat_preview_evaluate", arguments: { expression: "buttons()" } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
@@ -927,11 +931,11 @@ it.effect("registers annotated tools and preserves authenticated request context
       });
 
       const actionRequests = [
-        { name: "preview_click", arguments: { x: 10, y: 10 } },
-        { name: "preview_type", arguments: { text: "Hello" } },
-        { name: "preview_press", arguments: { key: "Enter" } },
-        { name: "preview_scroll", arguments: { deltaY: 100 } },
-        { name: "preview_wait_for", arguments: { text: "Example" } },
+        { name: "goat_preview_click", arguments: { x: 10, y: 10 } },
+        { name: "goat_preview_type", arguments: { text: "Hello" } },
+        { name: "goat_preview_press", arguments: { key: "Enter" } },
+        { name: "goat_preview_scroll", arguments: { deltaY: 100 } },
+        { name: "goat_preview_wait", arguments: { text: "Example" } },
       ];
       for (const request of actionRequests) {
         const result = yield* server
@@ -996,6 +1000,7 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           ),
         }),
       ).pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpHttpServer.layerMcpTransport),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
@@ -1228,4 +1233,91 @@ it.effect("a refused body that never finishes stops being read at its deadline",
     yield* TestClock.adjust("5 seconds");
     expect(yield* Fiber.join(read)).toBeUndefined();
   }),
+);
+
+it.effect("serves llms.txt whole without a credential and filtered with one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = {
+        environmentId,
+        requestNamespace: "llms",
+        capabilities: new Set<McpInvocationContext.McpCapability>(),
+        issuedAt: 1,
+      };
+      const threadScope: McpInvocationContext.McpThreadInvocationScope = {
+        ...base,
+        thread: {
+          threadId,
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+      };
+      const clientScope = (
+        access: McpInvocationContext.McpClientCaller["access"],
+      ): McpInvocationContext.McpInvocationScope => ({
+        ...base,
+        thread: undefined,
+        client: { sessionId: access, label: access, access },
+      });
+      const clients: Record<string, McpInvocationContext.McpInvocationScope> = {
+        "Bearer client.full": clientScope("auto"),
+        "Bearer client.readonly": clientScope("read-only"),
+      };
+      yield* HttpRouter.serve(
+        McpHttpServer.layerLlmsTxtRoute.pipe(
+          Layer.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
+              isRegistryToken: () => false,
+              resolve: (token) => Effect.succeed(token === "threadToken" ? threadScope : undefined),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+              authenticate: (request) =>
+                Effect.succeed(clients[request.headers.authorization ?? ""]),
+            }),
+          ),
+        ),
+        { disableListenLog: true, disableLogger: true },
+      ).pipe(Layer.build);
+      const httpClient = yield* HttpClient.HttpClient;
+      const paths = (token?: string) =>
+        Effect.gen(function* () {
+          const response = yield* httpClient.get("/llms.txt", {
+            headers: token === undefined ? {} : { authorization: "Bearer " + token },
+          });
+          expect(response.status).toBe(200);
+          expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+          const body = yield* response.text;
+          return new Set(
+            body
+              .split("\n")
+              .filter((line) => line.startsWith("- "))
+              .map((line) => line.slice(2, line.indexOf(":"))),
+          );
+        });
+
+      const all = yield* paths();
+      expect(all.size).toBe(Object.keys(agentSurfaceRegistry).length);
+
+      const thread = yield* paths("threadToken");
+      expect(thread.has("device.screenshot")).toBe(true);
+      expect(thread.has("permission_profile.sync")).toBe(false);
+
+      const client = yield* paths("client.full");
+      expect(client.has("permission_profile.sync")).toBe(true);
+      expect(client.has("device.screenshot")).toBe(false);
+
+      const reader = yield* paths("client.readonly");
+      expect(reader.has("decision.list")).toBe(true);
+      expect(reader.has("decision.request")).toBe(false);
+
+      const refused = yield* httpClient.get("/llms.txt", {
+        headers: { authorization: "Bearer stale.token" },
+      });
+      expect(refused.status).toBe(401);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

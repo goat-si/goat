@@ -38,7 +38,7 @@ import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@go
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { compactTraceAttributes } from "@goat/shared/observability";
-import { isWindowsReservedFileName, normalizeProjectPathForComparison } from "@goat/shared/path";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand } from "@goat/shared/shell";
@@ -57,16 +57,24 @@ import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import {
   defaultCheckoutWorkers,
   missingWindowsCheckoutSettings,
+  pinWorktreeRoot,
+  readWorktreeRoot,
+  sourceHooksConfig,
   WINDOWS_CHECKOUT_SETTINGS,
+  worktreeFolderName,
   worktreeSparseCheckoutPatterns,
 } from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
+import { makeCachedGitConfigReader } from "./gitConfigReadCache.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const gitProcesses = Semaphore.makeUnsafe(8);
 // Silence, not total time, marks a stuck checkout: a Windows checkout under real-time
 // scanning or a hook installing dependencies can print steadily for many minutes.
 const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
+// The first fetch after a long gap can pull thousands of new refs for minutes while
+// printing progress the whole time, so the worktree base fetch also stops only on silence.
+const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -277,17 +285,6 @@ function paginateBranches(input: {
   };
 }
 
-/**
- * The folder a new worktree gets for its branch. Git allows branch names Windows refuses as file
- * names (`"`, `<`, `|`, a trailing dot, `con`), so a Windows server replaces those as well.
- */
-export function worktreeFolderName(branch: string, platform: NodeJS.Platform): string {
-  const name = branch.replace(/\//g, "-");
-  if (platform !== "win32") return name;
-  const safe = name.replace(/[\\:*?"<>|]/gu, "-").replace(/[. ]+$/u, "") || "worktree";
-  return isWindowsReservedFileName(safe) ? `${safe}-branch` : safe;
-}
-
 /** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
 const isGitCommandError = Schema.is(GitCommandError);
 
@@ -315,7 +312,7 @@ export function existingBranchConflictDetail(input: {
     worktreePath: input.worktreePath ?? input.suggestedPath,
     branch: input.branch,
   });
-  const relaunch = `relaunch with workspaceStrategy (goat_ssh_thread_launch: workspace) ${workspace}`;
+  const relaunch = `relaunch with workspaceStrategy (workspace for ssh.thread_launch through goat_call) ${workspace}`;
   const resume =
     input.worktreePath === null
       ? `To continue it, run git worktree add "${input.suggestedPath}" ${input.branch}, then ${relaunch}.`
@@ -1014,8 +1011,10 @@ const collectOutput = Effect.fnUntraced(function* (
 
     const decoded = decoder.decode(chunkToDecode, { stream: !truncated });
     text += decoded;
-    lineBuffer += lineDecoder ? lineDecoder.decode(chunk, { stream: true }) : decoded;
-    yield* emitCompleteLines(false);
+    if (onLine) {
+      lineBuffer += lineDecoder ? lineDecoder.decode(chunk, { stream: true }) : decoded;
+      yield* emitCompleteLines(false);
+    }
   });
 
   yield* Stream.runForEach(stream, processChunk).pipe(
@@ -1031,9 +1030,11 @@ const collectOutput = Effect.fnUntraced(function* (
 
   const remainder = truncated ? "" : decoder.decode();
   text += remainder;
-  lineBuffer += remainder;
-  if (lineDecoder) lineBuffer += lineDecoder.decode();
-  yield* emitCompleteLines(true);
+  if (onLine) {
+    lineBuffer += remainder;
+    if (lineDecoder) lineBuffer += lineDecoder.decode();
+    yield* emitCompleteLines(true);
+  }
   return {
     text,
     truncated,
@@ -1218,6 +1219,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             () =>
               new GitCommandError({
                 ...gitCommandContext(commandInput),
+                reason: "timed_out",
                 detail: "Git command timed out.",
               }),
           ),
@@ -3555,11 +3557,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return { oldContents, newContents };
   });
 
-  const readConfigValue: GitVcsDriver.GitVcsDriver["Service"]["readConfigValue"] = (cwd, key) =>
+  const readConfigValue = yield* makeCachedGitConfigReader((cwd, key) =>
     runGitStdout("GitVcsDriver.readConfigValue", cwd, ["config", "--get", key], true).pipe(
-      Effect.map((stdout) => stdout.trim()),
-      Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
-    );
+      Effect.map((stdout) => stdout.trim() || null),
+    ),
+  );
 
   const resolveBranchBase = Effect.fn("GitVcsDriver.resolveBranchBase")(function* (
     cwd: string,
@@ -4053,7 +4055,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
     // resolve: a cwd like `<repo>/sub/..` must not name the folder `..`.
     const repoName = path.basename(path.resolve(input.cwd));
-    let worktreePath = input.path;
+    let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
     const progress = options?.progress;
     if (worktreePath == null) {
       const location = yield* resolveAvailableWorktreesDirectory(
@@ -4283,9 +4285,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         existing === "added" ? newBranch! : input.refName,
       );
+      const root = yield* readWorktreeRoot(executeGit, path, input.cwd, supportsHookRun(input.cwd));
       yield* Effect.gen(function* () {
-        if (sparse === null) {
+        if (sparse === null && !root.checkoutApart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
+          if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
           return;
         }
         // --no-checkout writes no files and runs no hook, so the patterns apply before
@@ -4297,12 +4301,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "--no-checkout",
           ...rest,
         ]);
-        yield* runGit(
-          "GitVcsDriver.createWorktree.sparseCheckout",
-          targetPath,
-          ["sparse-checkout", "set", "--no-cone", "--stdin"],
-          { stdin: sparse.patterns },
-        );
+        if (sparse !== null) {
+          yield* runGit(
+            "GitVcsDriver.createWorktree.sparseCheckout",
+            targetPath,
+            ["sparse-checkout", "set", "--no-cone", "--stdin"],
+            { stdin: sparse.patterns },
+          );
+        }
+        if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
         // checkout prints progress to a pipe only when asked, and would run post-checkout as a
         // same-commit switch. Hooks are off for it, then post-checkout runs with the
         // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.
@@ -4313,12 +4320,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "-f",
           "--progress",
         ]);
-        if (progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
+        if (sparse && progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
         const head = (yield* runGitStdout("GitVcsDriver.createWorktree.head", targetPath, [
           "rev-parse",
           "HEAD",
         ])).trim();
         yield* runCheckoutCommand("GitVcsDriver.createWorktree.postCheckout", targetPath, [
+          ...(yield* sourceHooksConfig(executeGit, path, input.cwd)),
           "hook",
           "run",
           "--ignore-missing",
@@ -4437,7 +4445,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             base.branchName,
           ]);
           if (base.baseRef.startsWith("refs/remotes/")) {
-            // gh consumes its key as a provider branch; T3 also needs the selected remote.
+            // gh consumes its key as a provider branch; GOAT also needs the selected remote.
             yield* runGit("GitVcsDriver.createWorktree.configureComparisonRef", input.cwd, [
               "config",
               `branch.${input.newRefName}.t3-merge-base-ref`,
@@ -4700,6 +4708,131 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return remoteNames.includes(remoteName) ? { remoteName, branchName } : null;
     });
 
+  /**
+   * Removes the temporary packs fetches leave in objects/pack when they are killed. Only
+   * files untouched for a whole stall window go, because a fetch still receiving data
+   * keeps writing its own. Best effort: a pack that cannot be read or removed stays.
+   */
+  const removeStaleTemporaryPacks = Effect.fn("GitVcsDriver.removeStaleTemporaryPacks")(
+    function* (cwd: string, untouchedForMs: number) {
+      const packDirectory = path.resolve(
+        cwd,
+        (yield* runGitStdout("GitVcsDriver.removeStaleTemporaryPacks", cwd, [
+          "rev-parse",
+          "--git-path",
+          "objects/pack",
+        ])).trim(),
+      );
+      const now = yield* Clock.currentTimeMillis;
+      let removed = 0;
+      for (const name of yield* fileSystem.readDirectory(packDirectory)) {
+        if (!name.startsWith("tmp_pack_") && !name.startsWith("tmp_idx_")) continue;
+        const file = path.join(packDirectory, name);
+        const { mtime } = yield* fileSystem.stat(file);
+        if (Option.isNone(mtime) || now - mtime.value.getTime() < untouchedForMs) continue;
+        yield* fileSystem.remove(file);
+        removed += 1;
+      }
+      return removed;
+    },
+    Effect.catch((cause) =>
+      Effect.logWarning("Could not remove stale temporary packs", { cause }).pipe(Effect.as(0)),
+    ),
+  );
+
+  /**
+   * Fetches one branch for a new worktree. Unlike other fetches it has no fixed time limit:
+   * it fails only after WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS without output, and a stalled
+   * fetch is retried once after the packs it abandoned are cleared. Tags are left out; a
+   * worktree base never needs them and they can be most of a first fetch.
+   */
+  const fetchWorktreeBase = Effect.fn("GitVcsDriver.fetchWorktreeBase")(function* (
+    input: GitVcsDriver.GitFetchWorktreeBaseCommitInput,
+    remoteName: string,
+    branch: string,
+  ) {
+    const args = [
+      "fetch",
+      "--progress",
+      "--no-tags",
+      "--",
+      remoteName,
+      `+refs/heads/${branch}:refs/remotes/${remoteName}/${branch}`,
+    ];
+    const onLine = input.onOutputLine;
+    const once = executeGitWithStableDiagnostics(
+      "GitVcsDriver.fetchWorktreeBase",
+      input.cwd,
+      args,
+      {
+        env: STATUS_UPSTREAM_REFRESH_ENV,
+        allowNonZeroExit: true,
+        stallTimeoutMs: WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
+        ...(onLine === undefined
+          ? {}
+          : { progress: { onStdoutLine: onLine, onStderrLine: onLine } }),
+      },
+    );
+    // Another fetch in the same repository can win the race for the tracking ref.
+    const run = once.pipe(
+      Effect.flatMap((result) =>
+        result.exitCode !== 0 && isRefLockFailure(result.stderr) ? once : Effect.succeed(result),
+      ),
+    );
+    const result = yield* run.pipe(
+      Effect.catchIf(
+        (error) => error.reason === "stalled",
+        (stall) =>
+          Effect.gen(function* () {
+            const removed = yield* removeStaleTemporaryPacks(
+              input.cwd,
+              WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS,
+            );
+            yield* Effect.logWarning("Worktree base fetch stalled; retrying once", {
+              cwd: input.cwd,
+              remoteName,
+              branch,
+              detail: stall.detail,
+              removedTemporaryPacks: removed,
+            });
+            if (onLine !== undefined) {
+              yield* onLine(
+                `${stall.detail} Retrying once${removed === 0 ? "" : ` after removing ${removed} abandoned temporary pack file${removed === 1 ? "" : "s"}`}.`,
+              );
+            }
+            return yield* run.pipe(
+              Effect.mapError((retryError) =>
+                retryError.reason === "stalled"
+                  ? new GitCommandError({
+                      ...gitCommandContext({
+                        operation: "GitVcsDriver.fetchWorktreeBase",
+                        cwd: input.cwd,
+                        args,
+                      }),
+                      reason: "stalled",
+                      detail: `${retryError.detail} It had already stalled once and was retried.`,
+                    })
+                  : retryError,
+              ),
+            );
+          }),
+      ),
+    );
+    if (result.exitCode === 0) return true;
+    if (
+      result.stderr.split(/\r?\n/).includes(`fatal: couldn't find remote ref refs/heads/${branch}`)
+    ) {
+      return false;
+    }
+    return yield* new GitCommandError({
+      ...gitCommandContext({ operation: "GitVcsDriver.fetchWorktreeBase", cwd: input.cwd, args }),
+      detail: fetchFailureDetail(result.stderr) ?? `git fetch ${remoteName} failed`,
+      ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+      stdoutLength: result.stdout.length,
+      stderrLength: result.stderr.length,
+    });
+  });
+
   const fetchWorktreeBaseCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchWorktreeBaseCommit"] =
     Effect.fn("fetchWorktreeBaseCommit")(function* (input) {
       const target = yield* resolveWorktreeBaseRemote(input);
@@ -4707,7 +4840,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const { remoteName, branchName } = target;
       const remoteRefName = `${remoteName}/${branchName}`;
       // A missing remote branch can leave a stale tracking ref; never resolve it.
-      if (!(yield* fetchRemote({ cwd: input.cwd, remoteName, refName: remoteRefName }))) {
+      if (!(yield* fetchWorktreeBase(input, remoteName, branchName))) {
         return null;
       }
       const resolved = yield* executeGit(

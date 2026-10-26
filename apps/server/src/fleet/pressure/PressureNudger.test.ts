@@ -148,7 +148,7 @@ const layer = (world: World, fleet: FleetSettings = {}) =>
 
 const tick = Effect.flatMap(PressureNudger.PressureNudger, (nudger) => nudger.tick);
 
-/** Each command as "<thread> <wake|notice>: <first line>". */
+/** Each command as "<thread> wake: <first line>" or "<thread> row@<id> <severity>: <first line>". */
 const sent = (world: World) =>
   world.commands
     .splice(0)
@@ -156,25 +156,48 @@ const sent = (world: World) =>
       command.type === "message.dispatch"
         ? command.threadId + " wake: " + command.text.split("\n")[0]
         : command.type === "thread.notice.record"
-          ? command.threadId + " notice: " + command.message.split("\n")[0]
+          ? command.threadId +
+            " row@" +
+            command.recordKey.split(":")[2] +
+            " " +
+            command.severity +
+            ": " +
+            command.message.split("\n")[0]
           : command.type,
     );
 
 describe("PressureNudger.tick", () => {
-  it.effect("wakes the threads orchestrating local work, once per level and cooldown", () => {
+  it.effect("keeps one status row per host in place and wakes only when it gets worse", () => {
     const world = makeWorld();
+    const critical = (thread: string, row: string, since: string) =>
+      thread +
+      " row@" +
+      row +
+      " warning: Resource pressure: this machine critical since " +
+      since +
+      " UTC · load 6.2 per core";
+    const normal = (thread: string, since: string) =>
+      thread +
+      " row@0 info: Resource pressure: this machine back to normal since " +
+      since +
+      " UTC";
     return Effect.gen(function* () {
       world.local = pressure("critical");
       yield* tick;
-      const first = world.commands.slice();
+      const woken = world.commands.find((command) => command.type === "message.dispatch");
       expect(sent(world)).toEqual([
+        critical("manager", "0", "00:00"),
+        critical("person", "0", "00:00"),
         "manager wake: Resource pressure: this machine is critical (since 1970-01-01T00:00:00.000Z).",
         "person wake: Resource pressure: this machine is critical (since 1970-01-01T00:00:00.000Z).",
       ]);
-      const text = first[0]?.type === "message.dispatch" ? first[0].text : "";
-      expect(text).toContain('"vitest-lane" (threadId vitest-lane, started by this thread)');
-      expect(text).toContain("- macmini: load 0.1 per core, 0 threads running or queued");
-      expect(text).toContain("start the next ones on macmini with goat_ssh_thread_launch");
+      const text = woken?.type === "message.dispatch" ? woken.text : "";
+      expect(text).toContain("started by this thread");
+      expect(text).toContain("macmini has room (load 0.1 per core, 0 threads running or queued)");
+      expect(text).toContain(
+        'start the next ones there with goat_call {path: "ssh.thread_launch"}',
+      );
+      expect(text.split("\n")).toHaveLength(3);
 
       yield* TestClock.adjust(MIN);
       yield* tick;
@@ -183,31 +206,40 @@ describe("PressureNudger.tick", () => {
       world.local = pressure("ok", 2 * MIN);
       yield* TestClock.adjust(MIN);
       yield* tick;
-      expect(sent(world)).toEqual([
-        "manager notice: Resource pressure: this machine is back to normal load. Heavy lanes can run there again; check goat_host_status before starting several at once.",
-        "person notice: Resource pressure: this machine is back to normal load. Heavy lanes can run there again; check goat_host_status before starting several at once.",
-      ]);
+      expect(sent(world)).toEqual([normal("manager", "00:02"), normal("person", "00:02")]);
 
-      // Critical again three minutes after the first notice: inside the 15-minute cooldown.
+      // Critical again inside the cooldown: the same row changes, and nobody is woken twice.
       world.local = pressure("critical", 3 * MIN);
       yield* TestClock.adjust(MIN);
       yield* tick;
-      expect(sent(world)).toEqual([]);
+      expect(sent(world)).toEqual([
+        critical("manager", "0", "00:03"),
+        critical("person", "0", "00:03"),
+      ]);
 
+      // The work there ended; the row still reaches the threads holding it.
+      world.shells = world.shells.map((item) =>
+        item.id === "vitest-lane" ? shell("vitest-lane", { launchedBy: "manager" }) : item,
+      );
       world.local = pressure("ok", 4 * MIN);
       yield* TestClock.adjust(MIN);
       yield* tick;
-      world.local = pressure("critical", 20 * MIN);
-      yield* TestClock.adjust(16 * MIN);
+      expect(sent(world)).toEqual([normal("manager", "00:04"), normal("person", "00:04")]);
+
+      world.shells = makeWorld().shells;
+      world.local = pressure("critical", 50 * MIN);
+      yield* TestClock.adjust(46 * MIN);
       yield* tick;
       expect(sent(world)).toEqual([
-        "manager wake: Resource pressure: this machine is critical (since 1970-01-01T00:20:00.000Z).",
-        "person wake: Resource pressure: this machine is critical (since 1970-01-01T00:20:00.000Z).",
+        critical("manager", String(50 * MIN), "00:50"),
+        critical("person", String(50 * MIN), "00:50"),
+        "manager wake: Resource pressure: this machine is critical (since 1970-01-01T00:50:00.000Z).",
+        "person wake: Resource pressure: this machine is critical (since 1970-01-01T00:50:00.000Z).",
       ]);
     }).pipe(Effect.provide(layer(world)));
   });
 
-  it.effect("records elevated as a notice and follows remote hosts its threads watch", () => {
+  it.effect("records elevated as a quiet row and follows remote hosts its threads watch", () => {
     const world = makeWorld();
     world.watches = [
       {
@@ -238,8 +270,8 @@ describe("PressureNudger.tick", () => {
     return Effect.gen(function* () {
       yield* tick;
       expect(sent(world)).toEqual([
-        "manager notice: Resource pressure: macbook is elevated (since 1970-01-01T00:00:00.000Z).",
-        "person notice: Resource pressure: macbook is elevated (since 1970-01-01T00:00:00.000Z).",
+        "manager row@0 info: Resource pressure: macbook elevated since 00:00 UTC · load 2 per core",
+        "person row@0 info: Resource pressure: macbook elevated since 00:00 UTC · load 2 per core",
       ]);
     }).pipe(Effect.provide(layer(world)));
   });

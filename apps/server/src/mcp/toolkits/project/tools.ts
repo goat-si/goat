@@ -41,6 +41,7 @@ import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpServ
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
 import { McpAttachmentInput } from "../attachment/input.ts";
+import { KeyedClientRequestId, withClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   success: Project,
@@ -87,10 +88,12 @@ const ProjectReadTool = Tool.make(agentSurfaceRegistry["project.read"].name, {
 const ProjectCreateTool = Tool.make(agentSurfaceRegistry["project.create"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.create"].description,
-  parameters: Schema.Struct({
-    ...ProjectCreatePayload.fields,
-    workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      ...ProjectCreatePayload.fields,
+      workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
+    }),
+  ),
   success: Schema.Struct({ ...Project.fields, commitError: Schema.optional(Schema.String) }),
   dependencies: [...shared.dependencies, ManagedProjectFolders.ManagedProjectFolders],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.create"]));
@@ -102,7 +105,11 @@ const ProjectUpdateTool = Tool.make(agentSurfaceRegistry["project.update"].name,
 const ProjectDeleteTool = Tool.make(agentSurfaceRegistry["project.delete"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.delete"].description,
-  parameters: Schema.Struct({ projectId: ProjectId, force: Schema.optionalKey(Schema.Boolean) }),
+  parameters: Schema.Struct({
+    projectId: ProjectId,
+    force: Schema.optionalKey(Schema.Boolean),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
+  }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.delete"]));
 const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ...shared,
@@ -169,7 +176,7 @@ export const ThreadLaunchParameters = Schema.Struct({
   notifyTarget: Schema.optional(
     NotifyTargetInput.annotate({
       description:
-        "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
+        "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from goat_handoff_create and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
     }),
   ),
   launchedBy: Schema.optional(
@@ -206,7 +213,7 @@ export const ThreadLaunchSuccess = Schema.Struct({
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
   ...shared,
   description: agentSurfaceRegistry["thread.launch"].description,
-  parameters: ThreadLaunchParameters,
+  parameters: withClientRequestId(ThreadLaunchParameters),
   success: ThreadLaunchSuccess,
   dependencies: [
     McpInvocationContext.McpInvocationContext,

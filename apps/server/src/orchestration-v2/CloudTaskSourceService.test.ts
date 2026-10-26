@@ -154,7 +154,7 @@ it.effect.each([
     return Effect.gen(function* () {
       const result = yield* (yield* CloudSource.CloudTaskSourceService).resolve({
         cwd: "/repo/project",
-        branch: "origin/dev",
+        branch: "feature",
         restriction: "project-folder",
       });
       assert.deepEqual(result, {
@@ -278,8 +278,33 @@ it.effect("rejects an unpublished branch before any cloud submission", () => {
       .resolve({ cwd: "/repo" })
       .pipe(Effect.flip);
     assert.equal(error.reason, "unpublished");
-    assert.equal(error.message, "Push this branch before starting a cloud task.");
+    assert.equal(
+      error.message,
+      "Branch feature is not on fork (https://github.com/acme-fork/repo). Push it, or pass a branch that exists there.",
+    );
     assert.isFalse(f.reads.some((args) => args[0] === "rev-parse"));
+  }).pipe(Effect.provide(f.layer));
+});
+
+it.effect("names both branches when a project-folder launch asks for another branch", () => {
+  const f = fixture({ exactHead: true });
+  return Effect.gen(function* () {
+    const source = yield* CloudSource.CloudTaskSourceService;
+    const error = yield* source
+      .resolve({ cwd: "/repo", branch: "dev", restriction: "project-folder" })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "checkout_mismatch");
+    assert.equal(
+      error.message,
+      "This provider starts from the project folder, which has feature checked out, not dev. Check out dev there, or omit the branch to start from feature.",
+    );
+    assert.deepEqual(f.reads, []);
+    const same = yield* source.resolve({
+      cwd: "/repo",
+      branch: "refs/heads/feature",
+      restriction: "project-folder",
+    });
+    assert.equal(same.source.branch, "feature");
   }).pipe(Effect.provide(f.layer));
 });
 

@@ -16,6 +16,7 @@ const reactTests = [
   "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
   "src/features/goat-bot/useReplying.test.tsx",
   "src/features/settings/MemorySyncDiagnostics.test.tsx",
+  "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
   "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
   "src/features/threads/HumanHandoffCard.test.tsx",
   "src/features/threads/SubagentRow.memory.test.tsx",
@@ -29,6 +30,7 @@ const reactTests = [
   "src/features/notes/NoteLinkedThread.test.tsx",
   "src/features/notes/NoteRouteScreen.test.tsx",
   "src/features/notes/NoteStartWorkRouteScreen.test.tsx",
+  "src/features/settings/ProjectActionsSettings.test.tsx",
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",
@@ -50,6 +52,11 @@ export default defineConfig({
           setupFiles: [
             "../../packages/shared/src/testing/longTempDir.ts",
             "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: [
+            "../../scripts/lib/node-runtime.ts",
+            "../../packages/shared/src/testing/gitConfigGuard.ts",
           ],
         },
       },
@@ -60,7 +67,11 @@ export default defineConfig({
           include: reactTests,
           // Native components mock React Native and render through react-dom in these tests.
           environment: "jsdom",
-          setupFiles: ["../../packages/shared/src/testing/providerEnv.ts"],
+          setupFiles: [
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: ["../../scripts/lib/node-runtime.ts"],
         },
       },
     ],

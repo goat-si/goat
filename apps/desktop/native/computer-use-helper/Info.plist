@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>GOAT Computer Use</string>
+  <key>CFBundleExecutable</key>
+  <string>GOAT Computer Use</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIdentifier</key>
+  <string>@BUNDLE_ID@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>GOAT Computer Use</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>GOAT Computer Use reads and operates app windows when you let an agent use your computer.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>GOAT Computer Use sends commands to apps when you let an agent use your computer.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>GOAT Computer Use takes screenshots of app windows so an agent can see what it is working on.</string>
+  <key>GOATComputerUseAllowAnyParent</key>
+  @ALLOW_ANY_PARENT@
+</dict>
+</plist>

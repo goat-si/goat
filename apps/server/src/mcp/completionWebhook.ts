@@ -25,6 +25,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { backoffMs, type LaunchWatch, type LaunchWatchWebhookTarget } from "./launchWatch.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Posts launch watch reports to a webhook, so an agent outside GOAT hears what
@@ -89,7 +90,7 @@ export const NotifyTargetInput = Schema.Struct({
   }),
   secretRef: Schema.optional(SecretRef).annotate({
     description:
-      "With url: a signing secret the user entered through request_secret. Posts carry x-goat-signature: sha256=<hex HMAC of the body>. It is consumed by this launch. Omit to post unsigned.",
+      "With url: a signing secret the user entered through goat_handoff_create. Posts carry x-goat-signature: sha256=<hex HMAC of the body>. It is consumed by this launch. Omit to post unsigned.",
   }),
 });
 export type NotifyTargetInput = typeof NotifyTargetInput.Type;
@@ -574,7 +575,7 @@ export const make = Effect.gen(function* () {
       }
       if (input.projectId === null) {
         return yield* refuse(
-          "secretRef comes from request_secret in a GOAT thread; call from one.",
+          `secretRef comes from ${goatCallText("handoff.create")} in a GOAT thread; call from one.`,
         );
       }
       const value = yield* secretRequests

@@ -1,3 +1,6 @@
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+
 export type GoatMcpToolLogo = "t3-code";
 
 export interface GoatMcpToolPresentation {
@@ -69,6 +72,7 @@ export type GoatMcpToolSummaryAction =
   | "connection-add"
   | "connection-remove"
   | "attachment-prepare"
+  | "attachment-list"
   | "attachment-discard"
   | "attachment-send"
   | "link-pr"
@@ -81,6 +85,7 @@ export type GoatMcpToolSummaryAction =
   | "browser"
   | "device"
   | "html-preview"
+  | "html-list"
   | "html-render"
   | "channel-message"
   | "channel-reply"
@@ -216,8 +221,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "thread-watch-list",
   ),
   goat_origin_report: tool(["Report", "Reporting", "Reported", "to the origin"], "thread-send"),
+  goat_origin_report_receipt: tool(
+    ["Read", "Reading", "Read", "an origin report receipt"],
+    "thread-read",
+  ),
   goat_origin_reports_wait: tool(
     ["Wait", "Waiting", "Waited", "for origin reports"],
+    "thread-wait",
+  ),
+  goat_origin_resolve_binding: tool(
+    ["Resolve", "Resolving", "Resolved", "a lost remote launch"],
     "thread-wait",
   ),
   goat_workflow_stop: tool(
@@ -227,6 +240,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_thread_interrupt: tool(
     ["Interrupt", "Interrupting", "Requested an interrupt of", "a GOAT thread"],
     "thread-interrupt",
+  ),
+  goat_thread_retry: tool(
+    ["Retry", "Retrying", "Retried", "a GOAT thread's workspace preparation"],
+    "thread-send",
   ),
   goat_worktree_handoff: tool(
     ["Hand off", "Handing off", "Handed off", "thread to a git worktree"],
@@ -432,6 +449,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Repair", "Repairing", "Repaired", "a hub device"],
     "environment-update",
   ),
+  goat_hub_opencodex_sync: tool(
+    ["Sync", "Syncing", "Synced", "OpenCodex models"],
+    "environment-update",
+  ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
   goat_fallback_chain_get: tool(["Read", "Reading", "Read", "fallback chains"], "environment-read"),
   goat_fallback_chain_set: tool(
@@ -442,6 +463,17 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_permission_profile_get: tool(
     ["Read", "Reading", "Read", "a permission profile"],
     "environment-read",
+  ),
+  goat_describe: tool(["Describe", "Describing", "Described", "GOAT capabilities"], "capabilities"),
+  goat_call: tool(["Call", "Calling", "Called", "a GOAT capability"], "environment-update"),
+  goat_operation_read: tool(["Read", "Reading", "Read", "an operation"], "host-status"),
+  goat_operation_wait: tool(
+    ["Wait for", "Waiting for", "Waited for", "an operation"],
+    "host-status",
+  ),
+  goat_operation_cancel: tool(
+    ["Cancel", "Cancelling", "Cancelled", "an operation"],
+    "environment-update",
   ),
   goat_goatclaw_sync: tool(["Sync", "Syncing", "Synced", "goatclaw policy"], "environment-update"),
   goat_goal_get: tool(["Read", "Reading", "Read", "a fleet goal"], "host-status"),
@@ -507,6 +539,13 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Cancel", "Cancelling", "Cancelled", "a provider sign-in"],
     "provider-diagnose",
   ),
+  goat_provider_update: tool(["Update", "Updating", "Updated", "a provider"], "provider-diagnose"),
+  goat_provider_add: tool(["Add", "Adding", "Added", "a provider"], "provider-diagnose"),
+  goat_provider_link: tool(
+    ["Link", "Linking", "Linked", "a cloud provider's login"],
+    "provider-diagnose",
+  ),
+  goat_provider_remove: tool(["Remove", "Removing", "Removed", "a provider"], "provider-diagnose"),
   goat_thread_launch: tool(
     ["Launch", "Launching", "Launched", "a project thread"],
     "thread-create",
@@ -593,12 +632,17 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Prepare", "Preparing", "Prepared", "an attachment upload"],
     "attachment-prepare",
   ),
+  goat_attachment_pending_list: tool(
+    ["List", "Listing", "Listed", "pending attachment uploads"],
+    "attachment-list",
+  ),
   goat_attachment_discard: tool(
     ["Discard", "Discarding", "Discarded", "a pending attachment"],
     "attachment-discard",
   ),
   goat_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
+  goat_html_list: tool(["List", "Listing", "Listed", "saved HTML pages"], "html-list"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   channel_ingest: tool(
     ["Message", "Messaging", "Messaged", "GOAT's front desk"],
@@ -630,7 +674,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
 };
 
 /**
- * The T3 orchestration tool inventory, used to gate loose name matching on
+ * The GOAT orchestration tool inventory, used to gate loose name matching on
  * both the server (ACP MCP identity recovery) and the client (logo branding).
  */
 // Read-side only: persisted activity can retain names from before the GOAT rename.
@@ -681,9 +725,84 @@ const GOAT_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_worktree_status: "goat_worktree_status",
 };
 
+/**
+ * Canonical names (goat_<resource>_<verb>) that /mcp also accepts for a tool served under an
+ * older name, so history shows an alias call as the tool it ran. agentSurface.test.ts keeps this
+ * equal to the registry's aliases for every tool presented here.
+ */
+export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> = {
+  goat_channel_bot_home_claim: "channel_bot_home_claim",
+  goat_channel_bot_home_read: "channel_bot_home",
+  goat_channel_ingest: "channel_ingest",
+  goat_channel_input_read: "channel_input_get",
+  goat_channel_task_export: "channel_task_export",
+  goat_channel_task_list: "channel_task_list",
+  goat_channel_task_move: "channel_task_move",
+  goat_channel_task_read: "channel_task_get",
+  goat_channel_task_report: "channel_task_report",
+  goat_cloud_agent_holders: "goat_cloud_holders",
+  goat_cloud_agent_launch: "goat_cloud_launch",
+  goat_cloud_agent_run_forget: "goat_cloud_run_forget",
+  goat_cloud_agent_run_list: "goat_cloud_run_list",
+  goat_cloud_agent_run_register: "goat_cloud_run_register",
+  goat_device_close: "device_close",
+  goat_device_list: "device_list",
+  goat_device_open: "device_open",
+  goat_device_screenshot: "device_screenshot",
+  goat_handoff_create: "request_secret",
+  goat_html_preview: "html_preview",
+  goat_html_render: "html_render",
+  goat_origin_report_wait: "goat_origin_reports_wait",
+  goat_permission_profile_read: "goat_permission_profile_get",
+  goat_permission_profile_sync: "goat_goatclaw_sync",
+  goat_preview_back: "preview_back",
+  goat_preview_click: "preview_click",
+  goat_preview_dialog: "preview_dialog",
+  goat_preview_drag: "preview_drag",
+  goat_preview_evaluate: "preview_evaluate",
+  goat_preview_forward: "preview_forward",
+  goat_preview_hover: "preview_hover",
+  goat_preview_logs: "preview_logs",
+  goat_preview_navigate: "preview_navigate",
+  goat_preview_open: "preview_open",
+  goat_preview_press: "preview_press",
+  goat_preview_recording_start: "preview_recording_start",
+  goat_preview_recording_stop: "preview_recording_stop",
+  goat_preview_reload: "preview_reload",
+  goat_preview_resize: "preview_resize",
+  goat_preview_scroll: "preview_scroll",
+  goat_preview_select: "preview_select",
+  goat_preview_set_appearance: "preview_set_appearance",
+  goat_preview_snapshot: "preview_snapshot",
+  goat_preview_status: "preview_status",
+  goat_preview_type: "preview_type",
+  goat_preview_upload: "preview_upload",
+  goat_preview_wait: "preview_wait_for",
+  goat_provider_list: "orchestrator_capabilities",
+  goat_provider_sync_read: "goat_provider_sync_status",
+  goat_pull_request_guide_read: "read_pull_request_guide",
+  goat_pull_request_guide_update: "write_pull_request_guides",
+  goat_pull_request_link: "link_pull_request",
+  goat_pull_request_list: "list_thread_pull_requests",
+  goat_pull_request_unlink: "unlink_pull_request",
+  goat_pull_request_unwatch: "unwatch_pull_request",
+  goat_pull_request_watch: "watch_pull_request",
+  goat_schedule_create: "schedule_task",
+  goat_schedule_delete: "delete_scheduled_task",
+  goat_schedule_list: "list_scheduled_tasks",
+  goat_schedule_run: "run_scheduled_task_now",
+  goat_schedule_update: "update_scheduled_task",
+  goat_task_cancel: "task_cancel",
+  goat_task_create: "delegate_task",
+  goat_task_read: "task_status",
+  goat_thread_configuration_read: "goat_thread_configuration",
+  goat_thread_create_many: "create_threads",
+};
+
 export const GOAT_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(GOAT_MCP_TOOLS),
   ...Object.keys(GOAT_MCP_LEGACY_TOOL_ALIASES),
+  ...Object.keys(GOAT_MCP_CANONICAL_TOOL_ALIASES),
 ]);
 
 function normalizeGoatMcpToolLabel(value: string): string {
@@ -691,7 +810,7 @@ function normalizeGoatMcpToolLabel(value: string): string {
 }
 
 /**
- * ACP agents disagree on how the injected T3 server prefixes its tools:
+ * ACP agents disagree on how the injected GOAT server prefixes its tools:
  * `mcp__goat__x` (Claude/Cursor), `goat.x` (Codex), plus single
  * underscore, colon, slash, dash, and space separators seen from registry
  * agents. The prefix match is deliberately loose because the display-name
@@ -739,13 +858,26 @@ export function resolveGoatMcpToolId(toolName: string | null | undefined): strin
   return name !== null && GOAT_MCP_TOOL_NAMES.has(name) ? name : null;
 }
 
+/**
+ * The shipped name of the GOAT tool a call ran, whether the agent named it by its listed
+ * canonical name or the name it shipped with. For code that recognizes a tool by name; identity
+ * shown to people keeps the spelling from resolveGoatMcpToolId.
+ */
+export function resolveGoatMcpShippedToolId(toolName: string | null | undefined): string | null {
+  const id = resolveGoatMcpToolId(toolName);
+  return id === null ? null : (GOAT_MCP_CANONICAL_TOOL_ALIASES[id] ?? id);
+}
+
 export function resolveGoatMcpToolDefinition(
   toolName: string | null | undefined,
 ): GoatMcpToolDefinition | null {
   const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
-  const canonicalName = name === null ? null : (GOAT_MCP_LEGACY_TOOL_ALIASES[name] ?? name);
-  return canonicalName !== null && Object.hasOwn(GOAT_MCP_TOOLS, canonicalName)
-    ? GOAT_MCP_TOOLS[canonicalName]!
+  const servedName =
+    name === null
+      ? null
+      : (GOAT_MCP_LEGACY_TOOL_ALIASES[name] ?? GOAT_MCP_CANONICAL_TOOL_ALIASES[name] ?? name);
+  return servedName !== null && Object.hasOwn(GOAT_MCP_TOOLS, servedName)
+    ? GOAT_MCP_TOOLS[servedName]!
     : null;
 }
 
@@ -755,3 +887,38 @@ export function resolveGoatMcpToolPresentation(
   const definition = resolveGoatMcpToolDefinition(toolName);
   return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
 }
+
+/**
+ * The GOAT tool an item ran, the arguments it ran with, and that tool's definition. For goat_call
+ * that is the tool its path names and its args, so clients label, link and render the call as
+ * that tool; any other item is itself.
+ */
+export function resolveGoatMcpItemCall(item: {
+  readonly toolName: string | null | undefined;
+  readonly input?: unknown;
+}): {
+  readonly toolName: string | null | undefined;
+  readonly input: unknown;
+  readonly definition: GoatMcpToolDefinition | null;
+  readonly presentation: GoatMcpToolPresentation | null;
+} {
+  const input: unknown = item.input;
+  // However the call spelled them, as the server read it: {path, args}, {name, arguments}, ...
+  const target =
+    resolveGoatMcpShippedToolId(item.toolName) === "goat_call" ? goatCallTarget(input) : {};
+  const path = target.path;
+  const entry = typeof path === "string" ? resolveAgentSurfaceEntry(path) : undefined;
+  const args = isRecord(target.args) ? target.args : {};
+  const call =
+    entry === undefined || entry.resource === "surface"
+      ? { toolName: item.toolName, input }
+      : { toolName: entry.name, input: args };
+  return {
+    ...call,
+    definition: resolveGoatMcpToolDefinition(call.toolName),
+    presentation: resolveGoatMcpToolPresentation(call.toolName),
+  };
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

@@ -36,7 +36,7 @@ class LocalTracer extends Context.Reference("@goat/shared/relayTracing/LocalTrac
 
 /**
  * Exports every span `effect` creates through the product tracer. Use it only
- * around T3 Connect work; wrap local work inside it with
+ * around GOAT Connect work; wrap local work inside it with
  * {@link withLocalTracing} so it stays off the product tracer.
  */
 export const withRelayClientTracing = <A, E, R>(
@@ -174,8 +174,8 @@ export function layer(
       attributes: {
         "service.namespace": "t3code",
         "service.runtime": resource.runtime,
-        "service.component": resource.component ?? "relay-client",
-        "t3.client.surface": resource.client,
+        "t3code.component": resource.component ?? "relay-client",
+        "t3code.client.surface": resource.client,
       },
     },
   }).pipe(Layer.provide(OtlpSerialization.layerJson));

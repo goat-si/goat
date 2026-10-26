@@ -116,6 +116,10 @@ To generate a fresh title from the conversation, open a thread's menu and choose
 **Regenerate title**. The action is unavailable while title generation is in progress
 or when the connected environment needs a server update.
 
+To change how titles are written, add **Thread title instructions** in **Settings → General →
+Text generation**, such as a length limit or an identifier to put first. They apply to new and
+regenerated titles. Select a project to give it its own instructions.
+
 Agents connected through GOAT can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
@@ -123,7 +127,9 @@ open.
 
 ### Follow Priority in Activity
 
-On web and desktop, switch to **Activity** to see **Priority** at the top. It holds threads
+On web and desktop, the sidebar opens in **Activity**, with **Priority** at the top. Choose
+the bell to switch between Activity and **Projects**; the sidebar remembers your choice on that
+device. Priority holds threads
 with work in progress, pending approvals or answers, unread completions, or an unacknowledged
 return from snooze. A delegated task needing approval or an answer brings its parent here too,
 and the parent row shows **Approval** or **Input**.
@@ -155,15 +161,20 @@ Use **Go to thread** for more context or to
 [attach files to an answer](./question-attachments.md). A request whose provider session cannot
 resume stays listed with answering turned off.
 
-For durable requests with a recommendation and an expiry, open **Settings → Decision inbox**.
-It includes pending thread requests from the selected environments. Choose an option and explain your
-answer; the asking thread receives the result. Expired requests never choose an option automatically.
+For durable requests with a recommendation and an expiry, open **Settings → Decision Inbox**.
+It includes pending thread requests from the selected environments and decisions from threads
+those environments launched on connected or linked hosts. Remote rows show their host; unavailable
+hosts and incomplete lists are reported so a partial list is not mistaken for an empty inbox. Choose an option and explain your
+answer; the asking host delivers the result to its thread. Person-only questions must be answered
+from a client connected to the asking host; linked hosts cannot forward approvals. Expired requests never choose an option automatically.
 Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
 questions can still be answered in their asking thread.
 
 ### See everything running
 
-On web and desktop, **Fleet** in the rail beside the thread sidebar shows how many threads are
+On web and desktop, GOAT opens on **Fleet** each time it starts, including after an update; a
+link to a thread still opens that thread, and **Home** at the top of the rail opens the global
+agent. **Fleet** in the rail beside the thread sidebar shows how many threads are
 running or need you across every connected machine; hover it for a count per machine. Open it,
 or search for it in the command palette, for a graph of your machines and the agents working on
 each, and a list of those threads grouped by machine; select a machine to show only its threads.
@@ -205,6 +216,16 @@ there are more than three alerts, **+N more** opens the rest with their actions.
 Below the list, **Connections** shows your saved machines with the same controls as
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
 another with **Add device**.
+
+### Choose what the rail shows
+
+On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
+them up or down. Home and Settings always stay. Until you choose, the rail adjusts to your setup:
+Hub appears on a machine that is a hub, and **Add provider** while your main machine has no
+working provider. An
+item you turn on stays on whatever changes later, and **Reset to defaults** returns to the
+automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
+stay reachable from the command palette or Settings.
 
 ### Fold working threads on mobile
 

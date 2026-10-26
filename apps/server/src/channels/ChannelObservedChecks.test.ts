@@ -89,11 +89,7 @@ describe("channel check evidence", () => {
         });
         assert.include(
           resultsTo(harness.slackSent, "result")[0]!.message.text,
-          "Reported tests: passed",
-        );
-        assert.include(
-          resultsTo(harness.slackSent, "result")[0]!.message.text,
-          "GOAT check: failed (exit 3)",
+          "Verification: the agent reported tests passed; GOAT's own check failed (exit 3).",
         );
         const records = yield* botMessages;
         assert.deepStrictEqual(
@@ -155,7 +151,7 @@ describe("channel check evidence", () => {
         assert.lengthOf(resultsTo(harness.slackSent, "result"), 1);
         assert.lengthOf(
           harness.slackSent.filter((delivery) =>
-            delivery.message.text.startsWith("Check evidence for "),
+            delivery.message.text.startsWith("Verification for "),
           ),
           1,
         );

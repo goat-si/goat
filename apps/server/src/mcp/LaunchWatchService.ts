@@ -26,6 +26,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -46,17 +47,23 @@ import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
+  dormantExpired,
+  endReported,
   EXCERPT_MAX_CHARS,
+  failureFromRemoteStatus,
   finishedWake,
   goneWake,
   isTerminalStatus,
+  launcherlessExpired,
   type LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
   type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
+  type LaunchWatchRunDetails,
   type LaunchWatchWebhookTarget,
   newLaunchWatch,
+  noRunDetails,
   normalizeHost,
   outageWake,
   questionKey,
@@ -65,9 +72,15 @@ import {
   recordFailure,
   recordQuestion,
   recordFailedAttempt,
+  rearmRetriedRun,
+  RemoteRunFailureStatus,
+  settleEnd,
   settleRun,
   wakeAttempt,
+  watchExpired as expired,
 } from "./launchWatch.ts";
+import { runFailure } from "./threadStatus.ts";
+import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
  * Wakes a thread when a thread it launched finishes, so orchestrators do not
@@ -101,14 +114,6 @@ const REMOTE_ANSWER_MARGIN_MS = 60_000;
 /** Bound on one whole remote step, including SSH setup. */
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
 const REMOTE_READ_TIMEOUT_MS = 60_000;
-/** A watch with nothing left to report is dropped this long after its last change. */
-const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
-/**
- * A launcherless watch has no thread that could unwatch it, so it is dropped
- * this long after it was last armed even while its run is still owed, for
- * example when the host never comes back or a question is never answered.
- */
-const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 /** How often dormant watches past their retention are dropped while the server runs. */
 const SWEEP_MS = 60 * 60_000;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
@@ -177,6 +182,12 @@ export interface LaunchWatchServiceShape {
   readonly rearm: (
     input: LaunchWatchKey & { readonly runId: RunId },
   ) => Effect.Effect<void, LaunchWatchStoreError>;
+  /** Follows a run again on every watch of its thread once a retry moved it back to preparing. */
+  readonly rearmRetried: (input: {
+    readonly host: string | null | undefined;
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+  }) => Effect.Effect<void, LaunchWatchStoreError>;
   /** The watch under this key, if any. */
   readonly find: (
     input: LaunchWatchKey,
@@ -230,6 +241,8 @@ type StepResult =
        * message was promoted into, which carries on its work.
        */
       readonly runId: RunId;
+      /** When it ended, where the step could read it. */
+      readonly end?: string | null;
     }
   | {
       readonly _tag: "Running";
@@ -243,50 +256,7 @@ type StepResult =
   | { readonly _tag: "CallerChanged" }
   | { readonly _tag: "Unreachable"; readonly error: string };
 
-interface Details {
-  readonly title: string | null;
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly excerpt: string | null;
-  readonly prUrl: string | null;
-  /**
-   * A registered cloud run GOAT could only link: its attach run ends without a result, so
-   * the completion webhook is not told it completed. The launching thread still hears why.
-   */
-  readonly linkOnlyRegistration: boolean;
-}
-
-const noDetails: Details = {
-  title: null,
-  branch: null,
-  worktreePath: null,
-  excerpt: null,
-  prUrl: null,
-  linkOnlyRegistration: false,
-};
-
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
-
-/**
- * Orchestrator refusals a retry cannot change. A previously rejected command
- * is not one of them: the orchestrator also records a command that failed for
- * a passing reason as rejected, so the wake is retried under a fresh id.
- */
-const PERMANENT_DISPATCH_ERRORS = new Set([
-  "OrchestratorCommandRejectedError",
-  "OrchestratorSubagentThreadReadOnlyError",
-  "OrchestratorThreadAboveModeLimitError",
-]);
-
-const isPermanentDispatchFailure = (cause: Cause.Cause<unknown>) =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => false,
-    onSome: (error) =>
-      typeof error === "object" &&
-      error !== null &&
-      "_tag" in error &&
-      PERMANENT_DISPATCH_ERRORS.has(String(error._tag)),
-  });
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
@@ -304,6 +274,7 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeRequestIds = Schema.decodeUnknownEffect(
   Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
 );
+const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 
 const describe = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
@@ -532,11 +503,13 @@ export const make = Effect.gen(function* () {
       }
       const status = waited.result.run?.status;
       if (status !== undefined && isTerminalStatus(status)) {
+        const completedAt = waited.result.run?.completedAt;
         // The wait follows a promoted queued message into the run it joined.
         return {
           _tag: "Terminal",
           status,
           runId: waited.result.run?.id ?? runId,
+          end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
       const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
@@ -629,6 +602,7 @@ export const make = Effect.gen(function* () {
           _tag: "Terminal",
           status: waited.status,
           runId: waited.runId ?? runId,
+          end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
       // Only user questions are listed remotely; approvals show up when the run ends.
@@ -679,8 +653,14 @@ export const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(watch.threadId);
       const records = yield* threads.getThreadRecords(
         watch.threadId,
-        ["messages", "providerThreads"],
-        { messageRoles: ["assistant"], messageRunIds: [runId] },
+        ["messages", "providerThreads", "runs", "turnItems"],
+        {
+          messageRoles: ["assistant"],
+          messageRunIds: [runId],
+          runIds: [runId],
+          turnItemRunIds: [runId],
+          turnItemTypes: ["assistant_message", "error"],
+        },
       );
       return {
         title: shell?.title ?? null,
@@ -692,7 +672,11 @@ export const make = Effect.gen(function* () {
           (thread) =>
             thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
         ),
-      } satisfies Details;
+        failure: runFailure(
+          records.runs.find((run) => run.id === runId) ?? null,
+          records.turnItems,
+        ),
+      } satisfies LaunchWatchRunDetails;
     });
 
   /**
@@ -700,7 +684,12 @@ export const make = Effect.gen(function* () {
    * Positions count every visible item while the messages view only filters,
    * so the read starts a fixed window before the end.
    */
-  const remoteDetails = (watch: LaunchWatch, host: string, runId: RunId) =>
+  const remoteDetails = (
+    watch: LaunchWatch,
+    host: string,
+    runId: RunId,
+    status: LaunchWatchTerminalStatus,
+  ) =>
     Effect.gen(function* () {
       const read = (args: Record<string, unknown>) =>
         callHost(
@@ -727,46 +716,59 @@ export const make = Effect.gen(function* () {
         if (!result.hasMore || result.nextPosition === null) break;
         afterPosition = result.nextPosition;
       }
+      const excerpt = lastText(texts);
+      // A run that failed before its agent spoke has nothing to quote; its status says why.
+      const failure =
+        status === "failed" && excerpt === null
+          ? yield* callHost(
+              watch,
+              host,
+              "goat_thread_status",
+              { threadId: watch.threadId },
+              REMOTE_READ_TIMEOUT_MS,
+            ).pipe(
+              Effect.flatMap(decodeFailureStatus),
+              Effect.map((remote) => failureFromRemoteStatus(remote, runId)),
+              Effect.catch((error) =>
+                error instanceof LauncherGone
+                  ? Effect.fail(error)
+                  : Effect.logDebug("launch watch: failure status unreadable", {
+                      host,
+                      cause: error,
+                    }).pipe(Effect.as(null)),
+              ),
+            )
+          : null;
       return {
         title: head.thread.title,
         branch: head.thread.branch,
         worktreePath: head.thread.worktreePath,
-        excerpt: lastText(texts),
+        excerpt,
         prUrl: head.thread.linkedPullRequest?.url ?? null,
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
-      } satisfies Details;
+        failure,
+      } satisfies LaunchWatchRunDetails;
     });
 
   /** Details make a wake more useful but never hold it back. */
-  const detailsFor = (watch: LaunchWatch, runId: RunId) =>
+  const detailsFor = (watch: LaunchWatch, runId: RunId, status: LaunchWatchTerminalStatus) =>
     (watch.host === null
       ? localDetails(watch, runId)
-      : remoteDetails(watch, watch.host, runId)
+      : remoteDetails(watch, watch.host, runId, status)
     ).pipe(
       Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
-      Effect.map(Option.getOrElse(() => noDetails)),
+      Effect.map(Option.getOrElse(() => noRunDetails)),
       Effect.catch((error) =>
         Effect.logDebug("launch watch: details unavailable", {
           watchId: watch.id,
           cause: error,
-        }).pipe(Effect.as(noDetails)),
+        }).pipe(Effect.as(noRunDetails)),
       ),
     );
 
   const wake = (launcherThreadId: ThreadId, message: LaunchWatchWake) =>
-    threads.dispatch({
-      type: "message.dispatch",
-      commandId: message.commandId,
-      threadId: launcherThreadId,
-      messageId: message.messageId,
-      text: message.text,
-      notification: message.notification,
-      attachments: [],
-      dispatchMode: { type: "queue_after_active" },
-      createdBy: "agent",
-      creationSource: "server",
-    });
+    wakeThread(threads, launcherThreadId, message);
 
   /**
    * Sends a wake. A refusal the orchestrator will repeat settles it, with a
@@ -859,22 +861,6 @@ export const make = Effect.gen(function* () {
     return watch?.incarnation === incarnation ? watch : undefined;
   };
 
-  const launcherlessExpired = (watch: LaunchWatch, now: number) =>
-    watch.launcherThreadId === null &&
-    now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
-
-  /** A watch past its retention, which every operation treats as gone. */
-  const expired = (watch: LaunchWatch, now: number) =>
-    watch.recovery === undefined &&
-    (launcherlessExpired(watch, now) ||
-      (watch.pendingRuns.length === 0 &&
-        watch.outage === null &&
-        now - watch.updatedAt >= DORMANT_RETENTION_MS));
-
-  /** An expired watch with nothing owed. One still owed is left to its follower to drop. */
-  const dormantExpired = (watch: LaunchWatch, now: number) =>
-    watch.pendingRuns.length === 0 && watch.outage === null && expired(watch, now);
-
   /**
    * Whether a launcherless watch can no longer report: the completion webhook,
    * its only destination, stopped taking it, or it outlived its retention.
@@ -896,7 +882,7 @@ export const make = Effect.gen(function* () {
     incarnation: string,
     runId: RunId,
     result: StepResult,
-    details: Details,
+    details: LaunchWatchRunDetails,
   ) =>
     locked(
       Effect.uninterruptible(
@@ -928,15 +914,28 @@ export const make = Effect.gen(function* () {
             case "Terminal": {
               missingEscalations.delete(watchId);
               const endedRunId = result.runId;
-              // A promoted message ends with the run it joined; that run is reported once.
-              if (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) {
-                yield* keep(settleRun(recordContact(watch, now), runId, now));
+              // The end is the one the step observed, so it always belongs to the status it saw.
+              const end = result.end ?? null;
+              // A promoted message ends with the run it joined, and a run retried in place may
+              // still sit at the end already reported; either is reported once.
+              if (
+                (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) ||
+                endReported(watch, endedRunId, end)
+              ) {
+                const contacted = recordContact(watch, now);
+                // A retry that arrived meanwhile still has the run followed once more.
+                yield* keep(
+                  endedRunId === runId
+                    ? settleEnd(contacted, runId, end, now)
+                    : settleRun(contacted, runId, now),
+                );
                 return 0;
               }
               const title = details.title ?? watch.title;
+              const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
               const sent = yield* deliver(
                 watch,
-                finishedWake({ watch, runId: endedRunId, status: result.status, ...details }),
+                finishedWake(wake),
                 details.linkOnlyRegistration
                   ? undefined
                   : {
@@ -951,9 +950,11 @@ export const make = Effect.gen(function* () {
                 yield* keep(sent.watch);
                 return RETRY_MS;
               }
-              const settled = settleRun(recordContact(sent.watch, now), runId, now);
+              const contacted = recordContact(sent.watch, now);
               yield* keep({
-                ...(endedRunId === runId ? settled : settleRun(settled, endedRunId, now)),
+                ...(endedRunId === runId
+                  ? settleEnd(contacted, runId, end, now)
+                  : settleRun(settleRun(contacted, runId, now), endedRunId, now)),
                 title,
               });
               return 0;
@@ -1687,7 +1688,9 @@ export const make = Effect.gen(function* () {
         if (result._tag === "Terminal" && result.status === "completed")
           yield* capture(watch, result.runId);
         const details =
-          result._tag === "Terminal" ? yield* detailsFor(watch, result.runId) : noDetails;
+          result._tag === "Terminal"
+            ? yield* detailsFor(watch, result.runId, result.status)
+            : noRunDetails;
         const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {
@@ -1873,6 +1876,24 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const rearmRetried: LaunchWatchServiceShape["rearmRetried"] = (input) =>
+    locked(
+      Effect.gen(function* () {
+        yield* ensureLoaded;
+        const host = normalizeHost(input.host);
+        const now = yield* Clock.currentTimeMillis;
+        const rearmed = [...watches.values()].flatMap((watch) => {
+          if (watch.host !== host || watch.threadId !== input.threadId) return [];
+          if (watch.recovery !== undefined || watch.detached || expired(watch, now)) return [];
+          const next = rearmRetriedRun(watch, input.runId, now);
+          return next === watch ? [] : [next];
+        });
+        if (rearmed.length === 0) return;
+        yield* save((map) => rearmed.forEach((watch) => map.set(watch.id, watch)));
+        yield* Effect.forEach(rearmed, ensureFollower, { discard: true });
+      }),
+    );
+
   const withReplicationChoice = Effect.fn("LaunchWatchService.withReplicationChoice")(function* (
     watch: LaunchWatch,
   ) {
@@ -2047,6 +2068,7 @@ export const make = Effect.gen(function* () {
     register,
     recover,
     rearm,
+    rearmRetried,
     find,
     unwatch,
     list,

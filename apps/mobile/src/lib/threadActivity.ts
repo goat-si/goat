@@ -28,6 +28,7 @@ import {
   commandProgramName,
 } from "@goat/client-runtime/work-log/command-label";
 import {
+  commandVerb,
   contextCompactionLabel,
   formatCommandActionsLabel,
   liveThoughtLine,
@@ -44,7 +45,7 @@ import {
   type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
 import {
-  resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   resolveGoatMcpToolPresentation,
   type GoatMcpToolLogo,
   type GoatMcpToolPresentation,
@@ -336,7 +337,10 @@ export function workEntryRowLabel(
   // Expanded, an inspecting command shows the command it ran.
   const commandActionsLabel = expanded ? null : commandActionsRowLabel(entry);
   if (commandActionsLabel) return commandActionsLabel;
-  if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
+  if (entry.command?.trim()) {
+    const verb = commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false));
+    return compactWorkEntryText(`${verb} ${commandDisplayText(entry.command)}`);
+  }
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
   if (action === "code-search" || action === "search") {
@@ -531,7 +535,7 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
   return (
     item.type === "fork" ||
     item.type === "thread_created" ||
-    item.type === "system_notice" ||
+    (item.type === "system_notice" && item.severity !== "info") ||
     item.type === "human_handoff" ||
     item.type === "proposed_plan" ||
     item.type === "secret_request"
@@ -585,6 +589,7 @@ function itemWorkLogTone(item: OrchestrationV2TurnItem): WorkLogPresentationEntr
 }
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
+  if (item.type === "system_notice" && item.severity === "info") return "eye";
   if (item.type === "notification") {
     const source = item.source;
     switch (source.kind) {
@@ -671,9 +676,7 @@ function itemToolPresentation(item: OrchestrationV2TurnItem): GoatMcpToolPresent
   if (item.type !== "dynamic_tool") {
     return null;
   }
-  return (
-    resolveGoatMcpToolPresentation(item.toolName) ?? resolveGoatMcpToolPresentation(item.title)
-  );
+  return resolveGoatMcpItemCall(item).presentation ?? resolveGoatMcpToolPresentation(item.title);
 }
 
 function itemSummary(
@@ -681,7 +684,7 @@ function itemSummary(
   toolPresentation: GoatMcpToolPresentation | null = null,
 ): string {
   if (item.type === "notification") return item.summary;
-  if (item.type === "system_notice") return item.message;
+  if (item.type === "system_notice") return item.message.split("\n")[0] ?? "";
   if (item.type === "compaction") return contextCompactionLabel(item);
   const title =
     (item.type === "dynamic_tool"
@@ -727,18 +730,16 @@ function itemSummary(
     case "secret_request":
       return item.label;
     case "dynamic_tool": {
-      const classified = classifyToolActivity({
-        itemType: "dynamic_tool_call",
-        data: { toolName: item.toolName ?? undefined, input: item.input },
-      });
+      const call = resolveGoatMcpItemCall(item);
+      const classified = classifyToolActivity({ itemType: "dynamic_tool_call", data: call });
       if (classified === "read") {
-        const [path] = collectToolFilePaths({ input: item.input });
+        const [path] = collectToolFilePaths({ input: call.input });
         return formatReadToolLabel(path ?? "");
       }
       if (classified === "search") {
-        return formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call";
+        return formatSearchToolLabel({ input: call.input }) ?? call.toolName ?? "Tool call";
       }
-      return toolPresentation?.displayName ?? item.toolName ?? "Tool call";
+      return toolPresentation?.displayName ?? call.toolName ?? "Tool call";
     }
     case "proposed_plan":
       return "Proposed plan";
@@ -773,8 +774,9 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
         : `${item.files.length} changed files`;
     case "run_interrupt_request":
     case "run_interrupt_result":
-    case "system_notice":
       return item.message || null;
+    case "system_notice":
+      return item.message.split("\n").slice(1).join("\n").trim() || null;
     case "error":
       return item.failure.message;
     case "compaction":
@@ -1021,7 +1023,7 @@ function groupAdjacentActivities(
         item.type === "dynamic_tool" &&
         item.runId !== null &&
         (item.status === "running" || item.status === "completed") &&
-        resolveGoatMcpToolDefinition(item.toolName)?.summaryAction === "delegate" &&
+        resolveGoatMcpItemCall(item).definition?.summaryAction === "delegate" &&
         !workEntryDisplayIndicatesToolFailure(entry.activity.workEntry)
       ) {
         const output = compactDynamicToolOutput(item.output);
@@ -1923,18 +1925,7 @@ function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boo
   }
   const command = activity.workEntry.command?.trim();
   if (command) {
-    const program = commandProgramName(command);
-    const verb =
-      status === "inProgress"
-        ? "Running"
-        : status === "failed"
-          ? "Failed"
-          : status === "declined"
-            ? "Declined"
-            : status === "stopped"
-              ? "Stopped"
-              : "Ran";
-    return `${verb} ${program ?? "command"}`;
+    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
   return activity.detail ?? activity.summary;
 }
@@ -2002,10 +1993,9 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (answer === null) {
-      return null;
-    }
-    answers[question.id] = answer;
+    // An optional question left blank is omitted; it must not hold back the required ones.
+    if (answer !== null) answers[question.id] = answer;
+    else if (question.required !== false) return null;
   }
 
   return answers;

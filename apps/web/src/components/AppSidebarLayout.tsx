@@ -42,6 +42,7 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { SettingsSearchShortcut } from "./settings/SettingsSearchShortcut";
 import {
   SidebarBrandWidthProbe,
   SidebarChromeHeader,
@@ -51,6 +52,7 @@ import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
 import { DestinationRail, DestinationRailVisibleContext } from "./sidebar/DestinationRail";
 import { DESTINATION_RAIL_WIDTH_PX } from "./sidebar/destinationRail.logic";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
+import type { SidebarRouteReveal } from "./sidebar/routeReveal";
 import { useProjects } from "../state/entities";
 import {
   clampThreadSidebarWidth,
@@ -156,12 +158,12 @@ export function SidebarControl({
         return;
       }
       if (
-        isRichTextBoldShortcut(event) &&
+        isRichTextBoldShortcut(event, window.getSelection()) &&
         event.target instanceof HTMLElement &&
         event.target.closest('[data-composer-rich-text="true"]')
       ) {
-        // The rich-text composer claims Mod+B for bold; the toggle stays
-        // available everywhere else, including the plain-text composer.
+        // The rich-text composer claims Mod+B only to bold selected text;
+        // the toggle stays available everywhere else.
         return;
       }
       const command = resolveShortcutCommand(event, keybindings, { context: { usagePageOpen } });
@@ -338,6 +340,10 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const projectsSidebar = useLegacySidebarEnabled();
+  const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
+    observedKey: null,
+    pendingKey: null,
+  }));
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   useThreadVisitedMigration();
@@ -454,9 +460,9 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                 <SettingsSidebarNav pathname={pathname} />
               </>
             ) : projectsSidebar === null ? null : projectsSidebar ? (
-              <LegacyThreadSidebar />
+              <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
             ) : (
-              <ThreadSidebar />
+              <ThreadSidebar routeReveal={sidebarRouteReveal} />
             )}
             <SidebarRail onDoubleClick={resetSidebarWidth} />
           </Sidebar>
@@ -478,6 +484,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         ) : null}
         <SidebarControl onCollapsedBrandWidthChange={setCollapsedBrandWidth} />
         <NavigationHistoryShortcuts />
+        {isOnSettings ? <SettingsSearchShortcut /> : null}
         {isOnSettings ? null : <ThreadUndoShortcut />}
         <MainAppLocationTracker />
       </SidebarProvider>

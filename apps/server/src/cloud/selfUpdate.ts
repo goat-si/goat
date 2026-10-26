@@ -6,6 +6,7 @@ import {
   type ServerSelfUpdateProgressStage,
   type ServerSelfUpdateResult,
   type ThreadId,
+  SERVER_UPDATE_BUSY_REASON,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
@@ -45,8 +46,7 @@ import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
-export const SERVER_UPDATE_BUSY_REASON =
-  "GOAT is running threads on this server, so the update waits. Try again when they finish, or update from a GOAT app that can confirm interrupting them.";
+export { SERVER_UPDATE_BUSY_REASON };
 
 const PREFLIGHT_TIMEOUT = Duration.seconds(30);
 

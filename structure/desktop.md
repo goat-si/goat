@@ -68,25 +68,47 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 ## Computer use host
 
 When the server asks for a Cua Driver host on the private control pipe, the Electron main process
-owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`), so macOS attributes Accessibility and Screen
-Recording to GOAT rather than to the server child. On macOS it checks both permissions before
-starting and reports `unavailable` until they are granted. Packaged builds start the driver from
-`resources/cua-driver`; development builds need `GOAT_CUA_DRIVER_PATH`. The host reuses a running
-driver, retires a crashed one, and passes the same telemetry and update-check opt-outs as the
-standalone host ([server.md](server.md#computer-use)).
+owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
+"GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
+packaged builds look in `Contents/Helpers`, where signed mac builds always put it and
+`build-desktop-artifact.ts --computer-use-helper` puts an ad-hoc one in an unsigned build
+(`scripts/desktop-artifact-computer-use.ts`), and, when GOAT.app is Developer ID signed, run a
+verified installed generation of it from the state directory
+(`apps/desktop/src/cua/ComputerUseHelperInstall.ts`). Development builds need
+`GOAT_CUA_HELPER_PATH` to a helper built by `scripts/build-computer-use-helper.ts`, and a helper
+that is present but unusable keeps computer use off. A release helper
+(`apps/desktop/native/computer-use-helper/main.swift`) serves any parent signed by GOAT's Developer ID
+team, whatever its identifier; a development or ad-hoc helper, built with
+`GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
+with responsibility disclaimed, speaks line-delimited
+JSON on stdio and starts `cua-driver mcp --direct --embedded` as its direct child (no socket), so macOS attributes
+Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
+and that the driver it reports is the helper's child. Packaged macOS builds without the helper
+keep computer use off. Development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
+host checks both permissions before starting and reports `unavailable` until they are granted. It
+reuses a running driver, retires a crashed one, and passes the same telemetry and update-check
+opt-outs as the standalone host ([server.md](server.md#computer-use)).
 
-Setup proves the macOS grants from inside the driver (`verify`): Electron's check comes first,
-then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
-`health_report`'s bundle identity for this process, and capture non-blank pixels plus an
-accessibility tree of a GOAT window. `check_permissions` alone cannot show that capture works.
-The check's driver is always stopped afterwards; the next agent turn starts its own.
+Setup proves the macOS grants from inside the driver (`verify`) for whichever engine runs it. The
+grant check comes first: the helper's own probe with a helper, Electron's with the in-process
+development fallback. Then a fresh driver (TCC answers are cached per process) must report `host`
+attribution, pass `health_report`'s bundle identity for its parent (the helper's bundle id and
+service pid, or GOAT's for the fallback), and capture non-blank pixels plus an accessibility tree
+of a GOAT window. `check_permissions` alone cannot show that capture works. The check's driver is
+always stopped afterwards; the next agent turn starts its own.
 
 `stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
-checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the
-driver, cursor theme tool and Wayland helper on Linux, and the driver, UIA worker and cursor theme
-tool on Windows. The SDK's native libraries come from `@trycua/cua-driver` and are unpacked beside
-`app.asar`; `patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. The license
+checks its size and SHA-256, and stages the driver, cursor theme tool and Wayland helper on
+Linux, and the driver, UIA worker and cursor theme tool on Windows. Their SDK's native libraries
+come from `@trycua/cua-driver` and are unpacked beside `app.asar`;
+`patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. macOS carries only the
+helper's driver and excludes the SDK and its native packages. The license
 notices are vendored in `apps/desktop/src/cua/notices/`.
+
+The driver's own cursor overlay is off in direct mode, so the helper draws the agent cursor and
+window glow itself (`Overlay.swift`, #1214); see `docs/internals/computer-use.md`.
+
+> Decision record: [ADR-0023](decisions/ADR-0023-goat-computer-use-app.md)
 
 ## Shell
 

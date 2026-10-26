@@ -27,12 +27,11 @@ const machine = (
     Effect.provide(
       Layer.mergeAll(
         ServerSettingsService.layerTest({ goatclaw }),
-        reach === undefined
-          ? Layer.empty
-          : Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-              connectedHosts: Effect.succeed(["box"]),
-              callHostTool: (call) => reach(call),
-            }),
+        Layer.mock(SshRemoteDispatch.SshRemoteDispatch)(
+          reach === undefined
+            ? { connectedHosts: Effect.succeed([]) }
+            : { connectedHosts: Effect.succeed(["box"]), callHostTool: (call) => reach(call) },
+        ),
       ),
     ),
   );
@@ -146,5 +145,47 @@ describe("GoatclawFleetSync", () => {
         expect(reach.enforcesCeilings).toBe(enforcesCeilings);
       }
     }),
+  );
+  it.effect("connects like the launch or send it precedes, while the reconcile wakes nothing", () =>
+    Effect.gen(function* () {
+      const remote = yield* machine({});
+      const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
+      const local = yield* machine({ enabled: true }, (call) => {
+        calls.push(call);
+        return connectedTo(remote)(call);
+      });
+      yield* local.sync.reconcile;
+      yield* local.settings.updateSettings({ goatclaw: { defaultProfile: "manager" } });
+      yield* local.sync.ensure("box");
+      // A launcher on another build sees a compatible runtime as not ready; the send's own
+      // connection must decide, or every profiled send is refused until the host updates.
+      expect(calls.map((call) => call.requireReady)).toEqual([true, undefined]);
+    }),
+  );
+  it.effect(
+    "admits a launch and the follow-up send to a host alike while its sync is unconfirmed",
+    () =>
+      Effect.gen(function* () {
+        const failures = [
+          {
+            reason: "remote_refused",
+            message: `GOAT on box does not have ${FleetSync.SYNC_TOOL}.`,
+          },
+          { reason: "host_unavailable", message: "box did not answer." },
+        ] as const;
+        for (const failure of failures) {
+          let attempts = 0;
+          const local = yield* machine({ enabled: true }, () => {
+            attempts += 1;
+            return Effect.fail(new SshRemoteDispatch.SshRemoteDispatchError(failure));
+          });
+          const launch = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
+          const send = yield* FleetSync.syncBeforeForwarding(local.sync, "box");
+          expect(launch).toMatchObject({ enforcement: "unconfirmed", host: "box" });
+          expect(send).toEqual(launch);
+          // Neither call is refused, and each retries the sync so the ceiling lands once it can.
+          expect(attempts).toBe(2);
+        }
+      }),
   );
 });

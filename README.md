@@ -60,7 +60,7 @@ GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) and keeps
 3. **Start GOAT.** Open the desktop app, or run `goat` if you installed the command; it starts the server and opens the web app. On macOS and Linux, `goat service install` keeps the server running in the background. `goat --help` lists the rest.
 4. **Add your other screens and machines.** Pair a phone or another browser with [remote access](./docs/user/remote-access.md), and add SSH hosts under **Settings → Connections**.
 
-GOAT is published to the public [goat-si/goat-releases](https://github.com/goat-si/goat-releases) repository, which the install scripts, the desktop updater and `goat update` all read. So far only Nightly builds are published there.
+GOAT is published to the public [goat-si/goat-releases](https://github.com/goat-si/goat-releases) repository, which the install scripts, the desktop updater and `goat update` all read. It publishes stable releases, starting with v0.1.1, and Nightly builds. The install scripts follow the Nightly train unless you set `GOAT_CHANNEL=stable`.
 
 ## Hubs
 

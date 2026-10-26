@@ -23,7 +23,7 @@ import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
-import { MEMORY_SCANNER_POLICY_VERSION, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -89,7 +89,7 @@ const workClaimMs = 600000;
 export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
 /** Outbox rows one retention statement examines; the pass yields to the event loop between pages. */
-export const MEMORY_RETENTION_PAGE_ROWS = 64;
+const MEMORY_RETENTION_PAGE_ROWS = 64;
 const isFailureCode = Schema.is(M.MemoryFailureCode);
 const safeCode = (error: unknown): M.MemoryFailureCode => {
   if (typeof error === "object" && error !== null) {
@@ -690,7 +690,7 @@ const make = Effect.gen(function* () {
             yield* renewClaim;
             const generate = generation.generateMemorySummary;
             const output = yield* hold
-              .guard(yield* hold.keyFor(meta.modelSelection), generate(input))
+              .guard(yield* hold.keyFor(meta.modelSelection), redacted(generate(input)))
               .pipe(
                 Effect.mapError((cause) =>
                   cause._tag === "MemoryGenerationHeld"

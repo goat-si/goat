@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import {
   OrchestratorMcpCapabilitiesInput,
   OrchestrationV2StopWorkflowInput,
@@ -30,6 +31,8 @@ import {
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpTaskStatusInput,
   OrchestratorMcpThreadInterruptInput,
+  OrchestratorMcpThreadRetryInput,
+  OrchestratorMcpThreadRetryResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadListResult,
@@ -167,7 +170,7 @@ const ListScheduledTasksTool = Tool.make(agentSurfaceRegistry["schedule.list"].n
 
 const UpdateScheduledTaskTool = Tool.make(agentSurfaceRegistry["schedule.update"].name, {
   description: agentSurfaceRegistry["schedule.update"].description,
-  parameters: OrchestratorMcpUpdateScheduledTaskInput,
+  parameters: withClientRequestId(OrchestratorMcpUpdateScheduledTaskInput),
   success: OrchestratorMcpScheduleTaskResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -256,6 +259,15 @@ const ThreadInterruptTool = Tool.make(agentSurfaceRegistry["thread.interrupt"].n
   failureMode: "return",
   dependencies: hostThreadDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.interrupt"]));
+
+const ThreadRetryTool = Tool.make(agentSurfaceRegistry["thread.retry"].name, {
+  description: agentSurfaceRegistry["thread.retry"].description,
+  parameters: OrchestratorMcpThreadRetryInput,
+  success: OrchestratorMcpThreadRetryResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.retry"]));
 
 const ThreadStatusTool = Tool.make(agentSurfaceRegistry["thread.status"].name, {
   description: agentSurfaceRegistry["thread.status"].description,
@@ -367,6 +379,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadWaitTool,
   ThreadStatusTool,
   ThreadInterruptTool,
+  ThreadRetryTool,
   ThreadWatchTool,
   ThreadUnwatchTool,
   ThreadWatchListTool,

@@ -27,7 +27,7 @@ User workflows stay in `docs/user/`. The longer architectural constraints stay i
 
 The command the repository ships is `goat`. `apps/server/src/binCli.ts` builds
 `Command.make("goat")`, and the default handler starts the server. `apps/server/package.json`
-also exposes a `t3` bin at the same `./dist/bin.mjs`. The npm package name remains `t3`.
+also exposes a legacy `t3` bin at the same `./dist/bin.mjs`; the workspace package name is `goat`.
 
 A local server speaks HTTP from `apps/server/src/server.ts` and accepts WebSocket RPC on `GET /ws`
 from `apps/server/src/ws.ts`. Dispatch enters orchestration through
@@ -38,10 +38,9 @@ Agents also reach the same server over MCP. The HTTP MCP server is named `GOAT` 
 `goat_*`; see [`mcp-toolkits.md`](mcp-toolkits.md).
 
 GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.
-Upstream names remain in the tree where a rename would break a stored identity: checkpoint refs
-still use the `refs/t3/` prefix, tracing sent to the T3 Connect relay from
-`apps/server/src/cloud/relayTracing.ts` still reports `t3code-server`, and the default local data
-directory is still `~/.t3`. Where each process writes
+New checkpoint refs use `refs/goat/`, with legacy `refs/t3/` readers. Tracing sent to the
+T3 Connect relay from `apps/server/src/cloud/relayTracing.ts` retains relay-owned names.
+Local state defaults to `~/.goat`, with a legacy `~/.t3` fallback. Where each process writes
 is the [state roots](settings-and-storage.md#state-roots) contract.
 
 ## Invariants
@@ -60,6 +59,6 @@ in [`manifest.json`](manifest.json).
 - **INV-SSH-01** — Scripts that launch GOAT on an SSH host set the remote server home to
   `$HOME/.goat` and do not use `$HOME/.t3`.
 - **INV-CKPT-01** — Orchestration v2 checkpoint refs use the prefix
-  `refs/t3/orchestration-v2/checkpoints`.
+  `refs/goat/orchestration-v2/checkpoints`, with legacy `refs/t3/` readers.
 - **INV-MCP-01** — The HTTP MCP server name is `GOAT` and its path is `/mcp`.
 - **INV-CHAN-01** — A channel kind is `goat`, `slack`, or `mcp`.

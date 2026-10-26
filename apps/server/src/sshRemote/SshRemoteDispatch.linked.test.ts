@@ -1,136 +1,9 @@
-import * as ServerSettings from "../serverSettings.ts";
-import * as Stream from "effect/Stream";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { RuntimeMode } from "@goat/contracts";
-import { describe, expect, it, vi } from "@effect/vitest";
-import * as SshConfig from "@goat/ssh/config";
-import * as SshTunnel from "@goat/ssh/tunnel";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
-import * as ServerConfig from "../config.ts";
-import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
-
-const LINK: LinkedHosts.LinkedHostCredential = {
-  host: {
-    name: "box",
-    baseUrl: "https://box.example.ts.net",
-    environmentId: "env-box",
-    label: "Build box",
-    serverVersion: "0.1.0-test",
-    access: "approval-required",
-    linkedAt: "2026-10-19T00:00:00.000Z",
-    expiresAt: "2026-11-18T00:00:00.000Z",
-  },
-  token: "link-token",
-};
-
-type Answer = { readonly status: number } | { readonly result: unknown };
-
-/**
- * Runs body against a dispatch with one linked host and an SSH manager that
- * fails the test if anything reaches it. `answer` plays the host's /mcp.
- */
-const withLinkedHost = <A, E>(
-  answer: (request: {
-    readonly method: string;
-    readonly tool?: string;
-    readonly args?: unknown;
-  }) => Answer,
-  body: Effect.Effect<A, E, SshRemoteDispatch.SshRemoteDispatch>,
-) =>
-  Effect.gen(function* () {
-    const record: Array<{
-      url: string;
-      authorization: string | null;
-      method: string;
-      tool?: string;
-    }> = [];
-    const fetchEndpoint = vi.fn(async (url: string, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as {
-        id?: string;
-        method: string;
-        params?: { name?: string; arguments?: unknown };
-      };
-      record.push({
-        url,
-        authorization: new Headers(init?.headers).get("authorization"),
-        method: request.method,
-        ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
-      });
-      if (request.method === "initialize")
-        return Response.json({
-          jsonrpc: "2.0",
-          id: request.id,
-          result: {
-            protocolVersion: "2025-06-18",
-            capabilities: { tools: {} },
-            serverInfo: { name: "GOAT", version: "test" },
-          },
-        });
-      if (request.method === "notifications/initialized")
-        return new Response(null, { status: 202 });
-      const reply = answer({
-        method: request.method,
-        ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
-        args: request.params?.arguments,
-      });
-      if ("status" in reply) return new Response(null, { status: reply.status });
-      return Response.json({ jsonrpc: "2.0", id: request.id, result: reply.result });
-    });
-    const noSsh = () => Effect.die("A linked host must not use SSH");
-    const manager = SshTunnel.SshEnvironmentManager.of({
-      status: noSsh,
-      ensureEnvironment: noSsh,
-      readyEnvironment: noSsh,
-      beginSetupOperation: noSsh,
-      publishSetupOutcome: noSsh,
-      publishProviderDiagnosis: noSsh,
-      forgetEnvironment: noSsh,
-      disconnectEnvironment: noSsh,
-      revalidateTunnels: () => Effect.void,
-      issueClientSession: () => Effect.die("unused"),
-      issueMcpClientSession: noSsh,
-      runRemoteScript: noSsh,
-    });
-    const links = LinkedHosts.LinkedHosts.of({
-      changes: Stream.empty,
-      list: Effect.succeed([LINK.host]),
-      find: (name) => Effect.succeed(name === "box" ? Option.some(LINK) : Option.none()),
-      names: Effect.succeed(["box"]),
-      link: () => Effect.die("unused"),
-      unlink: () => Effect.die("unused"),
-    });
-    const discoverHosts = vi
-      .spyOn(SshConfig, "discoverSshHosts")
-      .mockReturnValue(Effect.succeed([]));
-    const managerLayer = vi
-      .spyOn(SshTunnel.SshEnvironmentManager, "layer")
-      .mockReturnValue(Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
-    vi.stubGlobal("fetch", fetchEndpoint);
-    try {
-      const result = yield* body.pipe(
-        Effect.result,
-        Effect.provide(
-          SshRemoteDispatch.layer.pipe(
-            Layer.provide(ServerSettings.layerTest()),
-            Layer.provide(Layer.succeed(LinkedHosts.LinkedHosts, links)),
-            Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
-          ),
-        ),
-      );
-      return { result, record };
-    } finally {
-      vi.unstubAllGlobals();
-      managerLayer.mockRestore();
-      discoverHosts.mockRestore();
-    }
-  });
+import { withLinkedHost } from "./testkit/LinkedHostFixture.ts";
 
 const call = (tool: string, writes: boolean, mode: RuntimeMode = "approval-required") =>
   Effect.gen(function* () {
@@ -196,7 +69,7 @@ describe("SshRemoteDispatch with a linked host", () => {
         _tag: "Failure",
         failure: {
           reason: "remote_refused",
-          message: expect.stringContaining("goat_host_link_create"),
+          message: expect.stringContaining('goat_call {path:"host_link.create"}'),
         },
       });
     }),
@@ -298,6 +171,41 @@ describe("SshRemoteDispatch with a linked host", () => {
       expect(
         record.filter((entry) => entry.method === "tools/call").map((entry) => entry.tool),
       ).toEqual(["goat_project_list"]);
+    }),
+  );
+
+  it.effect.each([
+    ["0.1.0-test", "task_status"],
+    ["0.1.3", "goat_task_read"],
+  ] as const)("calls a host at %s by the name it answers to: %s", ([version, sent]) =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withLinkedHost(
+        () => ({ result: { structuredContent: { taskId: "t" } } }),
+        call("goat_task_read", false),
+        version,
+      );
+      expect(result._tag).toBe("Success");
+      expect(record.at(-1)).toMatchObject({ method: "tools/call", tool: sent });
+    }),
+  );
+
+  it.effect("answers remote_outdated for a tool the host lacks, without running it here", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withLinkedHost(
+        (request) =>
+          request.method === "tools/call"
+            ? { rpcError: `Tool '${request.tool}' not found` }
+            : { result: {} },
+        call("goat_provider_sync_read", false),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          reason: "remote_outdated",
+          message: expect.stringContaining("GOAT on box does not have goat_provider_sync_read"),
+        },
+      });
+      expect(record.at(-1)).toMatchObject({ tool: "goat_provider_sync_status" });
     }),
   );
 

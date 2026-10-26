@@ -1,9 +1,6 @@
-import * as NodeChildProcess from "node:child_process";
-import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeVM from "node:vm";
 
 import { assert, describe, it } from "vite-plus/test";
 
@@ -11,6 +8,8 @@ import {
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
+  resolveMacBundleInfoPlistStrings,
+  resolveMacLauncherIdentity,
   resolveMacLauncherPaths,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
@@ -76,18 +75,18 @@ describe("electron development launcher", () => {
 
   it("keeps the native Electron executable name inside the branded macOS bundle", () => {
     const paths = resolveMacLauncherPaths(
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app",
-      "T3 Code (Dev)",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app",
+      "GOAT (Dev)",
     );
 
-    assert.equal(paths.launcherExecutableName, "T3 Code (Dev) Launcher");
+    assert.equal(paths.launcherExecutableName, "GOAT (Dev) Launcher");
     assert.equal(
       paths.launcherBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/T3 Code (Dev) Launcher",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/GOAT (Dev) Launcher",
     );
     assert.equal(
       paths.runtimeElectronBinaryPath,
-      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron",
+      "/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/Electron",
     );
 
     const script = makeDevelopmentLauncherScript({
@@ -98,9 +97,26 @@ describe("electron development launcher", () => {
     });
     assert.include(
       script,
-      "exec '/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron'",
+      "exec '/repo/apps/desktop/.electron-runtime/GOAT (Dev).app/Contents/MacOS/Electron'",
     );
     assert.notInclude(script, "node_modules/electron");
+  });
+
+  // #1284: macOS names the requesting app after CFBundleName in keychain and privacy prompts.
+  it("names the macOS bundle GOAT while keeping its bundle identity", () => {
+    const development = resolveMacLauncherIdentity(true);
+    assert.equal(development.displayName, "GOAT (Dev)");
+    assert.match(development.bundleId, /^com\.t3tools\.t3code\.dev\.[a-z0-9]+$/);
+    assert.deepEqual(development.protocolSchemes, ["goat-dev", "t3code-dev"]);
+    const developmentPlist = resolveMacBundleInfoPlistStrings("GOAT (Dev) Launcher", development);
+    assert.equal(developmentPlist.CFBundleName, "GOAT (Dev)");
+    assert.equal(developmentPlist.CFBundleDisplayName, "GOAT (Dev)");
+    assert.equal(developmentPlist.CFBundleIdentifier, development.bundleId);
+
+    const production = resolveMacLauncherIdentity(false);
+    assert.equal(production.displayName, "GOAT");
+    assert.equal(production.bundleId, "com.t3tools.t3code");
+    assert.equal(resolveMacBundleInfoPlistStrings("Electron", production).CFBundleName, "GOAT");
   });
 
   it("restores execute permissions on an unchanged launcher", () => {
@@ -116,94 +132,4 @@ describe("electron development launcher", () => {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
-});
-
-async function startupCleanupPattern(desktopDir) {
-  const source = NodeFS.readFileSync(new URL("./dev-electron.mjs", import.meta.url), "utf8");
-  let pattern;
-  // Supply inert imports so the real startup runs without launching Electron or signalling processes.
-  await NodeVM.runInNewContext(
-    `(async () => { ${source.replace(/^import\s[\s\S]*?;\n/gm, "")} })()`,
-    {
-      NodeChildProcess: {
-        execFileSync: () => undefined,
-        spawnSync: (command, args) => {
-          if (command === "pkill" && args.includes("-f")) pattern = args.at(-1);
-        },
-        spawn: () => new NodeEvents.EventEmitter(),
-      },
-      NodeFS: { watch: () => ({ close: () => undefined }) },
-      NodeOS: { platform: () => "linux" },
-      NodePath,
-      desktopDir,
-      resolveDevProtocolClient: () => null,
-      resolveElectronLaunchCommand: (args) => ({ electronPath: "electron", args }),
-      waitForResources: async () => undefined,
-      URL,
-      process: {
-        env: { VITE_DEV_SERVER_URL: "http://localhost:1234" },
-        execPath: "node",
-        once: () => undefined,
-      },
-    },
-  );
-  assert.isString(pattern);
-  return pattern;
-}
-
-it
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Native pgrep is unavailable on Windows.
-  .skipIf(NodeOS.platform() === "win32")
-  .each([
-    "/tmp/t3-feature.one/apps/desktop",
-    "/tmp/t3-feature.one [two](three)+?^${four}|back\\slash*/apps/desktop",
-  ])("dev cleanup matches only the literal root argument: %s", async (desktopDir) => {
-  const pattern = await startupCleanupPattern(desktopDir);
-  const flag = `--t3code-dev-root=${desktopDir}`;
-  const argvCases = [
-    [flag],
-    [flag, "main.cjs"],
-    [flag.replace(".one", "Xone")],
-    [`${flag}-two`],
-    [`prefix${flag}`],
-    [`--t3code-dev-root=/other${desktopDir}`],
-  ];
-  const children = [];
-  try {
-    for (const args of argvCases) {
-      const child = NodeChildProcess.spawn(
-        process.execPath,
-        ["-e", "process.send('ready'); setInterval(() => {}, 1000)", "--", ...args],
-        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
-      );
-      children.push(child);
-      await Promise.race([
-        NodeEvents.once(child, "message"),
-        NodeEvents.once(child, "exit").then(() => {
-          throw new Error("Fixture exited before readiness");
-        }),
-      ]);
-    }
-    // Use the native ERE engine, but never execute the launcher's signal-producing command.
-    const result = NodeChildProcess.spawnSync(
-      "pgrep",
-      ["-P", String(process.pid), "-f", "--", pattern],
-      { encoding: "utf8" },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const matches = result.stdout.trim().split(/\s+/).map(Number);
-    assert.sameMembers(
-      matches,
-      children.slice(0, 2).map((child) => child.pid),
-    );
-  } finally {
-    await Promise.all(
-      children.map(async (child) => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        const exited = NodeEvents.once(child, "exit");
-        child.kill("SIGTERM");
-        await exited;
-      }),
-    );
-  }
 });

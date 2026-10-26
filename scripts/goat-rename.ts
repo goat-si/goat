@@ -7,9 +7,9 @@
  *   node scripts/goat-rename.ts --list
  *
  * `--apply` `git rm`s dropped upstream paths, rewrites tracked text files and
- * `git mv`s renamed paths. It is idempotent. `--check` exits 1 when a tracked
- * file still has a T3 spelling that no keep rule or legacy marker explains, or
- * a dropped path is back. `--root` runs against another checkout, such as an
+ * `git mv`s renamed paths. It is idempotent. `--check` includes non-ignored
+ * untracked files unless `--root` is given. It exits 1 when a scanned file has
+ * a T3 spelling that no keep rule or legacy marker explains, or a dropped path is back. `--root` runs against another checkout, such as an
  * upstream tag before it is merged.
  */
 import * as NodeChildProcess from "node:child_process";
@@ -25,6 +25,7 @@ import {
 import {
   DROP_RULES,
   isExempt,
+  isMovableAsset,
   KEEP_RULES,
   PATH_RULES,
   TEXT_RULES,
@@ -85,7 +86,7 @@ const apply = () => {
   for (const path of trackedFiles()) {
     const text = readText(path);
     if (text === undefined) continue;
-    const result = applyTextRules(path, text, textRules);
+    const result = applyTextRules(path, text, textRules, KEEP_RULES);
     if (result.text !== text) {
       NodeFS.writeFileSync(NodePath.join(root, path), result.text);
       changedFiles += 1;
@@ -93,7 +94,8 @@ const apply = () => {
     for (const [id, count] of result.hits) totals.set(id, (totals.get(id) ?? 0) + count);
   }
   let moved = 0;
-  for (const path of trackedFiles()) {
+  // Exempt binaries keep their bytes, but listed brand assets still move so their references stay valid.
+  for (const path of allTrackedFiles().filter((path) => !isExempt(path) || isMovableAsset(path))) {
     const target = applyPathRules(path, pathRules);
     if (target === path) continue;
     NodeFS.mkdirSync(NodePath.dirname(NodePath.join(root, target)), { recursive: true });
@@ -106,16 +108,26 @@ const apply = () => {
 
 const check = () => {
   const limit = Number(option("--limit") ?? 200);
-  const dropped = allTrackedFiles()
+  const filesToCheck = [
+    ...new Set([
+      ...allTrackedFiles(),
+      ...(option("--root") === undefined
+        ? git("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean)
+        : []),
+    ]),
+  ];
+  const dropped = filesToCheck
     .filter((path) => isDropped(path, DROP_RULES))
     .map((path) => ({ path, line: 0, text: "(dropped path)" }));
-  const residue = trackedFiles().flatMap((path) => {
-    const text = readText(path);
-    const fromText = text === undefined ? [] : findResidue(path, text, KEEP_RULES);
-    const fromPath =
-      findResidue(path, path, KEEP_RULES).length > 0 ? [{ path, line: 0, text: "(path)" }] : [];
-    return [...fromPath, ...fromText];
-  });
+  const residue = filesToCheck
+    .filter((path) => !isExempt(path))
+    .flatMap((path) => {
+      const text = readText(path);
+      const fromText = text === undefined ? [] : findResidue(path, text, KEEP_RULES);
+      const fromPath =
+        findResidue(path, path, KEEP_RULES).length > 0 ? [{ path, line: 0, text: "(path)" }] : [];
+      return [...fromPath, ...fromText];
+    });
   for (const item of [...dropped, ...residue].slice(0, limit))
     out(`${item.path}:${item.line}: ${item.text.slice(0, 160)}`);
   const files = new Set(residue.map((item) => item.path)).size;

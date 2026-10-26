@@ -31,6 +31,14 @@
       "types": "./src/server/auth.ts",
       "import": "./src/server/auth.ts"
     },
+    "./server/builtinSkills/registry": {
+      "types": "./src/server/builtinSkills/registry.ts",
+      "import": "./src/server/builtinSkills/registry.ts"
+    },
+    "./server/builtinSkills/computerUseSkillFiles": {
+      "types": "./src/server/builtinSkills/computerUseSkillFiles.ts",
+      "import": "./src/server/builtinSkills/computerUseSkillFiles.ts"
+    },
     "./server/collectStreamText": {
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"
@@ -94,6 +102,10 @@
     "./server/nativeProtocolLogging": {
       "types": "./src/server/nativeProtocolLogging.ts",
       "import": "./src/server/nativeProtocolLogging.ts"
+    },
+    "./server/developmentInstructions": {
+      "types": "./src/server/developmentInstructions.ts",
+      "import": "./src/server/developmentInstructions.ts"
     },
     "./server/notification": {
       "types": "./src/server/notification.ts",

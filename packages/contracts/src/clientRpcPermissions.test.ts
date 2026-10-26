@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
 import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+
+it("lets readers follow computer use status without granting control", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.computerUseStatusChanges, {})).toEqual([
+    "orchestration:read",
+  ]);
+  for (const method of [
+    WS_METHODS.computerUseStop,
+    WS_METHODS.computerUseStopAll,
+    WS_METHODS.computerUseResume,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});
+it("a desktop window's live picture needs the same read grant as a browser tab's stream", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.previewSessionsFrames, {})).toEqual([
+    "orchestration:read",
+  ]);
+});
 describe("memory client guards", () => {
   it("guards all three memory mutations", () => {
     for (const method of [
@@ -158,6 +175,27 @@ it("hub device verify and membership changes need orchestration:operate", () => 
     WS_METHODS.hubDeviceJoin,
     WS_METHODS.hubDeviceLeave,
     WS_METHODS.hubDeviceRepair,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});
+
+it("OpenCodex sync needs the same environment:maintain grant as its update check", () => {
+  for (const method of [
+    WS_METHODS.serverCheckOpenCodexUpdate,
+    WS_METHODS.serverPlanOpenCodexSync,
+    WS_METHODS.serverSyncOpenCodex,
+    WS_METHODS.serverSubscribeOpenCodexSync,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["environment:maintain"]);
+});
+
+it("note mutations require orchestration operation permission", () => {
+  for (const method of [
+    WS_METHODS.notesWrite,
+    WS_METHODS.notesUpdate,
+    WS_METHODS.notesMove,
+    WS_METHODS.notesDelete,
+    WS_METHODS.notesStartWork,
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });

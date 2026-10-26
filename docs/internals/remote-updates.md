@@ -48,9 +48,9 @@ Concretely:
 4. **Ranges, not versions.** A client speaks one orchestration protocol. A server
    serves a range and advertises it. The client connects when the range includes
    its protocol; otherwise exactly one side is named as the one to update.
-5. **Permissions are the existing scopes**, enforced at execution, with
-   disruption gated by idleness or an explicit human confirmation, and every
-   request journaled with its actor.
+5. **Permissions are checked at execution** through existing scopes or a thread’s
+   goatclaw profile for host preparation. Disruption is gated by idleness or an
+   explicit human confirmation, and every update request is journaled with its actor.
 
 ## Options considered
 
@@ -285,7 +285,7 @@ means pairing with explicit scopes. GOAT adds no administrator role.
 | Paired desktop, web, or mobile                            | R                       | M                                                          | M and a confirmation                     | W                           |
 | Owning SSH client (saved key)                             | R                       | Idle refresh of a runtime it owns; M for the manual update | M and a confirmation                     | Never changed by connecting |
 | MCP agent                                                 | R                       | M, `when_idle`                                             | Only after a person approves the handoff | Not through update tools    |
-| Linked host, T3 Connect route                             | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
+| Linked host, GOAT Connect route                           | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
 
 Rules that hold for every row:
 
@@ -296,15 +296,19 @@ Rules that hold for every row:
   holds for the launcher path as it already did for SSH drain. Pressing Update in
   a GOAT app is that confirmation (`confirmReplacement`); requests that omit it,
   from older clients or automation, are refused while the server is busy.
-- **No self-approval.** An agent can request an immediate update but cannot approve
-  it; the handoff names the host and target, and the approver's grant is
-  rechecked when it runs.
+- **No self-approval.** A live, writable goatclaw thread in full-access/default modes
+  may prepare a pinned SSH host when its enabled profile grants `hub.manage` for
+  that host. Its credential, modes and profile are checked at admission and again
+  before the job runs; preparation never confirms replacement. Other callers still
+  need `environment:maintain`. Idle runtime updates keep their existing authorization. An agent can
+  request an immediate update but cannot approve it; the handoff names the host
+  and target, and the approver's grant is rechecked when it runs.
 - **Never downgrade.** No caller can move a server to an older build through
   these paths. A newer or unowned runtime blocks replacement.
 - **Organization policy wins.** A managed setting that disables updates beats
   every row. An app that cannot write its bundle is not evidence of such a policy
   and does not stop server updates.
-- **Linking grants nothing new.** Linking a host or routing through T3 Connect
+- **Linking grants nothing new.** Linking a host or routing through GOAT Connect
   changes reachability, not authority. SSH runtime updates are not host-routable.
 
 ### Audit

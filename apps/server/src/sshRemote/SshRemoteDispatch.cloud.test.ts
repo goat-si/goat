@@ -75,6 +75,7 @@ const withDispatch = <A, E>(
     });
     const cloud = {
       owns: (alias: string) => Effect.succeed(alias === OWNED),
+      catalog: Effect.succeed([{ alias: OWNED, label: "owned" }]),
       ensureReady: (alias: CloudMachineAlias, { wake }: CloudMachineService.EnsureReadyOptions) =>
         Effect.sync(() => void events.push(`ready:${alias}:${wake ? "wake" : "quiet"}`)).pipe(
           Effect.andThen(
@@ -157,16 +158,25 @@ describe("SshRemoteDispatch with cloud machines", () => {
     }),
   );
 
-  it.effect("dials another server's machine and probes hosts as plain SSH", () =>
-    Effect.gen(function* () {
-      const { events } = yield* withDispatch({}, (dispatch) =>
-        hostCall(FOREIGN)(dispatch).pipe(
-          Effect.ignore,
-          Effect.andThen(dispatch.listHosts({ probe: true })),
-        ),
-      );
-      expect(events).toEqual([`ensureEnvironment:${FOREIGN}`, `ssh:${FOREIGN}`]);
-    }),
+  it.effect(
+    "dials another server's machine and probes SSH hosts, listing owned machines unprobed",
+    () =>
+      Effect.gen(function* () {
+        const { result, events } = yield* withDispatch({}, (dispatch) =>
+          hostCall(FOREIGN)(dispatch).pipe(
+            Effect.ignore,
+            Effect.andThen(dispatch.listHosts({ probe: true })),
+          ),
+        );
+        expect(events).toEqual([`ensureEnvironment:${FOREIGN}`, `ssh:${FOREIGN}`]);
+        expect(result).toMatchObject({
+          _tag: "Success",
+          success: [
+            { alias: FOREIGN, source: "ssh-config", reachable: false },
+            { alias: OWNED, source: "cloud-machine" },
+          ],
+        });
+      }),
   );
 
   it.effect("drops the tunnel of a machine whose address changed", () =>
@@ -192,8 +202,8 @@ it.effect(
       expect(events).toEqual([`ready:${OWNED}:quiet`, `ssh:${OWNED}`]);
       expect(scripts).toEqual([
         {
-          script:
-            'if [ -f "$HOME/.goat/userdata/environment-id" ]; then cat "$HOME/.goat/userdata/environment-id"; fi',
+          // With no attachment, the app server's identity applies only while it could be attached.
+          script: SshTunnel.hostEnvironmentIdScript(null),
           timeoutMs: 15_000,
         },
       ]);

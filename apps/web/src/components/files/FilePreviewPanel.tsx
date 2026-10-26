@@ -83,11 +83,13 @@ import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { AudioPreview } from "./AudioPreview";
-import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
+import { isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
-import { FilePathCopyMenu } from "./FilePathCopyMenu";
+import { FileViewMenu } from "./FileViewMenu";
+import { claimAwaitedEditorFocus } from "./sourceEditorContent";
+import { WorkspaceBrowserPreview } from "./WorkspaceBrowserPreview";
 import { breadcrumbPathOf, retainedBreadcrumbTrail, trailChildOf } from "./filePath";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import {
@@ -109,7 +111,7 @@ import {
   FileSurfaceLoading,
 } from "./fileSurfaceChrome";
 import SourceFilePreview from "./ReadOnlySourcePreview";
-import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { clampFileLine, resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
@@ -119,6 +121,7 @@ import {
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
   workspaceAssetResource,
+  refreshedRevision,
   workspaceMediaPreviewUrl,
   workspacePreviewAssetResource,
 } from "./filePreviewMode";
@@ -197,10 +200,7 @@ function WorkspaceImagePreview(props: {
     }
   }, [connection._tag, refreshAssetUrl]);
   useWorkspaceMutationRefresh({
-    mutationId:
-      props.refreshRequestId === 0
-        ? props.workspaceMutationId
-        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
+    mutationId: refreshedRevision(props.workspaceMutationId, props.refreshRequestId),
     resourceKey: JSON.stringify([props.environmentId, resource]),
     refresh: () => {
       void refreshAssetUrl().catch(() => undefined);
@@ -239,58 +239,6 @@ function WorkspaceImagePreview(props: {
   );
 }
 
-/**
- * HTML runs in a sandboxed frame with an opaque origin, so a page cannot reach
- * the app's session or storage.
- */
-function WorkspaceBrowserPreview(props: {
-  readonly environmentId: EnvironmentId;
-  readonly threadRef: ScopedThreadRef;
-  readonly draft: boolean;
-  readonly absolutePath: string;
-  readonly workspaceRoot: string;
-  readonly title: string;
-  readonly workspaceMutationId: string | null;
-}) {
-  const resource = workspacePreviewAssetResource({
-    threadRef: props.threadRef,
-    draft: props.draft,
-    workspaceRoot: props.workspaceRoot,
-    absolutePath: props.absolutePath,
-  });
-  const assetUrl = useAssetUrlState(props.environmentId, resource);
-  const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
-  const revisionSuffix =
-    props.workspaceMutationId === null
-      ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
-
-  if (assetUrl._tag === "Failure") {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-        Unable to load file preview.
-      </div>
-    );
-  }
-  if (assetUrl._tag !== "Success") {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
-  return (
-    <BrowserDocumentFrame
-      src={`${assetUrl.url}${revisionSuffix}`}
-      documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${props.workspaceMutationId}`}
-      title={props.title}
-      pdf={isPdfPreviewFile(props.absolutePath)}
-      onRetry={refreshAssetUrl}
-      threadRef={props.threadRef}
-    />
-  );
-}
-
 function WorkspaceVideoPreview(props: {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef;
@@ -311,10 +259,7 @@ function WorkspaceVideoPreview(props: {
   const assetUrl = useAssetUrlState(props.environmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
   useWorkspaceMutationRefresh({
-    mutationId:
-      props.refreshRequestId === 0
-        ? props.workspaceMutationId
-        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
+    mutationId: refreshedRevision(props.workspaceMutationId, props.refreshRequestId),
     resourceKey: JSON.stringify([props.environmentId, resource]),
     refresh: () => {
       void refreshAssetUrl().catch(() => undefined);
@@ -335,11 +280,7 @@ function WorkspaceVideoPreview(props: {
         src={latestUrl}
         sourceFailed={assetUrl._tag === "Failure"}
         label={props.name}
-        revision={
-          props.refreshRequestId === 0
-            ? revision
-            : `${revision ?? ""}:files:${props.refreshRequestId}`
-        }
+        revision={refreshedRevision(revision, props.refreshRequestId)}
         preload="metadata"
         className="flex h-full min-h-0 w-full max-w-5xl items-center justify-center"
         onRetry={refreshAssetUrl}
@@ -376,10 +317,7 @@ function WorkspaceAudioPreview(props: {
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   useWorkspaceMutationRefresh({
-    mutationId:
-      props.refreshRequestId === 0
-        ? props.workspaceMutationId
-        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
+    mutationId: refreshedRevision(props.workspaceMutationId, props.refreshRequestId),
     resourceKey: JSON.stringify([props.environmentId, resource]),
     refresh: () => {
       void refreshAssetUrl().catch(() => undefined);
@@ -413,20 +351,6 @@ function WorkspaceAudioPreview(props: {
       onError={() => setFailedUrl(url)}
     />
   );
-}
-
-function clampFileLine(contents: string, requestedLine: number): number {
-  let lineCount = 1;
-  for (let index = 0; index < contents.length; index += 1) {
-    const character = contents.charCodeAt(index);
-    if (character === 10) {
-      lineCount += 1;
-    } else if (character === 13) {
-      lineCount += 1;
-      if (contents.charCodeAt(index + 1) === 10) index += 1;
-    }
-  }
-  return Math.min(Math.max(1, requestedLine), lineCount);
 }
 
 function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
@@ -794,6 +718,7 @@ function EditableFileSurface({
   const editorOptions: EditorOptions<"file", FileCommentAnnotationGroup, undefined> = {
     onAttach: (editor) => {
       editorRef.current = editor;
+      claimAwaitedEditorFocus(surfaceRef.current);
     },
     onComplete: () => {
       editorRef.current = null;
@@ -1210,6 +1135,11 @@ export default function FilePreviewPanel({
     (handledReveal?.path === relativePath && handledReveal.requestId === revealRequestId);
   const renderMarkdown = isMarkdown && renderMarkdownPreferred && revealHandled;
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
+  // Rendered documents and media reload through their URL; text views re-read the file.
+  const refreshOpenFile = () => {
+    if (isMedia || renderBrowserFile) setMediaRefreshRequestId((current) => current + 1);
+    if (!isMedia && !isPdf) file.refresh();
+  };
   const renderTable = tableDelimiter !== null && renderTablePreferred && revealHandled;
   const renderedMode = isMarkdown
     ? ("markdown" as const)
@@ -1333,7 +1263,12 @@ export default function FilePreviewPanel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+      data-file-view
+      // Clicking read-only content focuses the view, so the path copy shortcuts follow it.
+      tabIndex={-1}
+    >
       {breadcrumbPath !== null && breadcrumbTrail !== null ? (
         <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
           <ScrollArea
@@ -1357,7 +1292,14 @@ export default function FilePreviewPanel({
               />
             </div>
           </ScrollArea>
-          <FilePathCopyMenu filePath={breadcrumbPath} workspaceRoot={cwd} />
+          <FileViewMenu
+            filePath={breadcrumbPath}
+            workspaceRoot={cwd}
+            environmentId={environmentId}
+            threadRef={threadRef}
+            readResult={isMedia || isPdf ? null : file.data}
+            onRefresh={refreshOpenFile}
+          />
           {absolutePath &&
           (environmentId === primaryEnvironmentId || remoteOpenState.mode !== "local-exec") ? (
             <OpenInPicker
@@ -1490,6 +1432,7 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               title={relativePath}
               workspaceMutationId={workspaceMutationId}
+              refreshRequestId={mediaRefreshRequestId}
             />
           ) : relativePath && file.error && file.data === null ? (
             <div
@@ -1604,13 +1547,7 @@ export default function FilePreviewPanel({
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}
               workspaceMutationId={workspaceMutationId}
-              {...(previewPath && !isPdf
-                ? {
-                    onRefreshSelectedFile: isMedia
-                      ? () => setMediaRefreshRequestId((current) => current + 1)
-                      : file.refresh,
-                  }
-                : {})}
+              {...(previewPath ? { onRefreshSelectedFile: refreshOpenFile } : {})}
             />
           </aside>
         ) : null}

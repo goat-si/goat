@@ -1,16 +1,12 @@
 import {
   GoatHostStatusResult,
-  ORCHESTRATION_PROTOCOL_VERSION,
   OrchestratorMcpFailure,
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import {
-  ownRuntimeProtocolRanges,
-  servedRuntimeProtocolRanges,
-} from "@goat/shared/sshRuntimeProtocol";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -27,7 +23,9 @@ import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
@@ -45,6 +43,7 @@ import {
   hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
+  LOCAL_HOST_COMPATIBILITY,
   markHostCompatibility,
   quotaRefreshDue,
   tagRemoteHostStatus,
@@ -60,12 +59,6 @@ import {
 export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
-
-/** This machine reads every host as a client, so it compares the protocols it speaks. */
-const LOCAL_COMPATIBILITY = {
-  version: packageJson.version,
-  speaks: ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
-};
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -110,6 +103,8 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  // Runtime updates wait on this predicate, so host status reports the same answer.
+  const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
@@ -123,13 +118,27 @@ const make = Effect.gen(function* () {
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
   const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
   const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-  /** This machine's view of whether its goatclaw policy reached the host. */
-  const withGoatclaw = (entry: HostStatusEntry) =>
-    Option.isNone(fleet) || entry.host === null
-      ? Effect.succeed(entry)
-      : fleet.value
-          .hostState(entry.host)
-          .pipe(Effect.map((goatclaw): HostStatusEntry => ({ ...entry, goatclaw })));
+  const childBootstrap = yield* Effect.serviceOption(
+    OpenCodexChildBootstrap.OpenCodexChildBootstrap,
+  );
+  /** This machine's view of the host: whether its goatclaw policy reached it, and its Child setup. */
+  const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
+    if (entry.host === null) return entry;
+    const goatclaw = Option.isSome(fleet) ? yield* fleet.value.hostState(entry.host) : undefined;
+    // The switch first: reading it can record why the host's consent ended.
+    const optIn = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.sshOptIn(entry.host)
+      : undefined;
+    const child = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.status(entry.host)
+      : undefined;
+    return {
+      ...entry,
+      ...(goatclaw === undefined ? {} : { goatclaw }),
+      ...(child === undefined ? {} : { opencodexChild: child }),
+      ...(optIn === undefined ? {} : { opencodexChildOptIn: optIn }),
+    } satisfies HostStatusEntry;
+  });
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
@@ -194,6 +203,9 @@ const make = Effect.gen(function* () {
     const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
     const pressure =
       pressureMonitor._tag === "Some" ? yield* pressureMonitor.value.current : undefined;
+    const blockers = Option.isSome(projections)
+      ? yield* projections.value.getServerActivityBlockers(5).pipe(Effect.option)
+      : Option.none();
     const updateStatus =
       opencodexUpdate._tag === "Some" ? yield* opencodexUpdate.value.status : undefined;
     const entry = {
@@ -206,7 +218,16 @@ const make = Effect.gen(function* () {
         ...snapshot,
         platform,
         // Display counts still leave subagents out; the OpenCodex idle check needs them.
-        threads: { ...countHostThreads(shells), subagentsRunning: runningSubagents(shells) },
+        threads: {
+          ...countHostThreads(shells),
+          subagentsRunning: runningSubagents(shells),
+          ...(Option.isSome(blockers)
+            ? {
+                activity: blockers.value.length > 0 ? ("busy" as const) : ("idle" as const),
+                blockers: blockers.value,
+              }
+            : {}),
+        },
         ...(yield* readQuotas()),
         ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
         opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
@@ -330,7 +351,7 @@ const make = Effect.gen(function* () {
                   input.repositories === true,
                   options?.requireReady === true,
                 ),
-                LOCAL_COMPATIBILITY,
+                LOCAL_HOST_COMPATIBILITY,
               ),
             ),
           ],
@@ -358,7 +379,7 @@ const make = Effect.gen(function* () {
         hosts: [
           local,
           ...(yield* Effect.forEach(remote, (entry) =>
-            withGoatclaw(markHostCompatibility(entry, LOCAL_COMPATIBILITY)),
+            withGoatclaw(markHostCompatibility(entry, LOCAL_HOST_COMPATIBILITY)),
           )),
         ],
       };

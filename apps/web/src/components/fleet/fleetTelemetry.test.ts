@@ -1,4 +1,4 @@
-import type { FleetMachine } from "@goat/client-runtime/state/fleet";
+import { buildFleet, type FleetMachine, type FleetShell } from "@goat/client-runtime/state/fleet";
 import {
   EnvironmentId,
   type HostStatusEntry,
@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { FleetConnection } from "./fleetConnection";
 import {
   fleetAlerts,
+  fleetChildSetups,
   fleetHostRows,
   fleetThroughput,
   hostSourceKey,
@@ -81,6 +82,7 @@ function machine(id: string, overrides: Partial<FleetMachine> = {}): FleetMachin
     machineKind: null,
     environmentId: null,
     sshHost: null,
+    reportedAliases: [],
     boat: null,
     answering: true,
     running: 0,
@@ -175,6 +177,149 @@ describe("recordHostSamples with host clocks that disagree", () => {
 });
 
 describe("fleetHostRows", () => {
+  it("does not list a host again when a server on the primary's machine reports it", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", { environmentId: mini }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("macmini"), entry("devbox")] },
+      ),
+      primaryEnvironmentId: studio,
+      sharedSshConfigEnvironmentIds: new Set([studio, headless]),
+    });
+    expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
+  });
+
+  it("does not list a host again under another server's alias the graph resolved", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", {
+          environmentId: mini,
+          reportedAliases: [{ via: headless, alias: "mini-ts" }],
+        }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("mini-ts"), entry("devbox")] },
+      ),
+      primaryEnvironmentId: studio,
+    });
+    expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
+  });
+
+  it("reads a machine through an alias the graph resolved when nothing closer reports it", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", {
+          environmentId: mini,
+          answering: false,
+          reportedAliases: [{ via: headless, alias: "mini-ts" }],
+        }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("mini-ts", { cpu: 0.7 })] },
+      ),
+      primaryEnvironmentId: studio,
+    });
+    expect(rows.map((row) => [row.label, row.sourceKey])).toEqual([
+      ["studio", hostSourceKey(studio, null)],
+      ["mini", hostSourceKey(headless, "mini-ts")],
+    ]);
+  });
+
+  it("does not list a connected host again under the alias a same-machine server reports", () => {
+    const desktop = EnvironmentId.make("desktop");
+    const headless = EnvironmentId.make("headless");
+    const lidge = EnvironmentId.make("lidge");
+    // The headless server launched this thread on lidge, which the desktop reaches as "lidge".
+    const liveThread: FleetShell = {
+      environmentId: lidge,
+      id: ThreadId.make("ws10"),
+      title: "WS10",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtime: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      pendingSubagentRequest: null,
+      pendingBackgroundTasks: [],
+      nativeSubagents: [],
+      archivedAt: null,
+      deletedAt: null,
+      sideChatOf: null,
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make("ws10"),
+      },
+      createdAt: "2026-10-24T09:00:00.000Z",
+      updatedAt: "2026-10-24T09:00:00.000Z",
+      source: {},
+    };
+    const fleet = buildFleet({
+      environments: [
+        {
+          environmentId: desktop,
+          label: "MacBook",
+          sshAliases: [],
+          machineId: "mbp",
+          machineUserId: "jun",
+        },
+        {
+          environmentId: headless,
+          label: "Headless",
+          sshAliases: [],
+          machineId: "mbp",
+          machineUserId: "jun",
+        },
+        { environmentId: lidge, label: "lidge-AI-AI", sshAliases: ["lidge"], machineId: "lidge" },
+      ],
+      primaryEnvironmentId: desktop,
+      shells: [liveThread],
+      remote: [
+        {
+          dispatcherEnvironmentId: headless,
+          launches: [
+            {
+              host: "lidge-ts",
+              threadId: ThreadId.make("ws10"),
+              title: null,
+              launcherThreadId: ThreadId.make("launcher"),
+              source: "thread",
+              state: "running",
+              latest: null,
+              hostUnavailableSince: null,
+              updatedAt: "2026-10-24T09:30:00.000Z",
+            },
+          ],
+          cloudMachines: [],
+        },
+      ],
+    });
+    const rows = fleetHostRows({
+      machines: fleet.machines,
+      sshAliases: new Map([[lidge, ["lidge"]]]),
+      reports: reportsOf(
+        { environmentId: desktop, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry(null), entry("lidge-ts")] },
+        { environmentId: lidge, hosts: [entry(null)] },
+      ),
+      primaryEnvironmentId: desktop,
+    });
+    expect(rows.map((row) => row.label)).toEqual(["MacBook", "lidge-AI-AI"]);
+  });
+
   it("uses the graph's matching and does not list a machine's alias entry again", () => {
     const rows = fleetHostRows({
       machines: [
@@ -281,6 +426,89 @@ describe("hottestReading", () => {
 });
 
 describe("fleetAlerts", () => {
+  it("shows the Home's Child setup on the machine it names, also when this client reads that machine directly", () => {
+    const blocked = {
+      state: "blocked",
+      reason: "npm_missing",
+      message: "npm is not installed on boat-7.",
+      checkedAt: NOW,
+    } as const;
+    const machines = [
+      machine("studio", { environmentId: studio }),
+      machine("boat", { environmentId: mini, reportedAliases: [{ via: studio, alias: "boat-7" }] }),
+    ];
+    const reports = reportsOf(
+      {
+        environmentId: studio,
+        hosts: [
+          entry(null),
+          { ...entry("boat-7"), opencodexChild: blocked },
+          { ...entry("boat-8"), opencodexChild: { state: "running", checkedAt: NOW } },
+          { ...entry("boat-9"), opencodexChild: { state: "child", checkedAt: NOW } },
+        ],
+      },
+      { environmentId: mini, hosts: [entry(null)] },
+    );
+    const rows = fleetHostRows({
+      machines,
+      sshAliases: new Map(),
+      reports,
+      primaryEnvironmentId: studio,
+    });
+    expect(rows.find((row) => row.key === "boat")?.entry?.opencodexChild).toBeUndefined();
+    const alerts = fleetAlerts(rows, new Map(), NOW, {
+      childSetups: fleetChildSetups(rows, machines, reports),
+    }).filter((alert) => alert.key.endsWith(":child-setup"));
+    expect(
+      alerts.map(({ label, tone, detail, lines }) => ({ label, tone, detail, lines })),
+    ).toEqual([
+      {
+        label: "boat",
+        tone: "destructive",
+        detail: "OpenCodex Child setup blocked: npm missing",
+        lines: ["npm is not installed on boat-7."],
+      },
+      { label: "boat-8", tone: "muted", detail: "Setting up as OpenCodex Child", lines: undefined },
+    ]);
+  });
+
+  it("reads each route's setup from the server that reported that alias, not a namesake elsewhere", () => {
+    const machines = [
+      machine("box", {
+        reportedAliases: [
+          { via: studio, alias: "alpha" },
+          { via: mini, alias: "beta" },
+        ],
+      }),
+    ];
+    const reports = reportsOf(
+      {
+        environmentId: studio,
+        hosts: [
+          entry("alpha"),
+          {
+            ...entry("beta"),
+            opencodexChild: { state: "blocked", reason: "unreachable", checkedAt: NOW },
+          },
+        ],
+      },
+      {
+        environmentId: mini,
+        hosts: [{ ...entry("beta"), opencodexChild: { state: "child", checkedAt: NOW } }],
+      },
+    );
+    const rows = fleetHostRows({
+      machines,
+      sshAliases: new Map(),
+      reports,
+      primaryEnvironmentId: null,
+    });
+    const setups = fleetChildSetups(rows, machines, reports);
+    expect(setups.get("box")?.state).toBe("child");
+    const alerts = fleetAlerts(rows, new Map(), NOW, { childSetups: setups });
+    expect(alerts.filter((alert) => alert.key === "box:child-setup")).toEqual([]);
+  });
+
   it("reports down connections, stale hosts and version drift, most severe first", () => {
     const rows = fleetHostRows({
       machines: [

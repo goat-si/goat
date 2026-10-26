@@ -1,207 +1,16 @@
 import { expect, it } from "@effect/vitest";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import {
-  BUILTIN_PERMISSION_PROFILES,
-  EnvironmentId,
-  type HubParityCheckId,
-  type HubParityResult,
-} from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/sql/SqlClient";
 
-import * as Inbox from "../goatclaw/DecisionInbox.ts";
-import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import * as Sqlite from "../persistence/Sqlite.ts";
-import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { type DevicePlatform, HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
-import * as HubParity from "./HubParity.ts";
-
-const PINNED = "SHA256:pinnedpinnedpinnedpinnedpinnedpinnedpinned0";
-const OTHER = "SHA256:otherotherotherotherotherotherotherotherot0";
-const scope: McpInvocationScope = {
-  environmentId: EnvironmentId.make("hub"),
-  capabilities: new Set(["orchestration"]),
-  issuedAt: 0,
-  requestNamespace: "hub-test",
-  thread: undefined,
-  client: { sessionId: "agent", label: "Agent", access: "full-access" },
-};
-const owner: Inbox.DecisionCaller = {
-  kind: "client",
-  sessionId: "person",
-  environmentId: EnvironmentId.make("hub"),
-  scopes: ["orchestration:operate", "settings:write"],
-};
-const verdict = (failing: ReadonlyArray<HubParityCheckId> = []): HubParityResult => ({
-  verdict: failing.length === 0 ? "ok" : failing.some((id) => id <= "P4") ? "broken" : "degraded",
-  checkedAt: 0,
-  failingCheckIds: failing,
-  checks: failing.map((id) => ({ id, status: "failed", reason: "fixture" })),
-});
-
-interface Fixture {
-  readonly profile?: string;
-  readonly pin?: string;
-  readonly offered?: string;
-  readonly direct?: boolean;
-  readonly running?: number;
-  readonly linked?: ReadonlyArray<string>;
-  readonly verdicts?: ReadonlyArray<HubParityResult>;
-  readonly addFails?: boolean;
-  readonly deviceDown?: ReadonlyArray<string>;
-  readonly deviceExit?: Readonly<Record<string, number>>;
-  readonly health?: { readonly service: string; readonly role?: string };
-  readonly strayTunnel?: boolean;
-  readonly platform?: DevicePlatform;
-  /** `ocx connect status --json` on the device. */
-  readonly connection?: Readonly<Record<string, unknown>>;
-  /** Home `ocx hub invite` exit; 0 mints a code. */
-  readonly inviteExit?: number;
-  readonly connectExit?: number;
-  readonly addExit?: { readonly code: number; readonly phase: string };
-}
-
-const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
-  const calls: string[] = [];
-  const links = new Map((fixture.linked ?? []).map((alias) => [alias, "lnk_0123456789abcdef"]));
-  const verdicts = [...(fixture.verdicts ?? [])];
-  let offered = fixture.offered ?? PINNED;
-  const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
-  const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
-    calls.push(`home ${args.join(" ")}`);
-    const [group, command, alias] = args;
-    if (group === "link" && command === "status")
-      return Effect.succeed(
-        json({
-          role: "home",
-          links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: 42255 })),
-        }),
-      );
-    if (command === "probe")
-      return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
-    if (command === "add") {
-      if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
-      if (fixture.addFails)
-        return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
-      links.set(alias!, "lnk_fedcba9876543210");
-      return Effect.succeed(json({ linkId: "lnk_fedcba9876543210" }));
-    }
-    if (command === "revoke") {
-      for (const [name, id] of links) if (id === args[3]) links.delete(name);
-      return Effect.succeed(json({ linkId: args[3] }));
-    }
-    return Effect.succeed(json({ linkId: args[3] }));
-  };
-  const device = (alias: string, args: ReadonlyArray<string>) => {
-    calls.push(`device ${alias} ${args.join(" ")}`);
-    if (fixture.deviceDown?.includes(args[0]!))
-      return Effect.fail(new HubOcxError({ reason: "unreachable", message: `${alias} is down.` }));
-    if (args[0] === "connect" && args[1] === "status")
-      return Effect.succeed(json(fixture.connection ?? { state: "disconnected" }));
-    return Effect.succeed({
-      code: fixture.deviceExit?.[args[0]!] ?? 0,
-      stdout: "opencodex 2.83.0",
-    });
-  };
-  const goatclaw = {
-    enabled: true,
-    defaultProfile: fixture.profile ?? "owner",
-    profiles: {
-      ...BUILTIN_PERMISSION_PROFILES,
-      "hub-admin": {
-        id: "hub-admin",
-        runtimeModeCeiling: "full-access" as const,
-        capabilities: ["hub.manage" as const, "threads.launch" as const],
-        maxLanes: 1,
-      },
-    },
-  };
-  const context = yield* Layer.build(
-    HubMembership.layer.pipe(
-      Layer.provide(
-        Layer.succeed(
-          HubOcx,
-          HubOcx.of({
-            home,
-            device,
-            devicePlatform: (alias) =>
-              Effect.sync(() => {
-                calls.push(`platform ${alias}`);
-                return fixture.platform ?? "posix";
-              }),
-            connectHubClient: (alias) =>
-              Effect.sync(() => {
-                calls.push(`handoff ${alias}`);
-                return (fixture.inviteExit ?? 0) !== 0
-                  ? { minted: false as const, exit: fixture.inviteExit! }
-                  : {
-                      minted: true as const,
-                      dataUrl: "https://hub.tailnet-example.ts.net:8443",
-                      expiresAt: "2026-10-22T12:05:00.000Z",
-                      connect: { code: fixture.connectExit ?? 0, stdout: "" },
-                    };
-              }),
-            pinnedFingerprint: () => Effect.succeed(fixture.pin),
-            directAlias: () => Effect.succeed(fixture.direct ?? true),
-            runningTurns: () => Effect.succeed(fixture.running ?? 0),
-            deviceHealth: (alias) =>
-              Effect.sync(() => {
-                calls.push(`health ${alias}`);
-                return JSON.stringify(fixture.health ?? { service: "opencodex" });
-              }),
-            homeTunnels: (alias, port) =>
-              Effect.sync(() => {
-                calls.push(`tunnels ${alias} ${port}`);
-                return links.has(alias) || fixture.strayTunnel ? 1 : 0;
-              }),
-          }),
-        ),
-      ),
-      Layer.provide(
-        Layer.mock(HubParity.HubParity)({
-          verify: (alias) =>
-            Effect.sync(() => {
-              calls.push(`verify ${alias}`);
-              return verdicts.length > 1 ? verdicts.shift()! : (verdicts[0] ?? verdict());
-            }),
-        }),
-      ),
-      Layer.provideMerge(Inbox.layer),
-      Layer.provideMerge(Profiles.layer),
-      Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
-      Layer.provide(Layer.mock(PendingQuestions.PendingQuestionsMcpService)({})),
-      Layer.provideMerge(Settings.layerTest({ goatclaw })),
-      Layer.provideMerge(Sqlite.layerMemory),
-      Layer.provide(NodeCrypto.layer),
-    ),
-  );
-  const membership = Context.get(context, HubMembership.HubMembership);
-  const inbox = Context.get(context, Inbox.DecisionInbox);
-  const sql = Context.get(context, SqlClient.SqlClient);
-  const audit = sql<{
-    action: string;
-    target: string;
-    outcome: string;
-    decision_id: string | null;
-  }>`SELECT action, target, outcome, decision_id FROM audit_events WHERE action LIKE 'hub.%' ORDER BY id`;
-  return {
-    membership,
-    inbox,
-    audit,
-    calls,
-    approve: (id: string, optionId = "approve") =>
-      inbox.answer(owner, { id, optionId, reason: "Reviewed the host key." }),
-    offer: (fingerprint: string) => {
-      offered = fingerprint;
-    },
-  };
-});
+import {
+  OTHER,
+  PINNED,
+  owner,
+  scope,
+  setup,
+  threadScope,
+  verdict,
+} from "./HubMembership.testkit.ts";
 
 it.effect("an owner joins a pinned device: GOAT's pin becomes --expect-fingerprint", () =>
   Effect.gen(function* () {
@@ -689,4 +498,279 @@ it.effect(
         "home link revoke --link-id lnk_0123456789abcdef --force --yes --json",
       );
     }),
+);
+
+it.effect("a thread's unpinned join asks through a handoff whose id continues it once", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ addFails: true });
+    const first = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+    expect(first).toMatchObject({
+      kind: "needs_human",
+      state: "needs_human",
+      handoff: { kind: "approval", state: "pending", targetPath: "hub.device_join" },
+      next: { after: "approval", call: "goat_hub_device_join" },
+    });
+    expect(first.decisionId).toBe((first as { handoff: { handoffId: string } }).handoff.handoffId);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    const early = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
+      .pipe(Effect.flip);
+    expect(early.message).toContain("still open");
+
+    yield* hub.answer(first.decisionId!);
+    const joined = yield* hub.membership.join(threadScope, {
+      deviceAlias: "lidge-ts",
+      decisionId: first.decisionId!,
+    });
+    expect(joined.state).toBe("failed");
+    expect(hub.calls).toContain(`home link add lidge-ts --expect-fingerprint ${PINNED} --json`);
+    const reused = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: first.decisionId! })
+      .pipe(Effect.flip);
+    expect(reused.message).toContain("already used");
+  }),
+);
+
+it.effect("a handoff covers only the change it was asked for", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linked: ["box"] });
+    const join = yield* hub.membership.join(threadScope, { deviceAlias: "lidge-ts" });
+    yield* hub.answer(join.decisionId!);
+    hub.offer(OTHER);
+    const swapped = yield* hub.membership
+      .join(threadScope, { deviceAlias: "lidge-ts", decisionId: join.decisionId! })
+      .pipe(Effect.flip);
+    expect(swapped.message).toContain("does not cover this change");
+    const leave = yield* hub.membership
+      .leave(threadScope, { deviceAlias: "box", decisionId: join.decisionId! })
+      .pipe(Effect.flip);
+    expect(leave.message).toContain("does not cover this change");
+    const declined = yield* hub.membership.join(threadScope, { deviceAlias: "other-ts" });
+    yield* hub.answer(declined.decisionId!, "declined");
+    expect(
+      (yield* hub.membership
+        .join(threadScope, { deviceAlias: "other-ts", decisionId: declined.decisionId! })
+        .pipe(Effect.flip)).message,
+    ).toContain("was not given");
+    expect(hub.calls.some((call) => call.includes("link add"))).toBe(false);
+  }),
+);
+
+it.effect("a thread force-removes and re-links through handoffs bound to those steps", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linked: ["lidge-ts"], deviceExit: { disconnect: 125 } });
+    const asked = yield* hub.membership.leave(threadScope, { deviceAlias: "lidge-ts" });
+    expect(asked).toMatchObject({
+      kind: "needs_human",
+      next: { call: "goat_hub_device_leave" },
+      handoff: { targetPath: "hub.device_leave" },
+    });
+    yield* hub.answer(asked.decisionId!);
+    const forced = yield* hub.membership.leave(threadScope, {
+      deviceAlias: "lidge-ts",
+      decisionId: asked.decisionId!,
+    });
+    expect(forced.state).toBe("degraded");
+    expect(forced.steps.map(({ step }) => step)).toEqual(["revoke", "link_removed"]);
+
+    const relinkHub = yield* setup({
+      linked: ["macmini-ts"],
+      verdicts: [verdict(["P2"]), verdict(["P2"]), verdict()],
+    });
+    const relink = yield* relinkHub.membership.repair(threadScope, { deviceAlias: "macmini-ts" });
+    expect(relink).toMatchObject({ kind: "needs_human", next: { call: "goat_hub_device_repair" } });
+    yield* relinkHub.answer(relink.decisionId!);
+    const relinked = yield* relinkHub.membership.repair(threadScope, {
+      deviceAlias: "macmini-ts",
+      decisionId: relink.decisionId!,
+    });
+    expect(relinked.state).toBe("child");
+  }),
+);
+
+it.effect(
+  "an inbox approval answered by an owner-profile agent does not approve a hub change",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup();
+      const asked = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" });
+      expect(asked.state).toBe("needs_human");
+      expect(asked).not.toHaveProperty("handoff");
+      yield* hub.inbox.answer(
+        { kind: "agent", scope },
+        { id: asked.decisionId!, optionId: "approve", reason: "Looks fine." },
+      );
+      const refused = yield* hub.membership
+        .join(scope, { deviceAlias: "lidge-ts", decisionId: asked.decisionId! })
+        .pipe(Effect.flip);
+      expect(refused.message).toContain("answered by an agent");
+    }),
+);
+
+it.effect(
+  "a decision an agent filed itself does not approve a hub change, even when a person answers it",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ profile: "hub-admin" });
+      const lookalike = yield* hub.inbox.create(
+        { kind: "agent", scope },
+        {
+          title: "Join lidge-ts to the hub",
+          context: `Looks routine.\n\n${HubMembership.decisionBinding("join", "lidge-ts", PINNED)}`,
+          options: [
+            { id: "approve", label: "Approve", consequence: "Joins." },
+            { id: "decline", label: "Decline", consequence: "Nothing changes." },
+          ],
+          requiredProfile: "owner",
+        },
+      );
+      yield* hub.approve(lookalike.id);
+      const refused = yield* hub.membership
+        .join(scope, { deviceAlias: "lidge-ts", decisionId: lookalike.id })
+        .pipe(Effect.flip);
+      expect(refused.message).toContain("not asked by GOAT");
+      expect(hub.calls.some((call) => call.includes("link add"))).toBe(false);
+      expect(yield* hub.consumed).toEqual([]);
+    }),
+);
+
+it.effect("GOAT joins a cloud machine it pinned, under any default profile, without asking", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, profile: "observer" });
+    const result = yield* hub.membership.joinProvisioned(
+      scope,
+      "boat-builder",
+      Effect.succeed(true),
+    );
+    expect(result.state).toBe("child");
+    expect(hub.calls).toContain(`home link add boat-builder --expect-fingerprint ${PINNED} --json`);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    expect((yield* hub.audit).at(-1)).toMatchObject({ action: "hub.join", outcome: "child" });
+  }),
+);
+
+it.effect("GOAT refuses a cloud machine whose offered key is not the one it pinned", () =>
+  Effect.gen(function* () {
+    for (const pin of [OTHER, undefined]) {
+      const hub = yield* setup({ ...(pin === undefined ? {} : { pin }), offered: PINNED });
+      const result = yield* hub.membership.joinProvisioned(
+        scope,
+        "boat-builder",
+        Effect.succeed(true),
+      );
+      expect(result.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+      // No person is asked: a provisioning join never files a decision.
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }
+  }),
+);
+
+it.effect("GOAT joining a cloud machine that is already linked changes nothing", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, linked: ["boat-builder"] });
+    const result = yield* hub.membership.joinProvisioned(
+      scope,
+      "boat-builder",
+      Effect.succeed(true),
+    );
+    expect(result.state).toBe("child");
+    expect(hub.calls).toEqual(["home link status --json", "verify boat-builder"]);
+  }),
+);
+
+it.effect("GOAT never joins a host a person added without even with a matching pin", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED });
+    const refused = yield* hub.membership
+      .joinProvisioned(scope, "mac-studio", Effect.succeed(true))
+      .pipe(Effect.flip);
+    expect(refused.code).toBe("invalid_request");
+    expect(hub.calls).toEqual([]);
+  }),
+);
+
+/** Holds for the first `reads` reads, then reads as withdrawn. */
+const holdsFor = (reads: number) => {
+  let count = 0;
+  return Effect.sync(() => (++count <= reads ? person : undefined));
+};
+
+it.effect("a person's standing consent joins a pinned SSH host without asking anyone", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, profile: "observer" });
+    const result = yield* hub.membership.joinWithConsent(
+      scope,
+      "mac-studio",
+      Effect.succeed(person),
+    );
+    expect(result.state).toBe("child");
+    expect(hub.calls).toContain(`home link add mac-studio --expect-fingerprint ${PINNED} --json`);
+    expect((yield* hub.inboxItems).items).toEqual([]);
+    // GOAT records only links it made for its own cloud machines; a person's host is not one.
+    expect(yield* hub.provisioned).toEqual([]);
+  }),
+);
+
+it.effect("standing consent never links an unpinned or changed key, and asks nobody instead", () =>
+  Effect.gen(function* () {
+    for (const pin of [OTHER, undefined]) {
+      const hub = yield* setup(pin === undefined ? {} : { pin });
+      const result = yield* hub.membership.joinWithConsent(
+        scope,
+        "mac-studio",
+        Effect.succeed(person),
+      );
+      expect(result.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }
+  }),
+);
+
+it.effect("consent withdrawn during the join stops it right before ocx link add", () =>
+  Effect.gen(function* () {
+    // Read under the permit, again as the join starts, and last before the link is added.
+    for (const reads of [0, 1, 2]) {
+      const hub = yield* setup({ pin: PINNED });
+      const result = yield* hub.membership.joinWithConsent(scope, "mac-studio", holdsFor(reads));
+      expect(result.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+      expect((yield* hub.audit).at(-1)).toMatchObject({ action: "hub.join", outcome: "withdrawn" });
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }
+  }),
+);
+
+it.effect(
+  "a cloud join stops before ocx link add once the switch is off, settling its record",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ pin: PINNED });
+      let reads = 0;
+      const gate = Effect.sync(() => ++reads < 2);
+      const result = yield* hub.membership.joinProvisioned(scope, "boat-builder", gate);
+      expect(result.state).toBe("failed");
+      expect(hub.calls.some((call) => call.startsWith("home link add"))).toBe(false);
+      expect(yield* hub.provisioned).toEqual([
+        { alias: "boat-builder", link_id: null, adding_since: null },
+      ]);
+    }),
+);
+
+it.effect("standing consent is for SSH hosts only and leaves an existing link unchanged", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ pin: PINNED, linked: ["mac-studio"] });
+    const cloud = yield* hub.membership
+      .joinWithConsent(scope, "boat-builder", Effect.succeed(person))
+      .pipe(Effect.flip);
+    expect(cloud.code).toBe("invalid_request");
+    const result = yield* hub.membership.joinWithConsent(
+      scope,
+      "mac-studio",
+      Effect.succeed(person),
+    );
+    expect(result.state).toBe("child");
+    expect(hub.calls).toEqual(["home link status --json", "verify mac-studio"]);
+  }),
 );

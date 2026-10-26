@@ -27,6 +27,7 @@ import {
   resolveLocalVersionStatusLabel,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { HeadlessServerSetting } from "./HeadlessServerSetting";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
@@ -123,7 +124,6 @@ import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { HostsSettings } from "./HostsSettings";
 import { HubDeviceCard } from "./HubDeviceCard";
-import { HubNodesSettings } from "./HubNodesSettings";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { WorktreeCheckoutHealthNotice } from "./WorktreeCheckoutHealthNotice";
 import { ensureLocalApi } from "../../localApi";
@@ -968,6 +968,7 @@ export function ConnectionsSettings() {
             }
           >
             <LocalEnvironmentSetting />
+            <HeadlessServerSetting />
             {canManageLocalBackend ? (
               <SettingsRow
                 title="Version"
@@ -1119,7 +1120,7 @@ export function ConnectionsSettings() {
                   {pendingDesktopServerExposureMode === "network-accessible"
                     ? "Let your other devices connect to GOAT over the network. Pair devices to give them access. GOAT will restart."
                     : isGoatConnectEnabled()
-                      ? "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. GOAT will restart."
+                      ? "Devices connected over your local network will disconnect. Existing tunnels, such as GOAT Connect or Tailscale HTTPS, keep working. GOAT will restart."
                       : "Devices connected over your local network will disconnect. Tailscale HTTPS keeps working. GOAT will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -1377,6 +1378,7 @@ export function ConnectionsSettings() {
             description="Connect an environment to view its settings and access."
           />
           <LocalEnvironmentSetting />
+          <HeadlessServerSetting />
           {canReadRelay || canManageRelay ? (
             <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
           ) : null}
@@ -1425,9 +1427,6 @@ export function ConnectionsSettings() {
         </SettingsSection>
       ) : null}
       <ConnectionEnvironmentsSection />
-      {primaryEnvironmentId !== null ? (
-        <HubNodesSettings environmentId={primaryEnvironmentId} />
-      ) : null}
       {primarySettings}
       <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
         {primaryEnvironmentId !== null ? (

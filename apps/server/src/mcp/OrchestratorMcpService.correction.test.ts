@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as DateTime from "effect/DateTime";
@@ -98,6 +99,7 @@ function fixture(response: { lost: boolean; beforeCommit: boolean }) {
     }),
   ).pipe(Layer.provide(realThreads));
   return OrchestratorMcpService.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provideMerge(
       Layer.mergeAll(
         runtime,

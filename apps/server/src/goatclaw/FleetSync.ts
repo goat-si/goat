@@ -1,4 +1,5 @@
 import {
+  type GoatclawCeilingAdvice,
   type GoatclawFleetPolicy,
   type GoatclawHostSync,
   type GoatclawSettings,
@@ -31,7 +32,7 @@ export const SYNC_TOOL = agentSurfaceRegistry["permission_profile.sync"].name;
 /** A host that holds the policy is asked again this often, to notice a change made there. */
 export const REFRESH_MS = 10 * 60_000;
 /** A host that did not answer is retried this often. */
-export const RETRY_MS = 60_000;
+const RETRY_MS = 60_000;
 const CALL_TIMEOUT_MS = 15_000;
 
 const policyOf = (settings: GoatclawSettings): GoatclawFleetPolicy => ({
@@ -44,7 +45,7 @@ const versionOf = (policy: GoatclawFleetPolicy) =>
   `${policy.updatedAt ?? ""}\u0000${goatclawPolicyContent(policy)}`;
 
 /** Whether `incoming` replaces `current`: a deliberately set policy, no older, that changes something. */
-export const supersedes = (incoming: GoatclawFleetPolicy, current: GoatclawFleetPolicy) =>
+const supersedes = (incoming: GoatclawFleetPolicy, current: GoatclawFleetPolicy) =>
   incoming.updatedAt !== undefined &&
   (current.updatedAt === undefined || incoming.updatedAt >= current.updatedAt) &&
   versionOf(incoming) !== versionOf(current);
@@ -78,6 +79,33 @@ export interface HostReach {
   readonly enforcesCeilings: boolean;
 }
 
+/**
+ * The one rule for forwarding a goatclaw ceiling to another host, shared by remote launches and
+ * follow-up sends so the two can never disagree (#786). The destination is synced first, and a
+ * sync that is pending or a destination too old to answer it never refuses the call: goatclaw is
+ * open by default, and orchestration that keeps running outranks a ceiling the destination may
+ * not enforce until it catches up. The ceiling is still forwarded either way, and the caller gets
+ * advice to put in its result when the destination has not confirmed it enforces one.
+ */
+export const syncBeforeForwarding = Effect.fn("GoatclawFleetSync.syncBeforeForwarding")(function* (
+  fleet: GoatclawFleetSync["Service"],
+  host: string,
+): Effect.fn.Return<GoatclawCeilingAdvice | undefined> {
+  const reach = yield* fleet.ensure(host);
+  if (reach.enforcesCeilings) return undefined;
+  yield* Effect.logWarning("goatclaw.ceilingUnconfirmed", {
+    host,
+    state: reach.sync.state,
+    message: reach.sync.message,
+  });
+  return {
+    enforcement: "unconfirmed",
+    host,
+    sync: reach.sync,
+    message: `${host} has not confirmed it enforces goatclaw ceilings (sync ${reach.sync.state}), so the forwarded ceiling may not apply there yet.`,
+  };
+});
+
 interface HostRecord extends HostReach {
   /** The local policy this host was last synced against. */
   readonly version: string;
@@ -87,7 +115,7 @@ interface HostRecord extends HostReach {
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
-  const dispatch = yield* Effect.serviceOption(SshRemoteDispatch.SshRemoteDispatch);
+  const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const records = new Map<string, HostRecord>();
   const gates = new Map<string, Semaphore.Semaphore>();
   const gate = (host: string) => {
@@ -151,7 +179,7 @@ export const make = Effect.gen(function* () {
   const classify = (host: string, error: unknown): HostReach => {
     if (error instanceof SshRemoteDispatch.SshRemoteDispatchError) {
       if (
-        error.reason === "remote_refused" &&
+        (error.reason === "remote_refused" || error.reason === "remote_outdated") &&
         error.message.startsWith(`GOAT on ${host} does not have ${SYNC_TOOL}`)
       )
         return { sync: { state: "outdated", message: error.message }, enforcesCeilings: false };
@@ -168,12 +196,19 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const syncHost = Effect.fn("GoatclawFleetSync.syncHost")(function* (host: string) {
+  /**
+   * `connect` is for a launch or send that is about to reach the host anyway: it uses the same
+   * connection it will, so a compatible runtime of another build still answers. The background
+   * reconcile never starts or wakes a runtime.
+   */
+  const syncHost = Effect.fn("GoatclawFleetSync.syncHost")(function* (
+    host: string,
+    connect = false,
+  ) {
     const checkedAt = yield* Clock.currentTimeMillis;
-    if (Option.isNone(dispatch)) return { sync: pending(), enforcesCeilings: false };
     const outcome = yield* local.pipe(
       Effect.flatMap((mine) =>
-        dispatch.value
+        dispatch
           .callHostTool(
             {
               host,
@@ -182,7 +217,7 @@ export const make = Effect.gen(function* () {
               // Starts no thread there; the remote session only needs to change settings.
               writes: true,
               settingsWrite: true,
-              requireReady: true,
+              ...(connect ? {} : { requireReady: true as const }),
               timeoutMs: CALL_TIMEOUT_MS,
             },
             Effect.succeed("approval-required" as const),
@@ -230,7 +265,7 @@ export const make = Effect.gen(function* () {
           record.version === versionOf(mine.value)
         )
           return { sync: record.sync, enforcesCeilings: record.enforcesCeilings };
-        return yield* syncHost(host);
+        return yield* syncHost(host, true);
       }),
     );
 
@@ -242,8 +277,7 @@ export const make = Effect.gen(function* () {
   };
 
   const reconcile = Effect.gen(function* () {
-    if (Option.isNone(dispatch)) return;
-    const hosts = yield* dispatch.value.connectedHosts;
+    const hosts = yield* dispatch.connectedHosts;
     if (hosts.length === 0) return;
     const mine = yield* local.pipe(Effect.option);
     const version = Option.isSome(mine) ? versionOf(mine.value) : "";

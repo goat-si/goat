@@ -21,7 +21,7 @@ From the repository root:
 
 The command:
 
-1. Creates three temporary T3 base directories and starts a local server for each on an available
+1. Creates three temporary GOAT base directories and starts a local server for each on an available
    port.
 2. Creates T3 Code, React, and Linux Git repositories with recognizable favicons, feature branches,
    and a deterministic T3 Code review diff.
@@ -51,30 +51,38 @@ shared across every checkout. The readiness check only verifies that the port is
 verify process ownership. Concurrent screenshot harnesses in different worktrees can therefore
 collide or attach to the wrong Metro process.
 
-Every configured device defaults to dark appearance and the `t3-code` palette, so plain
-`pnpm screenshots:mobile` produces 35 dark PNGs. Pass `--appearance light`, `--appearance dark`, or
-`--appearance both` to override the configured appearance; `both` produces 70 PNGs.
+Every configured device defaults to dark appearance and the `goat-code` palette, so plain
+`pnpm screenshots:mobile` produces 45 dark PNGs. Pass `--appearance light`, `--appearance dark`, or
+`--appearance both` to override the configured appearance; `both` produces 90 PNGs.
 
-Pass `--theme <id>` (repeatable) or `--theme all` to capture the app's other palettes: `t3-code`,
-`t3-chat`, `grove`, `ocean`, `ember`, and `iris`. The runner hands the palette to the app as a launch
+Pass `--theme <id>` (repeatable) or `--theme all` to capture the app's other palettes: `goat-code`,
+`goat-chat`, `grove`, `ocean`, `ember`, and `iris`. The runner hands the palette to the app as a launch
 argument, the app applies it to both color schemes, and a scene only reports itself ready once the
 requested palette is active — so a capture can never show the previous theme. `--theme all`
 multiplies the run by six; only the native build is shared.
 
 The default matrix is:
 
-| Output folder                         | Capture target               | Upload dimensions | Store slot                                |
-| ------------------------------------- | ---------------------------- | ----------------- | ----------------------------------------- |
-| `apple/iphone-6.9/dark/t3-code/`      | disposable iPhone 17 Pro Max | 1320×2868         | App Store Connect iPhone 6.9-inch         |
-| `apple/iphone-6.5/dark/t3-code/`      | disposable iPhone 14 Plus    | 1284×2778         | App Store Connect iPhone 6.5-inch         |
-| `apple/ipad-13/dark/t3-code/`         | iPad Pro 13-inch (M5)        | 2752×2064         | App Store Connect iPad 13-inch, landscape |
-| `google-play/phone/dark/t3-code/`     | Pixel AVD at 420 dpi         | 1080×1920         | Google Play phone, portrait 9:16          |
-| `google-play/tablet-7/dark/t3-code/`  | Pixel AVD at 600dp width     | 1080×1920         | Google Play 7-inch tablet, portrait 9:16  |
-| `google-play/tablet-10/dark/t3-code/` | Pixel AVD at 800dp width     | 1440×2560         | Google Play 10-inch tablet, portrait 9:16 |
+| Output folder                             | Capture target                 | Upload dimensions | Store slot                                |
+| ----------------------------------------- | ------------------------------ | ----------------- | ----------------------------------------- |
+| `apple/iphone-6.9/dark/goat-code/`        | disposable iPhone 17 Pro Max   | 1320×2868         | App Store Connect iPhone 6.9-inch         |
+| `apple/iphone-6.5/dark/goat-code/`        | disposable iPhone 14 Plus      | 1284×2778         | App Store Connect iPhone 6.5-inch         |
+| `apple/iphone-duo-closed/dark/goat-code/` | iPhone Duo, folded portrait    | 1398×2034         | App Store Connect iPhone Duo              |
+| `apple/iphone-duo-open/dark/goat-code/`   | iPhone Duo, unfolded landscape | 2853×2007         | App Store Connect iPhone Duo              |
+| `apple/ipad-13/dark/goat-code/`           | iPad Pro 13-inch (M5)          | 2752×2064         | App Store Connect iPad 13-inch, landscape |
+| `google-play/phone/dark/goat-code/`       | Pixel AVD at 420 dpi           | 1080×1920         | Google Play phone, portrait 9:16          |
+| `google-play/tablet-7/dark/goat-code/`    | Pixel AVD at 600dp width       | 1080×1920         | Google Play 7-inch tablet, portrait 9:16  |
+| `google-play/tablet-10/dark/goat-code/`   | Pixel AVD at 800dp width       | 1440×2560         | Google Play 10-inch tablet, portrait 9:16 |
 
-Each target captures thread, terminal, review, thread list, and environments, and every target but
-the iPad also captures agent activity. Each palette folder's five or six screenshots satisfy the configured Apple limit of 1–10, Google
+Each target captures thread, terminal, review, thread list, and environments, and every target except
+the iPad and Duo also captures agent activity. Each palette folder's five or six screenshots satisfy the configured Apple limit of 1–10, Google
 phone requirement of 2–8, and Google tablet recommendation/slot minimum of 4 with a maximum of 8.
+The two Duo folders each contain five scenes and upload to the same iPhone Duo slot (ten images
+total). They omit agent activity to stay within that shared limit. Duo capture requires
+an installed iOS runtime that supports iPhone Duo and `agent-device` on PATH, or
+`AGENT_DEVICE_PATH` pointing to its executable; it sets and verifies the
+simulator fold pose before launching the app.
+
 Every palette gets its own leaf folder so one upload slot never mixes themes and each folder keeps a
 store-legal screenshot count.
 
@@ -91,16 +99,18 @@ The generated tree is deliberately aligned with the store upload fields:
 
     artifacts/app-store/screenshots/
     ├── apple/
-    │   ├── iphone-6.9/dark/t3-code/{thread,terminal,review,threads,environments,agent-activity}.png
-    │   ├── iphone-6.5/dark/t3-code/{thread,terminal,review,threads,environments,agent-activity}.png
-    │   └── ipad-13/dark/t3-code/{thread,terminal,review,threads,environments}.png
+    │   ├── iphone-6.9/dark/goat-code/{thread,terminal,review,threads,environments,agent-activity}.png
+    │   ├── iphone-6.5/dark/goat-code/{thread,terminal,review,threads,environments,agent-activity}.png
+    │   ├── iphone-duo-closed/dark/goat-code/{thread,terminal,review,threads,environments}.png
+    │   ├── iphone-duo-open/dark/goat-code/{thread,terminal,review,threads,environments}.png
+    │   └── ipad-13/dark/goat-code/{thread,terminal,review,threads,environments}.png
     └── google-play/
-        ├── phone/dark/t3-code/{thread,terminal,review,threads,environments,agent-activity}.png
-        ├── tablet-7/dark/t3-code/{thread,terminal,review,threads,environments,agent-activity}.png
-        └── tablet-10/dark/t3-code/{thread,terminal,review,threads,environments,agent-activity}.png
+        ├── phone/dark/goat-code/{thread,terminal,review,threads,environments,agent-activity}.png
+        ├── tablet-7/dark/goat-code/{thread,terminal,review,threads,environments,agent-activity}.png
+        └── tablet-10/dark/goat-code/{thread,terminal,review,threads,environments,agent-activity}.png
 
 A light-only run writes the same tree under `light/`; `--appearance both` writes both appearance
-folders, and each requested theme adds a sibling folder next to `t3-code/`.
+folders, and each requested theme adds a sibling folder next to `goat-code/`.
 
 Edit [mobile-showcase.config.ts](../../scripts/mobile-showcase.config.ts) to change simulator or AVD
 names, light/dark appearance, default palette, iOS orientation, scenes, output directory, capture
@@ -112,7 +122,7 @@ appearance settings can never drift apart.
 
 Run the `Mobile Showcase Screenshots` workflow from GitHub's Actions tab, choose `all`, `ios`, or
 `android`, select `light`, `dark`, or `both`, and pick a palette (or `all`, which raises each job's
-timeout from 60 to 300 minutes). The default dispatch captures both appearances of the `t3-code`
+timeout from 60 to 300 minutes). The default dispatch captures both appearances of the `goat-code`
 palette and runs iOS and Android concurrently: iPhone and iPad capture on a
 12-vCPU Blacksmith macOS runner, while Android phone, 7-inch tablet, and 10-inch tablet capture on a
 16-vCPU Blacksmith Linux runner with a KVM-accelerated x86_64 emulator.
@@ -131,6 +141,7 @@ debug APK matches its accelerated emulator.
 
 Capture one scene or device:
 
+    pnpm screenshots:mobile --device iphone-duo-closed --device iphone-duo-open
     pnpm screenshots:mobile --device iphone-6.9 --scene thread
     pnpm screenshots:mobile --platform android --scene review
 

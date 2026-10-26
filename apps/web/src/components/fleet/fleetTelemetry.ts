@@ -1,3 +1,4 @@
+import { presentChildSetup } from "@goat/client-runtime/hub-devices";
 import type { FleetMachine } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import {
@@ -21,6 +22,7 @@ import type {
   EnvironmentId,
   HostStatusEntry,
   HostStatusQuota,
+  OpenCodexChildBootstrapStatus,
   ServerEventLoopStall,
 } from "@goat/contracts";
 
@@ -184,6 +186,12 @@ export function fleetHostRows(input: {
   readonly sshAliases: ReadonlyMap<EnvironmentId, ReadonlyArray<string>>;
   readonly reports: ReadonlyMap<EnvironmentId, ReadonlyArray<HostStatusEntry>>;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  /**
+   * Servers that read the primary's SSH config, such as the headless server SSH launches keep
+   * beside the desktop's, so their entries for this client's aliases are machines already
+   * listed too. Defaults to the primary alone.
+   */
+  readonly sharedSshConfigEnvironmentIds?: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<FleetHostRow> {
   const matched = matchFleetHostEntries(input);
   const sourceOf = new Map<HostStatusEntry, string>();
@@ -191,6 +199,10 @@ export function fleetHostRows(input: {
     for (const entry of hosts) sourceOf.set(entry, hostSourceKey(environmentId, entry.host));
   }
   const claimed = new Set<string>();
+  // An alias the graph resolved to a machine is that machine, under whichever server reported it.
+  for (const machine of input.machines) {
+    for (const route of machine.reportedAliases) claimed.add(hostSourceKey(route.via, route.alias));
+  }
   const rows: FleetHostRow[] = input.machines.map((machine) => {
     const entry = matched.get(machine.id) ?? null;
     const sourceKey = entry === null ? null : (sourceOf.get(entry) ?? null);
@@ -205,12 +217,15 @@ export function fleetHostRows(input: {
     };
   });
   const ownAliases = new Set([...input.sshAliases.values()].flat());
+  const readsClientAliases = (environmentId: EnvironmentId) =>
+    environmentId === input.primaryEnvironmentId ||
+    input.sharedSshConfigEnvironmentIds?.has(environmentId) === true;
   for (const [environmentId, hosts] of input.reports) {
     for (const entry of hosts) {
       if (entry.host === null) continue;
       const key = hostSourceKey(environmentId, entry.host);
       if (claimed.has(key)) continue;
-      if (environmentId === input.primaryEnvironmentId && ownAliases.has(entry.host)) continue;
+      if (readsClientAliases(environmentId) && ownAliases.has(entry.host)) continue;
       claimed.add(key);
       rows.push({
         key,
@@ -223,6 +238,34 @@ export function fleetHostRows(input: {
     }
   }
   return rows;
+}
+
+/**
+ * The Home's Child setup for each row. The Home sets it on its own report of the machine, under
+ * the alias it reaches it by, so a machine this client also reads directly keeps it.
+ */
+export function fleetChildSetups(
+  rows: ReadonlyArray<FleetHostRow>,
+  machines: ReadonlyArray<Pick<FleetMachine, "id" | "sshHost" | "reportedAliases">>,
+  reports: ReadonlyMap<EnvironmentId, ReadonlyArray<HostStatusEntry>>,
+): ReadonlyMap<string, OpenCodexChildBootstrapStatus> {
+  const byId = new Map(machines.map((machine) => [machine.id, machine] as const));
+  const setups = new Map<string, OpenCodexChildBootstrapStatus>();
+  for (const row of rows) {
+    const machine = row.machineId === null ? undefined : byId.get(row.machineId);
+    const routes = machine === undefined ? [] : [machine.sshHost, ...machine.reportedAliases];
+    const status =
+      row.entry?.opencodexChild ??
+      routes
+        .map((route) =>
+          route === null
+            ? undefined
+            : reports.get(route.via)?.find((entry) => entry.host === route.alias)?.opencodexChild,
+        )
+        .find((candidate) => candidate !== undefined);
+    if (status !== undefined) setups.set(row.key, status);
+  }
+  return setups;
 }
 
 /**
@@ -379,6 +422,8 @@ export function fleetAlerts(
     readonly pendingSince?: ReadonlyMap<EnvironmentId, number>;
     /** The last event-loop stall each environment reported when it connected. */
     readonly stalls?: ReadonlyMap<EnvironmentId, ServerEventLoopStall>;
+    /** The Home's Child setup for each row, from fleetChildSetups. */
+    readonly childSetups?: ReadonlyMap<string, OpenCodexChildBootstrapStatus>;
   } = {},
 ): ReadonlyArray<FleetAlert> {
   const unreadable = options.unreadable ?? [];
@@ -403,6 +448,16 @@ export function fleetAlerts(
         label: row.label,
         ...alert,
         ...(retry ? act("retry") : {}),
+      });
+    }
+    const setup = presentChildSetup(options.childSetups?.get(row.key) ?? row.entry?.opencodexChild);
+    if (setup !== null) {
+      alerts.push({
+        key: row.key + ":child-setup",
+        tone: setup.tone === "progress" ? "muted" : setup.tone,
+        label: row.label,
+        detail: setup.label,
+        ...(setup.detail === null ? {} : { lines: [setup.detail] }),
       });
     }
     const entry = row.entry;

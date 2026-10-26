@@ -1,284 +1,58 @@
 import { expect, it } from "@effect/vitest";
 import {
   ChatAttachmentId,
-  MessageId,
-  NodeId,
-  ProjectId,
-  ProviderInstanceId,
-  ProviderSessionId,
-  RunAttemptId,
-  RunId,
-  ThreadId,
   ProviderTurnId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
-import { makeClaudeCloudAdapter } from "./adapter.ts";
-import * as Cli from "./cli.ts";
+import { makeHarness, policy, selection, sessionAnswer, source } from "./adapter.testkit.ts";
 import { ClaudeCloudError } from "./protocol.ts";
 import { LOGIN } from "./testing.ts";
 
-const INSTANCE = ProviderInstanceId.make("claude-cloud-test");
-const THREAD = ThreadId.make("cloud-thread-test");
-const policy = {
-  runtimeMode: "approval-required" as const,
-  interactionMode: "default" as const,
-  cwd: "/fixture/repo",
-};
-const selection = { instanceId: INSTANCE, model: "cloud-default" };
-const source = {
-  repository: "https://github.com/fixture/repository",
-  branch: "main",
-  sha: "a".repeat(40),
-};
-
-const makeTurn = Effect.fnUntraced(function* (
-  providerThread: OrchestrationV2ProviderThread,
-  ordinal = 1,
-): Effect.fn.Return<Adapter.ProviderAdapterV2TurnInput> {
-  const now = yield* DateTime.now;
-  const appThread: OrchestrationV2AppThread = {
-    id: THREAD,
-    projectId: ProjectId.make("project-cloud"),
-    title: "Cloud test",
-    createdBy: "user",
-    creationSource: "web",
-    providerInstanceId: INSTANCE,
-    modelSelection: selection,
-    runtimeMode: policy.runtimeMode,
-    interactionMode: policy.interactionMode,
-    branch: "main",
-    worktreePath: "/fixture/thread-worktree",
-    activeProviderThreadId: providerThread.id,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: THREAD },
-    forkedFrom: null,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: null,
-  };
-  return {
-    appThread,
-    threadId: THREAD,
-    runId: RunId.make(`cloud-run-${ordinal}`),
-    runOrdinal: ordinal,
-    providerTurnOrdinal: ordinal,
-    attemptId: RunAttemptId.make(`cloud-attempt-${ordinal}`),
-    rootNodeId: NodeId.make(`cloud-root-${ordinal}`),
-    providerThread,
-    message: {
-      messageId: MessageId.make(`cloud-message-${ordinal}`),
-      text: "task",
-      attachments: [],
-      createdBy: "user" as const,
-      creationSource: "web" as const,
-    },
-    modelSelection: selection,
-    runtimePolicy: policy,
-    cloudSource: source,
-    cloudLaunchSource: { cwd: "/fixture/project", restriction: "project-folder" },
-  } satisfies Adapter.ProviderAdapterV2TurnInput;
-});
-
-const makeHarness = Effect.fnUntraced(function* () {
-  let starts = 0;
-  let sends = 0;
-  let reads = 0;
-  let startError: ClaudeCloudError | undefined;
-  let observedSummary = "Changed behavior.";
-  let sendError: ClaudeCloudError | undefined;
-  let controlError: ClaudeCloudError | undefined;
-  let observationError: ClaudeCloudError | undefined;
-  let resolvedLogin = LOGIN;
-  const startCwds: string[] = [];
-  const controlCommands: Array<{ kind: string; cwd: string; id?: string }> = [];
-  let failCommitAt = -1;
-  let commitCalls = 0;
-  const ledger: NonNullable<OrchestrationV2ProviderThread["cloudTask"]>[] = [];
-  const accepted = yield* Deferred.make<void>();
-  const exit = yield* Deferred.make<void, ClaudeCloudError>();
-  const read = yield* Deferred.make<void>();
-  const deliver = yield* Deferred.make<void>();
-  const sendReached = yield* Deferred.make<void>();
-  const sendRelease = yield* Deferred.make<void>();
-  const startedAt = yield* DateTime.now;
-  let pauseSend = false;
-  let found = true;
-  const cli = Cli.ClaudeCloudCli.of({
-    readiness: (login, cwd) =>
-      Effect.sync(() => {
-        expect(login).toEqual(LOGIN);
-        expect(cwd).toBe("/fixture/goat/control");
-        controlCommands.push({ kind: "readiness", cwd });
-        return { version: "2.1.296" };
-      }),
-    start: (_login, cwd) =>
+it.effect.each([1, 2])(
+  "a registered folder's trust prompts (%s) are accepted, noticed in the thread and recorded",
+  (prompts) =>
+    Effect.scoped(
       Effect.gen(function* () {
-        startCwds.push(cwd);
-        expect(ledger.at(-1)?.status).toBe("submitting");
-        starts += 1;
-        if (startError) return yield* startError;
-        return {
-          receipt: {
-            taskId: "session_ABC123",
-            url: "https://claude.ai/code/session_ABC123",
-            title: "Task",
-          },
-          exited: Deferred.await(exit),
-        };
+        const h = yield* makeHarness();
+        h.trustPrompts(prompts);
+        yield* h.runtime.startTurn(h.input);
+        yield* Deferred.await(h.accepted);
+        expect(h.trustChecks).toEqual(["/fixture/project"]);
+        expect(h.trustRecords).toEqual([
+          { cwd: "/fixture/project", threadId: h.input.threadId, prompts },
+        ]);
+        const notices = h.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+            ? [event.turnItem.message]
+            : [],
+        );
+        expect(notices).toEqual([
+          "Claude Code asked to trust /fixture/project. GOAT accepted it automatically.",
+        ]);
+        expect(h.ledger.at(-1)?.status).toBe("running");
       }),
-    send: (login, cwd, id) =>
-      Effect.gen(function* () {
-        expect(login).toEqual(LOGIN);
-        expect(cwd).toBe("/fixture/goat/control");
-        controlCommands.push({ kind: "send", cwd, id });
-        expect(ledger.at(-1)?.status).toBe("submitting");
-        expect(ledger.at(-1)?.progress).toBe("Submitting follow-up");
-        sends += 1;
-        yield* Deferred.succeed(sendReached, undefined);
-        if (pauseSend) yield* Deferred.await(sendRelease);
-        if (sendError) return yield* sendError;
-        return { taskId: id, url: `https://claude.ai/code/${id}` };
-      }),
-  });
-  const adapter = yield* makeClaudeCloudAdapter({
-    instanceId: INSTANCE,
-    resolveLogin: Effect.sync(() => resolvedLogin),
-    resolveControlCwd: Effect.suspend(() =>
-      controlError ? Effect.fail(controlError) : Effect.succeed("/fixture/goat/control"),
     ),
-    runStartedAt: () => Effect.succeed(startedAt),
-    observe: (input) =>
-      Effect.gen(function* () {
-        expect(input.repository).toBe(source.repository);
-        expect(input.sessionUrl).toBe("https://claude.ai/code/session_ABC123");
-        reads += 1;
-        yield* Deferred.succeed(read, undefined);
-        if (observationError) return yield* observationError;
-        if (found) yield* Deferred.await(deliver);
-        return found
-          ? {
-              prUrl: "https://github.com/fixture/repository/pull/1",
-              branch: "claude/result",
-              summary: observedSummary,
-            }
-          : null;
-      }),
-  }).pipe(Effect.provideService(Cli.ClaudeCloudCli, cli));
-  const runtime = yield* adapter.openSession({
-    threadId: THREAD,
-    providerSessionId: ProviderSessionId.make("cloud-session-test"),
-    modelSelection: selection,
-    runtimePolicy: policy,
-  });
-  const providerThread = yield* runtime.ensureThread({
-    threadId: THREAD,
-    modelSelection: selection,
-    runtimePolicy: policy,
-  });
-  const commitCloudTask: NonNullable<Adapter.ProviderAdapterV2TurnInput["commitCloudTask"]> = (
-    task,
-  ) =>
+);
+
+it.effect("a folder outside GOAT's projects keeps the trust rejection and records nothing", () =>
+  Effect.scoped(
     Effect.gen(function* () {
-      commitCalls += 1;
-      if (commitCalls === failCommitAt)
-        return yield* new Adapter.ProviderAdapterProtocolError({
-          driver: adapter.driver,
-          detail: "fixture commit loss",
-        });
-      ledger.push(task);
-      if (task.status === "running" && task.progress === "Running in the cloud")
-        yield* Deferred.succeed(accepted, undefined);
-    });
-  const input = { ...(yield* makeTurn(providerThread)), commitCloudTask };
-  const subscription = yield* runtime.subscribeEvents!;
-  const events: Adapter.ProviderAdapterV2Event[] = [];
-  const terminal = yield* Deferred.make<void>();
-  yield* subscription.events.pipe(
-    Stream.runForEach((event) =>
-      Effect.gen(function* () {
-        events.push(event);
-        if (event.type === "turn.terminal") yield* Deferred.succeed(terminal, undefined);
-      }),
-    ),
-    Effect.forkChild,
-  );
-  const task = {
-    taskId: "session_ABC123",
-    url: "https://claude.ai/code/session_ABC123",
-    status: "running" as const,
-    tracking: "polled" as const,
-    source,
-    localChangesExcluded: false,
-    progress: "Running in the cloud",
-    updatedAt: DateTime.formatIso(startedAt),
-  };
-  const saved = {
-    ...providerThread,
-    nativeThreadRef: {
-      driver: adapter.driver,
-      nativeId: task.taskId,
-      strength: "strong" as const,
-      fingerprint: LOGIN.binding,
-    },
-    cloudTask: task,
-  };
-  const { message: _message, cloudLaunchSource: _launch, ...attach } = input;
-  return {
-    runtime,
-    input,
-    saved,
-    attach: { ...attach, providerThread: saved, cloudTask: task },
-    ledger,
-    events,
-    accepted,
-    exit,
-    read,
-    deliver,
-    sendReached,
-    sendRelease,
-    terminal,
-    counts: () => ({ starts, sends, reads }),
-    noMatch: () => {
-      found = false;
-    },
-    failCommit: (number: number) => {
-      failCommitAt = number;
-    },
-    pauseSend: () => {
-      pauseSend = true;
-    },
-    controlCommands,
-    startCwds,
-    controlError: (error: ClaudeCloudError) => {
-      controlError = error;
-    },
-    summary: (summary: string) => {
-      observedSummary = summary;
-    },
-    startError: (error: ClaudeCloudError) => {
-      startError = error;
-    },
-    observationError: (error: ClaudeCloudError) => {
-      observationError = error;
-    },
-    login: (login: typeof LOGIN) => {
-      resolvedLogin = login;
-    },
-    sendError: (error: ClaudeCloudError) => {
-      sendError = error;
-    },
-  };
-});
+      const h = yield* makeHarness();
+      h.trustPrompts(1);
+      h.disallowTrust();
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.terminal);
+      expect(h.trustRecords).toEqual([]);
+      expect(h.ledger.at(-1)).toMatchObject({
+        status: "failed",
+        error: "Claude Code hasn't trusted this folder yet.",
+      });
+    }),
+  ),
+);
 
 it.effect(
   "acceptance stays open until a linked PR is durably committed; the base owns result messages",
@@ -293,7 +67,7 @@ it.effect(
         yield* Deferred.succeed(h.exit, undefined);
         yield* Deferred.await(h.read);
         expect(h.events.some((event) => event.type === "turn.terminal")).toBe(false);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         expect(h.ledger.at(-1)?.status).toBe("succeeded");
         expect(h.ledger.at(-1)?.summary).toContain("Result PR found\nChanged behavior.");
@@ -373,11 +147,12 @@ it.effect(
     ),
 );
 it.effect(
-  "follow-up records intent and ack, preserves original source and does not call a prior PR completion",
+  "follow-up records intent and ack, preserves original source and completes from the session reply",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* makeHarness();
+        h.sessionReads(sessionAnswer("task", "Answer."));
         const accepted = {
           ...h.saved,
           cloudTask: {
@@ -398,9 +173,13 @@ it.effect(
             sha: "b".repeat(40),
           },
         });
+        yield* Deferred.await(h.admitted);
+        expect(h.events.some((event) => event.type === "turn.terminal")).toBe(false);
+        yield* TestClock.adjust("30 seconds");
         yield* Deferred.await(h.terminal);
         expect(h.ledger[0]?.progress).toBe("Submitting follow-up");
-        expect(h.ledger.at(-1)?.progress).toBe("Follow-up accepted");
+        expect(h.ledger[1]?.summary).toContain("not completed work");
+        expect(h.ledger.at(-1)?.summary).toBe("Answer.");
         expect(h.ledger.at(-1)?.source).toEqual(source);
         expect(h.ledger.at(-1)?.prUrl).toBeUndefined();
         expect(h.ledger.at(-1)?.taskId).toBe(accepted.nativeThreadRef.nativeId);
@@ -410,7 +189,6 @@ it.effect(
         ]);
         const updated = h.events.findLast((event) => event.type === "provider_thread.updated");
         expect(updated?.providerThread.nativeThreadRef).toEqual(accepted.nativeThreadRef);
-        expect(h.ledger.at(-1)?.summary).toContain("not completed work");
         expect(h.events.filter((event) => event.type === "message.updated")).toEqual([]);
         expect(h.counts()).toEqual({ starts: 0, sends: 1, reads: 0 });
       }),
@@ -473,17 +251,24 @@ it.effect.each(["rejected", "uncertain"] as const)(
       }),
     ),
 );
-it.effect("restart after follow-up ack settles only admission without PR observation", () =>
+it.effect("restart after follow-up ack follows the session reply without PR observation", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeHarness();
+      // The restarted run reads its own message back from the projection to find its reply.
+      h.sessionReads(sessionAnswer("task", "Restarted reply."));
       yield* h.runtime.resumeTurn!({
         ...h.attach,
         cloudTask: { ...h.saved.cloudTask, progress: "Follow-up accepted" },
       });
+      yield* Deferred.await(h.following);
+      yield* TestClock.adjust("30 seconds");
       yield* Deferred.await(h.terminal);
       expect(h.counts().reads).toBe(0);
-      expect(h.ledger.at(-1)?.summary).toContain("not completed work");
+      expect(h.events.find((event) => event.type === "turn.terminal")).toMatchObject({
+        status: "completed",
+        resultText: "Restarted reply.",
+      });
       expect(h.events.filter((event) => event.type === "message.updated")).toEqual([]);
     }),
   ),
@@ -595,6 +380,47 @@ it.effect("does not clear uncertainty on an otherwise unsupported follow-up", ()
       yield* Deferred.await(h.terminal);
       expect(h.ledger.at(-1)?.status).toBe("unknown");
       expect(h.controlCommands).toEqual([]);
+    }),
+  ),
+);
+it.effect.each(["cancelled", "unknown", "submitting"] as const)(
+  "a confirmed API error marker on a %s task never authorizes a follow-up",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const task = { ...h.saved.cloudTask, status, confirmedTerminalError: true as const };
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: task } });
+        yield* h.runtime.startTurn({
+          ...h.input,
+          providerThread: { ...h.saved, cloudTask: { ...task, status: "submitting" } },
+        });
+        yield* Deferred.await(h.terminal);
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+        expect(h.controlCommands).toEqual([]);
+        expect(h.ledger.at(-1)?.status).toBe("unknown");
+      }),
+    ),
+);
+it.effect("a restart keeps a marked failure blocked when its saved identity is inconsistent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const task = {
+        ...h.saved.cloudTask,
+        status: "failed" as const,
+        error: "API Error: 529 Overloaded",
+        confirmedTerminalError: true as const,
+        url: "https://claude.ai/code/session_OTHER1",
+      };
+      yield* h.runtime.resumeTurn!({
+        ...h.attach,
+        providerThread: { ...h.saved, cloudTask: task },
+        cloudTask: task,
+      });
+      yield* Deferred.await(h.terminal);
+      expect(h.ledger.at(-1)?.status).toBe("unknown");
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
     }),
   ),
 );
@@ -734,7 +560,7 @@ it.effect(
         yield* Deferred.await(h.accepted);
         yield* Deferred.succeed(h.exit, undefined);
         yield* Deferred.await(h.read);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         const summary = h.ledger.at(-1)?.summary;
         expect(summary?.length).toBeLessThanOrEqual(4000);
@@ -838,7 +664,7 @@ it.effect.each(
           yield* Deferred.await(h.accepted);
           yield* Deferred.succeed(h.exit, undefined);
           yield* Deferred.await(h.read);
-          yield* Deferred.succeed(h.deliver, undefined);
+          yield* h.pullRequestStands;
         }
         yield* Deferred.await(h.terminal);
         expect(h.startCwds).toEqual(["/fixture/project"]);
@@ -907,6 +733,7 @@ it.effect.each([true, false, undefined])(
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* makeHarness();
+        h.sessionReads(sessionAnswer("task", "Answer."));
         const prior = {
           ...h.saved,
           cloudTask: {
@@ -922,6 +749,8 @@ it.effect.each([true, false, undefined])(
           runtimePolicy: { ...policy, cwd: "/missing/deleted-project" },
           cloudSource: { ...source, repository: "https://github.com/fixture/other" },
         });
+        yield* Deferred.await(h.admitted);
+        yield* TestClock.adjust("30 seconds");
         yield* Deferred.await(h.terminal);
         expect(h.counts()).toEqual({ starts: 0, sends: 1, reads: 0 });
         for (const task of h.ledger) {
@@ -953,7 +782,7 @@ it.effect.each([true, false, undefined])(
           },
         });
         yield* Deferred.await(h.read);
-        yield* Deferred.succeed(h.deliver, undefined);
+        yield* h.pullRequestStands;
         yield* Deferred.await(h.terminal);
         expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 1 });
         for (const task of h.ledger) {

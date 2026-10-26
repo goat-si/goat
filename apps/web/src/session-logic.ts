@@ -25,6 +25,7 @@ import {
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
 import type { HtmlRenderReference } from "@goat/shared/htmlRender";
+import { resolveGoatMcpItemCall } from "@goat/shared/goatMcpToolPresentation";
 import { turnItemDetailRevision } from "@goat/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@goat/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
@@ -553,12 +554,17 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         changedFiles: item.files.map((file) => file.path),
         toolData: item,
       };
-    case "system_notice":
+    case "system_notice": {
+      // The first line is the row; the rest opens with it, so a long notice stays one line.
+      const [headline = "", ...rest] = item.message.split("\n");
+      const detail = rest.join("\n").trim();
       return {
         ...common,
-        label: item.message,
-        sourceActivityKind: "runtime.warning",
+        label: headline,
+        ...(detail.length > 0 ? { detail } : {}),
+        ...(item.severity === "info" ? {} : { sourceActivityKind: "runtime.warning" }),
       };
+    }
     case "error": {
       const presentation = providerErrorPresentation(item);
       return {
@@ -573,21 +579,18 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
       };
     }
     case "dynamic_tool": {
-      const classified = classifyToolActivity({
-        itemType: "dynamic_tool_call",
-        data: { toolName: item.toolName ?? undefined, input: item.input },
-      });
-      const [readPath] = collectToolFilePaths({ input: item.input });
+      const call = resolveGoatMcpItemCall(item);
+      const classified = classifyToolActivity({ itemType: "dynamic_tool_call", data: call });
       return {
         ...common,
         label:
           title ??
           (classified === "read"
-            ? formatReadToolLabel(readPath ?? "")
+            ? formatReadToolLabel(collectToolFilePaths({ input: call.input })[0] ?? "")
             : classified === "search"
-              ? (formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call")
-              : (item.toolName ?? "Tool call")),
-        toolTitle: title ?? item.toolName ?? "Tool",
+              ? (formatSearchToolLabel({ input: call.input }) ?? call.toolName ?? "Tool call")
+              : (call.toolName ?? "Tool call")),
+        toolTitle: title ?? call.toolName ?? "Tool",
         toolData: { input: item.input, output: item.output },
       };
     }
@@ -1007,7 +1010,8 @@ function reuseTimelineEntries(
     OrchestrationV2ProjectedTurnItem,
     OrchestrationV2ProjectedTurnItem
   >();
-  for (const [index, previousItem] of before.visibleTurnItems.entries()) {
+  for (let index = 0; index < before.visibleTurnItems.length; index += 1) {
+    const previousItem = before.visibleTurnItems[index]!;
     const item = input.visibleTurnItems[index]!;
     if (item === previousItem) continue;
     if (!isStreamingTurnItemTextUpdate(previousItem, item)) return null;

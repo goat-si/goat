@@ -69,7 +69,7 @@ export class LegacyDatabaseRemoveError extends Schema.TaggedError<LegacyDatabase
   }
 }
 
-/** Offline inspection and repair of a T3 state database, for `t3 doctor`. */
+/** Offline inspection and repair of a GOAT state database, for `goat doctor`. */
 export class DatabaseMaintenance extends Context.Service<
   DatabaseMaintenance,
   {
@@ -150,7 +150,7 @@ export interface LegacyRemovalOptions {
   readonly busyRetry: Schedule.Schedule<unknown, PlatformError.PlatformError>;
 }
 
-export const defaultLegacyRemovalOptions: LegacyRemovalOptions = {
+const defaultLegacyRemovalOptions: LegacyRemovalOptions = {
   // Antivirus and indexers hold freshly closed files for moments on Windows.
   busyRetry: Schedule.exponential("20 millis").pipe(Schedule.upTo({ times: 6 })),
 };

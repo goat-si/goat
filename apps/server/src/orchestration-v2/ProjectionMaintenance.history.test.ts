@@ -15,8 +15,8 @@ const now = Date.parse("2026-10-22T00:00:00.000Z");
 const day = 86_400_000;
 const threads = 24;
 const items = 20;
-// Threads 0-19 went idle 30 down to 11 days ago, oldest first; 20-23 were active yesterday.
-const idleDays = (thread: number) => (thread < 20 ? 30 - thread : 1);
+// Threads 0-19 went idle 30 down to 11 days ago, oldest first; 20-23 were last active 26 h ago.
+const idleDays = (thread: number) => (thread < 20 ? 30 - thread : 1 + 1 / 12);
 const outputBytes = 32_000;
 
 const layer = ProjectionMaintenance.layer.pipe(
@@ -153,3 +153,27 @@ it.effect("trims tool output in the oldest idle threads until history fits its b
     assert.equal(again.trimmedRows, 0);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "trims settled day-idle threads when week-idle ones cannot bring history under budget",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      yield* seed;
+      // Threads 20-23 went quiet yesterday; 23 still has a run under way.
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('run-live', 'thread-23', 0, 'codex', 'running', '2026-10-21', '{}')`;
+      const result = yield* maintenance.boundHistory({ budgetBytes: 0, now });
+      assert.isAbove(result.trimmedRows, 0);
+      const trimmedThreads = new Set(
+        (yield* outputs("projection"))
+          .filter((row) => isTrimmed(row.output))
+          .map((row) => Number(row.thread_id.slice("thread-".length))),
+      );
+      for (const thread of [0, 19, 20, 21, 22])
+        assert.isTrue(trimmedThreads.has(thread), `${thread}`);
+      assert.isFalse(trimmedThreads.has(23));
+    }).pipe(Effect.provide(layer)),
+);

@@ -16,7 +16,7 @@ import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 // must come from the installer. Traversal entries target ../../../outside/sentinel.
 const archives = {
   tarComplete:
-    "H4sIAAAAAAACA+3ZPVKDQACGYY6SC4Twk4VWZ0xp4wUym7AzoLA4uyB6e1HHImthIwTW92mSVBQvH4RkkG+11MW2VPWzMrtgCtEoF+LzdeS+/nwfR1kWBxsRzKC3nTTj4YP/abjsP1TaqHNnb8693F2vf5rGEf3nMHbeFqZ6UWa6Y/zaP06ccyHPExFsIvp70R/L7n/ujW3NtitVo66y/8S9/sfRPmP/vvTHctXVaTwFjl+3gKMtnkLbzr//vbv/PEvYvy/9sejr/3d83RbqaHrdVY0KPz7Mtv/U3X8qopz9+9Ifq+gvT1VYLub7P/v3pj+Wy/n9t9LjHOo6tOWc+09jZ/9JlkXs35f+WE3/i/9/GtXJQnYyfLStnnL/wt2/4Pnfo/5YZ3/12iltq1aPJ8Ck93/hfv8X3P896o/V9H843N7dH8KmmPX5P3X3n8Tpnv370h8AAAAAAAAAAAAAAAAAAAB/5x055e7oAFAAAA==",
+    "H4sIAAAAAAAC/+3az06DMAAGcB5lLzBWKC1XF0fiEp1m28UT6UYTUP4YCk7f3k7jYTVxF2FQv9+Fcerh69dSxkG856JMpqnMX2Q9c7pAtJCxz6tmXn/+9gjnnjNhTg9a1YhaD+/8T4fT/A9ZWct9o672rZhdLn9KPYL8+6BzniZ19irr7sY4m7/nG3MhDH3mTAjytyJ/GHb++7ZWVT1tUlnIi/TfN9d/jwQc/bclfxiuPNvpKRB/bQGxSp5dVfXf/8Dsf8h99N+W/GHQ6/93+GWVyLhuyyYrpHu86a3/1Ow/ZSRE/23JH0aRv9hlbjqY53/035r8YbiM979ZqeuQ565K++w/9Yz++5wT9N+W/GE0+Z/8/1PIRiSiEe6Tqsou+8/M/jOc/y3KH8aZv3xrZKmyqtQToNP9n5nP/wz7v0X5w2jyX0fzxV3kFkmv539q9t/3aID+25I/DNft8jpabaJOxziWmgfBL99/hcb3PzzE+z978ofh2t4s14v4Yb7ePsar+62eDZs/X/3P9t/n5vt/SnD+tyZ/AAAAAAAAAAAAAAAAAAAAAOjOB0iDKKUAUAAA",
   tarMissing:
     "H4sIAAAAAAACA+2YPXKEIBhAPcpeYFl+RNpkZrdMkws47MKMJIoZwJjcPiSZFEuKVLJKvteglcX7HoqzfO+lVftO9y/aHaolwBHB+dcaSdff1wQ3Dal2vMrA5IN08fHV/2S+9j8b6/Ql+LvLJA+3888YweA/B9HzXjnzqt1yz/jTP6HJLAhBebXD4L8I/8B66c05jkD7PQKtV8/Ij9n7p3Wy/xPRUOi/FP/Aqvf/H/l2VLp1kw1m0OjzJlv/LO2fcSyg/1L8A5vwL88GdTf5/qfp+Y/gGvovxj+wmf8/xsYc+h75Lmf/jCT906bB0H8p/oHN+L/6/zvoIJUMEj350S7ZP0/753D+L8g/sE3/+i1o681o4wAs+v7n6fc/h/d/Qf6Bzfh/PN0fH05oUFnP/yztnxJWQ/+l+AcAAADWxweiMlbaACgAAA==",
   tarTraversal:
@@ -26,7 +26,7 @@ const archives = {
   tarHardlink:
     "H4sIAAAAAAACA+3aTVKDMAAFYI7SC5Tmh8BWZ+zSjRfopE1miIXgJCB6e6OOi8aF4wIK6fs2wIrFy0v4ySjfG2nVttbNi3a7bAokqIT4Ogbx8fc5JWVJs43IZjD4Xrpw++w2jZf5j8Y6fer93WmQu+vlzzklyH8OIeetcuZVu+nu8Wf+lEVjoaqYyDYE+SeRPyw7/9PgfOe2fa1bfZX+s3j+p6Qo0f9U8oflaswxDIHD9xJw8Oqc+27+/hdx/6uSof+p5A+Lnv9/wred0gc32N60Ov+8mK3/PO4/F6RC/1PJH1aRvzyavF7M8z/6n0z+sFzR919jQx2aJvf1nP3nNOo/K0uC/qeSP6wm/4v/P63upZK9zJ99Z6fsv4j7L/D+n1D+sM789VuvrTedDQNg0vVfxM//Aut/QvnDavJ/2t8/PO7zVs36/s/j/jPKC/Q/lfxhuRpjz1pNuwXk//u/WEF4tqFzbE658f4DAAAAAAAAAAAAAAAAAAAAAADAOn0ALza7RQBQAAA=",
   zipComplete:
-    "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",
+    "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",
   zipMissing:
     "UEsDBBQAAAAIAAAAIVxkdYIxEAAAAA4AAAAOAAAAY3VhLWRyaXZlci5leGVLLk3UTSnKLEst0kutSAUAUEsDBBQAAAAIAAAAIVyXVkbUFgAAABQAAAAUAAAAY3VhLWN1cnNvci10aGVtZS5leGVLLk3UTS4tKs4v0i3JSM1N1UutSAUAUEsDBBQAAAAIAAAAIVxvciQcFAAAABIAAAASAAAAY3VhX2RyaXZlcl9zZGsuZGxsSy5NjE8pyixLLYovTsnWS8nJAQBQSwMEFAAAAAgAAAAhXMfGOdAbAAAAHAAAABwAAABjdWFfZHJpdmVyX25vZGVfcnVudGltZS5ub2RlSy5NjE8pyixLLYrPy09JjS8qzSvJzE3VA3EAUEsBAhQDFAAAAAgAAAAhXGR1gjEQAAAADgAAAA4AAAAAAAAAAAAAAO2BAAAAAGN1YS1kcml2ZXIuZXhlUEsBAhQDFAAAAAgAAAAhXJdWRtQWAAAAFAAAABQAAAAAAAAAAAAAAO2BPAAAAGN1YS1jdXJzb3ItdGhlbWUuZXhlUEsBAhQDFAAAAAgAAAAhXG9yJBwUAAAAEgAAABIAAAAAAAAAAAAAAO2BhAAAAGN1YV9kcml2ZXJfc2RrLmRsbFBLAQIUAxQAAAAIAAAAIVzHxjnQGwAAABwAAAAcAAAAAAAAAAAAAADtgcgAAABjdWFfZHJpdmVyX25vZGVfcnVudGltZS5ub2RlUEsFBgAAAAAEAAQACAEAAB0BAAAAAA==",
   zipTraversal:
@@ -40,6 +40,8 @@ const releases = [
     executable: "cua-driver",
     requiredFiles: ["cua-driver", "cua-cursor-theme", "wayland-helper/winrects@cua/extension.js"],
     files: [
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
       "cua-driver",
       "cua-cursor-theme",
       "libcua_driver_sdk.so",
@@ -60,6 +62,8 @@ const releases = [
     executable: "cua-driver.exe",
     requiredFiles: ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"],
     files: [
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
       "cua-driver.exe",
       "cua-driver-uia.exe",
       "cua-cursor-theme.exe",
@@ -74,14 +78,23 @@ const releases = [
 
 const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   fixture: (typeof releases)[number],
-  options: { archive?: string; bytes?: number; sha256?: string } = {},
+  options: {
+    archive?: string;
+    bytes?: number;
+    sha256?: string;
+    archiveName?: string;
+    baseDir?: string;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-install-test-" });
+  const baseDir =
+    options.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-install-test-" }));
   const installRoot = path.join(baseDir, "tools", "cua-driver");
-  const destination = path.join(installRoot, "0.34.1");
+  const archiveName = options.archiveName ?? `cua-driver-fixture.${fixture.format}`;
+  const destination = path.join(installRoot, "0.34.1", archiveName);
+  const versionDirectory = path.dirname(destination);
   const outside = path.join(baseDir, "tools", "outside");
   yield* fs.makeDirectory(outside, { recursive: true });
   yield* fs.writeFileString(path.join(outside, "sentinel"), "untouched");
@@ -89,9 +102,9 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   const archive = Buffer.from(options.archive ?? fixture.complete, "base64");
   const release = {
     version: "0.34.1",
-    archiveName: `cua-driver-fixture.${fixture.format}`,
+    archiveName,
     format: fixture.format,
-    url: `https://example.invalid/cua-driver-0.34.1.${fixture.format}`,
+    url: `https://example.invalid/${archiveName}`,
     bytes: options.bytes ?? archive.byteLength,
     sha256: options.sha256 ?? Hex.encode(yield* crypto.digest("SHA-256", archive)),
     executable: fixture.executable,
@@ -139,7 +152,7 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   const expectUnpublished = Effect.gen(function* () {
     expect(publications).toEqual([]);
     expect(yield* fs.exists(destination)).toBe(false);
-    expect(yield* fs.readDirectory(installRoot)).toEqual([]);
+    expect(yield* fs.readDirectory(path.dirname(destination))).toEqual([]);
     expect(yield* fs.readFileString(path.join(outside, "sentinel"))).toBe("untouched");
     expect(yield* fs.readDirectory(outside)).toEqual(["sentinel"]);
     expect((yield* fs.readDirectory(path.join(baseDir, "tools"))).sort()).toEqual([
@@ -150,9 +163,11 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   return {
     installation,
     makeInstallation,
+    baseDir,
     fs,
     path,
     installRoot,
+    versionDirectory,
     destination,
     release,
     requests,
@@ -162,6 +177,25 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
 });
 
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
+  it.effect("does not reuse another release archive's driver at the same version", () =>
+    Effect.gen(function* () {
+      const fixture = releases[0];
+      const first = yield* makeHarness(fixture);
+      yield* first.installation.executable;
+
+      const next = yield* makeHarness(fixture, {
+        archiveName: "cua-driver-fixture-arm64.tar.gz",
+        baseDir: first.baseDir,
+      });
+      const executable = yield* next.installation.executable;
+
+      expect(executable).toBe(next.path.join(next.destination, fixture.executable));
+      expect(next.requests).toEqual([next.release.url]);
+      expect(yield* next.fs.exists(first.destination)).toBe(true);
+      expect(yield* next.fs.exists(next.destination)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each(releases)(
     "publishes a complete $format release in T3 home and reuses it across installer instances",
     (fixture) =>

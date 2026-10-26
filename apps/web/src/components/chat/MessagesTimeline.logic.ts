@@ -1,3 +1,4 @@
+import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
@@ -13,6 +14,7 @@ import {
 } from "@goat/client-runtime/work-log/command-label";
 import {
   formatCommandActionsLabel,
+  commandVerb,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -54,7 +56,7 @@ import {
 } from "@goat/contracts";
 import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
 import {
-  resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   type GoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput } from "@goat/shared/toolOutput";
@@ -143,7 +145,12 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
       formatPath: (path) => formatWorkspaceRelativePath(path, workspaceRoot),
     });
   }
-  if (entry.command?.trim()) return commandDisplayText(entry.command);
+  if (entry.command?.trim()) {
+    const command = commandDisplayText(entry.command);
+    return entry.itemType === "command_execution"
+      ? `${commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false))} ${command}`
+      : command;
+  }
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     const searchLabel =
@@ -185,8 +192,8 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
 export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload">) {
   const item = entry.structuredPayload;
   if (item?.type !== "dynamic_tool") return null;
-  if (resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
-  const input = item.input;
+  if (resolveGoatMcpItemCall(item).definition?.summaryAction !== "thread-read") return null;
+  const { input } = resolveGoatMcpItemCall(item);
   const threadId =
     input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
   return typeof threadId === "string" && threadId.trim().length > 0 ? threadId.trim() : null;
@@ -261,17 +268,7 @@ export function liveWorkEntryLabel(
   }
   const command = entry.command?.trim();
   if (command) {
-    const verb =
-      status === "inProgress"
-        ? "Running"
-        : status === "failed"
-          ? "Failed"
-          : status === "declined"
-            ? "Declined"
-            : status === "stopped"
-              ? "Stopped"
-              : "Ran";
-    return `${verb} ${commandProgramName(command) ?? "command"}`;
+    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
   return workEntryDisplayLabel(entry, workspaceRoot);
 }
@@ -526,6 +523,12 @@ export type MessagesTimelineRow = MessagesTimelineRowContent & {
 };
 
 type MessagesTimelineRowContent =
+  | {
+      kind: "cloud-run";
+      id: string;
+      createdAt: string | null;
+      card: CloudRunCard;
+    }
   | {
       kind: "worktree-setup";
       id: string;
@@ -1355,7 +1358,7 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
       item?.type !== "dynamic_tool" ||
       item.runId === null ||
       (item.status !== "running" && item.status !== "completed") ||
-      resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      resolveGoatMcpItemCall(item).definition?.summaryAction !== "delegate"
     )
       return true;
     const output = compactDynamicToolOutput(item.output);
@@ -1438,6 +1441,7 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  cloudRun?: CloudRunCard | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
@@ -2026,8 +2030,11 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  const result = attachTrailingToolGroupsToAssistant(
-    attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
+  const result = placeCloudRunCard(
+    attachTrailingToolGroupsToAssistant(
+      attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
+    ),
+    input.cloudRun ?? null,
   );
   return result.map((row, index) =>
     timelineRowIsWorkLog(row) && timelineRowIsWorkLog(result[index + 1])
@@ -2097,6 +2104,63 @@ function attachCreatedThreadSummaries(
 }
 
 const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
+const CLOUD_RUN_ROW_ID = "cloud-run-row";
+
+/**
+ * Shows a cloud run as one card. Its generic failure row, workspace preparation row and
+ * failed result message repeat what the card says, so they are dropped. Rows are
+ * filtered after folding so fold anchors and failed-run detection keep their inputs,
+ * and the card takes the failed message's place in the timeline.
+ */
+function placeCloudRunCard(
+  rows: MessagesTimelineRow[],
+  card: CloudRunCard | null,
+): MessagesTimelineRow[] {
+  if (card === null) return rows;
+  const cardRow: MessagesTimelineRow = {
+    kind: "cloud-run",
+    id: CLOUD_RUN_ROW_ID,
+    createdAt: card.startedAt,
+    card,
+  };
+  let placed = false;
+  const hiddenEntry = (entry: WorkLogEntry) =>
+    entry.projectedItem !== undefined && card.hiddenItemIds.has(entry.projectedItem.item.id);
+  const next = rows.flatMap((row): MessagesTimelineRow[] => {
+    switch (row.kind) {
+      case "message":
+        if (!card.hiddenMessageIds.has(row.message.id)) {
+          if (row.message.id !== card.resultMessageId || placed) return [row];
+          placed = true;
+          return [cardRow, row];
+        }
+        if (placed) return [];
+        placed = true;
+        return [cardRow];
+      case "assistant-meta":
+        return card.hiddenMessageIds.has(row.message.id) ? [] : [row];
+      case "event":
+        return card.hiddenItemIds.has(row.projectedItem.item.id) ? [] : [row];
+      case "work": {
+        const groupedEntries = row.groupedEntries.filter((entry) => !hiddenEntry(entry));
+        if (groupedEntries.length === row.groupedEntries.length) return [row];
+        return groupedEntries.length === 0 ? [] : [{ ...row, groupedEntries }];
+      }
+      case "work-live":
+        return hiddenEntry(row.entry) ? [] : [row];
+      case "working":
+      case "thinking":
+        // The running card shows the live stage and elapsed time in their place.
+        if (card.phase !== "running") return [row];
+        if (placed) return [];
+        placed = true;
+        return [cardRow];
+      default:
+        return [row];
+    }
+  });
+  return placed ? next : [...next, cardRow];
+}
 
 export type MessagesTimelineRowsInput = Parameters<typeof deriveMessagesTimelineRows>[0];
 
@@ -2183,7 +2247,8 @@ function replaceStreamingMessageRows(
     return null;
   }
   const replacements = new Map<ChatMessage, Extract<TimelineEntry, { kind: "message" }>>();
-  for (const [index, entry] of timelineEntries.entries()) {
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const entry = timelineEntries[index]!;
     const previousEntry = previousEntries[index]!;
     if (entry === previousEntry) continue;
     if (
@@ -2269,6 +2334,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
     case "worktree-setup":
       return a.snapshot === (b as typeof a).snapshot;
+    case "cloud-run":
+      return a.card === (b as typeof a).card;
 
     case "assistant-meta": {
       const bm = b as typeof a;

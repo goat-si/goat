@@ -5,12 +5,28 @@ description: Test GOAT's native iOS and Android app through its Device panel and
 
 # Test GOAT Mobile
 
+## Prerequisite: Agent device access
+
+Device tools work only while **Agent device access** is on in **Settings →
+Integrations → Devices** for this environment (a project can override it).
+It is a person's grant, and no agent tool can change it. Check it first:
+`goat_describe {path:"device.list"}` reports `available.now: false` with a
+reason that names the setting while it is off, and a `device.list` call is
+refused with the same reason.
+
+When it is off, ask the user to turn it on for the verification run, then wait
+for their reply. The grant reaches the thread on its next turn; if the device
+command is still missing from the shell, ask the user to restart the agent
+session. When verification ends, tell the user they can turn it back off if it
+was off before you asked.
+
 ## Open the device
 
-Call `device_list`, then `device_open` with the selected host and device IDs.
+GOAT's device tools run through `goat_call`. Call `goat_call {path:"device.list"}`, then
+`goat_call {path:"device.open"}` with the selected host and device IDs.
 GOAT boots the device and shows its live stream in the Device panel. Follow its
 returned `quickStart`, using the exact `agentDevice.command` and all `targetArgs`
-on every operation. Use `device_screenshot` to inspect the screen.
+on every operation. Use `goat_call {path:"device.screenshot"}` to inspect the screen.
 
 If GOAT device tools or the selected device are unavailable, report the blocker
 and stop verification. Do not install or switch to another automation system.
@@ -39,7 +55,7 @@ mobile verification includes that build step unless the user prohibits it.
 
 Start `vp run dev:client` from `apps/mobile`, or reuse a healthy Metro belonging
 to this checkout. Open its printed development-client URL with AgentDevice
-`open com.t3tools.t3code.dev <url>` and all returned target arguments.
+`open si.goat.mobile.dev <url>` and all returned target arguments.
 The device must be able to reach both Metro and the isolated backend.
 Append `&disableAutoLaunch=1&disableFab=1` to the development-client URL query
 when developer chrome would obscure screenshots or taps; the SDK 58 dev client
@@ -64,5 +80,5 @@ on Android. For a remote backend, use its reachable origin.
 
 Confirm the intended projects appear, exercise the affected flow, and capture
 evidence. Retain the app and environment while iterating. At teardown, remove
-the disposable connection, close the AgentDevice session, call `device_close`,
+the disposable connection, close the AgentDevice session, call `goat_call {path:"device.close"}`,
 and stop only your backend and Metro processes.

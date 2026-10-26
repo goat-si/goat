@@ -7,17 +7,22 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Schema from "effect/Schema";
 // eslint-disable-next-line goat/no-raw-mcp-registration -- Test harness calls only toolkits registered through McpHttpServer.toolkitRegistration.
 import { McpSchema, McpServer } from "effect/ai";
-import migration from "../../../persistence/Migrations/076_Memory.ts";
-import searchMigration from "../../../persistence/Migrations/078_MemorySearchCounters.ts";
-import hubMigration from "../../../persistence/Migrations/077_MemoryHubSync.ts";
-import lineageMigration from "../../../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../../../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../../../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../../../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../../../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../../../persistence/Migrations/084_MemoryRevertResults.ts";
-import readyMigration from "../../../persistence/Migrations/086_MemoryLastReadySpace.ts";
-import administeredMigration from "../../../persistence/Migrations/087_MemoryHubAdministered.ts";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import profileMigration from "../../../persistence/Migrations/098_PermissionProfiles.ts";
+import migration from "../../../persistence/Migrations/077_Memory.ts";
+import searchMigration from "../../../persistence/Migrations/079_MemorySearchCounters.ts";
+import hubMigration from "../../../persistence/Migrations/078_MemoryHubSync.ts";
+import lineageMigration from "../../../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../../../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../../../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../../../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../../../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../../../persistence/Migrations/085_MemoryRevertResults.ts";
+import readyMigration from "../../../persistence/Migrations/087_MemoryLastReadySpace.ts";
+import administeredMigration from "../../../persistence/Migrations/088_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
@@ -105,11 +110,15 @@ const sync = Layer.unwrap(
   }),
 ).pipe(Layer.provide(admin));
 
-const makeLayer = <E, R>(serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>) =>
+const makeLayer = <E, R, E2, R2>(
+  serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>,
+  profiles: Layer.Layer<Profiles.PermissionProfiles, E2, R2>,
+) =>
   Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
     McpHttpServer.layerMemoryAdministrationToolkit,
   ).pipe(
+    Layer.provideMerge(profiles),
     Layer.provideMerge(serviceCore),
     Layer.provideMerge(
       MemorySettings.layer.pipe(Layer.provideMerge(sync), Layer.provideMerge(settings)),
@@ -118,13 +127,51 @@ const makeLayer = <E, R>(serviceCore: Layer.Layer<Layer.Success<typeof core>, E,
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provide(NodeServices.layer),
   );
-export const layer = makeLayer(core);
+export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
+const profileCore = Layer.effectDiscard(
+  Effect.gen(function* () {
+    yield* profileMigration;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_events (application_event_version INTEGER, aggregate_kind TEXT, stream_id TEXT, event_type TEXT, payload_json TEXT)`;
+    yield* sql`CREATE TABLE orchestration_v2_projection_threads (
+      thread_id TEXT PRIMARY KEY, runtime_mode TEXT NOT NULL, deleted_at TEXT
+    )`;
+  }),
+).pipe(Layer.provideMerge(core));
+export const layerWithProfiles = makeLayer(
+  profileCore,
+  Profiles.layer.pipe(
+    Layer.provide(profileCore),
+    Layer.provideMerge(Settings.layerTest({ goatclaw: { enabled: true } })),
+  ),
+);
+const threadScope = (profileId: string) => ({
+  ...scope(),
+  client: undefined,
+  thread: {
+    threadId: M.ThreadId.make(`memory-${profileId}`),
+    providerSessionId: "synthetic",
+    providerInstanceId: M.ProviderInstanceId.make("codex"),
+  },
+});
+export const bindProfile = (profileId: string) =>
+  Effect.gen(function* () {
+    const caller = threadScope(profileId);
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, runtime_mode)
+      VALUES (${caller.thread.threadId}, 'full-access')`;
+    const profiles = yield* Profiles.PermissionProfiles;
+    yield* profiles.bind(caller.thread.threadId, profileId, "synthetic");
+    return caller;
+  });
+
 /** Session admission and memory calls must share the environment identity and event database. */
 export const layerForThreadEnvironment = <E, R>(
   environmentId: M.EnvironmentId,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
 ) =>
   McpHttpServer.layerMemoryToolkit.pipe(
+    Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(
       makeCore(
         Service.layer,
@@ -146,7 +193,11 @@ export const layerForThreadEnvironment = <E, R>(
   );
 export const layerWithSourceReadAuthority = (
   authority: Service.MemorySourceReadAuthority["readSource"],
-) => makeLayer(makeCore(Service.layerWithSourceReadAuthority(authority), database));
+) =>
+  makeLayer(
+    makeCore(Service.layerWithSourceReadAuthority(authority), database),
+    McpToolAccessTestkit.layerPermissionProfilesOff,
+  );
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   clientCapabilities: {},
@@ -190,15 +241,34 @@ export const upsert = (n = 3): M.MemoryUpsertInput => ({
   baseBoundary: null,
 });
 const json = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+/** Tests name memory tools by their grant names (MEMORY_MCP_TOOLS); /mcp lists them as goat_memory_*. */
+const listedName = (name: string) => {
+  const entry = resolveAgentSurfaceEntry(name);
+  return entry === undefined ? name : listedToolName(entry);
+};
 export const call = (name: string, input: object, invocation = scope()) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const result = yield* server.callTool({ name, arguments: input });
+    const result = yield* server.callTool({ name: listedName(name), arguments: input });
     const body = yield* json(
       result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
     );
     return { result, body };
   }).pipe(
     Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+    Effect.provideService(McpSchema.McpServerClient, client),
+  );
+
+/** The envelope goat_call answers with, built by its own dispatch over this server's tools. */
+export const callThroughGoatCall = (name: string, input: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const dispatch = ToolDispatch.of({
+      call: (tool, args) => server.callTool({ name: listedName(tool), arguments: args }),
+      served: () => undefined,
+    });
+    return yield* dispatchEnvelope(dispatch, listedName(name), input, "read");
+  }).pipe(
+    Effect.provideService(McpInvocationContext.McpInvocationContext, scope()),
     Effect.provideService(McpSchema.McpServerClient, client),
   );

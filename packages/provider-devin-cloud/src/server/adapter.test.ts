@@ -35,7 +35,7 @@ const open = (
       Cli.DevinCloudCli,
       Cli.DevinCloudCli.of({
         resolve: () => Effect.succeed(launch),
-        probe: () => Effect.succeed("3000.11.3"),
+        probe: () => Effect.succeed({ version: "3000.11.3", email: undefined }),
       }),
     ),
     Effect.provideService(
@@ -128,7 +128,7 @@ it.effect("an existing Devin cloud session rejects model or platform changes", (
         Cli.DevinCloudCli,
         Cli.DevinCloudCli.of({
           resolve: () => Effect.succeed(launch),
-          probe: () => Effect.succeed("3000.11.3"),
+          probe: () => Effect.succeed({ version: "3000.11.3", email: undefined }),
         }),
       ),
       Effect.provideService(
@@ -312,6 +312,86 @@ it.effect(
             assert.equal(prompts, mode === "prompt-loss" ? 1 : 0);
           }),
         );
+    }),
+);
+it.effect(
+  "a never-prompted session reruns setup unless its load confirms the requested version and platform",
+  () =>
+    Effect.gen(function* () {
+      const selected = {
+        ...opened,
+        modelSelection: {
+          ...opened.modelSelection,
+          model: "devin-ultra",
+          options: [{ id: "platform", value: "macos" }],
+        },
+      };
+      const choice = (id: string, value: string) => ({
+        id,
+        name: id,
+        type: "select" as const,
+        currentValue: value,
+        options: [
+          { name: "Requested", value: id === "platform" ? "macos" : "devin-ultra" },
+          { name: "Other", value: "other" },
+        ],
+      });
+      const unprompted = {
+        ...thread,
+        nativeThreadRef: { ...thread.nativeThreadRef!, ordinal: 0 },
+        cloudTask: { ...thread.cloudTask!, status: "submitting" as const },
+      };
+      for (const [loaded, expected] of [
+        // A refused setup left the repository selected but Devin's own version.
+        [
+          [...selectedRepoOptions, choice("devin_version", "other"), choice("platform", "macos")],
+          ["load", "configure", "prompt"],
+        ],
+        // A restart after a confirmed setup keeps it.
+        [
+          [
+            ...selectedRepoOptions,
+            choice("devin_version", "devin-ultra"),
+            choice("platform", "macos"),
+          ],
+          ["load", "prompt"],
+        ],
+      ] as const) {
+        const calls: string[] = [];
+        const completed = yield* Deferred.make<void>();
+        const runtime = yield* open(
+          relay({
+            create: Effect.die("A saved session is never recreated"),
+            attach: () =>
+              Effect.sync(() => {
+                calls.push("load");
+                return { configOptions: loaded };
+              }),
+            configureSource: (_id, _source, selection) =>
+              Effect.sync(() => {
+                assert.deepEqual(selection, { model: "devin-ultra", platform: "macos" });
+                calls.push("configure");
+              }),
+            prompt: () =>
+              Effect.sync(() => {
+                calls.push("prompt");
+                return { stopReason: "end_turn" as const };
+              }),
+          }),
+          undefined,
+          selected,
+        );
+        yield* Stream.runForEach(runtime.events, (event) =>
+          event.type === "turn.terminal" ? Deferred.succeed(completed, undefined) : Effect.void,
+        ).pipe(Effect.forkScoped);
+        yield* runtime.startTurn({
+          ...turnInput,
+          providerThread: unprompted,
+          commitCloudTask: () => Effect.void,
+        });
+        yield* Deferred.await(completed);
+        assert.deepEqual(calls, [...expected]);
+      }
     }),
 );
 it.effect("same-session follow-up retains source/ID and never resets repos", () =>

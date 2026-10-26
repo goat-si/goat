@@ -8,6 +8,10 @@ import {
   type ServerSettingsPatch,
 } from "@goat/contracts";
 import {
+  builtInSkillEnvironmentPatch,
+  builtInSkillProjectPatch,
+} from "@goat/client-runtime/built-in-skill-settings";
+import {
   clearProjectSettingsOverrides,
   resolveProjectSettings,
 } from "@goat/shared/projectSettings";
@@ -104,6 +108,7 @@ export function uniformMobileSetting<K extends keyof ServerSettings>(
 export function planMobileScopedSettingsClear(
   targets: readonly ScopedMobileSettingsTarget[],
   keys: readonly ProjectScopedServerSettingKey[],
+  skills: readonly string[] = [],
 ) {
   const writes = new Map<EnvironmentId, Record<string, unknown>>();
   for (const target of targets) {
@@ -113,15 +118,83 @@ export function planMobileScopedSettingsClear(
     )
       continue;
     const overrides = writes.get(target.environment.environmentId) ?? {};
-    overrides[target.projectId] = clearProjectSettingsOverrides(
+    let entry = clearProjectSettingsOverrides(
       target.environment.serverConfig.settings,
       target.projectId,
       keys,
     );
+    if (
+      skills.length > 0 &&
+      target.environment.serverConfig.environment.capabilities.devDisciplineSkill === true
+    ) {
+      const builtInSkills = { ...entry?.builtInSkills };
+      for (const skill of skills) delete builtInSkills[skill];
+      entry = { ...entry, builtInSkills };
+    }
+    overrides[target.projectId] = entry;
     writes.set(target.environment.environmentId, overrides);
   }
   return [...writes].map(([environmentId, projectSettingsOverrides]) => ({
     environmentId,
     patch: { projectSettingsOverrides } as ServerSettingsPatch,
+  }));
+}
+
+/**
+ * Switches one built-in skill on or off in every selected environment. Each environment keeps
+ * its own switched-off list, so names written by a newer build survive the toggle.
+ */
+export function planMobileBuiltInSkillToggle(
+  targets: readonly ScopedMobileSettingsTarget[],
+  skill: string,
+  on: boolean,
+) {
+  const writes = new Map<EnvironmentId, ServerSettingsPatch>();
+  for (const target of targets) {
+    if (
+      skill === "goat-discipline" &&
+      target.environment.serverConfig.environment.capabilities.devDisciplineSkill !== true
+    )
+      continue;
+    writes.set(
+      target.environment.environmentId,
+      builtInSkillEnvironmentPatch(
+        target.environment.serverConfig.settings.disabledBuiltInSkills,
+        skill,
+        on,
+      ),
+    );
+  }
+  return [...writes].map(([environmentId, patch]) => ({ environmentId, patch }));
+}
+
+export function planMobileBuiltInSkillProjectPatch(
+  targets: readonly ScopedMobileSettingsTarget[],
+  skill: string,
+  enabled: boolean | undefined,
+) {
+  const writes = new Map<
+    EnvironmentId,
+    NonNullable<ServerSettingsPatch["projectSettingsOverrides"]>
+  >();
+  for (const target of targets) {
+    if (
+      target.projectId === null ||
+      target.environment.serverConfig.environment.capabilities.devDisciplineSkill !== true
+    )
+      continue;
+    writes.set(target.environment.environmentId, {
+      ...writes.get(target.environment.environmentId),
+      ...builtInSkillProjectPatch(
+        target.environment.serverConfig.settings,
+        [target.projectId],
+        skill,
+        enabled,
+      ),
+    });
+  }
+  return [...writes].map(([environmentId, projectSettingsOverrides]) => ({
+    environmentId,
+    patch: { projectSettingsOverrides },
   }));
 }

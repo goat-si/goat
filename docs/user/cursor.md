@@ -30,8 +30,9 @@ the generated key before it expires, remove it from your Cursor dashboard's API 
 
 ## Cursor Cloud
 
-Cursor Cloud appears automatically in **Settings > Providers** and becomes available when you
-sign in to Cursor. You can start sign-in from the Cursor Cloud card; it uses the Cursor account.
+When the Cursor CLI (`cursor-agent`) is installed, GOAT turns on the Cursor provider and Cursor
+Cloud by itself. Cursor Cloud becomes available when you sign in to Cursor from the Cursor Cloud
+card; it uses the Cursor account.
 Turn Cursor Cloud off with its toggle. To follow Cursor's enabled state again, reset the cloud
 card. For another account, add a custom Cursor Cloud instance and choose its Cursor source.
 On mobile, manage the account under **Settings > Provider accounts**. Cursor Cloud uses only
@@ -44,6 +45,10 @@ Cloud messages accept text only and require full access. GOAT's sandbox and appr
 overrides do not apply to Cursor's cloud. Progress, summary, and returned PR or branch
 links remain visible when connecting to the environment remotely. Cursor may create
 a draft PR; opening it does not mean its checks passed.
+
+If Cursor stops a run with an unexpected error before it opens a branch or PR, GOAT asks the
+same agent to continue once, and the thread shows the result of that retry. Errors you need to
+fix, such as sign-in, access, or usage limits, are not retried.
 
 Messages sent while a task is active wait for completion. Later messages continue
 in the same cloud agent using its original repository revision, without including

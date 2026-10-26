@@ -53,6 +53,10 @@ Important fields common to both record types:
 `effect-span` records also contain `exit` with `Success`, `Failure`, or `Interrupted`. `otlp-span`
 records instead carry OTLP resource, scope, and optional status fields.
 
+Stable and nightly desktop apps can run at once and append to the same `desktop.trace.ndjson`, so
+each desktop `effect-span` record carries `resourceAttributes["service.version"]`, the version of
+the app that wrote it. Update check spans also record the update `channel` they used.
+
 The `TraceRecord`, `EffectTraceRecord`, and `OtlpTraceRecord` schemas live in
 `packages/shared/src/observability.ts`.
 
@@ -151,7 +155,7 @@ You do not need any extra env vars. Just run the app normally and inspect `serve
 Examples:
 
 ```bash
-npx t3
+goat
 ```
 
 ```bash
@@ -186,7 +190,7 @@ Default Grafana login:
 
 For endpoint settings and startup precedence, see the
 [user telemetry guide](../user/telemetry.md#export-diagnostics-to-your-own-receiver).
-In a worktree, use `vp run dev` instead of `npx t3` to keep state isolated.
+In a worktree, use `vp run dev` instead of `goat` to keep state isolated.
 
 ```bash
 export GOAT_OTLP_TRACES_URL=http://localhost:4318/v1/traces
@@ -207,7 +211,7 @@ export GOAT_TRACE_TIMING_ENABLED=true
 CLI:
 
 ```bash
-npx t3
+goat
 ```
 
 Monorepo web/server dev:
@@ -232,7 +236,7 @@ macOS app bundle example:
 GOAT_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 GOAT_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
 GOAT_OTLP_LOGS_URL=http://localhost:4318/v1/logs \
-"/Applications/T3 Code.app/Contents/MacOS/T3 Code"
+"/Applications/GOAT.app/Contents/MacOS/GOAT"
 ```
 
 Direct binary example:
@@ -627,6 +631,13 @@ process, and `goat-web` for web client spans the backend forwards, all in `servi
 `goat`. `OTEL_SERVICE_NAME` and a `service.name` or
 `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations apart with other
 resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development`.
+The UI reports `deployment.environment.name` from its build: `development` under the Vite dev server
+and `production` otherwise.
+
+Attributes specific to GOAT use the `goat.` prefix. The UI runs as `goat-web` in both a browser
+and the desktop window, since it is the same code, and `goat.client.surface` is `desktop` or
+`web`. The server's `goat.server.managed_by` is `desktop` when the desktop app launched it and
+`standalone` otherwise.
 
 Releases before the GOAT rename reported `t3code-server`, `t3code-desktop`, and `t3code-web` in
 namespace `t3code`, with `service.runtime` `t3-server` or `t3-web`, and tagged SSH runtime
@@ -679,7 +690,7 @@ Current high-value span and metric boundaries include:
 ## Heap Snapshots
 
 To see what a long-running server holds in memory, send it `SIGUSR2`. The server writes a V8 heap
-snapshot to its logs dir and logs the path. This works for desktop, `npx t3`, and service installs
+snapshot to its logs dir and logs the path. This works for desktop, `goat`, and service installs
 on macOS and Linux. Windows has no `SIGUSR2`.
 
 Send the signal to the server pid in `server-runtime.json`, which sits in the server's state dir

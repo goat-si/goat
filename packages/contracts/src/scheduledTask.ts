@@ -173,7 +173,7 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
         }),
         secretRef: Schema.optional(SecretRef).annotate({
           description:
-            "A secret the user entered through request_secret, used instead of secret. It is consumed by this save.",
+            "A secret the user entered through goat_handoff_create, used instead of secret. It is consumed by this save.",
         }),
       }),
     ),
@@ -227,7 +227,7 @@ export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
 /**
  * Why a webhook task has no public URL. relay_not_linked: the environment is
- * not linked to T3 Connect. managed_tunnel_not_configured: it is linked, but
+ * not linked to GOAT Connect. managed_tunnel_not_configured: it is linked, but
  * remote access has not created its managed tunnel. managed_tunnel_unrecognized:
  * the tunnel's name does not carry the key the relay routes by.
  */
@@ -245,6 +245,8 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
   /** Set when url is null and the cause is known. */
   urlUnavailableReason: Schema.optional(ScheduledTaskWebhookUrlUnavailableReason),
   hasSecret: Schema.Boolean,
+  /** The secretRef the stored signing secret came from; absent for an inline secret. */
+  secretRef: Schema.optional(SecretRef),
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 

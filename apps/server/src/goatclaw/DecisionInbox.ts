@@ -1,6 +1,4 @@
 import {
-  AuthOrchestrationOperateScope,
-  AuthSettingsWriteScope,
   CommandId,
   DecisionItem,
   DecisionOption,
@@ -13,9 +11,11 @@ import {
   ProviderRequestKind,
   RuntimeRequestId,
   ThreadId,
-  type AuthEnvironmentScope,
-  type DecisionAnswerInput,
-  type DecisionListInput,
+  type DecisionAnswerMcpInput,
+  type DecisionGetMcpInput,
+  type DecisionListMcpInput,
+  type DecisionListResult,
+  type PermissionProfile,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -26,7 +26,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { clientRuntimeModeCeiling } from "../mcp/McpInvocationContext.ts";
+import { PERSON, canResolveHumanStep } from "../handoffs/HumanStepAuthority.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -37,16 +38,20 @@ import {
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Profiles from "./PermissionProfiles.ts";
+import {
+  scopeOf,
+  isOwner,
+  resolverOf,
+  stepOf,
+  writeAccess,
+  narrowRuntimeMode,
+  requireProfile,
+  type DecisionCaller,
+} from "./DecisionAuthority.ts";
+import { validateTransport } from "./DecisionDestination.ts";
+import { compareDecisions } from "./decisionOrder.ts";
 
-/** Client identity is constructed by the authenticated RPC boundary, never decoded from input. */
-export type DecisionCaller =
-  | { readonly kind: "agent"; readonly scope: McpInvocationScope }
-  | {
-      readonly kind: "client";
-      readonly environmentId: EnvironmentId;
-      readonly sessionId: string;
-      readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
-    };
+export type { DecisionCaller } from "./DecisionAuthority.ts";
 
 export class DecisionInbox extends Context.Service<
   DecisionInbox,
@@ -57,15 +62,16 @@ export class DecisionInbox extends Context.Service<
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
     readonly list: (
       caller: DecisionCaller,
-      input: DecisionListInput,
-    ) => Effect.Effect<{ readonly items: ReadonlyArray<DecisionItem> }, OrchestratorMcpFailure>;
+      input: DecisionListMcpInput,
+    ) => Effect.Effect<DecisionListResult, OrchestratorMcpFailure>;
     readonly get: (
       caller: DecisionCaller,
       id: string,
+      options?: Pick<DecisionGetMcpInput, "permissionProfileCeiling" | "transportEnvironmentId">,
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
     readonly answer: (
       caller: DecisionCaller,
-      input: DecisionAnswerInput,
+      input: DecisionAnswerMcpInput,
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
     readonly withdraw: (
       caller: DecisionCaller,
@@ -95,39 +101,12 @@ const storageFailure = () =>
     code: "orchestration_error",
     message: "Decision inbox storage is unavailable.",
   });
-const scopeOf = (caller: DecisionCaller): McpInvocationScope =>
-  caller.kind === "agent"
-    ? caller.scope
-    : {
-        environmentId: caller.environmentId,
-        capabilities: new Set(["orchestration"]),
-        issuedAt: 0,
-        requestNamespace: `decision-client:${caller.sessionId}`,
-        thread: undefined,
-        client: {
-          sessionId: caller.sessionId,
-          label: "Decision inbox",
-          access: "full-access",
-          approvals: true,
-        },
-        grantedScopes: caller.scopes,
-      };
 const actorOf = (caller: DecisionCaller) =>
   caller.kind === "client"
     ? `client:${caller.sessionId}`
     : caller.scope.thread === undefined
       ? `mcp:${caller.scope.client?.sessionId ?? caller.scope.requestNamespace}`
       : `thread:${caller.scope.thread.threadId}`;
-const isOwner = (caller: DecisionCaller) =>
-  caller.kind === "client" && caller.scopes.includes(AuthSettingsWriteScope);
-const writeAccess = (caller: DecisionCaller) =>
-  caller.kind === "client"
-    ? caller.scopes.includes(AuthOrchestrationOperateScope)
-      ? Effect.void
-      : Effect.fail(denied("Answering decisions requires orchestration:operate."))
-    : caller.scope.readOnly === true || caller.scope.client?.access === "read-only"
-      ? Effect.fail(denied("This credential is read-only."))
-      : Effect.void;
 const isApprovalKind = Schema.is(ProviderRequestKind);
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeRequest = Schema.decodeEffect(DecisionRequestInput);
@@ -264,38 +243,57 @@ const make = Effect.gen(function* () {
   const presentItems = Effect.fn("DecisionInbox.presentItems")(function* (
     caller: DecisionCaller,
     items: ReadonlyArray<DecisionItem>,
+    transportEnvironmentId?: EnvironmentId,
   ) {
-    if (caller.kind === "agent") return items;
+    const local = items.map((item) => ({
+      ...item,
+      from: { ...item.from, environmentId: scopeOf(caller).environmentId },
+    }));
+    if (caller.kind === "agent" && transportEnvironmentId === undefined) return local;
     // History commonly repeats one responder; resolve each identity only once per response.
     const labels = new Map<string, string>();
     for (const actor of new Set(
       items.flatMap((item) => (item.answeredBy === null ? [] : [item.answeredBy])),
     )) {
-      labels.set(actor, yield* answererLabel(actor, caller.sessionId));
+      labels.set(
+        actor,
+        yield* answererLabel(actor, caller.kind === "client" ? caller.sessionId : undefined),
+      );
     }
-    return items.map((item) => ({
+    return local.map((item) => ({
       ...item,
-      answeredBy: item.answeredBy === null ? null : labels.get(item.answeredBy)!,
+      ...(caller.kind === "agent"
+        ? item.answeredBy === null
+          ? {}
+          : { answeredByLabel: labels.get(item.answeredBy) ?? "an agent" }
+        : { answeredBy: item.answeredBy === null ? null : labels.get(item.answeredBy)! }),
     }));
   });
   const presentItem = Effect.fn("DecisionInbox.presentItem")(function* (
     caller: DecisionCaller,
     item: DecisionItem,
+    transportEnvironmentId?: EnvironmentId,
   ) {
-    return (yield* presentItems(caller, [item]))[0]!;
+    return (yield* presentItems(caller, [item], transportEnvironmentId))[0]!;
   });
-  const callerLimits = Effect.fn("DecisionInbox.callerLimits")(function* (caller: DecisionCaller) {
+  const callerLimits = Effect.fn("DecisionInbox.callerLimits")(function* (
+    caller: DecisionCaller,
+    forwarded?: PermissionProfile,
+  ) {
     if (caller.kind === "client") return undefined;
     const scope = scopeOf(caller);
-    const effective = yield* profiles.resolve(scope);
     const callerThread =
       scope.thread === undefined
         ? undefined
         : (yield* sql<{
             interaction_mode: "plan" | "default";
-          }>`SELECT interaction_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${scope.thread.threadId}`.pipe(
+            runtime_mode: RuntimeMode;
+          }>`SELECT interaction_mode, runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${scope.thread.threadId} AND deleted_at IS NULL`.pipe(
             Effect.mapError(storageFailure),
           ))[0];
+    if (scope.thread !== undefined && callerThread === undefined)
+      return yield* denied("The calling thread is unavailable.");
+    const effective = yield* profiles.resolve(scope, callerThread?.runtime_mode, forwarded);
     return {
       runtimeMode: effective.runtimeMode,
       interactionMode: callerThread?.interaction_mode ?? "default",
@@ -361,7 +359,11 @@ const make = Effect.gen(function* () {
       },
     } satisfies DecisionItem;
   });
-  const pendingRows = Effect.fn("DecisionInbox.pendingRows")(function* (id?: string, limit = 100) {
+  const pendingRows = Effect.fn("DecisionInbox.pendingRows")(function* (
+    id?: string,
+    limit = 100,
+    input: DecisionListMcpInput = {},
+  ) {
     const target =
       id === undefined
         ? undefined
@@ -387,46 +389,37 @@ const make = Effect.gen(function* () {
       JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id AND t.deleted_at IS NULL
       WHERE (r.kind = 'user_input' OR r.kind IN ('command', 'file-read', 'file-change', 'mcp-elicitation', 'permission'))
         AND ((${target === undefined ? 1 : 0} = 1 AND r.status = 'pending') OR (r.thread_id = ${target?.threadId ?? null} AND r.runtime_request_id = ${target?.requestId ?? null}))
-      ORDER BY r.created_at DESC, r.runtime_request_id LIMIT ${limit}`.pipe(
+        AND (${input.launcherEnvironmentId ?? null} IS NULL OR (
+          t.archived_at IS NULL
+          AND NOT (COALESCE(json_extract(t.payload_json, '$.lineage.relationshipToParent'), '') = 'subagent'
+            AND COALESCE(json_extract(t.payload_json, '$.creationSource'), '') = 'provider')
+          AND json_extract(t.payload_json, '$.launchedBy.environmentId') = ${input.launcherEnvironmentId ?? null}
+          AND (${input.launcherThreadId ?? null} IS NULL OR json_extract(t.payload_json, '$.launchedBy.threadId') = ${input.launcherThreadId ?? null})
+        ))
+      ORDER BY r.created_at DESC, r.thread_id, r.runtime_request_id LIMIT ${limit}`.pipe(
       Effect.mapError(storageFailure),
     );
   });
-  const get = Effect.fn("DecisionInbox.get")(function* (caller: DecisionCaller, id: string) {
+  const get = Effect.fn("DecisionInbox.get")(function* (
+    caller: DecisionCaller,
+    id: string,
+    options: Pick<DecisionGetMcpInput, "permissionProfileCeiling" | "transportEnvironmentId"> = {},
+  ) {
+    const transportEnvironmentId = yield* validateTransport(caller, options);
+    if (options.permissionProfileCeiling !== undefined)
+      yield* callerLimits(caller, options.permissionProfileCeiling);
     yield* expire();
     const item = yield* durable(id);
-    if (item !== undefined) return yield* presentItem(caller, item);
+    if (item !== undefined) return yield* presentItem(caller, item, transportEnvironmentId);
     const row = (yield* pendingRows(id, 200)).find(
       (row) => pendingId(row.thread_id, row.runtime_request_id) === id,
     );
     if (row === undefined) return yield* invalid("The decision was not found.");
-    return yield* project(row, yield* callerLimits(caller));
-  });
-  const requireProfile = Effect.fn("DecisionInbox.requireProfile")(function* (
-    caller: DecisionCaller,
-    requiredProfile: string,
-  ) {
-    const effective = yield* profiles.resolve(scopeOf(caller));
-    if (isOwner(caller)) return "owner";
-    const required = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw
-      .profiles[requiredProfile];
-    if (required === undefined)
-      return yield* denied("The decision's required permission profile is unavailable.");
-    const held = effective.profile;
-    const modes = ["approval-required", "auto-accept-edits", "auto", "full-access"];
-    if (
-      !required.capabilities.every((capability) => held.capabilities.includes(capability)) ||
-      modes.indexOf(held.runtimeModeCeiling) < modes.indexOf(required.runtimeModeCeiling) ||
-      held.maxLanes < required.maxLanes ||
-      (held.hosts !== undefined &&
-        (required.hosts === undefined ||
-          !required.hosts.every((host) => held.hosts!.includes(host)))) ||
-      (held.maxTurns !== undefined &&
-        (required.maxTurns === undefined || held.maxTurns < required.maxTurns)) ||
-      (held.maxWallClockMs !== undefined &&
-        (required.maxWallClockMs === undefined || held.maxWallClockMs < required.maxWallClockMs))
-    )
-      return yield* denied(`This decision requires permission profile ${requiredProfile}.`);
-    return effective.profile.id;
+    return yield* presentItem(
+      caller,
+      yield* project(row, yield* callerLimits(caller, options.permissionProfileCeiling)),
+      transportEnvironmentId,
+    );
   });
   const deliver = Effect.fn("DecisionInbox.deliver")(function* () {
     const rows = yield* sql<
@@ -553,24 +546,35 @@ const make = Effect.gen(function* () {
     raiseOnce,
     withdrawOpen,
     list: Effect.fn("DecisionInbox.list")(function* (caller, input) {
+      const transportEnvironmentId = yield* validateTransport(caller, input);
+      if (input.permissionProfileCeiling !== undefined)
+        yield* callerLimits(caller, input.permissionProfileCeiling);
       yield* expire();
-      const limit = input.limit ?? 100;
-      const rows = yield* sql<DecisionRow>`SELECT * FROM decision_items
-        WHERE (${input.status ?? null} IS NULL OR status = ${input.status ?? null})
-        ORDER BY created_at DESC, id LIMIT ${limit}`.pipe(Effect.mapError(storageFailure));
+      // The routing facade can request the public maximum plus one to prove truncation.
+      const limit = Math.max(1, Math.min(201, Math.trunc(input.limit ?? 100)));
+      const rows = yield* sql<DecisionRow>`SELECT d.* FROM decision_items d
+        LEFT JOIN orchestration_v2_projection_threads t ON t.thread_id = d.from_thread_id
+        WHERE (${input.status ?? null} IS NULL OR d.status = ${input.status ?? null})
+        AND (${input.launcherEnvironmentId ?? null} IS NULL OR (
+          t.deleted_at IS NULL
+          AND json_extract(t.payload_json, '$.launchedBy.environmentId') = ${input.launcherEnvironmentId ?? null}
+          AND (${input.launcherThreadId ?? null} IS NULL OR json_extract(t.payload_json, '$.launchedBy.threadId') = ${input.launcherThreadId ?? null})
+        ))
+        ORDER BY d.created_at DESC, d.id LIMIT ${limit + 1}`.pipe(Effect.mapError(storageFailure));
       const items: DecisionItem[] = yield* Effect.forEach(rows, toItem);
       if (input.status === undefined || input.status === "open") {
-        const limits = yield* callerLimits(caller);
-        for (const row of yield* pendingRows(undefined, limit))
+        const limits = yield* callerLimits(caller, input.permissionProfileCeiling);
+        for (const row of yield* pendingRows(undefined, limit + 1, input))
           items.push(yield* project(row, limits));
       }
       return {
         items: yield* presentItems(
           caller,
-          items
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
-            .slice(0, limit),
+          items.sort(compareDecisions).slice(0, limit),
+          transportEnvironmentId,
         ),
+        unavailableHosts: [],
+        truncated: items.length > limit,
       };
     }),
     create: Effect.fn("DecisionInbox.create")(function* (caller, rawInput) {
@@ -618,12 +622,38 @@ const make = Effect.gen(function* () {
       return yield* presentItem(caller, (yield* durable(id))!);
     }),
     answer: Effect.fn("DecisionInbox.answer")(function* (caller, input) {
+      const transportEnvironmentId = yield* validateTransport(caller, input);
       yield* writeAccess(caller);
-      const item = yield* get(caller, input.id);
+      const item = yield* get(caller, input.id, input);
       if (item.status !== "open") return yield* invalid("This decision is no longer open.");
-      if (item.humanRequired && caller.kind !== "client")
-        return yield* denied("This item requires a person in a client; forward it to the user.");
-      const profile = yield* requireProfile(caller, item.requiredProfile);
+      const resolver = resolverOf(caller);
+      const step = stepOf(item);
+      if (item.humanRequired && !canResolveHumanStep(resolver, step))
+        return yield* denied(
+          step === "runtime_approval"
+            ? "Approvals need a person in a client, or an MCP client token holding orchestration:approve; forward it to the user."
+            : "This item requires a person in a client; forward it to the user.",
+        );
+      // Whoever may resolve a runtime approval answers it here as in its thread or through
+      // goat_pending_request_respond: profiles narrow agents, and an outside approver keeps its
+      // own ceiling.
+      const outsideApprover = resolver.kind === "outside_client" && step === "runtime_approval";
+      const profile =
+        step === "runtime_approval"
+          ? outsideApprover
+            ? "approver"
+            : isOwner(caller)
+              ? "owner"
+              : "person"
+          : yield* requireProfile(
+              caller,
+              item.requiredProfile,
+              input.permissionProfileCeiling,
+              (yield* callerLimits(caller, input.permissionProfileCeiling))?.runtimeMode,
+            ).pipe(
+              Effect.provideService(Profiles.PermissionProfiles, profiles),
+              Effect.provideService(Settings.ServerSettingsService, settings),
+            );
       if ("pending" in item && item.pending !== undefined) {
         if (input.optionId !== undefined)
           return yield* invalid("Answer projected questions with answers or decision.");
@@ -647,15 +677,7 @@ const make = Effect.gen(function* () {
           )
           .pipe(Effect.mapError(storageFailure));
         const scope = scopeOf(caller);
-        const effective = yield* profiles.resolve(scope);
-        const callerThread =
-          scope.thread === undefined
-            ? undefined
-            : (yield* sql<{
-                interaction_mode: "plan" | "default";
-              }>`SELECT interaction_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${scope.thread.threadId}`.pipe(
-                Effect.mapError(storageFailure),
-              ))[0];
+        const limits = yield* callerLimits(caller, input.permissionProfileCeiling);
         yield* pending
           .respond(
             scope,
@@ -667,26 +689,39 @@ const make = Effect.gen(function* () {
               ...(input.decision === undefined ? {} : { decision: input.decision }),
             },
             commandId,
+            caller.kind === "client" ? PERSON : undefined,
           )
           .pipe(
             Effect.provideService(
               DispatchModeLimit,
               caller.kind === "client"
                 ? undefined
-                : {
-                    runtimeMode: effective.runtimeMode,
-                    interactionMode: callerThread?.interaction_mode ?? "default",
-                  },
+                : outsideApprover
+                  ? {
+                      runtimeMode:
+                        input.permissionProfileCeiling === undefined
+                          ? clientRuntimeModeCeiling(scope.client)
+                          : narrowRuntimeMode(
+                              clientRuntimeModeCeiling(scope.client),
+                              input.permissionProfileCeiling.runtimeModeCeiling,
+                            ),
+                      interactionMode: "default",
+                    }
+                  : limits,
             ),
           );
         yield* reconcileAudits();
-        return yield* presentItem(caller, {
-          ...item,
-          status: "answered",
-          answer: null,
-          answeredBy: actorOf(caller),
-          updatedAt: yield* now,
-        });
+        return yield* presentItem(
+          caller,
+          {
+            ...item,
+            status: "answered",
+            answer: null,
+            answeredBy: actorOf(caller),
+            updatedAt: yield* now,
+          },
+          transportEnvironmentId,
+        );
       }
       if (
         input.answers !== undefined ||
@@ -714,7 +749,7 @@ const make = Effect.gen(function* () {
           Effect.logWarning("Decision answer delivery queued for retry", { decisionId: item.id }),
         ),
       );
-      return yield* presentItem(caller, (yield* durable(item.id))!);
+      return yield* presentItem(caller, (yield* durable(item.id))!, transportEnvironmentId);
     }),
     withdraw: Effect.fn("DecisionInbox.withdraw")(function* (caller, id) {
       yield* writeAccess(caller);

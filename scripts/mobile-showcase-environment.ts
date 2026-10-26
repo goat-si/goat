@@ -5,6 +5,13 @@ import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeUtil from "node:util";
 
+import { isolatedGitEnv, removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// The showcase runner imports this module before it starts any server. Started from a git hook,
+// it inherits GIT_DIR, which would point the showcase servers' git (status, background fetch) at
+// the developer's checkout instead of these fixture workspaces (#1114).
+removeInheritedGitEnv(process.env);
+
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
 export const SHOWCASE_PROJECT_ID = "t3code";
@@ -49,11 +56,11 @@ export const SHOWCASE_TERMINAL_BUFFER = [
   "",
   "  \u001b[32m→\u001b[0m  \u001b[2mLocal:\u001b[0m    \u001b[4;36mhttp://127.0.0.1:5173/\u001b[0m",
   "  \u001b[32m→\u001b[0m  \u001b[2mNetwork:\u001b[0m  \u001b[4;36mhttp://192.168.1.24:5173/\u001b[0m",
-  "  \u001b[32m→\u001b[0m  \u001b[2mProject:\u001b[0m  \u001b[1mt3code\u001b[0m \u001b[2m— ~/Code/t3code\u001b[0m",
+  "  \u001b[32m→\u001b[0m  \u001b[2mProject:\u001b[0m  \u001b[1mt3code\u001b[0m \u001b[2m(~/Code/t3code)\u001b[0m",
   "",
   "  \u001b[32m✓ 612 passed\u001b[0m   \u001b[33m△ 2 warnings\u001b[0m   \u001b[31m✗ 0 failed\u001b[0m",
   "",
-  "  \u001b[42;30m READY \u001b[0m \u001b[2mwatching for changes — press\u001b[0m \u001b[1mq\u001b[0m \u001b[2mto quit\u001b[0m",
+  "  \u001b[42;30m READY \u001b[0m \u001b[2mwatching for changes, press\u001b[0m \u001b[1mq\u001b[0m \u001b[2mto quit\u001b[0m",
   "",
   SHOWCASE_TERMINAL_PROMPT,
 ].join("\r\n");
@@ -254,10 +261,11 @@ function minutesBefore(now: number, minutes: number): string {
 }
 
 async function runGit(workspaceRoot: string, args: ReadonlyArray<string>): Promise<void> {
-  await execFile("git", [...args], {
+  // Run from a hook, an inherited GIT_DIR would build this fixture in the developer's checkout (#1114).
+  await execFile("git", ["-C", workspaceRoot, ...args], {
     cwd: workspaceRoot,
     env: {
-      ...process.env,
+      ...isolatedGitEnv(),
       GIT_AUTHOR_NAME: "Alex Rivera",
       GIT_AUTHOR_EMAIL: "alex@lumen.test",
       GIT_COMMITTER_NAME: "Alex Rivera",
@@ -316,7 +324,7 @@ async function seedCompanionWorkspace(input: {
   await NodeFSP.writeFile(NodePath.join(input.workspaceRoot, "favicon.svg"), input.favicon);
   await NodeFSP.writeFile(
     NodePath.join(input.workspaceRoot, "README.md"),
-    `# ${input.title}\n\nSeeded by the T3 Code mobile screenshot harness.\n`,
+    `# ${input.title}\n\nSeeded by the GOAT mobile screenshot harness.\n`,
   );
   await initializeRepository({
     workspaceRoot: input.workspaceRoot,

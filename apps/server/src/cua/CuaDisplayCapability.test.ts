@@ -1,17 +1,28 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/process";
 
 import {
   classifyDarwin,
   classifyLinux,
   classifyWindows,
   MAC_GRANTS_REASON,
+  MAC_STANDALONE_REASON,
   parseMacGrants,
+  probeDisplay,
   withMacGrants,
   ldconfigLibraries,
   localDisplayNumber,
   tasklistSession,
   x11SetupOutcome,
   x11SetupRequest,
+  linuxBusCandidates,
+  linuxDisplayCandidates,
   x11SocketDisplays,
   xauthorityCookie,
   xServerAuthFile,
@@ -78,6 +89,131 @@ describe("Linux display parsing", () => {
     expect(x11SocketDisplays(["X6", "X1", ".lock", "X10", "X3", "X7", "Xfoo"])).toEqual([
       1, 3, 6, 7, 10,
     ]);
+  });
+
+  it("a server given a display or session bus uses only that one, never another desktop (#1358)", () => {
+    // The server was started for its own Xvfb on :96 while a person is signed in on :1.
+    expect(linuxDisplayCandidates(":96", [1, 96])).toEqual([96]);
+    expect(linuxDisplayCandidates("localhost:10.0", [0, 1])).toEqual([]);
+    expect(linuxBusCandidates("unix:path=/tmp/private-bus", "/run/user/1000")).toEqual([
+      "unix:path=/tmp/private-bus",
+    ]);
+    // A server with neither, such as one started over SSH, looks for the local desktop.
+    expect(linuxDisplayCandidates(undefined, [1, 96])).toEqual([1, 96]);
+    expect(linuxBusCandidates(undefined, "/run/user/1000")).toEqual([
+      "unix:path=/run/user/1000/bus",
+    ]);
+  });
+
+  it("a server given a Wayland session and no DISPLAY never takes another session's X display (#1581)", () => {
+    // A headless GNOME session of its own, while a person is signed in on Xorg :1.
+    expect(linuxDisplayCandidates(undefined, [1], "gcu-wl-0")).toEqual([]);
+    expect(linuxDisplayCandidates(undefined, [1], "/run/gcu/wayland-0")).toEqual([]);
+    // Its session bus is the one in its own runtime directory, not the seat's.
+    expect(linuxBusCandidates(undefined, "/tmp/gcu-gnome/run")).toEqual([
+      "unix:path=/tmp/gcu-gnome/run/bus",
+    ]);
+    // With no X display found, the driver gets that Wayland session and no X display.
+    const result = classifyLinux(facts({ displays: [], wayland: liveWayland }));
+    expect(result.environment.map((variable) => variable.name)).not.toContain("DISPLAY");
+    expect(result.environment).toContainEqual({ name: "WAYLAND_DISPLAY", value: "wayland-0" });
+  });
+
+  // Runs the whole Linux probe with another session's X socket listed. A display number nothing
+  // listens on keeps the old behavior harmless: it would only read the X credentials and fail.
+  const probeWith = (environment: NodeJS.ProcessEnv) => {
+    const read: Array<string> = [];
+    return probeDisplay("standalone").pipe(
+      Effect.map((result) => ({ result, read })),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, environment),
+      Effect.provideService(HostProcess.HomeDirectory, "/home/person"),
+      Effect.provideService(HostProcess.UserId, 1000),
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({
+          readDirectory: (directory) => {
+            read.push(directory);
+            return Effect.succeed(directory === "/tmp/.X11-unix" ? ["X9998"] : []);
+          },
+          readFile: (file) => {
+            read.push(file);
+            return Effect.succeed(new Uint8Array());
+          },
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              stdin: Sink.drain,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+              unref: Effect.succeed(Effect.void),
+            }),
+          ),
+        ),
+      ),
+      Effect.provide(NodePath.layerPosix),
+    );
+  };
+
+  it.effect(
+    "a server in a Wayland session never reads another session's X credentials (#1581)",
+    () =>
+      Effect.gen(function* () {
+        const runtime = { XDG_RUNTIME_DIR: "/nonexistent/gcu-1581/run" };
+        const named = yield* probeWith({ ...runtime, WAYLAND_DISPLAY: "gcu-wl-0" });
+        const implied = yield* probeWith({ ...runtime, XDG_SESSION_TYPE: "wayland" });
+        for (const { result, read } of [named, implied]) {
+          expect(read.filter((file) => file.includes("Xauthority") || file === "/proc")).toEqual(
+            [],
+          );
+          expect(result.environment.map((variable) => variable.name)).not.toContain("DISPLAY");
+        }
+        // A server given neither, as over SSH, still looks for the local desktop.
+        const neither = yield* probeWith(runtime);
+        expect(neither.read).toContain("/home/person/.Xauthority");
+      }),
+  );
+
+  it("a named DISPLAY that does not answer is unavailable, even with a Wayland session beside it (#1358)", () => {
+    // Started for its own Xvfb on :96 from a terminal inside a Wayland desktop.
+    const failed = classifyLinux(
+      facts({
+        requestedDisplay: ":96",
+        displays: linuxDisplayCandidates(":96", [0, 96]).map((display) => ({
+          display,
+          outcome: "unreachable" as const,
+          xauthority: null,
+        })),
+        wayland: liveWayland,
+      }),
+    );
+    expect(failed).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(failed.reason).toContain("DISPLAY=:96");
+    const forwarded = classifyLinux(
+      facts({ requestedDisplay: "localhost:10.0", displays: [], wayland: liveWayland }),
+    );
+    expect(forwarded).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(forwarded.reason).toContain("forwarded");
+    // Without DISPLAY, the Wayland session is the one this server was started in.
+    expect(classifyLinux(facts({ displays: [], wayland: liveWayland })).capability).toBe("partial");
+  });
+
+  it("a named screen other than 0 is unavailable, since the driver would use screen 0", () => {
+    const result = classifyLinux(facts({ requestedDisplay: ":0.1" }));
+    expect(result).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(classifyLinux(facts({ requestedDisplay: ":1.0" })).capability).toBe("available");
   });
 
   it("reads local DISPLAY values and ignores forwarded ones", () => {
@@ -272,6 +408,14 @@ describe("macOS", () => {
       "Another user is signed in at this Mac's screen. Computer use needs jun signed in there.",
     );
     expect(classifyDarwin({ uid: 501, consoleUid: null, user: "jun" }).capability).toBe("partial");
+  });
+
+  it("is unavailable under a standalone server, whose grants would land on the launching terminal", () => {
+    expect(classifyDarwin({ uid: 501, consoleUid: 501, user: "jun", standalone: true })).toEqual({
+      capability: "unavailable",
+      reason: MAC_STANDALONE_REASON,
+      environment: [],
+    });
   });
 
   it("reads the grants from check_permissions", () => {

@@ -18,7 +18,7 @@ replies happen after that return. Adapters do not send replies themselves.
 `GoatBotHomeClaim` in `packages/contracts/src/settings.ts`. Servers do not sync the claim with
 each other: clients copy the newest claim to every server they reach. So a claim naming a
 vanished environment blocks the bot everywhere until someone moves it, either from a client or
-through `ChannelBotHome.claimHere` (the `channel_bot_home_claim` MCP tool), which writes a newer
+through `ChannelBotHome.claimHere` (the `goat_channel_bot_home_claim` MCP tool), which writes a newer
 claim for its own server and rechecks inside the settings write lock that the caller still has full access.
 
 Slack is one adapter. `apps/server/src/channels/slack/SlackChannelAdapter.ts` maps Socket Mode
@@ -35,7 +35,7 @@ poller runs inside the channel worker owner's pass.
 
 > Decision record: [ADR-0011](decisions/ADR-0011-channel-ledger.md)
 
-The ledger migration is `apps/server/src/persistence/Migrations/071_ChannelLedger.ts`. It creates
+The ledger migration is `apps/server/src/persistence/Migrations/072_ChannelLedger.ts`. It creates
 `channel_conversations`, `channel_bindings`, `channel_inbox`, `channel_tasks`,
 `channel_task_events`, `channel_outbox`, `channel_runtime_state`, `channel_identities`, and
 `channel_identity_links`. `ChannelLedger` reads them through `SqlClient`.
@@ -70,7 +70,13 @@ A late check updates the bound run's evidence without reopening the task or chan
 Local reconciliation and authenticated remote observation recover this evidence from persisted state.
 An absent check remains pending until the check worker records a disposition; an explicit no-check
 disposition ends observation without manufacturing a passing result. Web, mobile, Slack, and bot
-recall present the two kinds of evidence separately.
+recall present the two kinds of evidence separately. People see evidence only once an agent
+reported tests or a check runs; Slack and iMessage get it as one sentence, never as label lines.
+
+In GOAT Bot a task's card is its result. A non-turn task's outcome is delivered as its card under
+the `narration:<event>:origin` key, because the work queue and worker slots count an outcome as
+seen only when that delivery lands. A turn's answer stays a message, and its card carries no
+summary.
 
 `ChannelTaskReviews` gates successful Slack work when that connection opts in. It launches an
 ordinary server-owned thread because the completed worker has no active run to delegate from.

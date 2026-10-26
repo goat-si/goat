@@ -1,3 +1,4 @@
+import { DesktopWindowMaterialSetting } from "./DesktopWindowMaterialSetting";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import {
@@ -91,22 +92,20 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="appearance" title="Colors & themes" variant="plain" hideTitle>
-        <div id={searchableSetting("theme").id}>
-          <ThemeLibrary
-            appearanceMode={appearanceMode}
-            customThemes={customThemes}
-            initialAppearance={resolvedTheme}
-            refreshTheme={refreshTheme}
-            isImportOpen={isImportThemeOpen}
-            setAppearanceMode={setAppearanceMode}
-            setTheme={setTheme}
-            setThemeHalf={setThemeHalf}
-            theme={theme}
-            themeHalves={themeHalves}
-            onImportOpenChange={setIsImportThemeOpen}
-          />
-        </div>
+      <SettingsSection id="appearance" title="Colors & themes">
+        <ThemeLibrary
+          appearanceMode={appearanceMode}
+          customThemes={customThemes}
+          initialAppearance={resolvedTheme}
+          refreshTheme={refreshTheme}
+          isImportOpen={isImportThemeOpen}
+          setAppearanceMode={setAppearanceMode}
+          setTheme={setTheme}
+          setThemeHalf={setThemeHalf}
+          theme={theme}
+          themeHalves={themeHalves}
+          onImportOpenChange={setIsImportThemeOpen}
+        />
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title="Interface">
@@ -203,6 +202,8 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        <DesktopWindowMaterialSetting />
 
         {showEnvironmentIdentification ? (
           <SettingsRow

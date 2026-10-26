@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./desktop/windowMaterial.css";
 
 @font-face {
   font-family: "Pretendard";
@@ -577,6 +578,73 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     var(--app-scrollbar-width) 100%;
 }
 
+@property --scroll-edge-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-edge-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-edge-fade {
+  0% {
+    --scroll-edge-fade-top: 0px;
+    --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
+  }
+  8%,
+  92% {
+    --scroll-edge-fade-top: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
+  }
+  100% {
+    --scroll-edge-fade-top: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-bottom: 0px;
+  }
+}
+
+/* Fades only the edges a scroller can still move toward. The scroll timeline
+   drives it without JavaScript or React state, and an element that does not
+   overflow has an inactive timeline, so it keeps hard edges. */
+@utility scroll-edge-fade {
+  --scroll-edge-fade-size: 1.5rem;
+  @supports (animation-timeline: scroll()) {
+    -webkit-mask-image:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--scroll-edge-fade-top),
+        black calc(100% - var(--scroll-edge-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black);
+    mask-image:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--scroll-edge-fade-top),
+        black calc(100% - var(--scroll-edge-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black);
+    -webkit-mask-position: left, right;
+    mask-position: left, right;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size:
+      calc(100% - var(--app-scrollbar-width)) 100%,
+      var(--app-scrollbar-width) 100%;
+    mask-size:
+      calc(100% - var(--app-scrollbar-width)) 100%,
+      var(--app-scrollbar-width) 100%;
+    animation: scroll-edge-fade linear both;
+    animation-timeline: scroll(self y);
+  }
+}
+
 /* Stage-channel art needs a mask and pseudo-element gradient, so keep the
    behavior composable without tying it to the global components layer. */
 @utility sidebar-stage-backdrop {
@@ -603,12 +671,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @keyframes live-tool-shine {
-  from {
+  0% {
     background-position:
       -4.5rem 0,
       0 0;
   }
-  to {
+  /* One sweep, then the highlight rests off the edge: a 4s cadence like Codex. */
+  55%,
+  100% {
     background-position:
       calc(100% + 4.5rem) 0,
       0 0;
@@ -626,7 +696,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
       100% 100%;
     background-repeat: no-repeat;
     background-clip: text;
-    animation: live-tool-shine 2.2s steps(30) infinite;
+    animation: live-tool-shine 4s steps(30) infinite;
     animation-play-state: var(--visible-animation-state, paused);
   }
 }
@@ -704,6 +774,26 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 @utility goat-arrive {
   animation: goat-arrive 180ms cubic-bezier(0.2, 0.8, 0.2, 1) 1 both;
+
+  @media (prefers-reduced-motion: reduce), (forced-colors: active) {
+    animation: none;
+  }
+}
+
+/* Onboarding connection plate: the signal dot travels from the left node to the middle once. */
+@keyframes goat-onboarding-signal {
+  from {
+    opacity: 0;
+    transform: translateX(-50%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@utility goat-onboarding-signal {
+  animation: goat-onboarding-signal 520ms cubic-bezier(0.2, 0.8, 0.2, 1) 1 both;
 
   @media (prefers-reduced-motion: reduce), (forced-colors: active) {
     animation: none;
@@ -807,19 +897,21 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @keyframes live-activity-focus {
-  from {
+  0% {
     transform: translateX(0);
   }
-  to {
+  55%,
+  100% {
     transform: translateX(100%);
   }
 }
 
 @keyframes live-activity-focus-counter {
-  from {
+  0% {
     transform: translateX(0);
   }
-  to {
+  55%,
+  100% {
     transform: translateX(-100%);
   }
 }
@@ -854,7 +946,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     transparent 100%
   );
   mask-repeat: no-repeat;
-  animation: live-activity-focus 2.2s steps(30) infinite;
+  animation: live-activity-focus 4s steps(30) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -867,7 +959,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 @utility live-activity-focus-counter {
   width: 100%;
-  animation: live-activity-focus-counter 2.2s steps(30) infinite;
+  animation: live-activity-focus-counter 4s steps(30) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -1932,6 +2024,11 @@ code {
   margin: 0.65rem 0;
 }
 
+/* Prose paragraphs breathe more than lists and code; answers are read all day. */
+.chat-markdown > p {
+  margin: 1rem 0;
+}
+
 .chat-markdown-math-display .katex-display {
   margin: 0;
 }
@@ -2079,7 +2176,8 @@ code {
   display: inline-block;
 }
 
-.chat-markdown a {
+/* Context chips own their decoration, including the link-style hover underline. */
+.chat-markdown a:not([data-context-chip-appearance]) {
   text-decoration: none;
 }
 
@@ -2107,16 +2205,13 @@ code {
 }
 
 :is(.chat-markdown, .composer-tiptap) blockquote {
-  border-inline-start: 2px solid var(--contrast-border);
+  border-inline-start: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
   padding-inline-start: 0.8rem;
-  color: var(--contrast-muted-foreground);
+  color: inherit;
 }
 
-/* A quote in the composer is text the user is still writing; muting it reads
-   as disabled in an input, so the border alone carries the quote. */
 .composer-tiptap blockquote {
   margin: 0.65rem 0;
-  color: var(--foreground);
 }
 
 /* Preflight already draws the 1px rule, as it does in chat; only the block
@@ -2170,14 +2265,15 @@ code {
 }
 
 .chat-markdown :not(pre) > code {
-  border: 1px solid var(--contrast-border);
+  border: none;
   border-radius: 0.375rem;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
-  background: var(--muted);
-  padding: 0.1rem 0.35rem;
-  color: var(--contrast-foreground);
-  font-size: 0.75rem;
+  /* Tinted from the text color so it stays quiet on every theme surface. */
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.0625rem 0.3rem;
+  color: inherit;
+  font-size: 0.92em;
 }
 
 .chat-markdown pre {

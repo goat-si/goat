@@ -125,6 +125,7 @@ const environment = (home: string) =>
     let memoryEnabled = true;
     const context = yield* Layer.buildWithMemoMap(
       McpHttp.layerMemoryToolkit.pipe(
+        Layer.provide(AccessFixture.layerPermissionProfilesOff),
         Layer.provideMerge(
           Layer.mergeAll(
             Sync.layer,
@@ -527,13 +528,15 @@ it.effect(
       assert.strictEqual(port.changes, c.owner.policy.changes);
       for (const scopes of [["memory:read"], ["orchestration:read"]] as const) {
         const invocation = yield* c.a.issue(scopes);
-        const denied = yield* c.a.run(McpFixture.call("memory_read_source", c.input, invocation));
+        const denied = yield* c.a.run(
+          McpFixture.call("goat_memory_source_read", c.input, invocation),
+        );
         assert.isTrue(denied.result.isError === true);
       }
       const invocation = yield* c.a.issue(["memory:read", "orchestration:read"]);
       yield* c.a.begin;
       const mcp = yield* c.a
-        .run(McpFixture.call("memory_read_source", c.input, invocation))
+        .run(McpFixture.call("goat_memory_source_read", c.input, invocation))
         .pipe(Effect.forkScoped);
       yield* c.a.request();
       yield* c.owner.sync.syncOnce;
@@ -543,13 +546,13 @@ it.effect(
       assert.deepStrictEqual(returned.body, expected);
       // Reuse the issued scope: live registry reauthorization must reject ended runs.
       c.a.setOwningRun(false);
-      const ended = yield* c.a.run(McpFixture.call("memory_read_source", c.input, invocation));
+      const ended = yield* c.a.run(McpFixture.call("goat_memory_source_read", c.input, invocation));
       assert.isTrue(ended.result.isError === true);
       c.a.setOwningRun(true);
       // Recheck the same scope after the network await, rather than just at admission.
       yield* c.a.begin;
       const inFlight = yield* c.a
-        .run(McpFixture.call("memory_read_source", c.input, invocation))
+        .run(McpFixture.call("goat_memory_source_read", c.input, invocation))
         .pipe(Effect.forkScoped);
       yield* c.a.request();
       yield* c.owner.sync.syncOnce;
@@ -559,7 +562,7 @@ it.effect(
       c.a.setOwningRun(true);
       yield* c.a.begin;
       const grantRevoked = yield* c.a
-        .run(McpFixture.call("memory_read_source", c.input, invocation))
+        .run(McpFixture.call("goat_memory_source_read", c.input, invocation))
         .pipe(Effect.forkScoped);
       yield* c.a.request();
       yield* c.owner.sync.syncOnce;

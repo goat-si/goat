@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import type * as Electron from "electron";
 
@@ -14,12 +15,14 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import { createInitialDesktopUpdateState } from "../updates/updateMachine.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function layerElectronApp(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
   quit: Effect.Effect<void> = Effect.void,
+  exit: (code: number) => Effect.Effect<void> = () => Effect.void,
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -39,7 +42,7 @@ function layerElectronApp(
     whenReady: Effect.void,
     requestSingleInstanceLock: Effect.succeed(true),
     quit,
-    exit: () => Effect.void,
+    exit,
     relaunch: () => Effect.void,
     setPath: () => Effect.void,
     setName: () => Effect.void,
@@ -58,6 +61,7 @@ function layerElectronApp(
 }
 
 const layerElectronTheme = Layer.succeed(ElectronTheme.ElectronTheme, {
+  accessibility: Effect.succeed({ reducedTransparency: false, highContrast: false }),
   shouldUseDarkColors: Effect.succeed(false),
   setSource: () => Effect.void,
   onUpdated: () => Effect.void,
@@ -129,9 +133,9 @@ function layerUpdates(input: Partial<DesktopUpdates.DesktopUpdates["Service"]> =
 }
 
 describe("DesktopLifecycle", () => {
-  it.effect(
-    "serializes install-on-quit and waits for updater-controlled quit without shutdown",
-    () =>
+  it.effect.each(["install-on-quit", "restart-when-idle"] as const)(
+    "installs a downloaded update on quit under %s and waits for updater-controlled quit without shutdown",
+    (installPolicy) =>
       Effect.gen(function* () {
         const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
         const installationStarted = yield* Deferred.make<void>();
@@ -140,16 +144,18 @@ describe("DesktopLifecycle", () => {
         const events: string[] = [];
         const updateState = {
           ...initialUpdateState,
-          installPolicy: "install-on-quit" as const,
+          installPolicy,
           downloadedVersion: "1.2.4",
         };
         const layer = DesktopLifecycle.layer.pipe(
           Layer.provideMerge(
             layerUpdates({
               getState: Effect.succeed(updateState),
-              installPrepared: (version) =>
+              installPrepared: (version, options) =>
                 Effect.gen(function* () {
                   assert.equal(version, "1.2.4");
+                  assert.isTrue(options?.waitForCheck);
+                  assert.strictEqual(options?.checkWait, UPDATE_CHECK_SETTLE_WAIT);
                   events.push("install");
                   yield* Deferred.succeed(installationStarted, undefined);
                   yield* Deferred.await(allowInstallation);
@@ -226,6 +232,79 @@ describe("DesktopLifecycle", () => {
           }),
         ).pipe(Effect.provide(layer));
       }),
+  );
+
+  it.effect("keeps the updater's quit when it starts before the quit installation returns", () =>
+    Effect.gen(function* () {
+      const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const installationReturned = yield* Deferred.make<void>();
+      const events: string[] = [];
+      const updateState = {
+        ...initialUpdateState,
+        installPolicy: "install-on-quit" as const,
+        downloadedVersion: "1.2.4",
+      };
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerUpdates({
+            getState: Effect.succeed(updateState),
+            // Electron's quitAndInstall emits before-quit-for-update synchronously.
+            installPrepared: () =>
+              Effect.sync(() => {
+                appListeners.get("before-quit-for-update")?.();
+              }).pipe(
+                Effect.andThen(Deferred.succeed(installationReturned, undefined)),
+                Effect.as({ accepted: true, completed: false, failed: false, state: updateState }),
+              ),
+          }),
+        ),
+        Layer.provideMerge(layerElectronApp(appListeners)),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(
+          layerElectronWindow(
+            Effect.sync(() => {
+              events.push("destroy");
+            }),
+          ),
+        ),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(
+          Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: "darwin",
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(DesktopShutdown.DesktopShutdown, {
+            request: Effect.sync(() => {
+              events.push("shutdown");
+            }),
+            awaitRequest: Effect.never,
+            markComplete: Effect.void,
+            awaitComplete: Effect.void,
+            isComplete: Effect.succeed(false),
+          }),
+        ),
+        Layer.provideMerge(DesktopState.layer),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+          let prevented = 0;
+          const event = {
+            preventDefault: () => {
+              prevented += 1;
+            },
+          } as Electron.Event;
+          appListeners.get("before-quit")?.(event);
+          yield* Deferred.await(installationReturned);
+          yield* Effect.yieldNow;
+          appListeners.get("before-quit")?.(event);
+          assert.equal(prevented, 1, "the updater's own before-quit must not be cancelled");
+          assert.deepEqual(events, ["destroy"]);
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
   );
 
   [
@@ -467,6 +546,61 @@ describe("DesktopLifecycle", () => {
 
           assert.deepEqual(eventsBeforeCleanup, ["flush", "destroy", "request"]);
           assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
+        }),
+      ).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("exits on a repeated quit only once shutdown has stalled", () =>
+    Effect.gen(function* () {
+      const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const exitCodes: number[] = [];
+      const exit = (code: number) =>
+        Effect.sync(() => {
+          exitCodes.push(code);
+        });
+      const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+        platform: "darwin",
+        isDevelopment: false,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]);
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(layerUpdates()),
+        Layer.provideMerge(layerElectronApp(appListeners, Effect.void, exit)),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(layerElectronWindow()),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(layerEnvironment),
+        // Nothing marks this shutdown complete, so it stays pending.
+        Layer.provideMerge(DesktopShutdown.layer),
+        Layer.provideMerge(DesktopState.layer),
+      );
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+          yield* lifecycle.register;
+
+          let prevented = 0;
+          const event = {
+            preventDefault: () => {
+              prevented += 1;
+            },
+          } as Electron.Event;
+          appListeners.get("before-quit")?.(event);
+          appListeners.get("before-quit")?.(event);
+          yield* TestClock.adjust("9999 millis");
+          appListeners.get("before-quit")?.(event);
+          assert.deepEqual(
+            exitCodes,
+            [],
+            "a repeat before the threshold must not cut shutdown short",
+          );
+
+          yield* TestClock.adjust("1 millis");
+          appListeners.get("before-quit")?.(event);
+
+          assert.deepEqual(exitCodes, [0]);
+          assert.equal(prevented, 4);
         }),
       ).pipe(Effect.provide(layer));
     }),

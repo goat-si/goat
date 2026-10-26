@@ -8,6 +8,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -23,6 +24,7 @@ import {
 } from "./dev-runner.ts";
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
+const isWindows = HostProcess.Platform.defaultValue() === "win32";
 
 const netServiceLayer = Layer.succeed(NetService.NetService, {
   canListenOnHost: () => Effect.succeed(true),
@@ -87,6 +89,28 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(web.GOAT_DEV_AUTH_TOKEN, input.baseEnv.GOAT_DEV_AUTH_TOKEN);
         assert.equal(desktop.GOAT_DEV_AUTH_TOKEN, undefined);
+      }),
+    );
+
+    it.effect("lets web dev accept every cookie a browser keeps for localhost (#1185)", () =>
+      Effect.gen(function* () {
+        const input = {
+          baseEnv: { NODE_OPTIONS: "--enable-source-maps --max-http-header-size=8192" },
+          serverOffset: 0,
+          webOffset: 0,
+          goatHome: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        } as const;
+        const web = yield* createDevRunnerEnv({ ...input, mode: "dev" });
+        const desktop = yield* createDevRunnerEnv({ ...input, mode: "dev:desktop" });
+
+        assert.equal(web.NODE_OPTIONS, "--enable-source-maps --max-http-header-size=262144");
+        assert.equal(desktop.NODE_OPTIONS, input.baseEnv.NODE_OPTIONS);
       }),
     );
 
@@ -707,17 +731,116 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.deepStrictEqual(yield* spawnedArgs(false), []);
           const [seedArgs] = yield* spawnedArgs(undefined);
-          assert.includeMembers([...(seedArgs ?? [])], ["--base-dir", path.join(root, ".goat")]);
+          assert.includeMembers(
+            [...(seedArgs ?? [])],
+            [
+              NodePath.join(
+                NodePath.dirname(import.meta.dirname),
+                "apps/server/scripts/migrate-dev-db.ts",
+              ),
+              "--base-dir",
+              path.join(root, ".goat"),
+            ],
+          );
 
           // Either database means the worktree already has data.
           for (const name of ["state.sqlite", "statev2.sqlite"]) {
-            const file = path.join(root, ".t3", "userdata", name);
+            const file = path.join(root, ".goat", "userdata", name);
             NodeFS.mkdirSync(path.dirname(file), { recursive: true });
             NodeFS.writeFileSync(file, "");
             assert.deepStrictEqual(yield* spawnedArgs(undefined), []);
             NodeFS.rmSync(file);
           }
         }).pipe(Effect.scoped),
+      );
+
+      const startDevServer = (root: string, seed: boolean | undefined) =>
+        Effect.gen(function* () {
+          const spawned: Array<ReadonlyArray<string>> = [];
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              spawned.push((command as unknown as { readonly args: ReadonlyArray<string> }).args);
+              return Effect.succeed(mockProcess(0));
+            }),
+          );
+          const exit = yield* runDevRunnerWithInput({
+            ...devServerInput,
+            goatHome: undefined,
+            seed,
+          }).pipe(
+            Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
+            Effect.provideService(HostProcess.Platform, "linux"),
+            Effect.provideService(HostProcess.WorkingDirectory, root),
+            Effect.provideService(HostProcess.HomeDirectory, root),
+            Effect.provideService(HostProcess.Environment, {}),
+            Effect.exit,
+          );
+          return { exit, spawned };
+        });
+
+      const seededWritableWorktree = Effect.gen(function* () {
+        const root = yield* makeWorktree;
+        const stateDir = NodePath.join(root, ".goat", "userdata");
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(stateDir, "statev2.sqlite"), "");
+        NodeFS.chmodSync(NodePath.dirname(stateDir), 0o775);
+        NodeFS.chmodSync(stateDir, 0o775);
+        return { root, stateDir };
+      });
+
+      it.effect.skipIf(isWindows)(
+        "makes an existing writable worktree home private before the server starts, seeded or not (#1648)",
+        () =>
+          Effect.gen(function* () {
+            for (const seed of [undefined, false]) {
+              const { root, stateDir } = yield* seededWritableWorktree;
+              const { exit } = yield* startDevServer(root, seed);
+              assert.isTrue(Exit.isSuccess(exit));
+              for (const directory of [NodePath.dirname(stateDir), stateDir]) {
+                assert.equal(NodeFS.statSync(directory).mode & 0o777, 0o755, directory);
+              }
+            }
+          }).pipe(Effect.scoped),
+      );
+
+      it.effect.skipIf(isWindows)(
+        "refuses a symlinked worktree userdata and starts nothing (#1648)",
+        () =>
+          Effect.gen(function* () {
+            const root = yield* makeWorktree;
+            const target = NodePath.join(root, "elsewhere");
+            NodeFS.mkdirSync(target);
+            NodeFS.writeFileSync(NodePath.join(target, "statev2.sqlite"), "data");
+            NodeFS.mkdirSync(NodePath.join(root, ".goat"));
+            NodeFS.symlinkSync(target, NodePath.join(root, ".goat", "userdata"));
+
+            const { exit, spawned } = yield* startDevServer(root, undefined);
+
+            assert.isTrue(Exit.isFailure(exit));
+            assert.include(String(exit), "is a symlink");
+            assert.deepStrictEqual(spawned, []);
+            assert.equal(
+              NodeFS.readFileSync(NodePath.join(target, "statev2.sqlite"), "utf8"),
+              "data",
+            );
+          }).pipe(Effect.scoped),
+      );
+
+      it.effect(
+        "stops before starting anything when the worktree home cannot be prepared (#1648)",
+        () =>
+          Effect.gen(function* () {
+            const root = yield* makeWorktree;
+            const home = NodePath.join(root, ".goat");
+            NodeFS.writeFileSync(home, "not a directory");
+
+            const { exit, spawned } = yield* startDevServer(root, undefined);
+
+            assert.isTrue(Exit.isFailure(exit));
+            assert.include(String(exit), home);
+            assert.deepStrictEqual(spawned, []);
+          }).pipe(Effect.scoped),
       );
 
       it.effect("falls back to an ambient GOAT_HOME outside a worktree", () =>
@@ -745,5 +868,32 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }).pipe(Effect.scoped),
       );
     });
+  });
+});
+
+describe("server dev watch", () => {
+  it("covers workspace package sources and excludes package roots, where Vite and installs write", () => {
+    const repo = NodePath.resolve(import.meta.dirname, "..");
+    const serverPackage = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(repo, "apps/server/package.json"), "utf8"),
+    ) as { readonly scripts: { readonly dev: string } };
+    const watched = [...serverPackage.scripts.dev.matchAll(/--watch-path=(\S+)/g)].map(
+      ([, path]) => path,
+    );
+    const packageSources = NodeFS.readdirSync(NodePath.join(repo, "packages"))
+      .filter((name) => NodeFS.existsSync(NodePath.join(repo, "packages", name, "src")))
+      .map((name) => `../../packages/${name}/src`);
+
+    assert.deepStrictEqual(
+      watched.sort(),
+      [
+        "src",
+        "package.json",
+        ...packageSources,
+        // Runtime code outside src: source-control-github/src/server/pullRequestReads.graphql.ts
+        // imports it.
+        "../../packages/source-control-github/schema",
+      ].sort(),
+    );
   });
 });

@@ -123,7 +123,7 @@ function harnessFor(enabled = true, unsupportedMode = false) {
     providerInstances: [
       {
         instanceId: modelSelection.instanceId,
-        models: [{ slug: modelSelection.model }, { slug: reviewer.model }],
+        models: [modelSelection.model, reviewer.model],
         ...(unsupportedMode ? { supportedRuntimeModes: ["full-access" as const] } : {}),
       },
     ],

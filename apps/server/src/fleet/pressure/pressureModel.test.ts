@@ -1,5 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off -- reads one checked-in stall log fixture.
+import * as NodeFS from "node:fs";
+
 import { describe, expect, it } from "@effect/vitest";
-import type { HostStatusEntry, OrchestrationV2ThreadShell } from "@goat/contracts";
+import type {
+  HostPressureLevel,
+  HostStatusEntry,
+  OrchestrationV2ThreadShell,
+} from "@goat/contracts";
 
 import {
   classify,
@@ -9,7 +16,9 @@ import {
   pressureRecipients,
   rankHosts,
   resolvePressureSettings,
+  stallPressure,
   stepPressure,
+  toHostPressure,
   type PressureSample,
   type PressureState,
 } from "./pressureModel.ts";
@@ -50,13 +59,8 @@ describe("classify", () => {
     expect(classify(calm, settings).level).toBe("ok");
   });
 
-  it("raises a server stall at once and names it", () => {
-    const stalled = classify({ ...calm, eventLoopDelayMs: 26_380 }, settings);
-    expect(stalled.immediate).toBe("critical");
-    expect(stalled.reasons.map((reason) => reason.message)).toEqual([
-      "GOAT server stalled 26.4 s (threshold 5 s)",
-    ]);
-    expect(classify({ ...calm, eventLoopDelayMs: 3_000 }, settings).immediate).toBe("elevated");
+  it("leaves server stalls to stallPressure", () => {
+    expect(classify({ ...calm, eventLoopDelayMs: 26_380 }, settings).level).toBe("ok");
   });
 
   it("uses configured thresholds over the defaults", () => {
@@ -66,14 +70,35 @@ describe("classify", () => {
   });
 });
 
+describe("stallPressure", () => {
+  const stalls = (...ms: ReadonlyArray<number>) =>
+    ms.map((value, index) => ({ at: index * MIN, ms: value }));
+
+  it("never counts one stall and names repeated ones", () => {
+    expect(stallPressure(stalls(3_600), settings)).toEqual({ level: "ok", reason: null });
+    expect(stallPressure(stalls(2_600, 3_000, 2_500), settings)).toEqual({
+      level: "elevated",
+      reason: {
+        signal: "event_loop",
+        level: "elevated",
+        message: "GOAT server stalled 3 times over 2.5 s in 10 min (longest 3 s)",
+      },
+    });
+    expect(stallPressure(stalls(5_200, 2_100, 6_400), settings).level).toBe("critical");
+  });
+
+  it("takes one severe stall as critical", () => {
+    expect(stallPressure(stalls(26_380), settings).reason?.message).toBe(
+      "GOAT server stalled 26.4 s (threshold 15 s)",
+    );
+  });
+});
+
 describe("stepPressure", () => {
   it("rises only after the reading holds for sustainMs", () => {
-    // 0, 30, 60, 90 s are not yet two minutes; 120 s is.
-    expect(levels([load(2), load(2), load(2), load(2), load(2)])).toEqual([
-      "ok",
-      "ok",
-      "ok",
-      "ok",
+    // 0 to 150 s are not yet three minutes; 180 s is.
+    expect(levels(Array.from({ length: 7 }, () => load(2)))).toEqual([
+      ...Array.from({ length: 6 }, () => "ok"),
       "elevated",
     ]);
   });
@@ -84,24 +109,53 @@ describe("stepPressure", () => {
     );
   });
 
-  it("holds a level until readings clear the loosened threshold for sustainMs", () => {
+  it("holds a level until readings clear the loosened threshold for recoverMs", () => {
     let state = initialPressureState(0);
-    for (let at = 0; at <= 2 * MIN; at += 30 * SECOND)
+    for (let at = 0; at <= 3 * MIN; at += 30 * SECOND)
       state = stepPressure(state, load(2), settings, at);
     expect(state.level).toBe("elevated");
     // 1.3 per core is under 1.5 but above 1.5 × 0.8, so the host stays elevated.
-    for (let at = 2.5 * MIN; at <= 10 * MIN; at += 30 * SECOND)
+    for (let at = 3.5 * MIN; at <= 10 * MIN; at += 30 * SECOND)
       state = stepPressure(state, load(1.3), settings, at);
     expect(state.level).toBe("elevated");
     const clearing = [];
-    for (let at = 10.5 * MIN; at <= 12.5 * MIN; at += 30 * SECOND) {
+    for (let at = 10.5 * MIN; at <= 15.5 * MIN; at += 30 * SECOND) {
       state = stepPressure(state, load(1), settings, at);
       clearing.push(state.level);
     }
-    expect(clearing).toEqual(["elevated", "elevated", "elevated", "elevated", "ok"]);
+    expect(clearing).toEqual([...Array.from({ length: 10 }, () => "elevated"), "ok"]);
   });
 
-  it("goes critical on a stall and steps down as readings clear", () => {
+  it("records a single stall spike without leaving ok", () => {
+    let state = initialPressureState(0);
+    const seen = new Set<string>();
+    for (let at = 0; at <= 10 * MIN; at += 30 * SECOND) {
+      const stall = at === MIN ? 3_600 : null;
+      state = stepPressure(state, { ...calm, eventLoopDelayMs: stall }, settings, at);
+      seen.add(state.level);
+      if (at === 2 * MIN) expect(toHostPressure(state).eventLoopDelayMs).toBe(3_600);
+    }
+    expect([...seen]).toEqual(["ok"]);
+  });
+
+  it("goes elevated once stalls repeat and falls recoverMs after they stop repeating", () => {
+    let state = initialPressureState(0);
+    const stallAt = new Set([0, 4 * MIN, 8 * MIN]);
+    const changes: Array<readonly [number, string]> = [];
+    for (let at = 0; at <= 25 * MIN; at += 30 * SECOND) {
+      const before = state.level;
+      const stall = stallAt.has(at) ? 2_700 : null;
+      state = stepPressure(state, { ...calm, eventLoopDelayMs: stall }, settings, at);
+      if (state.level !== before) changes.push([at / MIN, state.level]);
+    }
+    // The third stall raises it; the first leaves the window at 10 min, then five clear minutes.
+    expect(changes).toEqual([
+      [8, "elevated"],
+      [15, "ok"],
+    ]);
+  });
+
+  it("goes critical on a severe stall and steps down as readings clear", () => {
     let state = stepPressure(
       initialPressureState(0),
       { ...load(2), eventLoopDelayMs: 26_380 },
@@ -110,32 +164,105 @@ describe("stepPressure", () => {
     );
     expect(state.level).toBe("critical");
     expect(state.reasons.map((reason) => reason.signal)).toEqual(["load", "event_loop"]);
-    for (let at = 30 * SECOND; at < 2.5 * MIN; at += 30 * SECOND)
+    for (let at = 30 * SECOND; at < 15 * MIN; at += 30 * SECOND)
       state = stepPressure(state, load(2), settings, at);
     expect(state.level).toBe("critical");
-    state = stepPressure(state, load(2), settings, 2.5 * MIN);
-    // Two minutes after the last stall, and load is still elevated: critical eases to elevated.
+    state = stepPressure(state, load(2), settings, 15 * MIN);
+    // The stall left the window at 10 min and load is still elevated: critical eases 5 min later.
     expect(state.level).toBe("elevated");
-    expect(state.since).toBe(2.5 * MIN);
+    expect(state.since).toBe(15 * MIN);
   });
 });
 
 describe("nudgeDecision", () => {
-  const cooldown = settings.notifyCooldownMs;
+  /** Feeds levels at minute marks and describes what each change writes. */
+  const replay = (steps: ReadonlyArray<readonly [number, HostPressureLevel]>) => {
+    let announced = NOTHING_ANNOUNCED;
+    return steps.flatMap(([minute, level]) => {
+      const { next, nudge } = nudgeDecision(announced, level, minute * MIN, settings);
+      announced = next;
+      if (nudge === null) return [];
+      const row =
+        nudge.row === null
+          ? ""
+          : (nudge.row.opened ? " opens row " : " updates row ") + Number(nudge.row.id) / MIN;
+      return [minute + " " + nudge.kind + row + (nudge.wake ? " + wake" : "")];
+    });
+  };
 
-  it("announces each change once and suppresses repeats inside the cooldown", () => {
-    const rise = nudgeDecision(NOTHING_ANNOUNCED, "critical", 0, cooldown);
-    expect(rise.kind).toBe("rise");
-    expect(nudgeDecision(rise.next, "critical", MIN, cooldown).kind).toBeNull();
-    const ease = nudgeDecision(rise.next, "elevated", 2 * MIN, cooldown);
-    expect(ease.kind).toBe("ease");
-    // Back to critical five minutes after the first critical notice: told already.
-    const flap = nudgeDecision(ease.next, "critical", 5 * MIN, cooldown);
-    expect(flap.kind).toBeNull();
-    expect(flap.next.level).toBe("critical");
-    const recover = nudgeDecision(flap.next, "ok", 6 * MIN, cooldown);
-    expect(recover.kind).toBe("recover");
-    expect(nudgeDecision(recover.next, "critical", 16 * MIN, cooldown).kind).toBe("rise");
+  it("opens one row per cooldown and rewrites it in place while a host flaps", () => {
+    const writes = replay(
+      Array.from({ length: 20 }, (_, index) => [index * 6, index % 2 === 0 ? "elevated" : "ok"]),
+    );
+    expect(writes.filter((write) => write.includes("opens"))).toEqual([
+      "0 rise opens row 0",
+      "48 rise opens row 48",
+      "96 rise opens row 96",
+    ]);
+    expect(writes).toHaveLength(20);
+    expect(writes.filter((write) => write.includes("wake"))).toEqual([]);
+  });
+
+  it("wakes at once when a host gets worse, even inside the cooldown", () => {
+    expect(
+      replay([
+        [0, "elevated"],
+        [2, "critical"],
+        [10, "elevated"],
+        [20, "critical"],
+        [40, "ok"],
+        [50, "critical"],
+      ]),
+    ).toEqual([
+      "0 rise opens row 0",
+      "2 rise updates row 0 + wake",
+      "10 ease updates row 0",
+      "20 rise updates row 0",
+      "40 recover updates row 0",
+      "50 rise opens row 50 + wake",
+    ]);
+  });
+
+  it("writes nothing for a level that is off, or for recovery without a row", () => {
+    const quiet = { ...settings, elevatedDelivery: "off" as const };
+    const rise = nudgeDecision(NOTHING_ANNOUNCED, "elevated", 0, quiet);
+    expect(rise.nudge).toBeNull();
+    expect(nudgeDecision(rise.next, "ok", 10 * MIN, quiet).nudge).toBeNull();
+  });
+});
+
+describe("replaying the 2026-10-22 13:37-15:26Z stall log", () => {
+  // Rebuilt from that afternoon's notices: 2.2-3.6 s stalls every 6-12 min while tests ran, loop
+  // utilization 0.2-0.5, rss about 500 MB, and the machine itself under its load thresholds.
+  const stalls = NodeFS.readFileSync(
+    new URL("./fixtures/event-loop-stalls-2026-10-22.ndjson", import.meta.url),
+    "utf8",
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { readonly time: string; readonly delayMaxMs: number })
+    .map((line) => ({ at: Date.parse(line.time), ms: line.delayMaxMs }));
+
+  it("keeps the host ok and writes nothing", () => {
+    const start = Date.parse("2026-10-22T13:30:00Z");
+    let state = initialPressureState(start);
+    let announced = NOTHING_ANNOUNCED;
+    const writes = [];
+    for (let at = start; at <= start + 120 * MIN; at += 30 * SECOND) {
+      const stall = stalls.find((entry) => entry.at > at - 30 * SECOND && entry.at <= at);
+      state = stepPressure(
+        state,
+        { ...load(0.9), eventLoopDelayMs: stall?.ms ?? null },
+        settings,
+        at,
+      );
+      const decision = nudgeDecision(announced, state.level, at, settings);
+      announced = decision.next;
+      if (decision.nudge !== null) writes.push(decision.nudge);
+    }
+    expect(stalls).toHaveLength(13);
+    expect(state.level).toBe("ok");
+    expect(writes).toEqual([]);
   });
 });
 

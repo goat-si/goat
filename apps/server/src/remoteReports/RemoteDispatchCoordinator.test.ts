@@ -29,12 +29,13 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0062 from "../persistence/Migrations/069_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/070_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/072_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/074_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/079_MemoryTaskGrantCeiling.ts";
-import Migration0089 from "../persistence/Migrations/092_RemoteDispatchObservation.ts";
+import Migration0062 from "../persistence/Migrations/070_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/071_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/073_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/080_MemoryTaskGrantCeiling.ts";
+import Migration0089 from "../persistence/Migrations/093_RemoteDispatchObservation.ts";
+import Migration0101 from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -74,13 +75,10 @@ const answer = (
 });
 const fixture = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* Migration0062;
-  yield* Migration0063;
-  yield* Migration0065;
-  yield* Migration0068;
+  for (const migration of [Migration0062, Migration0063, Migration0065, Migration0068])
+    yield* migration;
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
-  yield* Migration0073;
-  yield* Migration0089;
+  for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -764,29 +762,31 @@ it.effect("inbox caps include framed text and separators and preserve the exclud
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("fifty progress imports coalesce per correlation while preserving substantive rows", () =>
+it.effect("every progress report imported before the origin's next turn reaches that turn", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
       const c = yield* Coordinator.RemoteDispatchCoordinator;
       yield* f.launch(c, "next_turn");
-      for (let i = 1; i <= 50; i++) {
+      // #1054: reports held on the worker arrive as one batch, and more land before the turn.
+      const late = Array.from({ length: 46 }, (_, i) => report(i + 4));
+      const batches = [[report(1), report(2)], [report(3)], late, [report(50, "needs_input")]];
+      for (const reports of batches) {
         const call = yield* Queue.take(f.calls);
-        yield* Queue.offer(call.reply, Effect.succeed(answer([report(i)])));
+        yield* Queue.offer(call.reply, Effect.succeed(answer(reports)));
         yield* Queue.take(f.commits);
       }
-      const call = yield* Queue.take(f.calls);
-      yield* Queue.offer(call.reply, Effect.succeed(answer([report(51, "needs_input")])));
-      yield* Queue.take(f.commits);
-      const rows = yield* f.sql<{
-        kind: string;
-        text: string;
-      }>`SELECT kind, text FROM remote_report_inbox ORDER BY id`;
-      assert.equal(rows.length, 2);
-      assert.equal(rows[0]?.kind, "progress");
-      assert.include(rows[0]?.text ?? "", "report-50");
-      assert.equal(rows[1]?.kind, "needs_input");
-    }).pipe(Effect.provide(f.layer));
+      const turn = (yield* (yield* Inbox.RemoteReportInbox).pending(origin)).texts.join("\n\n");
+      const lines = turn.split("\n");
+      for (let i = 1; i <= 50; i++) assert.include(lines, `> report-${i}`);
+      assert.include(turn, "Report 50 from a thread on");
+      // Progress folds into one row per run of reports, so the question is not paged behind it.
+      const rows = yield* f.sql<{ kind: string }>`SELECT kind FROM remote_report_inbox ORDER BY id`;
+      assert.deepEqual(
+        rows.map((row) => row.kind),
+        ["progress", "needs_input"],
+      );
+    }).pipe(Effect.provide(Layer.merge(f.layer, Inbox.layer)));
   }).pipe(Effect.provide(database)),
 );
 
@@ -1098,7 +1098,7 @@ it.effect("a remote task's question wakes the parent once and stays readable unt
         assert.equal(notice.threadId, origin);
         assert.include(
           notice.text,
-          `goat_pending_request_read {host: "box", threadId: "${remote}", requestId: "request-1"}`,
+          `goat_call {path: "pending_request.read", args: {host: "box", threadId: "${remote}", requestId: "request-1"}}`,
         );
       }
       yield* Queue.take(f.commits);
@@ -1829,6 +1829,7 @@ const sibling = {
   host: "juns-macbook-pro",
   threadId: ThreadId.make("merge-manager"),
   message: "PR #48 is open.",
+  capabilities: ["browser"],
 } as const;
 const relayReport = (sequence: number, relay: RemoteRelaySend): RemoteReport => ({
   ...report(sequence),
@@ -1851,9 +1852,8 @@ it.effect("relays a send as the launcher, within its runtime mode, and re-arms i
         ),
       );
       const send = yield* Queue.take(f.calls);
-      assert.equal(send.call.host, sibling.host);
-      assert.equal(send.call.tool, "goat_thread_send");
-      assert.isTrue(send.call.writes);
+      assert.deepEqual(send.call.arguments.capabilities, ["browser"]);
+      assert.deepInclude(send.call, { host: sibling.host, tool: "goat_thread_send", writes: true });
       assert.equal(send.ceiling, "approval-required");
       assert.equal(send.call.arguments.mode, "auto");
       assert.match(
@@ -2097,7 +2097,7 @@ it.effect("refuses a relayed send to a finished review owned by another thread",
       assert.equal(notice.type, "message.dispatch");
       if (notice.type === "message.dispatch") {
         assert.include(notice.text, "Not delivered.");
-        assert.include(notice.text, "delegate_task");
+        assert.include(notice.text, "goat_task_create");
       }
       yield* Queue.take(f.commits);
       const next = yield* Queue.take(f.calls);
@@ -2155,7 +2155,7 @@ it.effect(
         const refused = yield* f.sql<{
           text: string;
         }>`SELECT text FROM remote_report_inbox ORDER BY id DESC LIMIT 1`;
-        assert.include(refused[0]!.text, "delegate_task");
+        assert.include(refused[0]!.text, "goat_task_create");
         assert.lengthOf(f.rearms, 1);
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),

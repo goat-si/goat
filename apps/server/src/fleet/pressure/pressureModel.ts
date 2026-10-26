@@ -49,6 +49,18 @@ export function resolvePressureSettings(
 const EXIT_RATIO = 0.8;
 const GIB = 1024 ** 3;
 
+/**
+ * Server stalls are a GOAT health signal counted over this window. A test run or build regularly
+ * stalls the loop for two or three seconds once; only a repeat says the machine is struggling.
+ */
+const STALL_WINDOW_MS = 10 * 60_000;
+/** Stalls of at least half criticalEventLoopDelayMs this many times in the window: elevated. */
+const REPEATED_STALLS = 3;
+/** Stalls of at least criticalEventLoopDelayMs this many times in the window: critical. */
+const REPEATED_CRITICAL_STALLS = 2;
+/** One stall this many times criticalEventLoopDelayMs is critical at once: remote follows fail. */
+const SEVERE_STALL_FACTOR = 3;
+
 const RANK: Record<HostPressureLevel, number> = { ok: 0, elevated: 1, critical: 2 };
 const higher = (left: HostPressureLevel, right: HostPressureLevel) =>
   RANK[left] >= RANK[right] ? left : right;
@@ -92,13 +104,12 @@ const round1 = (value: number) => Math.round(value * 10) / 10;
 export interface Classification {
   readonly level: HostPressureLevel;
   readonly reasons: ReadonlyArray<HostPressureReason>;
-  /** The level an event-loop stall alone sets, without waiting for sustainMs. */
-  readonly immediate: HostPressureLevel;
 }
 
 /**
- * The level one sample shows. `scale` below 1 loosens every threshold, so a host stays at a level
- * until its readings fall clear of where they rose (hysteresis).
+ * The level one sample's machine readings show; event-loop stalls are judged over a window by
+ * stallPressure. `scale` below 1 loosens every threshold, so a host stays at a level until its
+ * readings fall clear of where they rose (hysteresis).
  */
 export function classify(
   sample: PressureSample,
@@ -106,7 +117,6 @@ export function classify(
   scale = 1,
 ): Classification {
   const reasons: Array<HostPressureReason> = [];
-  let immediate: HostPressureLevel = "ok";
   const above = (
     signal: HostPressureReason["signal"],
     value: number | null,
@@ -161,21 +171,66 @@ export function classify(
     settings.criticalDiskFreeGiB,
     (value, threshold) => "disk " + round1(value) + " GiB free (threshold " + threshold + " GiB)",
   );
-  const stall = sample.eventLoopDelayMs;
-  if (stall !== null) {
-    const critical = settings.criticalEventLoopDelayMs;
-    const describe = (threshold: number) =>
-      "GOAT server stalled " + round1(stall / 1000) + " s (threshold " + threshold / 1000 + " s)";
-    if (stall >= critical * scale) {
-      reasons.push({ signal: "event_loop", level: "critical", message: describe(critical) });
-      immediate = "critical";
-    } else if (stall >= (critical / 2) * scale) {
-      reasons.push({ signal: "event_loop", level: "elevated", message: describe(critical / 2) });
-      immediate = "elevated";
-    }
-  }
   const level = reasons.reduce<HostPressureLevel>((top, reason) => higher(top, reason.level), "ok");
-  return { level, reasons, immediate };
+  return { level, reasons };
+}
+
+export interface Stall {
+  readonly at: number;
+  readonly ms: number;
+}
+
+const seconds = (ms: number) => round1(ms / 1000) + " s";
+
+/** The level the GOAT server's stalls in the last STALL_WINDOW_MS show. One alone is never news. */
+export function stallPressure(
+  stalls: ReadonlyArray<Stall>,
+  settings: ResolvedPressureSettings,
+): { readonly level: HostPressureLevel; readonly reason: HostPressureReason | null } {
+  const critical = settings.criticalEventLoopDelayMs;
+  const longest = stalls.reduce((top, stall) => Math.max(top, stall.ms), 0);
+  const window = Math.round(STALL_WINDOW_MS / 60_000) + " min";
+  const repeated = (count: number, threshold: number) =>
+    "GOAT server stalled " +
+    count +
+    " times over " +
+    seconds(threshold) +
+    " in " +
+    window +
+    " (longest " +
+    seconds(longest) +
+    ")";
+  if (longest >= critical * SEVERE_STALL_FACTOR)
+    return {
+      level: "critical",
+      reason: {
+        signal: "event_loop",
+        level: "critical",
+        message:
+          "GOAT server stalled " +
+          seconds(longest) +
+          " (threshold " +
+          seconds(critical * SEVERE_STALL_FACTOR) +
+          ")",
+      },
+    };
+  const long = stalls.filter((stall) => stall.ms >= critical).length;
+  if (long >= REPEATED_CRITICAL_STALLS)
+    return {
+      level: "critical",
+      reason: { signal: "event_loop", level: "critical", message: repeated(long, critical) },
+    };
+  const noticeable = stalls.filter((stall) => stall.ms >= critical / 2).length;
+  if (noticeable >= REPEATED_STALLS)
+    return {
+      level: "elevated",
+      reason: {
+        signal: "event_loop",
+        level: "elevated",
+        message: repeated(noticeable, critical / 2),
+      },
+    };
+  return { level: "ok", reason: null };
 }
 
 /** A host's held level plus how long each nearby level has been continuously shown. */
@@ -188,7 +243,8 @@ export interface PressureState {
   readonly atLeastSince: { readonly elevated: number | null; readonly critical: number | null };
   /** Since when every sample stayed at or under ok, or elevated, on the loosened thresholds. */
   readonly atMostSince: { readonly ok: number | null; readonly elevated: number | null };
-  readonly lastStall: { readonly at: number; readonly ms: number } | null;
+  /** Event-loop stalls in the last STALL_WINDOW_MS, oldest first. */
+  readonly stalls: ReadonlyArray<Stall>;
 }
 
 export const initialPressureState = (now: number): PressureState => ({
@@ -198,13 +254,13 @@ export const initialPressureState = (now: number): PressureState => ({
   loadPerCore: null,
   atLeastSince: { elevated: null, critical: null },
   atMostSince: { ok: null, elevated: null },
-  lastStall: null,
+  stalls: [],
 });
 
 /**
- * Feeds one sample. A level rises once the readings have held it for sustainMs, or at once for an
- * event-loop stall, which is already the symptom. It falls once the readings stay under the
- * loosened thresholds for sustainMs.
+ * Feeds one sample. A level rises once machine readings have held it for sustainMs, or once
+ * stalls repeat inside their window. It falls once every reading stays under the loosened
+ * thresholds, and stalls under theirs, for recoverMs.
  */
 export function stepPressure(
   state: PressureState,
@@ -214,33 +270,42 @@ export function stepPressure(
 ): PressureState {
   const enter = classify(sample, settings);
   const stay = classify(sample, settings, EXIT_RATIO);
+  const stalled = sample.eventLoopDelayMs;
+  const stalls = [
+    ...state.stalls.filter((stall) => now - stall.at < STALL_WINDOW_MS),
+    ...(stalled !== null && stalled > 0 ? [{ at: now, ms: stalled }] : []),
+  ];
+  const stall = stallPressure(stalls, settings);
+  const clear = higher(stay.level, stall.level);
   const since = (current: number | null, holds: boolean) => (holds ? (current ?? now) : null);
   const atLeastSince = {
     elevated: since(state.atLeastSince.elevated, RANK[enter.level] >= RANK.elevated),
     critical: since(state.atLeastSince.critical, RANK[enter.level] >= RANK.critical),
   };
   const atMostSince = {
-    ok: since(state.atMostSince.ok, stay.level === "ok"),
-    elevated: since(state.atMostSince.elevated, RANK[stay.level] <= RANK.elevated),
+    ok: since(state.atMostSince.ok, clear === "ok"),
+    elevated: since(state.atMostSince.elevated, RANK[clear] <= RANK.elevated),
   };
-  const held = (start: number | null) => start !== null && now - start >= settings.sustainMs;
+  const held = (start: number | null, ms: number) => start !== null && now - start >= ms;
+  const sustained = (start: number | null) => held(start, settings.sustainMs);
+  const recovered = (start: number | null) => held(start, settings.recoverMs);
   const risen: HostPressureLevel = higher(
-    enter.immediate,
-    held(atLeastSince.critical) ? "critical" : held(atLeastSince.elevated) ? "elevated" : "ok",
+    stall.level,
+    sustained(atLeastSince.critical)
+      ? "critical"
+      : sustained(atLeastSince.elevated)
+        ? "elevated"
+        : "ok",
   );
   let level = state.level;
   if (RANK[risen] > RANK[level]) level = risen;
-  else if (level === "critical" && held(atMostSince.ok)) level = "ok";
-  else if (level === "critical" && held(atMostSince.elevated)) level = "elevated";
-  else if (level === "elevated" && held(atMostSince.ok)) level = "ok";
-  const stalled = sample.eventLoopDelayMs;
-  const lastStall =
-    stalled !== null && stalled > 0
-      ? { at: now, ms: stalled }
-      : state.lastStall !== null && now - state.lastStall.at <= settings.sustainMs
-        ? state.lastStall
-        : null;
-  const current = enter.reasons.length > 0 ? enter.reasons : stay.reasons;
+  else if (level === "critical" && recovered(atMostSince.ok)) level = "ok";
+  else if (level === "critical" && recovered(atMostSince.elevated)) level = "elevated";
+  else if (level === "elevated" && recovered(atMostSince.ok)) level = "ok";
+  const current = [
+    ...(enter.reasons.length > 0 ? enter.reasons : stay.reasons),
+    ...(stall.reason === null ? [] : [stall.reason]),
+  ];
   return {
     level,
     since: level === state.level ? state.since : now,
@@ -248,46 +313,93 @@ export function stepPressure(
     loadPerCore: sample.loadPerCore,
     atLeastSince,
     atMostSince,
-    lastStall,
+    stalls,
   };
 }
 
-export const toHostPressure = (state: PressureState): HostPressure => ({
-  level: state.level,
-  since: DateTime.formatIso(DateTime.makeUnsafe(state.since)),
-  reasons: [...state.reasons],
-  loadPerCore: state.loadPerCore === null ? null : Math.round(state.loadPerCore * 100) / 100,
-  eventLoopDelayMs: state.lastStall === null ? null : Math.round(state.lastStall.ms),
-});
+export const toHostPressure = (state: PressureState): HostPressure => {
+  const longest = state.stalls.reduce((top, stall) => Math.max(top, stall.ms), 0);
+  return {
+    level: state.level,
+    since: DateTime.formatIso(DateTime.makeUnsafe(state.since)),
+    reasons: [...state.reasons],
+    loadPerCore: state.loadPerCore === null ? null : Math.round(state.loadPerCore * 100) / 100,
+    eventLoopDelayMs: longest > 0 ? Math.round(longest) : null,
+  };
+};
 
-/** What orchestrating threads were last told about one host, and when each level was announced. */
-export interface AnnouncedPressure {
-  readonly level: HostPressureLevel;
-  readonly sentAt: Partial<Record<HostPressureLevel, number>>;
+/**
+ * The one status notice each orchestrating thread keeps per host. Its id goes into the record key,
+ * so writing it again updates the same timeline row in place.
+ */
+export interface PressureRow {
+  readonly id: string;
+  readonly openedAt: number;
+  /** Threads holding this row; later updates reach them even after their work there finished. */
+  readonly recipients: ReadonlyArray<string>;
 }
 
-export const NOTHING_ANNOUNCED: AnnouncedPressure = { level: "ok", sentAt: {} };
+/** What orchestrating threads were last told about one host. */
+export interface AnnouncedPressure {
+  readonly level: HostPressureLevel;
+  readonly row: PressureRow | null;
+  /** When each level last woke them. */
+  readonly wokeAt: Partial<Record<HostPressureLevel, number>>;
+}
+
+export const NOTHING_ANNOUNCED: AnnouncedPressure = { level: "ok", row: null, wokeAt: {} };
 
 export type PressureNudgeKind = "rise" | "ease" | "recover";
 
+export interface PressureNudge {
+  readonly kind: PressureNudgeKind;
+  /** Write the host's status row: a new one when `opened`, else the current one in place. */
+  readonly row: { readonly id: string; readonly opened: boolean } | null;
+  /** Also start a turn in each orchestrating thread with the full notice. */
+  readonly wake: boolean;
+}
+
 /**
- * Whether a host's new level is news. Each level is announced at most once per cooldown, so a host
- * flapping across a threshold does not wake its orchestrators again and again. A change within the
- * cooldown is recorded as told without a message.
+ * What a host's new level changes in its orchestrators' timelines. A rise opens a status row at
+ * most once per cooldown; within it, every later change rewrites that row in place. Easing and
+ * recovery only ever rewrite an existing row, so a short episode adds nothing new. A rise to a
+ * level delivered as "wake" wakes its threads at once, at most once per level per cooldown, even
+ * when the row itself is only updated: getting worse is always news.
  */
 export function nudgeDecision(
   announced: AnnouncedPressure,
   level: HostPressureLevel,
   now: number,
-  cooldownMs: number,
-): { readonly next: AnnouncedPressure; readonly kind: PressureNudgeKind | null } {
-  if (level === announced.level) return { next: announced, kind: null };
+  settings: Pick<
+    ResolvedPressureSettings,
+    "notifyCooldownMs" | "elevatedDelivery" | "criticalDelivery"
+  >,
+): { readonly next: AnnouncedPressure; readonly nudge: PressureNudge | null } {
+  if (level === announced.level) return { next: announced, nudge: null };
   const kind: PressureNudgeKind =
     level === "ok" ? "recover" : RANK[level] > RANK[announced.level] ? "rise" : "ease";
-  const last = announced.sentAt[level];
-  if (last !== undefined && now - last < cooldownMs)
-    return { next: { ...announced, level }, kind: null };
-  return { next: { level, sentAt: { ...announced.sentAt, [level]: now } }, kind };
+  const current = announced.row;
+  const delivery =
+    level === "critical"
+      ? settings.criticalDelivery
+      : level === "elevated"
+        ? settings.elevatedDelivery
+        : "off";
+  if (kind !== "rise" || delivery === "off")
+    return {
+      next: { ...announced, level },
+      nudge:
+        current === null ? null : { kind, row: { id: current.id, opened: false }, wake: false },
+    };
+  const reuse = current !== null && now - current.openedAt < settings.notifyCooldownMs;
+  const row: PressureRow = reuse ? current : { id: String(now), openedAt: now, recipients: [] };
+  const woke = announced.wokeAt[level];
+  const wake =
+    delivery === "wake" && (woke === undefined || now - woke >= settings.notifyCooldownMs);
+  return {
+    next: { level, row, wokeAt: wake ? { ...announced.wokeAt, [level]: now } : announced.wokeAt },
+    nudge: { kind, row: { id: row.id, opened: !reuse }, wake },
+  };
 }
 
 type ShellLike = Pick<
@@ -561,25 +673,22 @@ export function launchAdvice(input: {
 
 const MAX_LISTED = 6;
 
-/** The message an orchestrating thread receives. */
-export function pressureNudgeText(input: {
+interface PressureTextInput {
   readonly kind: PressureNudgeKind;
   readonly host: string | null;
   readonly pressure: HostPressure;
   readonly consumers: ReadonlyArray<PressureConsumer>;
   readonly recipient: string;
   readonly alternatives: ReadonlyArray<HostPlacementCandidate>;
-}): { readonly text: string; readonly summary: string } {
+}
+
+/** "13:37 UTC" from an ISO instant. */
+const clockTime = (iso: string) => iso.slice(11, 16) + " UTC";
+
+/** The details under a notice: why, what runs there, where else to go, what to do. */
+function pressureDetails(input: PressureTextInput): ReadonlyArray<string> {
   const where = hostLabel(input.host);
   const level = input.pressure.level;
-  if (input.kind === "recover")
-    return {
-      summary: where + " is back to normal load",
-      text:
-        "Resource pressure: " +
-        where +
-        " is back to normal load. Heavy lanes can run there again; check goat_host_status before starting several at once.",
-    };
   const why = input.pressure.reasons.map((reason) => "- " + reason.message);
   const consumers = input.consumers.slice(0, MAX_LISTED).map((consumer) => {
     const mine = consumer.launcherThreadId === input.recipient ? ", started by this thread" : "";
@@ -615,28 +724,90 @@ export function pressureNudgeText(input: {
       : "Avoid starting more heavy lanes on " +
         where +
         (target === undefined ? "." : "; prefer " + hostLabel(target.host) + " for new ones.");
-  const lines = [
-    "Resource pressure: " +
-      where +
-      (input.kind === "ease" ? " eased to " : " is ") +
-      level +
-      " (since " +
-      input.pressure.since +
-      ").",
+  return [
     ...why,
     ...(consumers.length === 0 ? [] : ["", "Work running there:", ...consumers, ...more]),
     ...(room.length === 0
       ? ["", "No other host has room now."]
       : ["", "Hosts with room:", ...room]),
     "",
-    "Suggested: " +
-      action +
-      " Rank hosts with goat_host_status {placement:{}} before launching. This notice repeats for a level at most once per cooldown.",
+    "Suggested: " + action + " Rank hosts with goat_host_status {placement:{}} before launching.",
   ];
+}
+
+/**
+ * The host's status row in an orchestrating thread: one line with level, since and the main
+ * reason, details below it. Rewritten in place as the level changes.
+ */
+export function pressureStatusText(input: PressureTextInput): string {
+  const where = hostLabel(input.host);
+  const since = clockTime(input.pressure.since);
+  if (input.kind === "recover")
+    return (
+      "Resource pressure: " +
+      where +
+      " back to normal since " +
+      since +
+      "\nHeavy lanes can run there again; check goat_host_status before starting several at once."
+    );
+  const reason = input.pressure.reasons[0]?.message;
+  return [
+    "Resource pressure: " +
+      where +
+      " " +
+      input.pressure.level +
+      " since " +
+      since +
+      (reason === undefined ? "" : " · " + reason),
+    ...pressureDetails(input),
+  ].join("\n");
+}
+
+/**
+ * The message that wakes an orchestrating thread when a host gets worse. It goes into the
+ * agent's context, so it says what to do and where to go next in three lines; host.status lists
+ * the work running there and every host's room.
+ */
+export function pressureNudgeText(input: PressureTextInput): {
+  readonly text: string;
+  readonly summary: string;
+} {
+  const where = hostLabel(input.host);
+  const level = input.pressure.level;
+  const reason = input.pressure.reasons[0]?.message;
+  const mine = input.consumers.filter((consumer) => consumer.launcherThreadId === input.recipient);
+  const target = input.alternatives[0];
+  const next =
+    target === undefined
+      ? "No other host has room now."
+      : hostLabel(target.host) +
+        " has room (" +
+        target.reasons.join("; ") +
+        ")" +
+        (level === "critical"
+          ? "; start the next ones there" +
+            (target.host === null ? "." : ' with goat_call {path: "ssh.thread_launch"}.')
+          : ".");
   return {
     summary: where + " is under " + level + " resource pressure",
-    text: lines.join("\n"),
+    text: [
+      "Resource pressure: " + where + " is " + level + " (since " + input.pressure.since + ").",
+      (reason === undefined ? "" : reason + ". ") +
+        input.consumers.length +
+        " threads run there, " +
+        mine.length +
+        " started by this thread. " +
+        (level === "critical"
+          ? "Pause or queue new heavy lanes there and let running ones finish. "
+          : "Avoid starting more heavy lanes there. ") +
+        next,
+      'goat_call {path: "host.status", args: {placement: {}}} ranks hosts; goat_call {path: "thread.watch_list"} lists the threads this thread started.',
+    ].join("\n"),
   };
 }
 
 export const pressureHostKey = (host: string | null) => host ?? FLEET_LOCAL_HOST_KEY;
+
+/** Pressure wakes are keyed host-pressure:<host>:…; TurnDigest keeps one per host. */
+export const HOST_PRESSURE_KEY_PREFIX = "host-pressure:";
+export const HOST_PRESSURE_MESSAGE_PREFIX = `message:${HOST_PRESSURE_KEY_PREFIX}`;

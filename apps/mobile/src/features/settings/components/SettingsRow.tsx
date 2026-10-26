@@ -3,7 +3,11 @@ import type { ComponentProps } from "react";
 import { Platform } from "react-native";
 
 import { ListRow } from "../../../components/ui/ListRow";
-import type { SettingsLegalDocumentTarget, SettingsSheetTarget } from "./settings-sheet-targets";
+import {
+  isGoatSettingsSheetTarget,
+  type SettingsLegalDocumentTarget,
+  type SettingsSheetTarget,
+} from "./settings-sheet-targets";
 
 export function SettingsRow(props: {
   readonly disabled?: boolean;
@@ -27,10 +31,18 @@ export function SettingsRow(props: {
       detail={valueBelow ? undefined : props.value}
       disabled={props.disabled}
       onPress={() => {
-        if (props.target) {
+        const target = props.target;
+        // TypeScript checks a union-valued route name only up to 25 members, so GOAT's
+        // targets navigate in their own branch and upstream's list stays under the limit.
+        if (target && isGoatSettingsSheetTarget(target)) {
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: props.target },
+            params: { screen: target },
+          });
+        } else if (target) {
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: target },
           });
         } else if (props.fullScreenTarget) {
           navigation.navigate(props.fullScreenTarget);

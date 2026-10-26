@@ -20,11 +20,13 @@ import * as Store from "../../../memory/MemoryStore.ts";
 import { MemoryToolkit } from "./tools.ts";
 import { memoryError } from "./handlers.ts";
 import * as Fixture from "./handlers.testkit.ts";
+import * as Settings from "../../../serverSettings.ts";
 
 const decodeReceipt = Schema.decodeUnknownEffect(M.MemoryMutationReceipt);
 const decodePage = Schema.decodeUnknownEffect(M.MemoryPage);
 const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const encodeError = Schema.encodeSync(M.MemoryRpcError);
+const decodeRefusal = Schema.decodeUnknownEffect(M.OrchestratorMcpFailure);
 
 it("registers all nine core tools", () => {
   expect(Object.keys(MemoryToolkit.tools).sort()).toEqual([...M.MEMORY_MCP_TOOLS].sort());
@@ -35,7 +37,7 @@ it.effect(
   "real toolkit writes, reads, searches with service cursor, lists, histories, forgets and refuses invalid revert",
   () =>
     Effect.gen(function* () {
-      const created = yield* Fixture.call("memory_upsert", Fixture.upsert());
+      const created = yield* Fixture.call("goat_memory_upsert", Fixture.upsert());
       expect((yield* decodeReceipt(created.body)).outcome).toBe("accepted");
       yield* assertUsageCounters;
       const service = yield* MemoryService.MemoryService;
@@ -51,14 +53,14 @@ it.effect(
       };
       const direct = yield* service.search(query, Effect.void);
       expect(direct.nextCursor).not.toBeNull();
-      expect((yield* Fixture.call("memory_search", query)).body).toEqual(direct);
+      expect((yield* Fixture.call("goat_memory_search", query)).body).toEqual(direct);
       const continuation = { ...query, cursor: direct.nextCursor! };
-      expect((yield* Fixture.call("memory_search", continuation)).body).toEqual(
+      expect((yield* Fixture.call("goat_memory_search", continuation)).body).toEqual(
         yield* service.search(continuation, Effect.void),
       );
       expect(
         (yield* decodePage(
-          (yield* Fixture.call("memory_list", {
+          (yield* Fixture.call("goat_memory_list", {
             memorySpaceId: Fixture.space,
             includeQuarantined: false,
             limit: 1,
@@ -66,14 +68,14 @@ it.effect(
         )).items,
       ).toHaveLength(1);
       expect(
-        (yield* Fixture.call("memory_read", {
+        (yield* Fixture.call("goat_memory_read", {
           memorySpaceId: Fixture.space,
           memoryId: Fixture.memoryId,
         })).body,
       ).toMatchObject({ status: "active", payload: { text: "synthetic memory" } });
       expect(
         (yield* decodeHistory(
-          (yield* Fixture.call("memory_history", {
+          (yield* Fixture.call("goat_memory_history", {
             memorySpaceId: Fixture.space,
             memoryId: Fixture.memoryId,
             limit: 1,
@@ -85,7 +87,7 @@ it.effect(
         Effect.void,
       );
       expect(
-        (yield* Fixture.call("memory_forget", {
+        (yield* Fixture.call("goat_memory_forget", {
           memorySpaceId: Fixture.space,
           memoryId: Fixture.memoryId,
           operationId: M.MemoryOperationId.make(Fixture.id(4)),
@@ -93,7 +95,7 @@ it.effect(
         })).result.isError,
       ).not.toBe(true);
       expect(
-        (yield* Fixture.call("memory_revert_resolution", {
+        (yield* Fixture.call("goat_memory_revert_resolution", {
           memorySpaceId: Fixture.space,
           operationId: M.MemoryOperationId.make(Fixture.id(5)),
           memoryId: Fixture.memoryId,
@@ -102,9 +104,54 @@ it.effect(
           expectedHeads: [M.MemoryRevisionId.make(Fixture.id(8))],
         })).result.isError,
       ).toBe(true);
-      expect((yield* Fixture.call("memory_sync_status", {})).body).toMatchObject({
+      expect((yield* Fixture.call("goat_memory_sync_status", {})).body).toMatchObject({
         code: "hub_disabled",
       });
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect(
+  "argument mistakes are refused as invalid_request naming the fields, never as invalid_output",
+  () =>
+    Effect.gen(function* () {
+      for (const [name, input, fields] of [
+        ["goat_memory_list", {}, ["memorySpaceId", "includeQuarantined"]],
+        ["goat_memory_list", { limit: 1 }, ["memorySpaceId", "includeQuarantined"]],
+        ["goat_memory_search", { query: "synthetic" }, ["memorySpaceId"]],
+      ] as const) {
+        const { result, body } = yield* Fixture.call(name, input);
+        expect(result.isError).toBe(true);
+        const refusal = yield* decodeRefusal(body);
+        expect(refusal.code).toBe("invalid_request");
+        for (const field of fields) expect(refusal.message).toContain(field);
+        expect(refusal.message).toContain("goat_memory_sync_status");
+        expect(yield* Fixture.callThroughGoatCall(name, input)).toMatchObject({
+          status: "error",
+          error: { code: "invalid_request", reason: "invalid_request", retryable: false },
+        });
+      }
+      const rejected = "not-a-space-synthetic-value";
+      const invalid = yield* decodeRefusal(
+        (yield* Fixture.call("goat_memory_list", {
+          memorySpaceId: rejected,
+          includeQuarantined: false,
+        })).body,
+      );
+      expect(invalid.code).toBe("invalid_request");
+      expect(invalid.message).toContain("memorySpaceId");
+      expect(invalid.message).not.toContain(rejected);
+      const key = "synthetic private key text";
+      const nested = yield* decodeRefusal(
+        (yield* Fixture.call("goat_memory_list", {
+          memorySpaceId: Fixture.space,
+          includeQuarantined: false,
+          scope: { kind: "user", [key]: rejected },
+        })).body,
+      );
+      expect(nested.code).toBe("invalid_request");
+      expect(nested.message).toContain("scope");
+      expect(nested.message).not.toContain(key);
+      expect(nested.message).not.toContain(rejected);
     }).pipe(Effect.provide(Fixture.layer)),
 );
 
@@ -150,17 +197,19 @@ it.effect(
     Effect.gen(function* () {
       const granted = Fixture.scope();
       expect(
-        (yield* Fixture.call("memory_upsert", Fixture.upsert(), {
+        (yield* Fixture.call("goat_memory_upsert", Fixture.upsert(), {
           ...granted,
           client: { ...granted.client!, access: "read-only" },
         })).result.isError,
       ).toBe(true);
       expect(
-        (yield* Fixture.call("memory_upsert", Fixture.upsert(), { ...granted, readOnly: true }))
-          .result.isError,
+        (yield* Fixture.call("goat_memory_upsert", Fixture.upsert(), {
+          ...granted,
+          readOnly: true,
+        })).result.isError,
       ).toBe(true);
       expect(
-        (yield* Fixture.call("memory_upsert", Fixture.upsert(), granted)).result.isError,
+        (yield* Fixture.call("goat_memory_upsert", Fixture.upsert(), granted)).result.isError,
       ).not.toBe(true);
     }).pipe(Effect.provide(Fixture.layer)),
 );
@@ -184,7 +233,7 @@ it("maps safe code and capacity without exposing causes or undefined", () => {
 
 it.effect("strict contract decoding rejects extra keys before persisting a raw MCP request", () =>
   Effect.gen(function* () {
-    const result = yield* Fixture.call("memory_upsert", {
+    const result = yield* Fixture.call("goat_memory_upsert", {
       ...Fixture.upsert(),
       unexpected: "synthetic",
     });
@@ -221,6 +270,7 @@ it.effect(
         }),
       ).pipe(Layer.provideMerge(Fixture.core));
       const toolkit = McpHttpServer.layerMemoryToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(observed),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
@@ -249,9 +299,11 @@ it.effect(
                   ),
             ),
         };
-        const pending = yield* Fixture.call("memory_upsert", Fixture.upsert(), invocation).pipe(
-          Effect.forkScoped,
-        );
+        const pending = yield* Fixture.call(
+          "goat_memory_upsert",
+          Fixture.upsert(),
+          invocation,
+        ).pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         authorized = false;
         yield* Deferred.succeed(release, undefined);
@@ -334,17 +386,18 @@ it.effect(
     return Effect.gen(function* () {
       const { input, page } = yield* sourceFixture;
       for (const scopes of [["memory:read"], ["orchestration:read"], []] as const) {
-        const result = yield* Fixture.call("memory_read_source", input, Fixture.scope(scopes));
+        const result = yield* Fixture.call("goat_memory_source_read", input, Fixture.scope(scopes));
         expect(result.body).toMatchObject({ code: "unavailable" });
       }
       expect(calls).toBe(0);
       const full = { ...Fixture.scope(["memory:read", "orchestration:read"]), readOnly: true };
-      const result = yield* Fixture.call("memory_read_source", input, full);
+      const result = yield* Fixture.call("goat_memory_source_read", input, full);
       expect(result.result.isError).not.toBe(true);
       expect(result.body).toEqual(page);
       expect(calls).toBe(1);
       expect(
-        (yield* Fixture.call("memory_read_source", { ...input, sshHost: "synthetic" }, full)).body,
+        (yield* Fixture.call("goat_memory_source_read", { ...input, sshHost: "synthetic" }, full))
+          .body,
       ).toMatchObject({ code: "invalid_request" });
       expect(calls).toBe(1);
     }).pipe(
@@ -481,7 +534,7 @@ it.effect("r4 tracked MCP writes inherit injected context and forget purges them
       [rA],
     );
     const s = { ...Fixture.upsert(15001), memoryId: M.MemoryId.make(Fixture.id(15002)) };
-    const result = yield* Fixture.call("memory_upsert", s, caller);
+    const result = yield* Fixture.call("goat_memory_upsert", s, caller);
     expect(result.result.isError).not.toBe(true);
     const saved = yield* store.loadAggregate(Fixture.space, s.memoryId);
     expect(
@@ -522,7 +575,9 @@ it.effect(
         ...invocation,
         thread: { ...invocation.thread, threadId: M.ThreadId.make("failed-source-consumer") },
       };
-      expect((yield* Fixture.call("memory_read_source", input, invocation)).body).toEqual(page);
+      expect((yield* Fixture.call("goat_memory_source_read", input, invocation)).body).toEqual(
+        page,
+      );
       expect(
         (yield* store.readThreadLineage(
           { environmentId: invocation.environmentId, threadId: invocation.thread.threadId },
@@ -530,7 +585,7 @@ it.effect(
         )).revisions,
       ).toEqual((yield* store.loadAggregate(Fixture.space, input.memoryId)).heads);
       yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_outbox WHEN NEW.space='_worker' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
-      const failed = yield* Fixture.call("memory_read_source", input, failedCaller);
+      const failed = yield* Fixture.call("goat_memory_source_read", input, failedCaller);
       expect(failed.result.isError).toBe(true);
       expect(JSON.stringify(failed.body)).not.toContain("synthetic original");
     }).pipe(
@@ -550,4 +605,155 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect.each([
+  { profile: "observer", enabled: true, denied: true },
+  { profile: "worker", enabled: true, denied: false },
+  { profile: "manager", enabled: true, denied: false },
+  { profile: "observer", enabled: false, denied: false },
+])("memory writes respect the effective goatclaw profile: %j", ({ profile, enabled, denied }) =>
+  Effect.gen(function* () {
+    const caller = yield* Fixture.bindProfile(profile);
+    if (!enabled) {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: false } });
+    }
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const readInput = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+    const read = yield* Fixture.call("memory_read", readInput, caller);
+    expect(read.result.isError).not.toBe(true);
+    expect(read.body).toMatchObject({ status: "active" });
+    const stored = yield* service.read(readInput, Effect.void);
+    const store = yield* Store.MemoryStore;
+    const before = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    const expectedHeads = stored.status === "active" ? [stored.revision.revisionId] : [];
+    const update = yield* Fixture.call(
+      "memory_upsert",
+      {
+        ...Fixture.upsert(4),
+        expectedHeads,
+        payload: { text: "updated synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
+      },
+      caller,
+    );
+    if (!denied) expect(update.result.isError).not.toBe(true);
+    const latest = yield* service.read(readInput, Effect.void);
+    const forgotten = yield* Fixture.call(
+      "memory_forget",
+      {
+        ...readInput,
+        operationId: M.MemoryOperationId.make(Fixture.id(8)),
+        expectedHeads: latest.status === "active" ? [latest.revision.revisionId] : [],
+      },
+      caller,
+    );
+    if (denied) {
+      expect(forgotten.body).toMatchObject({ code: "capability_denied" });
+      expect(update.body).toMatchObject({ code: "capability_denied" });
+      const reverted = yield* Fixture.call(
+        "memory_revert_resolution",
+        {
+          ...readInput,
+          operationId: M.MemoryOperationId.make(Fixture.id(5)),
+          resolutionId: M.MemoryResolutionId.make(Fixture.id(6)),
+          restoredRevisionId: M.MemoryRevisionId.make(Fixture.id(7)),
+          expectedHeads,
+        },
+        caller,
+      );
+      expect(reverted.body).toMatchObject({ code: "capability_denied" });
+      expect(yield* service.read(readInput, Effect.void)).toEqual(stored);
+      expect(yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).toEqual(before);
+      for (const operation of [4, 5, 8])
+        expect(
+          yield* store.receipt(Fixture.space, M.MemoryOperationId.make(Fixture.id(operation))),
+        ).toBeFalsy();
+    } else {
+      expect(forgotten.result.isError).not.toBe(true);
+      expect(yield* service.read(readInput, Effect.void)).toMatchObject({ status: "forgotten" });
+    }
+  }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect.each(["live", "ceiling", "missing"] as const)(
+  "memory write admission respects %s profile authority",
+  (change) =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      const policy = (yield* settings.getSettings).goatclaw;
+      const worker = policy.profiles.worker!;
+      const narrowed = { ...worker, capabilities: [] };
+      if (change === "ceiling")
+        yield* settings.updateSettings({
+          goatclaw: { profiles: { ...policy.profiles, worker: narrowed } },
+        });
+      const caller = yield* Fixture.bindProfile("worker");
+      const service = yield* MemoryService.MemoryService;
+      yield* service.upsert(Fixture.upsert(), Effect.void);
+      if (change === "live") {
+        const initial = yield* service.read(
+          { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId },
+          Effect.void,
+        );
+        expect(
+          (yield* Fixture.call(
+            "memory_upsert",
+            {
+              ...Fixture.upsert(9),
+              expectedHeads: initial.status === "active" ? [initial.revision.revisionId] : [],
+            },
+            caller,
+          )).result.isError,
+        ).not.toBe(true);
+        yield* settings.updateSettings({
+          goatclaw: { profiles: { ...policy.profiles, worker: narrowed } },
+        });
+      } else if (change === "ceiling") {
+        yield* settings.updateSettings({ goatclaw: { profiles: policy.profiles } });
+      } else {
+        const { worker: _worker, ...remaining } = policy.profiles;
+        yield* settings.updateSettings({
+          goatclaw: { defaultProfile: "observer", profiles: remaining },
+        });
+      }
+      const input = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+      const before = yield* service.read(input, Effect.void);
+      const result = yield* Fixture.call(
+        "memory_forget",
+        {
+          ...input,
+          operationId: M.MemoryOperationId.make(Fixture.id(4)),
+          expectedHeads: before.status === "active" ? [before.revision.revisionId] : [],
+        },
+        caller,
+      );
+      expect(result.result.isError).toBe(true);
+      expect(result.body).toMatchObject({ code: "capability_denied" });
+      expect((yield* Fixture.call("memory_read", input, caller)).body).toEqual(before);
+    }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect(
+  "outside memory clients retain their grants with goatclaw's default observer profile",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { defaultProfile: "observer" } });
+      expect((yield* Fixture.call("memory_upsert", Fixture.upsert())).result.isError).not.toBe(
+        true,
+      );
+      const service = yield* MemoryService.MemoryService;
+      const input = { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+      const before = yield* service.read(input, Effect.void);
+      expect(
+        (yield* Fixture.call("memory_forget", {
+          ...input,
+          operationId: M.MemoryOperationId.make(Fixture.id(4)),
+          expectedHeads: before.status === "active" ? [before.revision.revisionId] : [],
+        })).result.isError,
+      ).not.toBe(true);
+      expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "forgotten" });
+    }).pipe(Effect.provide(Fixture.layerWithProfiles)),
 );

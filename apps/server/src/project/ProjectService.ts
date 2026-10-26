@@ -1,4 +1,5 @@
 import {
+  PROJECT_SETTINGS_OVERRIDES_REMOVAL,
   CommandId,
   type OrchestrationProjectShell,
   ProjectId,
@@ -6,6 +7,7 @@ import {
   type ProjectCreatePayload,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
+  type RepositoryIdentity,
   type ThreadId,
 } from "@goat/contracts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
@@ -131,6 +133,13 @@ export class ProjectService extends Context.Service<
       options?: { readonly includeDeleted?: boolean },
     ) => Effect.Effect<Option.Option<Project>, ProjectOperationError>;
     readonly snapshot: Effect.Effect<ProjectSnapshot, ProjectOperationError>;
+    /**
+     * The snapshot reports only cached identities, so a project read before its first lookup, or
+     * after the cache expired, has none. This waits for the lookup.
+     */
+    readonly awaitRepositoryIdentity: (
+      workspaceRoot: string,
+    ) => Effect.Effect<RepositoryIdentity | null>;
     readonly getShell: (
       projectId: ProjectId,
     ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectOperationError>;
@@ -480,15 +489,19 @@ export const make = Effect.gen(function* () {
   // settings write failure should not block the deletion it is cleaning up
   // after, and a server crash before a replay never revisits this project.
   const clearProjectSettingsOverrides = (projectId: ProjectId) =>
-    serverSettings.updateSettings({ projectSettingsOverrides: { [projectId]: null } }).pipe(
-      Effect.asVoid,
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Failed to clear settings overrides for deleted project ${projectId}.`,
-          cause,
+    serverSettings
+      .updateSettings({
+        projectSettingsOverrides: { [projectId]: PROJECT_SETTINGS_OVERRIDES_REMOVAL },
+      })
+      .pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Failed to clear settings overrides for deleted project ${projectId}.`,
+            cause,
+          ),
         ),
-      ),
-    );
+      );
 
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {
@@ -570,6 +583,7 @@ export const make = Effect.gen(function* () {
     getById,
     getByWorkspaceRoot,
     snapshot,
+    awaitRepositoryIdentity: projectEnrichment.awaitRepositoryIdentity,
     getShell,
     listShells,
   });

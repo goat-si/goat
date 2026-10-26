@@ -18,6 +18,8 @@ import {
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadSendInput,
   OrchestratorMcpCapabilitiesResult,
+  OrchestratorMcpThreadRun,
+  OrchestratorMcpThreadStatusResult,
 } from "./orchestratorMcp.ts";
 
 const decodePendingRequestRespondInput = Schema.decodeUnknownSync(
@@ -451,4 +453,47 @@ it("profile-fenced sends are destination-only and retain their exact ceiling", (
   };
   expect(decode(input).permissionProfileCeiling).toEqual(input.permissionProfileCeiling);
   expect(() => decode({ ...input, host: "relay" })).toThrow();
+});
+
+it("decodes terminal cause in status and recent runs with older-host omission", () => {
+  const run = {
+    runId: "run-1",
+    ordinal: 1,
+    status: "cancelled",
+    providerInstanceId: "codex",
+    model: "test",
+    requestedAt: "2026-10-15T00:00:00.000Z",
+    startedAt: null,
+    completedAt: "2026-10-15T00:00:01.000Z",
+  };
+  const decodeRecentRuns = Schema.decodeUnknownSync(OrchestratorMcpThreadRun);
+  const decodeStatus = Schema.decodeUnknownSync(OrchestratorMcpThreadStatusResult);
+  const legacyStatus = {
+    host: "local",
+    threadId: "thread-1",
+    title: "Test",
+    phase: "cancelled",
+    terminal: true,
+    run: {
+      runId: run.runId,
+      status: run.status,
+      requestedAt: run.requestedAt,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+    },
+    queuedRunId: null,
+    pendingRequest: null,
+    lastActivityAt: run.completedAt,
+    lastMessage: null,
+    lastError: null,
+    watch: null,
+  };
+  expect(decodeRecentRuns(run)).not.toHaveProperty("terminationCause");
+  expect(decodeStatus(legacyStatus).run).not.toHaveProperty("terminationCause");
+  const cause = { kind: "server_restart" };
+  expect(decodeRecentRuns({ ...run, terminationCause: cause }).terminationCause).toEqual(cause);
+  expect(
+    decodeStatus({ ...legacyStatus, run: { ...legacyStatus.run, terminationCause: cause } }).run
+      ?.terminationCause,
+  ).toEqual(cause);
 });

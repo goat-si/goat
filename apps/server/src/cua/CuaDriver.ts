@@ -1,7 +1,11 @@
 import * as NodeModule from "node:module";
 
 import {
+  CuaAgentBlock,
+  cuaAgentBlockUnder,
   CuaDriverMcpConfiguration,
+  type ComputerUseApp,
+  type ComputerUseReadiness,
   type CuaDisplayCapability,
   type CuaHostStatus,
   type HostComputerUse,
@@ -14,7 +18,9 @@ import {
   withCuaDriverPrivacyEnvironment,
 } from "@goat/shared/cuaDriverRelease";
 import {
+  cuaDriverSessionListingEnvironment,
   isCuaDriverStartupRefusal,
+  listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -30,6 +36,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
@@ -37,8 +44,11 @@ import { ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
+import * as LinuxReadiness from "./LinuxReadiness.ts";
+import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
 
 export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
   "CuaDriverStartError",
@@ -69,6 +79,8 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
       "install",
     ]),
     cause: Schema.optional(Schema.Defect()),
+    /** The desktop's typed reason, beside its message, when agents cannot get past it alone. */
+    block: Schema.optional(CuaAgentBlock),
   },
 ) {
   override get message() {
@@ -91,6 +103,27 @@ export const CUA_DRIVER_REFUSED_MESSAGE =
 
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
+/** The typed reason behind a failed start, when agents cannot get past it alone (#1399). */
+export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
+  Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+    ? failure.value.block
+    : undefined;
+
+/**
+ * The block that still explains anything: the grants the helper's newer readiness does not
+ * report granted; once every one is back, the last failure is history and the next start tries
+ * again (#1399).
+ */
+const currentBlock = (
+  failure: Option.Option<CuaDriverError>,
+  readiness: ComputerUseReadiness | undefined,
+) => {
+  const block = agentBlock(failure);
+  return block === undefined || readiness === undefined
+    ? block
+    : cuaAgentBlockUnder(block, readiness);
+};
+
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
@@ -106,7 +139,19 @@ export class CuaDriver extends Context.Service<
   {
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
+    readonly listedApps: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+    /**
+     * The same apps named for people, with icons where the desktop could read them, for the
+     * composer's @ list and the icons beside agent calls. Empty when computer use is off or the
+     * host cannot list; asking grants nothing.
+     */
+    readonly appCatalog: Effect.Effect<ReadonlyArray<ComputerUseApp>>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
+    /**
+     * Why an agent cannot use the computer here until a person acts, from the last failure and
+     * the helper's newest report only, so admission never waits on a readiness probe.
+     */
+    readonly block: Effect.Effect<CuaAgentBlock | undefined>;
     readonly status: Effect.Effect<CuaHostStatus>;
     readonly computerUse: Effect.Effect<HostComputerUse>;
     /**
@@ -115,8 +160,56 @@ export class CuaDriver extends Context.Service<
      * screen went away still go through; the next start reports the problem instead.
      */
     readonly admitEnable: Effect.Effect<void, CuaDriverHostError>;
+    /**
+     * The X display the running driver was started on (its DISPLAY and XAUTHORITY), so the lease
+     * proxy can check every window the driver names is really there (#1358). None when the
+     * driver is not running or has no X display.
+     */
+    readonly x11Display?: Effect.Effect<Option.Option<CuaX11Display>>;
+    /**
+     * The running driver's socket and the display environment it was started with, for the
+     * server's own live frames of a Linux session (#1370). None when the driver is not running.
+     */
+    readonly driverSession?: Effect.Effect<
+      Option.Option<{
+        readonly mcp: CuaDriverMcpConfiguration;
+        readonly display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
+      }>
+    >;
+    /**
+     * Before the first agent turn (#1542): whether a readiness check is wanted (computer use on,
+     * no driver starting or running), and the session a driver would start on, its binary and
+     * the freshly probed display. None when the display is unusable or the binary is missing.
+     */
+    readonly beforeTurn?: {
+      readonly wanted: Effect.Effect<boolean>;
+      readonly session: Effect.Effect<
+        Option.Option<{
+          readonly command: string;
+          readonly display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
+        }>
+      >;
+    };
   }
 >()("goat/cua/CuaDriver") {}
+
+export interface CuaX11Display {
+  readonly DISPLAY: string;
+  readonly XAUTHORITY?: string;
+}
+
+/** The X display among the variables a driver was started with. */
+const x11DisplayOf = (
+  environment: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+): Option.Option<CuaX11Display> => {
+  const value = (name: string) => environment.find((variable) => variable.name === name)?.value;
+  const display = value("DISPLAY");
+  if (display === undefined || display.trim() === "") return Option.none();
+  const xauthority = value("XAUTHORITY");
+  return Option.some(
+    xauthority === undefined ? { DISPLAY: display } : { DISPLAY: display, XAUTHORITY: xauthority },
+  );
+};
 
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
@@ -126,6 +219,7 @@ interface Acquisition {
   revoked: boolean;
   running?: boolean;
   mcp?: CuaDriverMcpConfiguration;
+  displayEnvironment?: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
   /** What this daemon last said about the macOS grants; a failed check clears it. */
   grants?: CuaDisplay.MacGrants | null;
 }
@@ -142,12 +236,36 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  /** A desktop host's named listing; servers without one name each app by its id. */
+  readonly appCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
+  /**
+   * Where a server that runs the driver itself reads requestable apps when a request asks
+   * (#1561): a short-lived listing on the given display environment, never the shared daemon.
+   */
+  readonly requestListing?: (
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+  ) => Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  readonly observeReadiness?: (
+    mcp: CuaDriverMcpConfiguration,
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+  ) => Effect.Effect<Pick<CuaHostStatus, "readiness" | "signals"> | undefined>;
   /** The verified install, run when computer use is turned on; absent where the driver ships. */
   readonly install?: Effect.Effect<void, CuaDriverHostError>;
   /** The running daemon's own view of the macOS grants; null when it does not say. */
   readonly observeGrants?: (
     mcp: CuaDriverMcpConfiguration,
   ) => Effect.Effect<CuaDisplay.MacGrants | null>;
+  /**
+   * What the host's computer use helper last reported: its readiness steps and the safety
+   * signals it raises. The desktop host's helper reports through desktop telemetry; a server
+   * that runs its own helper (Linux, #1223) passes that helper's answer here.
+   */
+  readonly helperReadiness?: Effect.Effect<
+    Option.Option<Pick<CuaHostStatus, "readiness" | "signals">>
+  >;
+  /** The driver binary a start would run, for a readiness check before the first turn. */
+  readonly binary?: Effect.Effect<string, CuaDriverHostError>;
 }
 
 export const make = Effect.fn("CuaDriver.make")(function* (
@@ -230,6 +348,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       if (display.capability === "unavailable")
         return yield* new CuaDriverHostError({ operation: "display", cause: display.reason });
       if (entry.revoked) return;
+      entry.displayEnvironment = display.environment;
       entry.host = yield* factory(display.environment);
       if (entry.revoked) {
         yield* stop(entry);
@@ -323,24 +442,114 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       ),
     ),
   );
+  /**
+   * A server running the driver itself lists apps when a request asks, on the screen a start
+   * would use. Requests in a burst share one listing; a slow or failed one counts as none.
+   */
+  const requestListing = options.requestListing;
+  const [standaloneListing] = yield* Effect.cachedInvalidateWithTTL(
+    requestListing === undefined
+      ? Effect.succeedNone
+      : Effect.gen(function* () {
+          const display = yield* freshProbe;
+          if (display.capability === "unavailable") return Option.none<ReadonlyArray<string>>();
+          return yield* requestListing(display.environment);
+        }).pipe(Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone })),
+    "5 seconds",
+  );
+  /** Before the first agent turn: the session a start would use, for a readiness check (#1542). */
+  const beforeTurn = (binary: Effect.Effect<string, CuaDriverHostError>) => ({
+    wanted: Effect.map(enabled, (on) => on && active === undefined),
+    session: Effect.gen(function* () {
+      if (active !== undefined || !(yield* enabled)) return Option.none();
+      // The same check a start makes: the screen may have gone since the last read.
+      const display = yield* freshProbe;
+      if (display.capability === "unavailable") return Option.none();
+      const command = yield* Effect.option(binary);
+      return Option.map(command, (command) => ({ command, display: display.environment }));
+    }),
+  });
   return CuaDriver.of({
     acquire,
+    x11Display: Effect.sync(() =>
+      active?.running && active.displayEnvironment !== undefined
+        ? x11DisplayOf(active.displayEnvironment)
+        : Option.none(),
+    ),
+    driverSession: Effect.sync(() =>
+      active?.running && active.mcp !== undefined && active.displayEnvironment !== undefined
+        ? Option.some({ mcp: active.mcp, display: active.displayEnvironment })
+        : Option.none(),
+    ),
+    ...(options.binary === undefined ? {} : { beforeTurn: beforeTurn(options.binary) }),
     enabled,
+    listedApps: Effect.gen(function* () {
+      if (!(yield* enabled)) return Option.none();
+      const apps = yield* options.listedApps ?? standaloneListing;
+      return (yield* enabled) ? apps : Option.none();
+    }),
+    appCatalog: Effect.gen(function* () {
+      if (!(yield* enabled)) return [];
+      const catalog: ReadonlyArray<ComputerUseApp> =
+        options.appCatalog === undefined
+          ? Option.getOrElse(yield* standaloneListing, () => []).map((id) => ({
+              id,
+              name: catalogName(id),
+            }))
+          : Option.getOrElse(yield* options.appCatalog, () => []);
+      return (yield* enabled) ? catalog : [];
+    }),
     lastFailure: Effect.sync(() => failure),
-    status: reported.pipe(
-      Effect.map((display) => ({
+    block: (options.helperReadiness ?? Effect.succeedNone).pipe(
+      Effect.map((helper) =>
+        currentBlock(failure, Option.isSome(helper) ? helper.value.readiness : undefined),
+      ),
+    ),
+    status: Effect.gen(function* () {
+      const display = yield* reported;
+      // The helper's own report (desktop telemetry) wins; the server-run Linux helper is read
+      // only when nothing reported.
+      const reportedByHelper = options.helperReadiness ?? Effect.succeedNone;
+      const first = yield* reportedByHelper;
+      const entry = active;
+      const observe =
+        Option.isNone(first) && entry?.running && entry.mcp ? options.observeReadiness : undefined;
+      const observed =
+        observe && entry?.mcp
+          ? yield* observe(entry.mcp, entry.displayEnvironment ?? []).pipe(
+              Effect.timeoutOrElse({
+                duration: "15 seconds",
+                orElse: () => Effect.succeed(undefined),
+              }),
+            )
+          : undefined;
+      // A report that arrived while the Linux helper was read is newer, so it still wins, even
+      // when that read failed or timed out.
+      const helper = observe ? yield* reportedByHelper : first;
+      const isEnabled = yield* enabled;
+      const block = currentBlock(
+        failure,
+        Option.isSome(helper) ? helper.value.readiness : observed?.readiness,
+      );
+      return {
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
             ? platform
             : ("other" as const),
         running: running(),
+        tools: !isEnabled ? "off" : running() ? "available" : "unavailable",
+        ...(isEnabled && entry === active && entry?.running && observed && Option.isNone(helper)
+          ? observed
+          : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
+        ...(block === undefined ? {} : { block }),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
         display,
-      })),
-    ),
+        ...(Option.isSome(helper) ? helper.value : {}),
+      } satisfies CuaHostStatus;
+    }),
     computerUse: Effect.all([enabled, reported]).pipe(
       Effect.map(([isEnabled, display]) => ({
         enabled: isEnabled,
@@ -388,7 +597,7 @@ type SdkClientModule = {
 };
 
 /** Asks the running daemon, which is the process macOS grants, for its own permissions. */
-export const makeMacGrantObserver = Effect.fn("CuaDriver.makeMacGrantObserver")(function* () {
+const makeMacGrantObserver = Effect.fn("CuaDriver.makeMacGrantObserver")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   return (mcp: CuaDriverMcpConfiguration) =>
@@ -550,6 +759,31 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
   },
 );
 
+/** The desktop host's helper readiness, as desktop telemetry last carried it. */
+/**
+ * The desktop app's last readiness report, while that app is still connected. One whose
+ * telemetry stopped cannot start the driver (acquire refuses it below), so its last report would
+ * call an idle driver ready for the next turn (#1538).
+ */
+export const desktopHelperReadiness = Effect.map(
+  DesktopTelemetryReceiver.DesktopTelemetryReceiver,
+  (receiver) =>
+    Effect.gen(function* () {
+      const { status } = yield* receiver.health;
+      if (status === "stopped" || status === "unavailable") return Option.none();
+      return Option.map(yield* receiver.cuaReadiness, ({ readiness, signals }) => ({
+        readiness,
+        signals,
+      }));
+    }),
+);
+
+/** An app's own name when its id is an executable path, so a Linux or Windows entry reads well. */
+export const catalogName = (id: string): string => {
+  const base = id.split(/[\\/]/).pop() ?? id;
+  return (base.replace(/\.(exe|app)$/i, "") || id).slice(0, 255);
+};
+
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
@@ -581,9 +815,13 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
                 yield* retire(new CuaDriverHostError({ operation: "restart" }));
               else
                 yield* retire(
-                  report.message === undefined
+                  report.message === undefined && report.block === undefined
                     ? unavailable
-                    : new CuaDriverHostError({ operation: "desktop", cause: report.message }),
+                    : new CuaDriverHostError({
+                        operation: "desktop",
+                        ...(report.message === undefined ? {} : { cause: report.message }),
+                        ...(report.block === undefined ? {} : { block: report.block }),
+                      }),
                 );
             }),
           ),
@@ -630,10 +868,16 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install } =
+    const { factory, install, helperReadiness, binary, requestListing } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
-          { factory: yield* makeDesktopHostFactory(), install: undefined }
+          {
+            factory: yield* makeDesktopHostFactory(),
+            install: undefined,
+            helperReadiness: yield* desktopHelperReadiness,
+            binary: undefined,
+            requestListing: undefined,
+          }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
@@ -661,19 +905,79 @@ export const layer = Layer.effect(
                       new CuaDriverHostError({ operation: "install", cause: error.message }),
                   ),
                 );
-            return { factory, install };
+            // A Linux server runs its own helper (#1223); its report stands in for the desktop's.
+            const linuxHelper =
+              platform === "linux" ? yield* Effect.serviceOption(LinuxHelperReport) : Option.none();
+            const helperReadiness = Option.isSome(linuxHelper)
+              ? Ref.get(linuxHelper.value.latest).pipe(
+                  Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
+                )
+              : undefined;
+            const named = environment.GOAT_CUA_DRIVER_PATH?.trim();
+            // What a standalone start runs.
+            const startBinary = named
+              ? Effect.succeed(named)
+              : installation.executable.pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new CuaDriverHostError({ operation: "install", cause: error.message }),
+                  ),
+                );
+            // The Linux check before the first turn (#1542) runs it.
+            const binary = Option.isSome(linuxHelper) ? startBinary : undefined;
+            // Requests are judged against a fresh listing of that binary on the probed screen
+            // (#1561), the same listing and identities the manifest is built from.
+            const requestListing = (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
+              startBinary.pipe(
+                Effect.flatMap((binaryPath) =>
+                  // Interrupting the request (its deadline, or the server stopping) ends the
+                  // listing's driver as well.
+                  Effect.tryPromise({
+                    try: (signal) =>
+                      listCuaRequestableApplications({
+                        binaryPath,
+                        platform,
+                        environment: cuaDriverSessionListingEnvironment(
+                          environment,
+                          display,
+                          platform,
+                        ),
+                        hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
+                        signal,
+                      }),
+                    catch: (cause) => new CuaDriverHostError({ operation: "start", cause }),
+                  }),
+                ),
+                Effect.map((apps) => Option.some(apps)),
+                Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
+              );
+            return { factory, install, helperReadiness, binary, requestListing };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const probe = CuaDisplay.probeDisplay().pipe(
+    const probe = CuaDisplay.probeDisplay(
+      config.mode === "desktop" ? "desktop" : "standalone",
+    ).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return yield* make(factory, probe, {
+      ...(config.mode === "desktop"
+        ? yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
+            Effect.map((request) => ({
+              listedApps: request.pipe(Effect.map(Option.map((listed) => listed.apps))),
+              appCatalog: request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
+            })),
+          )
+        : {}),
       ...(install ? { install } : {}),
+      ...(helperReadiness ? { helperReadiness } : {}),
+      ...(binary ? { binary } : {}),
+      ...(requestListing ? { requestListing } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
+      ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
   }),
 );
