@@ -1,7 +1,4 @@
-import {
-  scheduledTaskRunErrorText,
-  scheduledTaskRunPresentation,
-} from "@goat/client-runtime/scheduled-task-run";
+import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { scheduledMemoryAccess } from "./scheduledTaskPresentation";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -1350,9 +1347,9 @@ function EnvironmentTasks({
               {scheduledMemoryAccess(task) ? (
                 <Text className="text-sm text-foreground-muted">{scheduledMemoryAccess(task)}</Text>
               ) : null}
-              {scheduledTaskRunErrorText(task) ? (
+              {scheduledTaskRunPresentation(task).error ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
-                  Run: {scheduledTaskRunErrorText(task)}
+                  Run: {scheduledTaskRunPresentation(task).error}
                 </Text>
               ) : null}
             </Pressable>

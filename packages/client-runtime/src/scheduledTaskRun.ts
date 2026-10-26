@@ -1,7 +1,19 @@
 import type { ScheduledTask } from "@goat/contracts";
-export function scheduledTaskRunPresentation(
-  task: Pick<ScheduledTask, "lastRun" | "lastRunStatus">,
-) {
+
+type RunFields = Pick<ScheduledTask, "lastRun" | "lastRunStatus"> &
+  Partial<Pick<ScheduledTask, "lastRunError">>;
+
+// The server keeps writing the terminal status into lastRunError so clients without
+// lastRun still learn why a run ended; a client showing the badge drops that repeat.
+export function scheduledTaskRunPresentation(task: RunFields) {
+  const error = task.lastRunError ?? null;
+  return {
+    ...runOutcome(task),
+    error: task.lastRun !== undefined && error === task.lastRun.status ? null : error,
+  };
+}
+
+function runOutcome(task: RunFields) {
   if (task.lastRun === undefined) {
     if (task.lastRunStatus === "succeeded")
       return { label: "Dispatched (legacy)", tone: "outline" } as const;
@@ -23,14 +35,4 @@ export function scheduledTaskRunPresentation(
   if (status === "cancelled") return { label: "Cancelled", tone: "outline" } as const;
   if (status === "rolled_back") return { label: "Rolled back", tone: "warning" } as const;
   return { label: "Outcome unavailable", tone: "outline" } as const;
-}
-
-// The server keeps writing the terminal status into lastRunError so clients without
-// lastRun still learn why a run failed; clients that show the status badge drop it.
-export function scheduledTaskRunErrorText(
-  task: Pick<ScheduledTask, "lastRun" | "lastRunError">,
-): string | null {
-  if (task.lastRunError === null) return null;
-  if (task.lastRun !== undefined && task.lastRunError === task.lastRun.status) return null;
-  return task.lastRunError;
 }
