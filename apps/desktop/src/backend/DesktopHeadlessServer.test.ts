@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
@@ -12,8 +13,17 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopHeadlessServer from "./DesktopHeadlessServer.ts";
 
 const VERSION = "1.4.2";
+const ENVIRONMENT_ID = "env-headless";
+const INSTANCE_ID = "instance-1";
 
-const runtimeJson = (input: { pid?: number; port?: number; origin?: string; startedAt?: string }) =>
+const runtimeJson = (input: {
+  pid?: number;
+  port?: number;
+  origin?: string;
+  startedAt?: string;
+  instanceId?: string | null;
+  devUrl?: string;
+}) =>
   JSON.stringify({
     version: 1,
     serverVersion: VERSION,
@@ -21,7 +31,43 @@ const runtimeJson = (input: { pid?: number; port?: number; origin?: string; star
     port: input.port ?? 3773,
     origin: input.origin ?? `http://127.0.0.1:${input.port ?? 3773}`,
     startedAt: input.startedAt ?? "2026-10-12T10:00:00.000Z",
+    ...(input.instanceId === null ? {} : { instanceId: input.instanceId ?? INSTANCE_ID }),
+    ...(input.devUrl === undefined ? {} : { devUrl: input.devUrl }),
   });
+
+interface ListenerAnswer {
+  readonly environmentId?: string;
+  readonly instanceId?: string;
+  readonly serverVersion?: string;
+}
+
+/**
+ * The process answering on the recorded port. `answer` is asked once per
+ * descriptor request, in order; null means it refuses to describe itself.
+ */
+const fakeListener = (answer: (request: number) => ListenerAnswer | null) => {
+  let requests = 0;
+  return HttpClient.make((request) => {
+    const value = answer(++requests);
+    if (value === null)
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(request, new Response(null, { status: 503 })),
+      );
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          environmentId: value.environmentId ?? ENVIRONMENT_ID,
+          label: "headless",
+          platform: { os: "darwin", arch: "arm64" },
+          serverVersion: value.serverVersion ?? VERSION,
+          instanceId: value.instanceId ?? INSTANCE_ID,
+          capabilities: {},
+        }),
+      ),
+    );
+  });
+};
 
 /** A runtime binary that records each invocation and prints a fresh session. */
 const fakeRuntime = () => {
@@ -60,6 +106,8 @@ const setup = (input?: {
   stateDir?: (home: string) => string;
   installed?: boolean;
   attachEnabled?: () => boolean;
+  platform?: NodeJS.Platform;
+  listener?: (request: number) => ListenerAnswer | null;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -67,6 +115,10 @@ const setup = (input?: {
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-headless-" });
     const goatHome = path.join(home, ".goat");
     yield* fs.makeDirectory(path.join(goatHome, "userdata"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(goatHome, "userdata", "environment-id"),
+      `${ENVIRONMENT_ID}\n`,
+    );
     const runtimeDir = path.join(goatHome, "runtime", "goat", "versions", VERSION);
     if (input?.installed !== false) {
       yield* fs.makeDirectory(runtimeDir, { recursive: true });
@@ -75,7 +127,7 @@ const setup = (input?: {
     const runtime = fakeRuntime();
     const environment = DesktopEnvironment.DesktopEnvironment.of({
       path,
-      platform: "darwin",
+      platform: input?.platform ?? "darwin",
       isDevelopment: false,
       homeDirectory: home,
       stateDir: input?.stateDir?.(home) ?? path.join(goatHome, "desktop", "userdata"),
@@ -85,6 +137,7 @@ const setup = (input?: {
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, runtime.spawner),
+      Effect.provideService(HttpClient.HttpClient, fakeListener(input?.listener ?? (() => ({})))),
     );
     const writeRuntime = (contents: string) =>
       fs.writeFileString(path.join(goatHome, "userdata", "server-runtime.json"), contents);
@@ -197,5 +250,97 @@ it.layer(NodeServices.layer)("DesktopHeadlessServer", (it) => {
         expect(Option.isNone(yield* service.bootstrap)).toBe(true);
         expect(calls).toHaveLength(1);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("attaches on Windows with the runtime's goat.exe", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { service, calls, goatHome, runtimeDir, writeRuntime } = yield* setup({
+        platform: "win32",
+      });
+      yield* writeRuntime(runtimeJson({}));
+      yield* service.refresh;
+
+      expect(Option.getOrThrow(yield* service.bootstrap).accessToken).toBe("token-1");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.command).toBe(path.join(runtimeDir, "goat.exe"));
+      expect(calls[0]!.args.slice(3, 5)).toEqual(["--base-dir", goatHome]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("never issues a session to a listener that is not the recorded server", () =>
+    Effect.gen(function* () {
+      const answers: Array<ListenerAnswer | null> = [
+        { environmentId: "another-home" },
+        { instanceId: "a-later-start" },
+        { serverVersion: "1.5.0" },
+        null,
+      ];
+      for (const answer of answers) {
+        const { service, calls, writeRuntime } = yield* setup({ listener: () => answer });
+        yield* writeRuntime(runtimeJson({}));
+        yield* service.refresh;
+        expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+        expect(calls).toHaveLength(0);
+      }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("ignores development servers and records without an instance id", () =>
+    Effect.gen(function* () {
+      const { service, calls, writeRuntime } = yield* setup();
+      yield* writeRuntime(runtimeJson({ devUrl: "http://127.0.0.1:5733/" }));
+      yield* service.refresh;
+      yield* writeRuntime(runtimeJson({ instanceId: null, startedAt: "2026-10-12T11:00:00.000Z" }));
+      yield* service.refresh;
+      expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+      expect(calls).toHaveLength(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("publishes nothing when the listener changes while the session is issued", () =>
+    Effect.gen(function* () {
+      const { service, calls, writeRuntime } = yield* setup({
+        listener: (request) => (request === 1 ? {} : { instanceId: "a-later-start" }),
+      });
+      yield* writeRuntime(runtimeJson({}));
+      yield* service.refresh;
+      expect(calls).toHaveLength(1);
+      expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("detaches once the listener stops answering as the recorded server", () =>
+    Effect.gen(function* () {
+      let replaced = false;
+      const { service, writeRuntime } = yield* setup({
+        listener: () => (replaced ? { instanceId: "a-later-start" } : {}),
+      });
+      yield* writeRuntime(runtimeJson({}));
+      yield* service.refresh;
+      expect(Option.isSome(yield* service.bootstrap)).toBe(true);
+
+      replaced = true;
+      yield* service.refresh;
+      expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("compares Windows state paths without case or separator style", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { sameDirectory } = DesktopHeadlessServer;
+      expect(
+        sameDirectory(
+          "C:\\Users\\Jun\\.goat\\userdata",
+          "c:/users/jun/.GOAT/userdata\\",
+          "win32",
+          path,
+        ),
+      ).toBe(true);
+      expect(
+        sameDirectory("/Users/jun/.goat/userdata", "/users/jun/.goat/userdata", "darwin", path),
+      ).toBe(false);
+    }),
   );
 });

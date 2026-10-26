@@ -1017,7 +1017,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "headless-server",
-    title: "Headless server on this Mac",
+    title: "Headless server on this computer",
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: [

@@ -1,10 +1,13 @@
-import type { DesktopEnvironmentBootstrap } from "@goat/contracts";
+import { ExecutionEnvironmentDescriptor, type DesktopEnvironmentBootstrap } from "@goat/contracts";
+import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { HttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -25,10 +28,13 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 // Its session is issued by the headless server's own runtime binary, never by
 // this app's bundled server: the CLI migrates the database it opens, and a
 // newer app must not migrate a database an older live server is using.
+// So a session is issued only to the listener that reports the runtime
+// record's own server start, environment, and version.
 
 export const HEADLESS_LOCAL_ENVIRONMENT_ID = "headless";
 const LABEL = "Headless server";
 const POLL_INTERVAL = "5 seconds";
+const DESCRIPTOR_TIMEOUT = "2 seconds";
 const SESSION_TTL = "30d";
 const SESSION_RENEW_MARGIN_MS = 24 * 60 * 60 * 1000;
 const FAILED_ISSUE_RETRY_MS = 5 * 60 * 1000;
@@ -41,6 +47,8 @@ const RuntimeRecord = Schema.Struct({
   port: Schema.Number,
   origin: Schema.String,
   startedAt: Schema.String,
+  instanceId: Schema.optionalKey(Schema.String),
+  devUrl: Schema.optionalKey(Schema.String),
   serverVersion: Schema.optionalKey(Schema.String),
 });
 const decodeRuntimeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RuntimeRecord));
@@ -51,6 +59,7 @@ const decodeIssuedSession = Schema.decodeUnknownOption(Schema.fromJsonString(Iss
 export interface HeadlessServerRuntime {
   readonly pid: number;
   readonly startedAt: string;
+  readonly instanceId: string;
   readonly serverVersion: string;
   readonly httpBaseUrl: string;
   readonly wsBaseUrl: string;
@@ -58,8 +67,9 @@ export interface HeadlessServerRuntime {
 
 /**
  * The loopback server a `server-runtime.json` describes, or none when it is not
- * one this app can attach: a non-loopback origin, or no exact version naming
- * the runtime binary that can issue its sessions.
+ * one this app can attach: a non-loopback origin, a development server, no
+ * instance id to tie the listener to this start, or no exact version naming the
+ * runtime binary that can issue its sessions.
  */
 function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerRuntime> {
   return Option.flatMap(decodeRuntimeRecord(text), (record) => {
@@ -69,6 +79,9 @@ function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerR
       !Number.isSafeInteger(record.port) ||
       record.port < 1 ||
       record.port > 65535 ||
+      record.devUrl !== undefined ||
+      record.instanceId === undefined ||
+      record.instanceId.trim() === "" ||
       record.serverVersion === undefined ||
       !EXACT_VERSION.test(record.serverVersion)
     )
@@ -84,6 +97,7 @@ function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerR
     return Option.some({
       pid: record.pid,
       startedAt: record.startedAt,
+      instanceId: record.instanceId,
       serverVersion: record.serverVersion,
       httpBaseUrl: `http://127.0.0.1:${record.port}/`,
       wsBaseUrl: `ws://127.0.0.1:${record.port}/`,
@@ -99,6 +113,23 @@ const processExists = (pid: number) => {
     return cause instanceof Error && "code" in cause && cause.code === "EPERM";
   }
 };
+
+/** Whether two paths name one directory. Windows paths ignore case and separator style. */
+export function sameDirectory(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform,
+  path: Path.Path,
+): boolean {
+  if (platform !== "win32") return path.resolve(a) === path.resolve(b);
+  const key = (value: string) =>
+    path
+      .resolve(value)
+      .replace(/[\\/]+/gu, "\\")
+      .replace(/\\$/u, "")
+      .toLowerCase();
+  return key(a) === key(b);
+}
 
 interface Attached {
   readonly identity: string;
@@ -120,7 +151,7 @@ export class DesktopHeadlessServer extends Context.Service<
 
 /**
  * Builds the service. `attachEnabled` is read on every poll: a person can turn the headless
- * server off on this Mac (Settings > Connections), which detaches it and stops issuing sessions
+ * server off on this computer (Settings > Connections), which detaches it and stops issuing sessions
  * until they turn it back on. It never stops the server, which SSH clients may still use.
  */
 export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (options: {
@@ -129,19 +160,50 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const http = yield* HttpClient.HttpClient;
   const path = environment.path;
   const goatHome = path.join(environment.homeDirectory, ".goat");
   const runtimeFile = path.join(goatHome, "userdata", "server-runtime.json");
+  const environmentIdFile = path.join(goatHome, "userdata", "environment-id");
+  const runtimeBinary = environment.platform === "win32" ? "goat.exe" : "goat";
+  const realPath = (value: string) => fs.realPath(value).pipe(Effect.orElseSucceed(() => value));
   // Development builds would write a session into the developer's real
-  // ~/.goat, and SSH runtimes are never installed on Windows. When this app
-  // itself runs on ~/.goat, the headless state is already its own.
+  // ~/.goat. When this app itself runs on ~/.goat, the headless state is
+  // already its own.
   const enabled =
     !environment.isDevelopment &&
-    environment.platform !== "win32" &&
-    path.resolve(environment.stateDir) !== path.resolve(goatHome, "userdata");
+    !sameDirectory(
+      yield* realPath(environment.stateDir),
+      yield* realPath(path.join(goatHome, "userdata")),
+      environment.platform,
+      path,
+    );
 
   const attached = yield* Ref.make(Option.none<Attached>());
   const failed = yield* Ref.make(Option.none<{ identity: string; atMs: number }>());
+
+  // The environment id survives restarts and is shared by every server on this
+  // base directory, so the instance id pins the start the runtime record names.
+  const verifyListener = Effect.fn("DesktopHeadlessServer.verifyListener")(function* (
+    runtime: HeadlessServerRuntime,
+  ) {
+    const environmentId = (yield* fs.readFileString(environmentIdFile)).trim();
+    const response = yield* http
+      .get(new URL(GOAT_ENVIRONMENT_PATH, runtime.httpBaseUrl).href)
+      .pipe(Effect.timeout(DESCRIPTOR_TIMEOUT));
+    if (response.status !== 200)
+      return yield* Effect.fail(`descriptor answered ${response.status}`);
+    const descriptor = yield* response.json.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(ExecutionEnvironmentDescriptor)),
+      Effect.timeout(DESCRIPTOR_TIMEOUT),
+    );
+    if (
+      descriptor.environmentId !== environmentId ||
+      descriptor.instanceId !== runtime.instanceId ||
+      descriptor.serverVersion !== runtime.serverVersion
+    )
+      return yield* Effect.fail("the listener is not the server its runtime record names");
+  });
 
   const issueSession = (runtime: HeadlessServerRuntime) =>
     Effect.scoped(
@@ -158,7 +220,7 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
           return yield* Effect.fail("runtime binary is not installed");
         const handle = yield* spawner.spawn(
           ChildProcess.make(
-            path.join(runtimeDir, "goat"),
+            path.join(runtimeDir, runtimeBinary),
             [
               "auth",
               "session",
@@ -206,20 +268,32 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
       return;
     }
     // A restarted server may hold a different database; never reuse a token across one.
-    const identity = `${runtime.value.pid}|${runtime.value.startedAt}|${runtime.value.httpBaseUrl}`;
+    const identity = `${runtime.value.instanceId}|${runtime.value.pid}|${runtime.value.startedAt}|${runtime.value.httpBaseUrl}`;
     const now = yield* Clock.currentTimeMillis;
     const current = yield* Ref.get(attached);
-    if (
-      Option.isSome(current) &&
-      current.value.identity === identity &&
-      current.value.expiresAtMs - now > SESSION_RENEW_MARGIN_MS
-    )
-      return;
     const lastFailure = yield* Ref.get(failed);
     if (
       Option.isSome(lastFailure) &&
       lastFailure.value.identity === identity &&
       now - lastFailure.value.atMs < FAILED_ISSUE_RETRY_MS
+    )
+      return;
+    const reject = Effect.gen(function* () {
+      yield* Ref.set(failed, Option.some({ identity, atMs: now }));
+      yield* Ref.set(attached, Option.none());
+    });
+    const verified = (stage: string) =>
+      verifyListener(runtime.value).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Not attaching the headless GOAT server.", { stage, cause }),
+        ),
+        Effect.isSuccess,
+      );
+    if (!(yield* verified("before session"))) return yield* reject;
+    if (
+      Option.isSome(current) &&
+      current.value.identity === identity &&
+      current.value.expiresAtMs - now > SESSION_RENEW_MARGIN_MS
     )
       return;
     const issued = yield* issueSession(runtime.value).pipe(
@@ -237,6 +311,7 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
         yield* Ref.set(attached, Option.none());
       return;
     }
+    if (!(yield* verified("before publishing"))) return yield* reject;
     yield* Ref.set(failed, Option.none());
     yield* Ref.set(attached, Option.some({ identity, runtime: runtime.value, ...issued.value }));
   }).pipe(serialized.withPermits(1));
