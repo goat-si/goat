@@ -3,7 +3,7 @@ import type { KeepRule, TextRule } from "./engine.ts";
 /**
  * GOAT, not T3 Tools, owns its package metadata, security reporting and contribution guide. Upstream's
  * spellings of those lines rename to GOAT's here, so a chase that takes upstream's side of a conflict
- * and reruns `--apply` still lands on GOAT's values. Decision: devlog/_chase/10.015_t3_chase_owner_and_security.md.
+ * and reruns `--apply` still lands on GOAT's values. Decision: devlog/_chase/_fin/10/10.015_t3_chase_owner_and_security.md.
  */
 const at =
   (path: string) =>
