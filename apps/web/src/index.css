@@ -2025,7 +2025,7 @@ code {
 }
 
 /* Prose paragraphs breathe more than lists and code; answers are read all day. */
-.chat-markdown p {
+.chat-markdown > p {
   margin: 1rem 0;
 }
 
