@@ -103,7 +103,7 @@ export function addPreviewTabsToDraftState<S extends DraftState>(
   };
 }
 
-export function setPreviewTabsInDraftState<S extends DraftState>(
+function setPreviewTabsInDraftState<S extends DraftState>(
   state: S,
   threadKey: string,
   records: ReadonlyArray<PreviewTabContextRecord>,

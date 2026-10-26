@@ -126,7 +126,7 @@ const harnesses: ReadonlyArray<Harness> = [
     delivery: "harness may defer",
     composedIn: "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
     mustContain: [
-      'harness: "Claude Code"',
+      "ClaudeRuntimeSkills.runtimeInstructions(input)",
       "MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER",
       "GOAT_ORCHESTRATION_INSTRUCTIONS + GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS",
     ],
@@ -191,7 +191,10 @@ const harnesses: ReadonlyArray<Harness> = [
       "prepended to the first prompt and after mode change or compaction; runtime block on every prompt",
     delivery: "listed",
     composedIn: "packages/provider-acp/src/server/adapter.ts",
-    mustContain: ["goatAcpPromptWithInstructions({", "text: buildRuntimeInstructions({"],
+    mustContain: [
+      "goatAcpPromptWithInstructions({",
+      "text: buildAcpRuntimeInstructions(mcpContext, {",
+    ],
     firstTurn: (b) =>
       b.orchestration.goatAcpPromptWithInstructions({
         prompt: PROMPT,

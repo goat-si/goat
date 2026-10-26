@@ -139,7 +139,7 @@ export const screenActionGate = (
  * Shows the agent cursor to the tab's viewers. A visible cursor needs an agent in control;
  * hiding or yielding always goes through so a stale cursor never lingers.
  */
-export const pushCursorState = (
+const pushCursorState = (
   tab: ScreenTab,
   cursor: AgentCursorSnapshot,
   pushDesktop: (cursor: AgentCursorSnapshot) => void,

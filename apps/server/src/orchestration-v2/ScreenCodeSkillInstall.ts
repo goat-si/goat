@@ -36,7 +36,7 @@ export function installScreenCodeSkillAt(stateDir: string): string | undefined {
   }
 }
 
-export const installScreenCodeSkill = Effect.gen(function* () {
+const installScreenCodeSkill = Effect.gen(function* () {
   const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
   if (Option.isNone(config)) return undefined;
   const path = yield* Effect.sync(() => installScreenCodeSkillAt(config.value.stateDir));

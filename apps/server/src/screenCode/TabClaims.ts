@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 export interface TabIdentity {
@@ -247,6 +246,3 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
     }),
   });
 });
-
-export const layer = (close: (tab: TabClaim, afterStop: boolean) => Effect.Effect<void>) =>
-  Layer.effect(TabClaims, makeTabClaims(close));

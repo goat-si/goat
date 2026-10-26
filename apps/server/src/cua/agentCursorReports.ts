@@ -30,7 +30,7 @@ const cursorOf = (command: ComputerUseOverlayCommand): ComputerUseAgentCursor | 
     : null;
 
 /** Retains the last observed point for a positionless in-flight phase on the same owner. */
-export const scopedCursorReport = (
+const scopedCursorReport = (
   event: AgentCursorEvent,
   previous?: AgentCursorReport,
 ): AgentCursorReport => {

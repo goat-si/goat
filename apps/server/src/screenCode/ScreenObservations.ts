@@ -25,7 +25,7 @@ export interface ScreenObservationDraft {
   }[];
 }
 
-export class ObservationIndex {
+class ObservationIndex {
   private readonly byTarget = new Map<
     string,
     {
