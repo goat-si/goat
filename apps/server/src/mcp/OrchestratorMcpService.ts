@@ -157,6 +157,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
 // coordinator's exports can still be undefined while this module evaluates.
 const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
+  // eslint-disable-next-line goat/no-inline-schema-compile -- The remote schema resolves after this import cycle initializes.
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
@@ -1065,6 +1066,7 @@ function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
     runId: run.id,
     ordinal: run.ordinal,
     status: run.status,
+    ...(run.terminationCause === undefined ? {} : { terminationCause: run.terminationCause }),
     providerInstanceId: run.modelSelection.instanceId,
     model: run.modelSelection.model,
     requestedAt: DateTime.formatIso(run.requestedAt),
