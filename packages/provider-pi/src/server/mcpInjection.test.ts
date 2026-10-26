@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import {
+  GOAT_CUA_MCP_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
@@ -22,6 +23,29 @@ const mcpSession = {
 };
 
 describe("pi T3 MCP injection", () => {
+  it("hands the session's Cua Driver to GOAT's extension only, never from the parent", () => {
+    const cuaDriver = {
+      command: "/resources/cua-driver",
+      args: ["mcp"],
+      environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+    };
+    const inherited = { [GOAT_CUA_MCP_ENV]: '{"command":"/stale/cua-driver","args":[]}' };
+    const launch = (input: { readonly attached: boolean; readonly extension: boolean }) =>
+      buildPiRpcLaunch({
+        launchArgs: [],
+        environment: inherited,
+        mcpSession: input.attached ? { ...mcpSession, cuaDriver } : mcpSession,
+        extensionPath: input.extension ? "/tmp/cache/pi-goat-mcp-extension.ts" : undefined,
+      }).env[GOAT_CUA_MCP_ENV];
+    assert.deepEqual(JSON.parse(launch({ attached: true, extension: true }) ?? "null"), {
+      command: "/resources/cua-driver",
+      args: ["mcp"],
+      env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+    });
+    assert.isUndefined(launch({ attached: false, extension: true }));
+    assert.isUndefined(launch({ attached: true, extension: false }));
+  });
+
   it("always adds the permission bridge and configures MCP when available", () => {
     const resolvedArgs = resolvePiLaunchArgs(
       "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --tools='' --name=-review --extension-flag=kept",
@@ -55,6 +79,8 @@ describe("pi T3 MCP injection", () => {
       "/tmp/cache/pi-goat-mcp-extension.ts",
     ]);
     assert.notInclude(launch.args, "--no-extensions");
+    assert.equal(launch.env.GOAT_ACP_MCP_ENDPOINT, mcpSession.endpoint);
+    assert.equal(launch.env.GOAT_ACP_MCP_AUTHORIZATION, mcpSession.authorizationHeader);
     assert.equal(launch.env[GOAT_MCP_URL_ENV], "http://127.0.0.1:43123/mcp");
     assert.equal(launch.env[GOAT_MCP_BEARER_ENV], "secret-pi-token");
     assert.equal(launch.env[GOAT_PI_RUNTIME_MODE_ENV], "approval-required");

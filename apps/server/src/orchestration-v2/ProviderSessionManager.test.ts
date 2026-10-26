@@ -8,20 +8,18 @@ import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import { channelDispatcherIdleServices } from "../channels/testkit/channelDispatcherIdleServices.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
-import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
 import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as ProjectStore from "./ProjectStore.ts";
-import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as Path from "effect/Path";
@@ -32,6 +30,7 @@ import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@goat/shared/AgentScope";
 import {
   RunId,
+  OrchestratorMcpFailure,
   type OrchestrationV2Run,
   CommandId,
   MessageId,
@@ -75,6 +74,7 @@ import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -98,6 +98,9 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
+import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -543,6 +546,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver | ComputerUseTestkit.Leases>;
   readonly projectionReads?: { getThread: number; getThreadShell: number };
   readonly beforeGetThread?: Ref.Ref<Effect.Effect<void>>;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -660,6 +664,7 @@ function layerTest(input: {
           layerConfiguredStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.cuaDriverLayer === undefined ? [] : [input.cuaDriverLayer]),
         ),
       ),
     ),
@@ -740,6 +745,7 @@ function runBrowserAccessScenario(input: {
   readonly deviceOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
+  readonly turnCapabilities?: ReadonlyArray<MemoryContracts.TurnCapability>;
 }) {
   return Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
@@ -771,8 +777,9 @@ function runBrowserAccessScenario(input: {
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now, projectId })],
         });
       }
+      const { turnCapabilities = [] } = input;
       yield* manager
-        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy, turnCapabilities })
         .pipe(Effect.ignore);
     }).pipe(
       Effect.provide(
@@ -1667,6 +1674,63 @@ it.effect(
     }),
 );
 
+it.effect.each([
+  ["a limit", Effect.succeed(2), 2],
+  [
+    "an unreadable limit",
+    Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "down" })),
+    0,
+  ],
+] as const)(
+  "ProviderSessionManagerV2 hands the adapter %s from the goatclaw profile",
+  ([, lookup, expected]) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const asked = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+      const unused = () => Effect.die("unused");
+      const profiles = PermissionProfiles.PermissionProfiles.of({
+        resolve: unused,
+        check: unused,
+        require: unused,
+        assertTarget: unused,
+        recheck: unused,
+        requireCloudApproval: unused,
+        claim: unused,
+        completeRemote: unused,
+        complete: unused,
+        release: unused,
+        bind: unused,
+        nativeSubagentLimit: (threadId) =>
+          Ref.update(asked, (threads) => [...threads, threadId]).pipe(Effect.andThen(lookup)),
+      });
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-subagents");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(mcpConfigs))[0]?.nativeSubagentLimit, expected);
+        assert.deepEqual(yield* Ref.get(asked), [threadId]);
+        yield* manager.close(providerSessionId);
+      });
+      yield* effect.pipe(
+        Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })),
+        Effect.provideService(PermissionProfiles.PermissionProfiles, profiles),
+      );
+    }),
+);
+
 it.effect(
   "ProviderSessionManagerV2 withholds the preview capability when agent browser access is off",
   () =>
@@ -1725,26 +1789,22 @@ it.effect(
     }),
 );
 
-it.effect("ProviderSessionManagerV2 honors a project browser-access opt-out", () =>
+it.effect.each([
+  { name: "honors a project browser-access opt-out", expected: false },
+  { name: "withholds browser tools without the project", projectExists: false, expected: false },
+  {
+    name: "opens preview tools for an @browser turn",
+    turnCapabilities: ["browser"],
+    expected: true,
+  },
+] as const)("ProviderSessionManagerV2 $name", ({ name: _, expected, ...scenario }) =>
   Effect.gen(function* () {
     const captured = yield* runBrowserAccessScenario({
       enableAgentBrowserAccess: true,
       projectOverride: false,
+      ...scenario,
     });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
-  }),
-);
-
-it.effect("ProviderSessionManagerV2 fails browser access closed for a missing project", () =>
-  Effect.gen(function* () {
-    const captured = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-      projectExists: false,
-    });
-    assert.isDefined(captured);
-    assert.equal(captured?.browserToolsAvailable, false);
+    assert.equal(captured?.browserToolsAvailable, expected);
   }),
 );
 
@@ -5145,6 +5205,7 @@ it.effect.each(turnStartMemoryCases)(
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
+              Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(ChannelLedger.ChannelLedger)({
@@ -5181,11 +5242,7 @@ it.effect.each(turnStartMemoryCases)(
                         })
                         .pipe(Effect.as({ threadId } as never)),
                   }),
-                  Layer.mock(ProjectStore.ProjectStoreV2)({}),
-                  Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
-                  Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
-                  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
-                  Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
+                  channelDispatcherIdleServices,
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
                   ServerConfig.layerTest(process.cwd(), { prefix: "memory-channel-" }).pipe(
@@ -5874,5 +5931,76 @@ it.effect(
       });
 
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 decides computer use again on every turn of a live session",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const enabled = yield* Ref.make(false);
+      const acquires = yield* Ref.make(0);
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-cua");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const turn = (policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) =>
+          manager
+            .open({ threadId, providerSessionId, modelSelection, runtimePolicy: policy })
+            .pipe(Effect.andThen(mcpSessions.read(threadId)));
+
+        // Opened while computer use is off.
+        assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy. The
+        // thread is in full access, so that turn's control covers every app without a grant (D16).
+        yield* Ref.set(enabled, true);
+        const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
+        assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
+        assert.isTrue(enabledDriver?.args.includes("control:every-app"));
+        assert.equal(yield* Ref.get(acquires), 1);
+        // Plan and read-only turns never get it, and never start the driver.
+        assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
+        assert.isUndefined(
+          (yield* turn({ ...runtimePolicy, sandboxPolicy: "read-only" }))?.cuaDriver,
+        );
+        assert.equal(yield* Ref.get(acquires), 1);
+        // Settings switched the skill off, and a turn that asks for @computer still loads it.
+        yield* askComputer(manager, { threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.isTrue(carriesSkill(yield* mcpSessions.read(threadId)));
+        // Disabled again: the next turn drops it.
+        yield* Ref.set(enabled, false);
+        assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
+
+        yield* manager.close(providerSessionId);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 1_000,
+            cuaDriverLayer: ComputerUseTestkit.layerInteractive({
+              enabled: Ref.get(enabled),
+              acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
+            }),
+          }),
+        ),
+      );
     }),
 );

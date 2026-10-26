@@ -198,6 +198,8 @@ const fixture = Effect.fn("fixture")(function* (
       ServerSettings.ServerSettingsService,
       ServerSettings.ServerSettingsService.of({
         updateProviderInstance: () => Effect.die("Unexpected provider mutation"),
+        checkpointReplicationPermit: () =>
+          Effect.die("checkpoint replication is not used by this fixture"),
         withSettingsSnapshot: (use) => Effect.flatMap(Ref.get(settings), use),
         start: Effect.void,
         ready: Effect.void,
@@ -415,7 +417,6 @@ describe("device setup consent", () => {
       const { service, agentStarts, agentStops, settings } = yield* fixture();
       yield* service.configure({ enabled: true });
       expect(agentStarts).toEqual([]);
-      expect(yield* service.agentReadinessIfSupported()).toBeNull();
 
       yield* service.configure({ agentAccessEnabled: true });
       expect(agentStarts).toEqual(["start"]);

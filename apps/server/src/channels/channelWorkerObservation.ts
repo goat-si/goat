@@ -13,6 +13,7 @@ import type {
   ChannelTaskNeedsYouKind,
   ChannelTaskPullRequest,
   ChannelWorkerObservation,
+  ThreadResult,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
@@ -25,7 +26,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 /** Which person-facing request a native runtime request is; tool calls the client answers are none. */
-export const needsYouKindOf = (
+const needsYouKindOf = (
   kind: OrchestrationV2RuntimeRequest["kind"],
 ): ChannelTaskNeedsYouKind | undefined => {
   switch (kind) {
@@ -190,11 +191,38 @@ export const observeWorker = (input: {
   readonly pullRequests: ReadonlyArray<ChannelTaskPullRequest>;
   readonly needsYou: ReadonlyArray<ChannelTaskNeedsYou>;
   readonly usageLimitResetAt?: string | undefined;
+  readonly result?: ThreadResult | null | undefined;
 }): ChannelWorkerObservation => ({
   pullRequests: [...input.pullRequests],
   needsYou: [...input.needsYou],
   ...(input.usageLimitResetAt === undefined ? {} : { usageLimitResetAt: input.usageLimitResetAt }),
+  ...(input.result == null ||
+  (input.result.tests === undefined &&
+    input.result.observedCheck === undefined &&
+    input.result.runStatus !== "completed")
+    ? {}
+    : {
+        result: {
+          runId: input.result.runId,
+          ...(input.result.observedCheckPending === undefined
+            ? {}
+            : { observedCheckPending: input.result.observedCheckPending }),
+          ...(input.result.tests === undefined ? {} : { tests: input.result.tests }),
+          ...(input.result.observedCheck === undefined
+            ? {}
+            : { observedCheck: input.result.observedCheck }),
+        },
+      }),
 });
+
+/** Run states that have ended; anything else may still start or run. */
+export const ENDED_RUN_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "rolled_back",
+]);
 
 /** Whether a failed thread read means the thread does not exist, rather than a read that failed. */
 export const isThreadMissing = (error: unknown): boolean => {

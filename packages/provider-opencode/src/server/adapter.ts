@@ -82,7 +82,12 @@ import {
   makeSubagentChildThread,
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
-import { openCodeToolTurnItem } from "./toolItems.ts";
+import {
+  openCodeToolOutputWithImages,
+  openCodeToolStateResult,
+  openCodeToolTurnItem,
+} from "./toolItems.ts";
+import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
@@ -765,12 +770,6 @@ function toolInput(part: ToolPart): Record<string, unknown> {
   return part.state.input;
 }
 
-function toolOutput(part: ToolPart): string | undefined {
-  if (part.state.status === "completed") return part.state.output;
-  if (part.state.status === "error") return part.state.error;
-  return undefined;
-}
-
 function toolStartedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc {
   return dateTimeFromEpoch(
     part.state.status === "pending" ? undefined : part.state.time.start,
@@ -965,15 +964,45 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "goat",
-              config: {
-                type: "remote",
-                url: mcpSession.endpoint,
-                headers: { Authorization: mcpSession.authorizationHeader },
-                oauth: false,
-              },
+              config: goatRemoteMcpConfig(mcpSession.endpoint, mcpSession.authorizationHeader),
             }),
           );
         }
+        // Computer use is an addition: a server that cannot add it still runs
+        // the session, and the prompt only advertises it once it is attached.
+        // Each turn reconciles it, so enabling or disabling reaches this
+        // session on its next turn.
+        let installedCuaKey = "";
+        const syncCuaDriver = Effect.fn("OpenCodeAdapterV2.syncCuaDriver")(function* (
+          threadId: ThreadId,
+        ) {
+          if (!hasGoatMcp) return false;
+          const cuaDriver = (yield* mcpSessions.read(threadId))?.cuaDriver;
+          const wanted = McpProviderSession.cuaDriverKey(cuaDriver);
+          if (wanted === installedCuaKey) return wanted !== "";
+          if (cuaDriver === undefined) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.disconnect", () =>
+              client.mcp.disconnect({ name: McpProviderSession.CUA_MCP_SERVER_NAME }),
+            ).pipe(Effect.ignore({ log: true }));
+            installedCuaKey = "";
+            return false;
+          }
+          const added = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+            client.mcp.add({
+              name: McpProviderSession.CUA_MCP_SERVER_NAME,
+              config: McpProviderSession.cuaOpenCodeMcpConfig(cuaDriver),
+            }),
+          ).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not add Cua Driver to OpenCode.", cause).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+          installedCuaKey = added ? wanted : "";
+          return added;
+        });
 
         const now = yield* DateTime.now;
         let sessionEntity: OrchestrationV2ProviderSession = {
@@ -1430,7 +1459,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: childProviderThread,
             });
           }
-          const output = toolOutput(part);
+          const { output } = openCodeToolStateResult(part.state);
           if (part.state.status === "completed" && output !== undefined) context.result = output;
           const status = toolStatus(part);
           const completedAt = toolCompletedAt(part, now);
@@ -1576,7 +1605,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             | "updatedAt"
           >;
           const input = toolInput(part);
-          const output = toolOutput(part);
+          const { output, fileUrls } = openCodeToolStateResult(part.state);
           const isNativeTool = part.tool === "code_search" || part.tool === "apply_patch";
           if (!isNativeTool && part.tool.includes("_") && turn.mcpServerNames === undefined) {
             const serverNames = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
@@ -1593,6 +1622,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               !isNativeTool && part.tool.startsWith(`${name.replace(/[^a-zA-Z0-9_-]/g, "_")}_`),
           );
           const serverName = matchingServers?.length === 1 ? matchingServers[0] : undefined;
+          const mcpOutput = openCodeToolOutputWithImages(output, fileUrls);
           const presentation =
             serverName === undefined
               ? {}
@@ -1608,12 +1638,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...presentation,
                 toolName: part.tool,
                 input,
-                ...(output === undefined ? {} : { output }),
+                ...(mcpOutput === undefined ? {} : { output: mcpOutput }),
               }
             : openCodeToolTurnItem(base, {
                 name: part.tool,
                 input,
                 output,
+                fileUrls,
                 completedMetadata:
                   part.state.status === "completed" ? part.state.metadata : undefined,
               });
@@ -1668,17 +1699,25 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             driver: OPENCODE_PROVIDER,
             nativeItemId,
           });
-          const steps: Array<OrchestrationV2PlanStep> = todos.map((todo, index) => ({
-            id: `${nativeItemId}:${index + 1}`,
-            text: todo.content.trim() || `Todo ${index + 1}`,
-            status:
-              todo.status === "completed"
-                ? "completed"
-                : todo.status === "in_progress"
-                  ? "running"
-                  : "pending",
-          }));
-          const completed = steps.length > 0 && steps.every((step) => step.status === "completed");
+          // A cancelled todo is not outstanding work, and plan steps have no
+          // cancelled status, so drop it rather than show it as pending.
+          const steps: Array<OrchestrationV2PlanStep> = todos.flatMap((todo, index) =>
+            todo.status === "cancelled"
+              ? []
+              : [
+                  {
+                    id: `${nativeItemId}:${index + 1}`,
+                    text: todo.content.trim() || `Todo ${index + 1}`,
+                    status:
+                      todo.status === "completed"
+                        ? "completed"
+                        : todo.status === "in_progress"
+                          ? "running"
+                          : "pending",
+                  },
+                ],
+          );
+          const completed = todos.length > 0 && steps.every((step) => step.status === "completed");
           yield* emitProviderEvent({
             type: "node.updated",
             driver: OPENCODE_PROVIDER,
@@ -2942,12 +2981,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.mcp.add(
                   {
                     name: "goat",
-                    config: {
-                      type: "remote",
-                      url: currentMcp.endpoint,
-                      headers: { Authorization: currentMcp.authorizationHeader },
-                      oauth: false,
-                    },
+                    config: goatRemoteMcpConfig(
+                      currentMcp.endpoint,
+                      currentMcp.authorizationHeader,
+                    ),
                   },
                   { signal },
                 ),
@@ -3309,6 +3346,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 buildRuntimeInstructions({
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
+                  computerUse:
+                    (yield* syncCuaDriver(turnInput.threadId)) &&
+                    McpProviderSession.carriesComputerUseSkill(
+                      yield* mcpSessions.read(turnInput.threadId),
+                    ),
                 }),
               ]
                 .filter(Boolean)

@@ -44,6 +44,7 @@ import {
 import { ensureLocalApi } from "~/localApi";
 import { readBrowserClientSettings } from "~/clientPersistenceStorage";
 import { resolveSidebarViewIsProjects } from "~/components/Sidebar.logic";
+import { foldLegacyFirstRunPrompt } from "~/components/desktop/firstRunPrompts.logic";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -68,7 +69,8 @@ import { environmentIdsKey } from "~/state/environmentAtomList";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
-const SIDEBAR_VIEW_STORAGE_KEY = "goat:sidebar-view";
+// Versioned with `projectsSidebarEnabled`: the old key mirrors the retired Projects default.
+const SIDEBAR_VIEW_STORAGE_KEY = "goat:sidebar-view:v2";
 
 const sidebarViewMirrorListeners = new Set<() => void>();
 let sidebarViewMirrorCache: boolean | null | undefined;
@@ -84,7 +86,7 @@ function readSynchronousSidebarView(): boolean | null {
   }
   try {
     const settings = readBrowserClientSettings();
-    if (settings) return settings.legacySidebarEnabled;
+    if (settings) return settings.projectsSidebarEnabled;
   } catch {
     // Corrupt browser settings are ignored; hydration still loads the desktop file.
   }
@@ -158,7 +160,7 @@ function getClientSettingsSnapshot(): ClientSettings {
 
 function replaceClientSettingsSnapshot(settings: ClientSettings): void {
   clientSettingsSnapshot = settings;
-  writeSynchronousSidebarView(settings.legacySidebarEnabled);
+  writeSynchronousSidebarView(settings.projectsSidebarEnabled);
   emitClientSettingsChange();
 }
 
@@ -215,9 +217,11 @@ async function hydrateClientSettings(): Promise<void> {
         return;
       }
       if (persistedSettings) {
-        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
+        replaceClientSettingsSnapshot(
+          foldLegacyFirstRunPrompt({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings }),
+        );
       }
-      writeSynchronousSidebarView(getClientSettingsSnapshot().legacySidebarEnabled);
+      writeSynchronousSidebarView(getClientSettingsSnapshot().projectsSidebarEnabled);
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
       if (hydrationGeneration === clientSettingsHydrationGeneration) {
@@ -482,7 +486,7 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
 
 export function useLegacySidebarEnabled(): boolean | null {
   const status = useClientSettingsHydrationStatus();
-  const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
+  const projectsSidebarEnabled = useClientSettings((settings) => settings.projectsSidebarEnabled);
   const synchronousValue = useSyncExternalStore(
     subscribeSidebarViewMirror,
     getSidebarViewMirrorSnapshot,
@@ -490,7 +494,7 @@ export function useLegacySidebarEnabled(): boolean | null {
   );
   return resolveSidebarViewIsProjects({
     status,
-    value: legacySidebarEnabled,
+    value: projectsSidebarEnabled,
     synchronousValue,
   });
 }
@@ -824,6 +828,22 @@ function reportClientSettingsFailure(): void {
 
 export function updateClientSettings(patch: ClientSettingsPatch): Promise<boolean> {
   return persistClientSettingsPatch(patch).then(
+    () => true,
+    () => {
+      reportClientSettingsFailure();
+      return false;
+    },
+  );
+}
+
+/**
+ * For edits derived from the saved value: the update runs against the hydrated snapshot, so
+ * a change made before settings load cannot replace what was saved with defaults.
+ */
+export function updateClientSettingsWith(
+  update: (current: ClientSettings) => ClientSettings,
+): Promise<boolean> {
+  return persistClientSettingsUpdate(update).then(
     () => true,
     () => {
       reportClientSettingsFailure();

@@ -42,6 +42,9 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import { openPiCuaGate, writePiCuaGate } from "./cuaGate.ts";
+import * as Scope from "effect/Scope";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -464,12 +467,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      const cuaGate =
+        mcpSession?.cuaDriver === undefined
+          ? undefined
+          : {
+              path: yield* provideCacheFs(
+                openPiCuaGate(fileSystem).pipe(Effect.provideService(Scope.Scope, scope)),
+              ),
+              key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
+            };
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
+        cuaGatePath: cuaGate?.path,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -478,6 +491,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         threadId: input.threadId,
         env: launch.env,
       });
+      // Finalizers run in reverse order: reap detached work after terminating Pi.
+      const scopeUnit = scopedLaunch.unit;
+      const stopScope =
+        scopeUnit === undefined ? Effect.void : yield* Effect.cached(agentScope.stop(scopeUnit));
+      yield* Effect.addFinalizer(() => stopScope);
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: scopedLaunch.command,
         args: scopedLaunch.args,
@@ -494,6 +512,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }),
         ),
       );
+      // Detached children can keep stdout open after Pi exits.
+      if (scopeUnit !== undefined) {
+        yield* connection.exited.pipe(
+          Effect.matchEffect({ onFailure: () => stopScope, onSuccess: () => stopScope }),
+          Effect.forkIn(scope),
+        );
+      }
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
         id: input.providerSessionId,
@@ -2434,6 +2459,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
+            if (cuaGate !== undefined) {
+              const attached = yield* mcpSessions.read(turnInput.threadId);
+              yield* writePiCuaGate(fileSystem, cuaGate, attached).pipe(
+                Effect.mapError(() =>
+                  protocolError("Could not update Pi's computer use access for this turn"),
+                ),
+              );
+            }
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({
@@ -2449,7 +2482,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             // Resolved before the turn is installed: a failure here (an
             // unreadable attachment) must not leave `activeTurn` set, which
             // would reject every later turn as already active.
-            // Orchestration instructions reach pi through the T3 MCP
+            // Orchestration instructions reach pi through the GOAT MCP
             // extension's before_agent_start system-prompt hook, never by
             // wrapping the user text: a wrapped first message would no
             // longer start with "/" and slash commands would stop expanding.
@@ -3230,9 +3263,10 @@ function piForkEntry<E>(
 }
 
 /**
- * Pi shares the server clock. An adopted wake can precede its T3 turn, so search from the target
- * turn's end through the boundary turn's end. At thread start, use the earlier of thread creation
- * and turn start to include adopted wakes while preserving inherited session history.
+ * Pi shares the server clock. An adopted wake can precede its GOAT turn, so search from the target
+ * turn's end through the boundary turn's end. A boundary turn still running has no end yet, so
+ * the window stays open through the tree read. At thread start, use the earlier of thread
+ * creation and turn start to include adopted wakes while preserving inherited session history.
  */
 function piUncapturedForkEntry(
   listing: PiSessionListing,
@@ -3240,12 +3274,12 @@ function piUncapturedForkEntry(
   providerThreadCreatedAt: DateTime.Utc,
 ): string | undefined {
   const { startedAt, completedAt } = boundary.turn;
-  if (startedAt === null || completedAt === null) return undefined;
+  if (startedAt === null) return undefined;
   const from =
     boundary.target === null
       ? Math.min(DateTime.toEpochMillis(providerThreadCreatedAt), DateTime.toEpochMillis(startedAt))
       : DateTime.toEpochMillis(boundary.target.completedAt ?? startedAt);
-  const to = DateTime.toEpochMillis(completedAt);
+  const to = completedAt === null ? Infinity : DateTime.toEpochMillis(completedAt);
   const targetRef = boundary.target?.nativeTurnRef;
   const stopAt = targetRef?.strength === "strong" ? targetRef.nativeId : null;
   if (stopAt !== null && !listing.entries.has(stopAt)) return undefined;
@@ -3318,7 +3352,11 @@ function piQuestion(
               value: "",
             },
           ];
-  const question = recordString(event, "message") ?? recordString(event, "placeholder") ?? title;
+  // Extensions may send a blank placeholder, which is not a valid question.
+  const question =
+    [recordString(event, "message"), recordString(event, "placeholder")].find(
+      (text) => text !== undefined && text.trim().length > 0,
+    ) ?? title;
   return {
     id: questionId,
     header: title,

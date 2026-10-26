@@ -75,6 +75,12 @@ the running turn and give the bot thread runs it was built never to have.
   nothing in the sandbox backs it. A requester linked below full access keeps their ceiling, so
   the bot never gives a person more than they could run themselves. Work that changes things is
   a coding task.
+- **Computer use.** Full access does not reach the screen. Bot turns, channel task workers (known
+  by their `channel-worker:` thread id, so before the ledger binds them) and every thread they
+  launch or message count as unattended (`apps/server/src/cua/ComputerUseOrigin.ts`),
+  so they get no `cua-driver` until a person approves a `computer_use.grant` handoff in a GOAT
+  client session holding `settings:write`. Channel text never answers it: handoffs resolve only
+  through authenticated client RPC. See ADR-0020.
 - **Answer.** The turn's final report is the bot's reply, delivered as written; it is not
   reworded by reception the way coding results are, because the turn already wrote it for the
   person on the chosen model.
@@ -204,6 +210,11 @@ one not yet stored was never acknowledged and Slack sends it again, and one stor
 acknowledged comes back as a duplicate the inbox key absorbs. The desktop's short shutdown deadline
 can cut a socket mid-close; that only changes which of those two happens.
 
+A reply longer than one Slack message posts as several in its thread, split at lines and with
+code blocks closed in each part (`slackMessageChunking.ts`, ported from cli-jaw). The outbox
+still holds one row per reply, so a failure after the first part is recorded as unknown rather
+than retried: a retry would post the earlier parts twice.
+
 A Slack connection's default target fills only what the task left open. The project named with the
 work wins over the default project, which wins over the only project; the default model wins over
 the project's (and, on another machine, the remote project's). A default project that no longer
@@ -227,6 +238,11 @@ the one process holding the worker row in `channel_runtime_state`. Ownership cha
 compare-and-set on a stale heartbeat, and every worker write re-checks the token inside its
 transaction, so a process that paused past the heartbeat cannot commit a claim. Any process can
 accept input; the owner picks it up on its next pass.
+
+Reception reads one input per conversation at a time, in the order the inputs were stored, and
+up to four conversations at once. Reading two messages of one Slack thread side by side let the
+second miss the task the first was creating and could post the replies in reverse; a reception
+is bounded by its model timeout, so a later message waits seconds, never behind a worker's turn.
 
 ## iMessage on a local Mac
 
@@ -263,7 +279,7 @@ receipt that hit a rate limit still arrives before the result.
 All MCP callers share the `mcp` connection, so the gateway scopes an agent's conversation key and
 retry key by its request namespace: two agents that send the same `clientRequestId` stay two
 inputs in two conversations. Agents cannot start work. Their replies are not pushed anywhere; the
-outbox marks them delivered and the agent reads them with `channel_input_get`, which shows only
+outbox marks them delivered and the agent reads them with `goat_channel_input_read`, which shows only
 inputs from the caller's own namespace.
 
 ## Workers on other machines
@@ -274,7 +290,7 @@ worker there through [`SshRemoteDispatch`](../../apps/server/src/sshRemote/SshRe
 the path `goat_ssh_thread_launch` uses, with an origin report binding. The remote server is not
 changed: the worker files `goat_origin_report` there, and
 [`ChannelRemoteWorkers`](../../apps/server/src/channels/ChannelRemoteWorkers.ts) long-polls
-`goat_origin_reports_wait` and turns reports and the remote run's end into ledger events.
+`goat_origin_report_wait` and turns reports and the remote run's end into ledger events.
 
 - **One thread per generation.** The binding id derives from the task and its generation, and the
   remote stores it before it creates the thread and refuses a duplicate. A launch whose answer was
@@ -293,7 +309,7 @@ changed: the worker files `goat_origin_report` there, and
   channel path does not need `goat_ssh_thread_launch`'s full-access caller: the dispatcher chooses
   the host and folder from validated lists, not an agent.
 - **Models are checked there first.** The SSH launch does not say why a remote refused, so the
-  dispatcher reads that machine's `orchestrator_capabilities` before launching. A Slack
+  dispatcher reads that machine's `goat_provider_list` before launching. A Slack
   connection's model is only a preference: if that machine does not offer it, or cannot list its
   models, the remote project's model (or this machine's default) runs the work. If the model to
   run is listed as missing, the requester is asked to pick one for the project there. If the

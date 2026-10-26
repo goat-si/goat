@@ -7,6 +7,7 @@ import {
   type ChannelRequester,
   type ChannelTask,
   ChannelTaskId,
+  RunId,
   type ThreadPullRequestLink,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -147,6 +148,32 @@ describe("finding the work a question means", () => {
     assert.include(digest, "goat-si/goat#457 (merged)");
   });
 
+  it("recalls a completed task's conflicting verification evidence without changing its outcome", () => {
+    const completed = task({
+      observed: {
+        pullRequests: [],
+        needsYou: [],
+        result: {
+          runId: RunId.make("worker-run"),
+          tests: { ok: true },
+          observedCheckPending: false,
+          observedCheck: {
+            status: "completed",
+            command: "vp test run",
+            exitCode: 3,
+            durationMs: 1250,
+            at: "2026-10-12T00:00:00.000Z",
+          },
+        },
+      },
+    });
+    for (const text of [taskDigest(completed), journalFor([completed])]) {
+      assert.include(text, "[completed]");
+      assert.include(text, "Reported tests: passed");
+      assert.include(text, "GOAT check: failed (exit 3)");
+    }
+  });
+
   it("finds memory lines sharing a word, newest first and bounded", () => {
     const lines = Array.from({ length: 30 }, (_, index) => "- deploy note " + index).join("\n");
     const found = matchMemoryLines("# header\n- prefers Korean\n" + lines, "deploy");
@@ -168,7 +195,7 @@ describe("GOAT Bot journal", () => {
     );
     const journal = journalFor(many);
     assert.isAtMost(journal.length, JOURNAL_CHARS);
-    assert.isTrue(journal.startsWith("- 2026-10-12 00:39 [completed] Task 39 (for Bob) — "));
+    assert.isTrue(journal.startsWith("- 2026-10-12 00:39 [completed] Task 39 (for Bob): "));
     assert.notInclude(journal, "Task 0 ");
     const withPr = journalFor([
       task({

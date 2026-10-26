@@ -1,8 +1,17 @@
 /**
- * Do not import t3code modules from the string body. The Pi process resolves
+ * Do not import GOAT modules from the string body. The Pi process resolves
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import {
+  canonicalToolName,
+  legacyAgentSurfacePaths,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
+import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
 
 export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
 
@@ -10,6 +19,13 @@ export const GOAT_MCP_URL_ENV = "GOAT_MCP_URL";
 export const GOAT_MCP_BEARER_ENV = "GOAT_MCP_BEARER_TOKEN";
 export const GOAT_PI_RUNTIME_MODE_ENV = "GOAT_PI_RUNTIME_MODE";
 export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
+/** The managed Cua Driver's stdio MCP command, as JSON `{ command, args, env }`. */
+export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
+/**
+ * A file the adapter rewrites before every turn: `on` while the turn may use the driver this
+ * process launched with, anything else (Plan, read-only, a changed driver) closes it for the turn.
+ */
+export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
 
 /**
  * Pi tools whose confirmations the bridge raises as file-change approvals.
@@ -17,17 +33,42 @@ export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
  */
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
+/**
+ * Every path and name goat_call resolves to a read, by the resolver goat_call itself uses.
+ * goat_call is annotated destructive so clients ask before it; a call naming a read runs as one.
+ */
+const GOAT_CALL_READ_TARGETS = [
+  ...new Set([
+    ...Object.values(agentSurfaceRegistry).flatMap((entry) => [
+      entry.path,
+      canonicalToolName(entry),
+      entry.name,
+      ...entry.legacyNames,
+    ]),
+    ...legacyAgentSurfacePaths.keys(),
+  ]),
+]
+  .filter((name) => resolveAgentSurfaceEntry(name)?.effect === "read")
+  .toSorted();
+
 export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { Type } from "typebox";
 
 const URL_ENV = ${JSON.stringify(GOAT_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(GOAT_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
+const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
+const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
+const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
+const GOAT_CALL_READ_TARGETS = new Set(${JSON.stringify(GOAT_CALL_READ_TARGETS)});
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
+const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
+const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
@@ -48,6 +89,7 @@ type McpTool = {
   readonly inputSchema?: Record<string, unknown>;
   readonly annotations?: { readonly readOnlyHint?: boolean };
   readonly outputSchema?: Record<string, unknown>;
+  readonly _meta?: Record<string, unknown>;
 };
 
 function env(name: string): string | undefined {
@@ -91,7 +133,13 @@ function parseSseOrJson(body: string, contentType: string): JsonRpcResponse {
 function jsonSchemaToTypebox(schema: Record<string, unknown> | undefined) {
   const unsafe = (Type as { Unsafe?: (value: unknown) => unknown }).Unsafe;
   if (typeof unsafe === "function" && schema !== undefined) {
-    return unsafe(schema);
+    // Zero-argument MCP tools may omit "properties", which some OpenAI-compatible
+    // servers reject. Declare it, as Pi does for its own MCP tools.
+    return unsafe({
+      ...schema,
+      type: schema.type ?? "object",
+      ...(schema.properties === undefined ? { properties: {} } : {}),
+    });
   }
   return Type.Object({}, { additionalProperties: true });
 }
@@ -240,6 +288,157 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
+type StdioMcpSpec = { command: string; args: string[]; env: Record<string, string> };
+
+/** A newline-delimited JSON-RPC client for a stdio MCP server, started on first use. */
+function createStdioMcpClient(spec: StdioMcpSpec) {
+  let nextId = 1;
+  let child: ChildProcess | undefined;
+  const waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  const failAll = (error: Error) => {
+    for (const pending of waiting.values()) pending.reject(error);
+    waiting.clear();
+  };
+  const start = async () => {
+    // Loaded on first use, so sessions without computer use never touch it.
+    const { spawn } = await import("node:child_process");
+    const current = spawn(spec.command, spec.args, {
+      env: { ...process.env, ...spec.env },
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    child = current;
+    let buffer = "";
+    current.stdout?.setEncoding("utf8");
+    current.stdout?.on("data", (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split("\\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let message: JsonRpcResponse;
+        try {
+          message = JSON.parse(line) as JsonRpcResponse;
+        } catch {
+          continue;
+        }
+        const pending = typeof message.id === "number" ? waiting.get(message.id) : undefined;
+        if (pending === undefined) continue;
+        waiting.delete(message.id as number);
+        if (message.error) pending.reject(new Error(message.error.message ?? "MCP error"));
+        else pending.resolve(message.result);
+      }
+    });
+    // Only the current driver's exit fails calls: a replaced one's late exit
+    // must not fail the calls already waiting on its replacement.
+    const stopped = () => {
+      if (child !== current) return;
+      child = undefined;
+      failAll(new Error("Cua Driver stopped. Call the tool again to start a new session."));
+    };
+    current.on("exit", stopped);
+    current.on("error", stopped);
+  };
+  const request = async (method: string, params?: unknown, signal?: AbortSignal) => {
+    if (child === undefined) await start();
+    return new Promise<unknown>((resolve, reject) => {
+      const id = nextId++;
+      waiting.set(id, { resolve, reject });
+      signal?.addEventListener("abort", () => {
+        if (waiting.delete(id)) reject(new Error("Aborted"));
+      });
+      child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\\n");
+    });
+  };
+  const notify = (method: string, params?: unknown) => {
+    child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\\n");
+  };
+  const connect = async (signal?: AbortSignal) => {
+    await request(
+      "initialize",
+      { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "goat-pi-mcp", version: "1.0.0" } },
+      signal,
+    );
+    notify("notifications/initialized", {});
+  };
+
+  return {
+    connect,
+    async listTools(signal?: AbortSignal) {
+      const result = (await request("tools/list", {}, signal)) as { tools?: McpTool[] } | undefined;
+      return result?.tools ?? [];
+    },
+    async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+      // A driver that exited (the session ended) starts again and needs a handshake.
+      if (child === undefined) await connect(signal);
+      return request("tools/call", { name, arguments: args }, signal);
+    },
+    close() {
+      const current = child;
+      child = undefined;
+      current?.kill();
+      failAll(new Error("Cua Driver stopped. Call the tool again to start a new session."));
+    },
+  };
+}
+
+// A process launched by an adapter without the gate keeps its launch-time behavior. Once the
+// gate exists, "on" keeps the launch driver and "driver" names a newer one beside it (a new
+// control after Stop, #1564); anything else, including a missing or unreadable file, closes it.
+async function readCuaGate(): Promise<"on" | "driver" | "off"> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return "on";
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const value = (await readFile(path, "utf8")).trim();
+    return value === "on" || value === "driver" ? value : "off";
+  } catch {
+    return "off";
+  }
+}
+
+async function readCuaDriver(): Promise<StdioMcpSpec | undefined> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return undefined;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return parseCuaSpec(await readFile(path + ".driver", "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+// Beside the gate, so an extension from an older build keeps reading the gate unchanged.
+async function readCuaSkill(): Promise<boolean> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return true;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path + ".skill", "utf8")).trim() !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function cuaSpec(): StdioMcpSpec | undefined {
+  const raw = env(CUA_ENV);
+  return raw === undefined ? undefined : parseCuaSpec(raw);
+}
+
+function parseCuaSpec(raw: string): StdioMcpSpec | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { command?: unknown; args?: unknown; env?: unknown };
+    if (typeof parsed.command !== "string" || !Array.isArray(parsed.args)) return undefined;
+    return {
+      command: parsed.command,
+      args: parsed.args.map(String),
+      env: (parsed.env ?? {}) as Record<string, string>,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Keep skill chips in the request. Pi expands only one leading /skill:
   // command, so use its own frontmatter loader for every selected chip here.
@@ -294,7 +493,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     if (changed) return replacement;
   });
 
-  // Pi deliberately leaves permission policy to extensions. T3's injected
+  // Pi deliberately leaves permission policy to extensions. GOAT's injected
   // bridge uses Pi's public blocking tool hook so the shared runtime modes
   // keep their normal meaning without replacing or shadowing Pi's runtime.
   // Only Pi's own search is known to be read-only. An extension that replaces
@@ -304,20 +503,27 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
 
   const readOnlyMcpTools = new Set<string>();
-  const isReadOnlyMcpTool = (name: string) => {
+  const ownsTool = (name: string) => {
     const extensionPath = env(EXTENSION_PATH_ENV);
-    if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
+    if (extensionPath === undefined || typeof pi.getAllTools !== "function") return false;
     // A user extension may own the same name. Only our registered HTTP bridge
-    // may inherit the canonical T3 server's read-only annotation.
+    // may inherit the canonical GOAT server's read-only annotation.
     return pi.getAllTools().some((tool) => tool.name === name &&
       typeof tool.sourceInfo?.path === "string" &&
       NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));
+  };
+  const isReadOnlyMcpTool = (name: string) => readOnlyMcpTools.has(name) && ownsTool(name);
+  const isReadThroughGoatCall = (name: string, input: unknown) => {
+    if (name !== "mcp__goat__goat_call" || typeof input !== "object" || input === null) return false;
+    const path = (input as { readonly path?: unknown }).path;
+    return typeof path === "string" && GOAT_CALL_READ_TARGETS.has(path) && ownsTool(name);
   };
 
   pi.on("tool_call", async (event, ctx) => {
     const mode = runtimeMode();
     if (mode === "full-access") return;
-    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) || isReadOnlyMcpTool(event.toolName)) {
+    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) ||
+      isReadOnlyMcpTool(event.toolName) || isReadThroughGoatCall(event.toolName, event.input)) {
       return;
     }
     if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
@@ -342,13 +548,21 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         "warning",
       );
     });
+    // The development discipline does not depend on GOAT's tools, so it still applies here.
+    pi.on("before_agent_start", async (event) => {
+      const sections = event.systemPromptOptions?.sections;
+      if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
+        sections.goat_code_development = DEVELOPMENT_INSTRUCTIONS;
+        return undefined;
+      }
+      return { systemPrompt: event.systemPrompt + "\\n\\n" + DEVELOPMENT_INSTRUCTIONS };
+    });
     return;
   }
 
   // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
   let deferOptionalTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
 
@@ -363,7 +577,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       const name = tool.name;
       const registeredName = \`mcp__goat__\${name}\`;
       if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(registeredName);
-      const exposure = deferOptionalTools && !directTools.has(name) ? "deferred" : "direct";
+      // The server marks its resident tools; Pi defers the rest only while tool_search can find them.
+      const exposure = deferOptionalTools && tool._meta?.[ALWAYS_LOAD_META_KEY] !== true ? "deferred" : "direct";
       pi.registerTool({
         name: registeredName,
         label: name,
@@ -424,11 +639,14 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     // in history or guidance. Eagerly load GOAT schemas, including after tree
     // restores, while retaining deferred exposure for Pi's allowlist rules.
     // Pi still applies --tools/--exclude-tools to this active loadout.
-    const required = [
+    // A restored loadout can also drop the always-load tools, and tool_search never finds a
+    // direct tool, so they come back on every model.
+    const required = new Set([
       ...(hasToolSearch ? ["tool_search"] : []),
+      ...catalog.filter((tool) => tool._meta?.[ALWAYS_LOAD_META_KEY] === true).map((tool) => "mcp__goat__" + tool.name),
       ...(ctx.model?.api === "openai-completions" ? catalog.map((tool) => "mcp__goat__" + tool.name) : []),
-    ];
-    const missing = required.filter((name) => !active.includes(name));
+    ]);
+    const missing = [...required].filter((name) => !active.includes(name));
     if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
   };
 
@@ -445,16 +663,109 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     }
   });
 
+  // The managed Cua Driver, registered as mcp__cua-driver__<tool> like other
+  // harnesses name it. Its screenshots pass through as image content.
+  const cua = cuaSpec();
+  let computerUse = false;
+  // Turns this process may not use the driver on (Plan, read-only, a changed driver) close it.
+  let cuaOpen = true;
+  const cuaToolNames: string[] = [];
+  let closeCua: () => void = () => undefined;
+  let cuaClient: ReturnType<typeof createStdioMcpClient> | undefined;
+  let cuaDriverKey = JSON.stringify(cua);
+  if (cua !== undefined) {
+    cuaClient = createStdioMcpClient(cua);
+    closeCua = () => cuaClient?.close();
+    pi.on("session_shutdown", () => closeCua());
+    try {
+      const signal = AbortSignal.timeout(20_000);
+      await cuaClient.connect(signal);
+      for (const tool of await cuaClient.listTools(signal)) {
+        const name = tool.name;
+        const description = tool.description ?? name;
+        cuaToolNames.push("mcp__cua-driver__" + name);
+        pi.registerTool({
+          name: \`mcp__cua-driver__\${name}\`,
+          label: name,
+          description,
+          promptSnippet: description.split("\\n")[0] ?? name,
+          parameters: jsonSchemaToTypebox(tool.inputSchema),
+          async execute(_toolCallId, params, signal) {
+            if (!cuaOpen)
+              return {
+                content: [{ type: "text", text: "Computer use is off for this turn." }],
+                details: { server: "cua-driver", tool: name },
+                isError: true,
+              };
+            const result = await cuaClient!.callTool(
+              name,
+              (params ?? {}) as Record<string, unknown>,
+              signal,
+            );
+            return {
+              content: mcpModelContent(result),
+              details: { server: "cua-driver", tool: name },
+              ...(isMcpToolError(result) ? { isError: true } : {}),
+            };
+          },
+        });
+      }
+      computerUse = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pi.on("session_start", async (_event, ctx) => {
+        ctx.ui.notify(\`Cua Driver unavailable: \${message}\`, "warning");
+      });
+    }
+  }
+
   // Keep guidance in the system prompt so leading slash commands still expand.
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     reconcileDiscovery(ctx);
+    if (computerUse) {
+      const gate = await readCuaGate();
+      let open = gate !== "off";
+      if (gate === "driver") {
+        // The same driver tools under the control GOAT minted since launch: swap the connection.
+        const next = await readCuaDriver();
+        if (next === undefined) open = false;
+        else if (JSON.stringify(next) !== cuaDriverKey) {
+          closeCua();
+          const client = createStdioMcpClient(next);
+          cuaClient = client;
+          cuaDriverKey = JSON.stringify(next);
+          closeCua = () => client.close();
+        }
+      }
+      if (!open && cuaOpen) {
+        // End the driver connection before the turn starts, not just its tools.
+        closeCua();
+        pi.setActiveTools(pi.getActiveTools().filter((name) => !cuaToolNames.includes(name)));
+      } else if (open && !cuaOpen) {
+        const active = pi.getActiveTools();
+        pi.setActiveTools([...active, ...cuaToolNames.filter((name) => !active.includes(name))]);
+      }
+      cuaOpen = open;
+    }
+    const withComputerUse = computerUse && cuaOpen && (await readCuaSkill());
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
+      sections.goat_code_development = DEVELOPMENT_INSTRUCTIONS;
       sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
+      if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
+      else delete sections.goat_computer_use;
       return undefined;
     }
-    return { systemPrompt: event.systemPrompt + "\\n\\n" + ORCHESTRATION_INSTRUCTIONS };
+    return {
+      systemPrompt:
+        event.systemPrompt +
+        "\\n\\n" +
+        DEVELOPMENT_INSTRUCTIONS +
+        "\\n\\n" +
+        ORCHESTRATION_INSTRUCTIONS +
+        (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
+    };
   });
 }
 `;

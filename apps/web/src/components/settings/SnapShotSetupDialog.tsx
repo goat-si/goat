@@ -10,7 +10,13 @@ import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
 import { Button } from "../ui/button";
 import { Dialog, DialogDescription } from "../ui/dialog";
-import { WizardSteps, WizardPopup, WizardHeader, WizardPanel, WizardFooter } from "../ui/wizard";
+import {
+  WizardSteps,
+  WizardPopup,
+  WizardHeader,
+  WizardPanel,
+  WizardFooter,
+} from "../onboarding/OnboardingWizard";
 import {
   captureSetupAccessReady,
   captureSetupBackend,
@@ -30,7 +36,7 @@ const GNOME_ACCESS_COPY = {
   "not-installed": {
     title: "Install the extension",
     description:
-      "The T3 Code GNOME extension lets you capture other windows and bring them into your draft. Sign out once after installing.",
+      "The GOAT GNOME extension lets you capture other windows and bring them into your draft. Sign out once after installing.",
   },
   "restart-required": {
     title: "Extension installed",
@@ -46,7 +52,7 @@ const GNOME_ACCESS_COPY = {
   },
   disabled: {
     title: "Enable the extension",
-    description: "Enable T3 Code SnapShots to start capturing windows.",
+    description: "Enable the SnapShots extension to start capturing windows.",
   },
   enabled: {
     title: "Capture is ready",
@@ -58,7 +64,7 @@ const GNOME_ACCESS_COPY = {
   },
   error: {
     title: "Couldn't set up the extension",
-    description: "Check T3 Code SnapShots in GNOME Extensions, then try again.",
+    description: "Check the SnapShots extension in GNOME Extensions, then try again.",
   },
 };
 

@@ -1,3 +1,4 @@
+import type { ThreadStructure, ThreadStructureRuntime } from "@goat/client-runtime/state/shell";
 import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import {
   type AssetResource,
@@ -24,6 +25,7 @@ import {
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
 import type { HtmlRenderReference } from "@goat/shared/htmlRender";
+import { resolveGoatMcpItemCall } from "@goat/shared/goatMcpToolPresentation";
 import { turnItemDetailRevision } from "@goat/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@goat/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
@@ -251,7 +253,7 @@ export function derivePendingUserInputs(
 }
 
 export function deriveActivePlanState(
-  projection: OrchestrationV2ThreadProjection | null,
+  projection: ThreadStructure | null,
   latestRunId: RunId | undefined,
 ): ActivePlanState | null {
   if (projection === null) return null;
@@ -273,7 +275,7 @@ export function deriveActivePlanState(
     );
   if (plan === null || plan.steps.length === 0) return null;
   return {
-    createdAt: planItemTime(projection, plan.id),
+    createdAt: planItemTime(projection, plan),
     runId: plan.runId,
     explanation: plan.explanation ?? null,
     steps: plan.steps.map(({ text, status, durationMs }) => ({
@@ -286,7 +288,7 @@ export function deriveActivePlanState(
 
 // Claude's unfinished tasks belong to the provider session, not just the turn.
 export function selectComposerTasksPlan(
-  projection: OrchestrationV2ThreadProjection | null,
+  projection: ThreadStructure | null,
   plan: ActivePlanState | null,
   activeRunId: RunId | null,
   activeRunSettled: boolean,
@@ -315,20 +317,30 @@ export function selectComposerTasksPlan(
   return latestStartedRun?.providerThreadId === planProviderThreadId ? plan : null;
 }
 
-function planItemTime(projection: OrchestrationV2ThreadProjection, planId: PlanId): string {
+function planItemTime(
+  projection: ThreadStructure,
+  plan: Pick<OrchestrationV2PlanArtifact, "id" | "runId">,
+): string {
   const item = projection.turnItems.findLast(
     (candidate) =>
       (candidate.type === "proposed_plan" || candidate.type === "todo_list") &&
-      candidate.planId === planId,
+      candidate.planId === plan.id,
   );
-  return DateTime.formatIso(item?.updatedAt ?? projection.updatedAt);
+  if (item?.type === "proposed_plan" || item?.type === "todo_list") {
+    return DateTime.formatIso(item.updatedAt);
+  }
+  // Without a plan item, the plan's run dates it; the thread's own timestamps move while a reply streams.
+  const run = projection.runs.find((candidate) => candidate.id === plan.runId);
+  return DateTime.formatIso(
+    run?.completedAt ?? run?.startedAt ?? run?.requestedAt ?? projection.thread.createdAt,
+  );
 }
 
 function toLatestProposedPlanState(
-  projection: OrchestrationV2ThreadProjection,
+  projection: ThreadStructure,
   plan: Extract<OrchestrationV2PlanArtifact, { readonly kind: "proposed_plan" }>,
 ): LatestProposedPlanState {
-  const updatedAt = planItemTime(projection, plan.id);
+  const updatedAt = planItemTime(projection, plan);
   return {
     id: plan.id,
     createdAt: updatedAt,
@@ -340,7 +352,7 @@ function toLatestProposedPlanState(
 }
 
 export function findLatestProposedPlan(
-  projection: OrchestrationV2ThreadProjection | null,
+  projection: ThreadStructure | null,
   latestRunId: RunId | string | null | undefined,
 ): LatestProposedPlanState | null {
   if (projection === null) return null;
@@ -349,7 +361,7 @@ export function findLatestProposedPlan(
   const plan = [...(candidates.length > 0 ? candidates : plans)]
     .toSorted(
       (left, right) =>
-        planItemTime(projection, left.id).localeCompare(planItemTime(projection, right.id)) ||
+        planItemTime(projection, left).localeCompare(planItemTime(projection, right)) ||
         left.id.localeCompare(right.id),
     )
     .at(-1);
@@ -542,12 +554,17 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
         changedFiles: item.files.map((file) => file.path),
         toolData: item,
       };
-    case "system_notice":
+    case "system_notice": {
+      // The first line is the row; the rest opens with it, so a long notice stays one line.
+      const [headline = "", ...rest] = item.message.split("\n");
+      const detail = rest.join("\n").trim();
       return {
         ...common,
-        label: item.message,
-        sourceActivityKind: "runtime.warning",
+        label: headline,
+        ...(detail.length > 0 ? { detail } : {}),
+        ...(item.severity === "info" ? {} : { sourceActivityKind: "runtime.warning" }),
       };
+    }
     case "error": {
       const presentation = providerErrorPresentation(item);
       return {
@@ -562,21 +579,18 @@ function projectedWorkEntry(row: OrchestrationV2ProjectedTurnItem): WorkLogEntry
       };
     }
     case "dynamic_tool": {
-      const classified = classifyToolActivity({
-        itemType: "dynamic_tool_call",
-        data: { toolName: item.toolName ?? undefined, input: item.input },
-      });
-      const [readPath] = collectToolFilePaths({ input: item.input });
+      const call = resolveGoatMcpItemCall(item);
+      const classified = classifyToolActivity({ itemType: "dynamic_tool_call", data: call });
       return {
         ...common,
         label:
           title ??
           (classified === "read"
-            ? formatReadToolLabel(readPath ?? "")
+            ? formatReadToolLabel(collectToolFilePaths({ input: call.input })[0] ?? "")
             : classified === "search"
-              ? (formatSearchToolLabel({ input: item.input }) ?? item.toolName ?? "Tool call")
-              : (item.toolName ?? "Tool call")),
-        toolTitle: title ?? item.toolName ?? "Tool",
+              ? (formatSearchToolLabel({ input: call.input }) ?? call.toolName ?? "Tool call")
+              : (call.toolName ?? "Tool call")),
+        toolTitle: title ?? call.toolName ?? "Tool",
         toolData: { input: item.input, output: item.output },
       };
     }
@@ -996,7 +1010,8 @@ function reuseTimelineEntries(
     OrchestrationV2ProjectedTurnItem,
     OrchestrationV2ProjectedTurnItem
   >();
-  for (const [index, previousItem] of before.visibleTurnItems.entries()) {
+  for (let index = 0; index < before.visibleTurnItems.length; index += 1) {
+    const previousItem = before.visibleTurnItems[index]!;
     const item = input.visibleTurnItems[index]!;
     if (item === previousItem) continue;
     if (!isStreamingTurnItemTextUpdate(previousItem, item)) return null;
@@ -1124,7 +1139,7 @@ export function findRevertCheckpoint(
   );
 }
 
-export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase {
+export function derivePhase(runtime: ThreadStructureRuntime | null): SessionPhase {
   if (runtime === null) return "disconnected";
   if (
     runtime.status === "preparing" ||
@@ -1142,7 +1157,7 @@ export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase 
  */
 export function deriveCanInterruptRunningThread(
   hasActiveThread: boolean,
-  runtime: ThreadRuntimeSummary | null,
+  runtime: ThreadStructureRuntime | null,
 ): boolean {
   return (
     hasActiveThread &&

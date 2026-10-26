@@ -333,6 +333,9 @@ export function summarizeGoatToolCalls(
     case "project-read":
       label = phrase("Read", "read", quantity(countEntities(projectIds), "project"));
       break;
+    case "repository-snapshot":
+      label = phrase("Read", "read", `repository snapshots ${times}`);
+      break;
     case "project-create":
       label = phrase("Registered", "register", quantity(countEntities(projectIds), "project"));
       break;
@@ -398,6 +401,9 @@ export function summarizeGoatToolCalls(
         "prepare",
         quantity(countEntities(entityIds("attachmentId")), "attachment upload"),
       );
+      break;
+    case "attachment-list":
+      label = phrase("Listed", "list", `pending attachment uploads ${times}`);
       break;
     case "attachment-discard":
       label = phrase(
@@ -492,6 +498,9 @@ export function summarizeGoatToolCalls(
       break;
     case "html-preview":
       label = phrase("Previewed", "preview", quantity(selected.length, "HTML page"));
+      break;
+    case "html-list":
+      label = phrase("Listed", "list", `saved HTML pages ${times}`);
       break;
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));

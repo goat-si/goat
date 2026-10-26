@@ -39,7 +39,7 @@ function stageElapsedMs(stage: WorktreeSetupStage, nowMs: number): number | null
   return Math.max(0, end - start);
 }
 
-function useNowWhile(active: boolean): number {
+export function useNowWhile(active: boolean): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -49,7 +49,7 @@ function useNowWhile(active: boolean): number {
   return nowMs;
 }
 
-function StageIcon({ status }: { status: WorktreeSetupStage["status"] }) {
+export function StageIcon({ status }: { status: WorktreeSetupStage["status"] }) {
   const className = "size-4 shrink-0 stroke-2";
   switch (status) {
     case "done":
@@ -67,7 +67,7 @@ function StageIcon({ status }: { status: WorktreeSetupStage["status"] }) {
   }
 }
 
-function stageRowClassName(status: WorktreeSetupStage["status"]): string {
+export function stageRowClassName(status: WorktreeSetupStage["status"]): string {
   switch (status) {
     case "failed":
       return "text-destructive-foreground";
@@ -82,7 +82,7 @@ function stageRowClassName(status: WorktreeSetupStage["status"]): string {
   }
 }
 
-function ShimmerOverlay({ children }: { children: ReactNode }) {
+export function ShimmerOverlay({ children }: { children: ReactNode }) {
   return (
     <span
       aria-hidden

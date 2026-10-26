@@ -1,4 +1,9 @@
-import { MemoryHubSettings, MemoryHubSettingsUpdateInput } from "./memory.ts";
+import {
+  MemoryHubSettings,
+  MemoryHubSettingsUpdateInput,
+  ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+} from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
@@ -19,12 +24,16 @@ import {
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   implicitDefaultInstance,
   isDevinAcpRegistryInstance,
+  globalIdleCompaction,
+  idleCompactionPatch,
   requiredScopesForProjectMutation,
   requiredScopesForServerSettingsPatch,
+  resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
+  withIdleCompaction,
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
@@ -34,6 +43,16 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+
+describe("agent tool listing", () => {
+  it("lists the core tools to an environment that never chose, and keeps full for one that did", () => {
+    expect(decodeServerSettings({}).agentToolListing).toBe("core");
+    expect(decodeServerSettings({ agentToolListing: "full" }).agentToolListing).toBe("full");
+    expect(decodeServerSettingsPatch({ agentToolListing: "full" })).toEqual({
+      agentToolListing: "full",
+    });
+  });
+});
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
@@ -47,7 +66,18 @@ describe("storage cleanup settings", () => {
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
+      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
+      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+      historyArchiveDeleteAfterDays: null,
     });
+  });
+
+  it("keeps cloud machines joining a hub whose settings predate the switch", () => {
+    expect(decodeServerSettings({ hub: { enabled: true } }).hub.autoJoinCloudMachines).toBe(true);
+    expect(
+      decodeServerSettings({ hub: { enabled: true, autoJoinCloudMachines: false } }).hub
+        .autoJoinCloudMachines,
+    ).toBe(false);
   });
 
   it("accepts partial custom patches but requires complete stored project rules", () => {
@@ -146,6 +176,57 @@ describe("custom model settings", () => {
   });
 });
 
+describe("resolveIdleCompaction", () => {
+  it("lets a Claude instance override the global default", () => {
+    const settings = decodeServerSettings({
+      idleCompaction: "off",
+      providerInstances: {
+        claude_work: { driver: "claudeAgent", config: { idleCompaction: "onReturn" } },
+        claude_personal: { driver: "claudeAgent" },
+      },
+    });
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claude_work"))).toBe(
+      "onReturn",
+    );
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claude_personal"))).toBe("off");
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claudeAgent"))).toBe("off");
+  });
+
+  it("reads the mode from the legacy switch, in either form servers saved it", () => {
+    expect(globalIdleCompaction(decodeServerSettings({ compactIdleThreads: true }))).toBe(
+      "beforeCacheExpires",
+    );
+    expect(globalIdleCompaction(decodeServerSettings({ compactIdleThreads: "off" }))).toBe("off");
+    expect(globalIdleCompaction(decodeServerSettings({}))).toBe("onReturn");
+  });
+
+  it("keeps the legacy switch a boolean, as shipped clients decode it", () => {
+    const encode = Schema.encodeSync(Schema.toCodecJson(ServerSettings));
+    for (const mode of ["onReturn", "beforeCacheExpires", "off"] as const) {
+      const encoded = encode(withIdleCompaction(DEFAULT_SERVER_SETTINGS, mode)) as {
+        readonly compactIdleThreads: unknown;
+        readonly idleCompaction: unknown;
+      };
+      expect(encoded.compactIdleThreads).toBe(mode === "beforeCacheExpires");
+      expect(encoded.idleCompaction).toBe(mode);
+    }
+  });
+
+  it("patches the field the server reads", () => {
+    expect(
+      idleCompactionPatch({ compactIdleThreads: false, idleCompaction: "onReturn" }, "off"),
+    ).toEqual({
+      idleCompaction: "off",
+    });
+    expect(idleCompactionPatch({ compactIdleThreads: "onReturn" }, "off")).toEqual({
+      compactIdleThreads: "off",
+    });
+    expect(idleCompactionPatch({ compactIdleThreads: false }, "beforeCacheExpires")).toEqual({
+      compactIdleThreads: true,
+    });
+  });
+});
+
 describe("ClientSettings notifications", () => {
   it("requires opt-in when existing settings omit notification preferences", () => {
     expect(decodeClientSettings({}).notificationMode).toBe("off");
@@ -181,8 +262,14 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to Projects view", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(true);
+  it("defaults to Activity view", () => {
+    expect(decodeClientSettings({}).projectsSidebarEnabled).toBe(false);
+  });
+
+  it("moves clients that only saved the old Projects default to Activity view", () => {
+    const decoded = decodeClientSettings({ legacySidebarEnabled: true });
+    expect(decoded.projectsSidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("legacySidebarEnabled");
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -190,16 +277,18 @@ describe("ClientSettings sidebar", () => {
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(true);
+    expect(decoded.projectsSidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
   it.each([true, false])("preserves an explicit sidebar view choice: %s", (value) => {
-    expect(decodeClientSettings({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(value);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: value }).legacySidebarEnabled).toBe(
+    expect(decodeClientSettings({ projectsSidebarEnabled: value }).projectsSidebarEnabled).toBe(
       value,
     );
+    expect(
+      decodeClientSettingsPatch({ projectsSidebarEnabled: value }).projectsSidebarEnabled,
+    ).toBe(value);
   });
 });
 
@@ -711,5 +800,49 @@ describe("automatic server updates", () => {
   it.each(["false", null, 0])("rejects a non-boolean value %s", (automaticServerUpdates) => {
     expect(() => decodeServerSettings({ automaticServerUpdates })).toThrow();
     expect(() => decodeServerSettingsPatch({ automaticServerUpdates })).toThrow();
+  });
+});
+
+describe("channel automatic placement settings", () => {
+  it("requires an explicit opt-in and uses normal settings write permission", () => {
+    expect(decodeServerSettings({}).channelAutoPlacement).toBe(false);
+    const patch = decodeServerSettingsPatch({ channelAutoPlacement: true });
+    expect(patch.channelAutoPlacement).toBe(true);
+    expect(requiredScopesForServerSettingsPatch(patch)).toContain("settings:write");
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings(patch))).channelAutoPlacement,
+    ).toBe(true);
+    expect(decodeServerSettingsPatch({ channelAutoPlacement: false }).channelAutoPlacement).toBe(
+      false,
+    );
+  });
+});
+
+describe("host checkpoint replication settings", () => {
+  it("keeps omission distinct from on and off and preserves host placement fields", () => {
+    expect(decodeServerSettings({}).fleet.hosts).toBeUndefined();
+    const fleet = {
+      hosts: { box: { maxThreads: 4, allowGoals: false, checkpointReplication: "off" } },
+    };
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings({ fleet }))).fleet,
+    ).toEqual(fleet);
+    expect(decodeServerSettingsPatch({ fleet })).toEqual({ fleet });
+    expect(() =>
+      decodeServerSettings({ fleet: { hosts: { box: { checkpointReplication: "automatic" } } } }),
+    ).toThrow();
+  });
+});
+
+describe("destination rail client settings", () => {
+  it("decodes settings saved before the rail was customizable", () => {
+    expect(decodeClientSettings({}).destinationRail).toEqual({ order: [], shown: [], hidden: [] });
+  });
+
+  it("keeps ids this version does not know", () => {
+    const saved = { order: ["future-item", "notes"], shown: ["future-item"], hidden: ["bot"] };
+    const settings = decodeClientSettings({ destinationRail: saved });
+    expect(settings.destinationRail).toEqual(saved);
+    expect(encodeClientSettings(settings).destinationRail).toEqual(saved);
   });
 });

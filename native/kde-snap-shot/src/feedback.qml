@@ -38,7 +38,7 @@ Item {
         next.call();
     }
 
-    // A cached, bounded PNG is shared by each output. Nothing repaints while waiting for T3.
+    // A cached, bounded PNG is shared by each output. Nothing repaints while waiting for GOAT.
     Image {
         id: snapshot
         visible: false

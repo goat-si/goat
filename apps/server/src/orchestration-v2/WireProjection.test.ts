@@ -4,6 +4,7 @@ import {
   ProviderThreadId,
   NodeId,
   EventId,
+  type OrchestrationV2DomainEvent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -22,9 +23,14 @@ import {
   projectTurnItemForWire,
   projectTurnItemForDetail,
   projectDomainEventForWire,
+  projectTranscriptRowForClient,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
-import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@goat/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  MAX_TOOL_OUTPUT_IMAGES,
+  toolOutputImages,
+} from "@goat/shared/toolOutput";
 
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const encodeTurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
@@ -51,6 +57,41 @@ const base = {
 };
 
 describe("orchestration V2 wire projection", () => {
+  it("never sends a client typed computer-use text, including an ACP child's call envelope", () => {
+    const typed = {
+      ...base,
+      toolName: "cua-driver.type_text",
+      input: { pid: 1, text: "hunter2" },
+    } as OrchestrationV2TurnItem;
+    const child = {
+      ...typed,
+      input: { server: "cua-driver", tool: "type_text", arguments: { pid: 1, text: "hunter2" } },
+    } as OrchestrationV2TurnItem;
+    for (const item of [typed, child]) {
+      const event = projectDomainEventForWire({
+        id: EventId.make("typed"),
+        type: "turn-item.updated",
+        threadId: item.threadId,
+        occurredAt: item.updatedAt,
+        payload: item,
+      } as OrchestrationV2DomainEvent);
+      const row = projectTranscriptRowForClient({ position: 0, item });
+      for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), event, row])
+        expect(JSON.stringify(sent)).not.toContain("hunter2");
+      expect(JSON.stringify(row)).toContain('"text":{"redactedCharacters":7}');
+    }
+    // Raw text that reads like a redaction is still the agent's text.
+    const lookalike = {
+      ...typed,
+      input: { pid: 1, text: "123 characters" },
+    } as OrchestrationV2TurnItem;
+    const sent = projectTurnItemForWire(lookalike);
+    expect(sent.type === "dynamic_tool" ? sent.input : undefined).toEqual({
+      pid: 1,
+      text: { redactedCharacters: 14 },
+    });
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,
@@ -156,6 +197,20 @@ describe("orchestration V2 wire projection", () => {
     expect(item.output).toEqual({ ok: true });
   });
 
+  it("keeps a settle wait's outcome on the wire, so a row that never fetches detail shows it", () => {
+    const settle = { outcome: "pending", reason: "deadline" };
+    const item = {
+      ...base,
+      toolName: "mcp__cua-driver__wait_for_window_settle",
+      output: {
+        content: [{ type: "text", text: "Notification settle: pending (deadline)." }],
+        structuredContent: { settle },
+      },
+    } satisfies OrchestrationV2TurnItem;
+    const sent = decodeTurnItemJson(encodeTurnItemJson(projectTurnItemForWire(item)));
+    expect(sent.type === "dynamic_tool" ? sent.output : undefined).toEqual({ settle });
+  });
+
   it("uses encoded JSON bytes for strings near the dynamic-value limit", () => {
     const small = '"'.repeat(8_191);
     const large = '"'.repeat(8_192);
@@ -166,6 +221,32 @@ describe("orchestration V2 wire projection", () => {
       summary: '"'.repeat(159) + "…",
       truncated: true,
     });
+  });
+
+  it("keeps a page rendered through goat_call when its input is too large to send", () => {
+    const htmlRender = { attachmentId: "thread-1-page", title: "Chart", height: 300 };
+    const page = (toolName: string, input: unknown) =>
+      projectTurnItemForWire({
+        ...base,
+        toolName,
+        input,
+        output: { status: "ok", value: { htmlRender } },
+      });
+    const html = "<p>" + "x".repeat(17_000) + "</p>";
+    // MCP's own {name, arguments} spelling, which goat_call also takes, keeps the page too.
+    for (const input of [
+      { path: "html.render", args: { html } },
+      { name: "html.render", arguments: { html } },
+    ]) {
+      const wrapped = page("mcp__goat__goat_call", input);
+      expect(
+        htmlRenderFromToolItem(wrapped as Parameters<typeof htmlRenderFromToolItem>[0]),
+        Object.keys(input).join(","),
+      ).toEqual(htmlRender);
+    }
+    // Another tool's path-shaped argument stays inside the summary.
+    const other = page("mcp__github__fetch_pr", { path: "html.render", body: html });
+    expect(other.type === "dynamic_tool" ? other.input : null).not.toHaveProperty("path");
   });
 
   it("truncates detail at a UTF-8 boundary without changing the source", () => {

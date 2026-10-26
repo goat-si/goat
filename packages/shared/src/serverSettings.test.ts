@@ -1,6 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -54,6 +56,16 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("keeps the cloud auto-join switch off when another hub setting changes", () => {
+    const off = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      hub: { autoJoinCloudMachines: false },
+    });
+    expect(applyServerSettingsPatch(off, { hub: { cloudHolder: "auto" } }).hub).toMatchObject({
+      cloudHolder: "auto",
+      autoJoinCloudMachines: false,
+    });
+  });
+
   it("keeps the larger GOAT Bot home claim whatever order writes arrive in", () => {
     const claim = (environmentId: string, claimedAt: number, claimId: string) => ({
       environmentId: EnvironmentId.make(environmentId),
@@ -92,6 +104,16 @@ describe("serverSettings helpers", () => {
     ).toEqual(newer);
   });
 
+  it("translates a shipped client's idle compaction switch into a mode", () => {
+    const off = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { idleCompaction: "off" });
+    expect([off.idleCompaction, off.compactIdleThreads]).toEqual(["off", false]);
+    // Turning the old switch off keeps "Never" instead of reverting to the default.
+    const stillOff = applyServerSettingsPatch(off, { compactIdleThreads: false });
+    expect(stillOff.idleCompaction).toBe("off");
+    const on = applyServerSettingsPatch(off, { compactIdleThreads: true });
+    expect([on.idleCompaction, on.compactIdleThreads]).toEqual(["beforeCacheExpires", true]);
+  });
+
   it("changes a cleanup rule without replacing the machine's other rules", () => {
     const enabled = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       storageCleanup: { worktreeAfterDays: 8, worktreeOnMerge: true, logsAfterDays: 30 },
@@ -109,6 +131,9 @@ describe("serverSettings helpers", () => {
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: 30,
+      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
+      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+      historyArchiveDeleteAfterDays: null,
     });
   });
   it("replaces a source control host's patched field so a cleared account pin does not survive", () => {
@@ -956,4 +981,16 @@ it("rejects reserved hub keys before merging even a mixed settings patch", () =>
     );
     expect(FOLDED_SERVER_SETTINGS.standingInstructions).not.toBe("must not land");
   }
+});
+
+describe("channel automatic placement opt-in", () => {
+  it("persists both directions without replacing independent settings", () => {
+    const current = { ...DEFAULT_SERVER_SETTINGS, memoryEnabled: false };
+    const enabled = applyServerSettingsPatch(current, { channelAutoPlacement: true });
+    expect(enabled.channelAutoPlacement).toBe(true);
+    expect(enabled.memoryEnabled).toBe(false);
+    const disabled = applyServerSettingsPatch(enabled, { channelAutoPlacement: false });
+    expect(disabled.channelAutoPlacement).toBe(false);
+    expect(disabled.memoryEnabled).toBe(false);
+  });
 });

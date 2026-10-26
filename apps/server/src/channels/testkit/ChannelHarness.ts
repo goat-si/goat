@@ -16,6 +16,7 @@ import {
   CommandId,
   EnvironmentId,
   MessageId,
+  type ModelSelection,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -38,6 +39,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ServerConfig from "../../config.ts";
+import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as MemoryService from "../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../memory/MemorySyncService.ts";
@@ -53,6 +55,7 @@ import * as ProviderReplayHarness from "../../orchestration-v2/testkit/ProviderR
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
@@ -89,7 +92,7 @@ export const modelSelection = {
   model: "gpt-6.1-sol",
 } as const;
 
-export const refusingAdapter = {
+const refusingAdapter = {
   instanceId: modelSelection.instanceId,
   driver: ProviderDriverKind.make("codex"),
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -98,7 +101,7 @@ export const refusingAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
-export class WorkerWorld {
+class WorkerWorld {
   readonly runs = new Map<string, Array<OrchestrationV2Run>>();
   readonly finalText = new Map<string, string>();
   readonly background = new Set<string>();
@@ -225,17 +228,22 @@ export type ChannelServicesLayer = Layer.Layer<
 >;
 
 /** A machine whose SSH config lists no hosts: every task stays on this machine. */
-export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
   listHosts: () => Effect.succeed([]),
+  connectedHosts: Effect.succeed([]),
 });
 
 /** A provider account on this machine as placement sees it: signed in, with one weekly window. */
 export interface FakeProviderInstance {
   readonly instanceId: string;
   readonly displayName?: string;
+  /** Advertised model slugs; absent lists none, so any model counts as offered. */
+  readonly models?: ReadonlyArray<string>;
   /** The weekly window's use; absent when the account reports no quota. */
   readonly weeklyUsedPercent?: number;
   readonly resetsAt?: string;
+  readonly ready?: boolean;
+  readonly missing?: boolean;
 }
 
 const fakeInstance = (instance: FakeProviderInstance) =>
@@ -245,18 +253,18 @@ const fakeInstance = (instance: FakeProviderInstance) =>
     displayName: instance.displayName,
     enabled: true,
     snapshot: {
-      getSnapshot: Effect.succeed({
+      getSnapshot: Effect.map(DateTime.now, (now) => ({
         enabled: true,
         installed: true,
-        status: "ready",
-        auth: { status: "authenticated" },
-        // No models listed, so any model counts as offered.
-        models: [],
+        status: instance.ready === false ? "error" : "ready",
+        auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
+        // Absent means no models listed, so any model counts as offered.
+        models: (instance.models ?? []).map((slug) => ({ slug })),
         ...(instance.weeklyUsedPercent === undefined
           ? {}
           : {
               usageLimits: {
-                checkedAt: "2026-10-12T00:00:00.000Z",
+                checkedAt: DateTime.formatIso(now),
                 windows: [
                   {
                     id: "weekly",
@@ -268,13 +276,14 @@ const fakeInstance = (instance: FakeProviderInstance) =>
                 ],
               },
             }),
-      }),
+      })),
     },
   }) as never;
 
 export function makeHarness(
   options: {
     readonly projects?: number;
+    readonly repositoryIdentity?: import("@goat/contracts").RepositoryIdentity;
     /**
      * Provider accounts on this machine. By default only the configured one exists and it lists
      * no models, so any model counts as offered and placement has nothing to choose.
@@ -282,6 +291,16 @@ export function makeHarness(
     readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
+    /**
+     * Real directory as the work project's root. A .git inside it makes the dispatcher give the
+     * task its own worktree; the default is a path that does not exist.
+     */
+    readonly workspaceRoot?: string;
+    /**
+     * Every project shell's default model: undefined keeps the shared modelSelection, a value
+     * sets it, and null sets no default so resolution falls through to the server settings.
+     */
+    readonly shellDefaultModel?: ModelSelection | null;
     /** Settings overrides, including a publisher for live home changes. */
     readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
     /** The channel services under test; defaults to the assembled core without background loops. */
@@ -328,6 +347,12 @@ export function makeHarness(
     ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
       defaultRuntimeMode: "full-access",
+      providerInstances: Object.fromEntries(
+        (options.providerInstances ?? []).map((instance) => [
+          instance.instanceId,
+          { driver: ProviderDriverKind.make("codex"), config: {}, enabled: true },
+        ]),
+      ),
     });
   const layerRealThreads = ThreadManagement.layer.pipe(
     Layer.provide(layerOrchestrator),
@@ -560,12 +585,17 @@ export function makeHarness(
       }),
   });
 
+  const shellDefault =
+    options.shellDefaultModel === undefined ? modelSelection : options.shellDefaultModel;
   const shells = [
     ...Array.from({ length: options.projects ?? 1 }, (_, index) => ({
       id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
       title: index === 0 ? "Channel work" : "Other work " + index,
-      workspaceRoot: "/nonexistent/channel-work-" + index,
-      defaultModelSelection: modelSelection,
+      workspaceRoot:
+        index === 0
+          ? (options.workspaceRoot ?? "/nonexistent/channel-work-0")
+          : "/nonexistent/channel-work-" + index,
+      defaultModelSelection: shellDefault,
       scripts: [],
       createdAt: "2026-10-12T00:00:00.000Z",
       updatedAt: "2026-10-12T00:00:00.000Z",
@@ -576,7 +606,7 @@ export function makeHarness(
             id: scratchProjectId,
             title: "Scratch",
             workspaceRoot: "/nonexistent/scratch",
-            defaultModelSelection: modelSelection,
+            defaultModelSelection: shellDefault,
             scripts: [],
             createdAt: "2026-10-12T00:00:00.000Z",
             updatedAt: "2026-10-12T00:00:00.000Z",
@@ -586,6 +616,9 @@ export function makeHarness(
   ];
 
   const layerExternal = Layer.mergeAll(
+    Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+      resolve: () => Effect.succeed(options.repositoryIdentity ?? null),
+    }),
     Layer.mock(TextGeneration.TextGeneration)({
       generateChannelReception: (input) => script.current(input.input),
     }),
@@ -599,12 +632,18 @@ export function makeHarness(
           (instance) => instance.instanceId === instanceId,
         );
         return Effect.succeed(
-          listed !== undefined
-            ? fakeInstance(listed)
-            : ({ snapshot: { getSnapshot: Effect.succeed({ models: [] }) } } as never),
+          listed?.missing
+            ? undefined
+            : listed !== undefined
+              ? fakeInstance(listed)
+              : fakeInstance({ instanceId }),
         );
       },
-      listInstances: Effect.succeed((options.providerInstances ?? []).map(fakeInstance)),
+      listInstances: Effect.succeed(
+        (options.providerInstances ?? [{ instanceId: "codex" }])
+          .filter((instance) => !instance.missing)
+          .map(fakeInstance),
+      ),
     }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(environmentId),
@@ -676,6 +715,12 @@ export function makeHarness(
 
   const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
     Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(undefined),
+        projectProviders: (providers) => Effect.succeed(providers),
+      }),
+    ),
+    Layer.provide(
       Layer.mergeAll(
         layerThreads,
         layerLaunch,
@@ -713,6 +758,7 @@ export function makeHarness(
     Layer.provideMerge(layerExternal),
     Layer.provideMerge(layerLaunch),
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
+    Layer.provideMerge(layerDatabase),
   );
   /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
   const removeProject = (id: ProjectId) => {
@@ -839,6 +885,13 @@ export const botMessages = Effect.gen(function* () {
   const records = yield* threads.getThreadRecords(botThreadId, ["messages", "runs", "turnItems"]);
   return records;
 });
+
+/** The newest task card in the bot; a GOAT Bot task's result lives there. */
+export const latestCard = Effect.map(botMessages, (records) =>
+  records.turnItems
+    .flatMap((item) => (item.type === "notification" && item.ledgerTask ? [item.ledgerTask] : []))
+    .at(-1),
+);
 
 export const onlyTask = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

@@ -4,6 +4,7 @@ import {
   AuthMcpRegisteredClient,
   AuthMcpTokenResult,
   ExecutionEnvironmentDescriptor,
+  type LinkedHostFailureReason,
   type RuntimeMode,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -30,7 +31,7 @@ import { base64UrlEncode } from "../auth/utils.ts";
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
  * instead of SSH: a headless `goat serve` behind Tailscale, a LAN address or
- * T3 Connect. Linking spends a one-time pairing code from that host through
+ * GOAT Connect. Linking spends a one-time pairing code from that host through
  * its own MCP OAuth endpoints, exactly as an outside agent signs in, and keeps
  * the resulting `mcp-client` session. The host decides what that session may
  * do; nothing on the host changes. `SshRemoteDispatch` routes a linked name
@@ -38,9 +39,9 @@ import { base64UrlEncode } from "../auth/utils.ts";
  */
 
 /** One secret holds every link, so a link and its token are written together. */
-export const LINKED_HOSTS_SECRET = "linked-hosts";
+const LINKED_HOSTS_SECRET = "linked-hosts";
 /** Never dialled: the code comes back in the decision response, not through a browser. */
-export const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
+const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
 const LINK_TIMEOUT = "20 seconds";
 const LINK_CLIENT_NAME_MAX = 100;
 /** Lowercase-led, ssh-alias-safe, and short enough to read in a tool result. */
@@ -53,7 +54,7 @@ export class LinkedHostError extends Data.TaggedError("LinkedHostError")<{
    * host_unavailable: the host could not be reached or answered nonsense.
    * storage_failed: this machine could not read or write its links.
    */
-  readonly reason: "invalid_request" | "link_refused" | "host_unavailable" | "storage_failed";
+  readonly reason: LinkedHostFailureReason;
   readonly message: string;
 }> {}
 
@@ -180,7 +181,7 @@ export class LinkedHosts extends Context.Service<
   }
 >()("goat/linkedHosts/LinkedHosts") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;

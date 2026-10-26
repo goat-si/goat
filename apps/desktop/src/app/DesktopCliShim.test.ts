@@ -9,10 +9,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import { it as effectIt } from "@effect/vitest";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 
-import { type CliShimTarget, launcherPath, renderCliShim } from "./DesktopCliShim.ts";
+import { type CliShimTarget, install, launcherPath, renderCliShim } from "./DesktopCliShim.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
@@ -123,6 +124,50 @@ describe("renderCliShim", () => {
         }
         expect(NodeFS.readFileSync(old, "utf8")).toBe("upstream data");
         expect(NodeFS.readdirSync(NodePath.dirname(old))).toEqual(["sentinel"]);
+      }),
+  );
+
+  effectIt.effect(
+    "keeps a launcher per channel in the GOAT home Nightly and stable share (#1091)",
+    () =>
+      Effect.gen(function* () {
+        const root = tempRoot();
+        const installChannel = (appVersion: string, appPath: string) =>
+          install.pipe(
+            Effect.map(Option.getOrThrow),
+            Effect.provide(
+              DesktopEnvironment.layer({
+                dirname: "/repo/apps/desktop/dist-electron",
+                homeDirectory: root,
+                platform: "darwin",
+                processArch: "arm64",
+                appVersion,
+                appPath,
+                isPackaged: true,
+                resourcesPath: NodePath.dirname(appPath),
+                runningUnderArm64Translation: false,
+              }).pipe(
+                Layer.provideMerge(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+              ),
+            ),
+          );
+        const stableApp = "/Applications/GOAT.app/Contents/Resources/app.asar";
+        const nightlyApp = "/Applications/GOAT (Nightly).app/Contents/Resources/app.asar";
+        const stable = yield* installChannel("0.1.1", stableApp);
+        const nightly = yield* installChannel("0.1.2-nightly.20261023.256", nightlyApp);
+
+        const home = NodePath.join(root, ".goat", "desktop");
+        expect(stable).toBe(NodePath.join(home, "bin", "goat"));
+        expect(nightly).not.toBe(stable);
+        expect(nightly.startsWith(`${home}${NodePath.sep}`)).toBe(true);
+        for (const [launcher, app] of [
+          [stable, stableApp],
+          [nightly, nightlyApp],
+        ] as const) {
+          const content = NodeFS.readFileSync(launcher, "utf8");
+          expect(content).toContain(`export GOAT_CLI_PATH='${launcher}'`);
+          expect(content).toContain(`'${app}/apps/server/dist/bin.mjs'`);
+        }
       }),
   );
 

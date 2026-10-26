@@ -8,6 +8,7 @@ import {
   PrimaryConnectionTarget,
   ConnectionTransientError,
 } from "../connection/model.ts";
+import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
@@ -234,6 +235,52 @@ describe("shared SSH owner invalidation", () => {
           sshRuntimeReady: ready,
         });
       }
+    } finally {
+      stop();
+      h.registry.dispose();
+    }
+  });
+});
+
+describe("presentations with providers", () => {
+  it("leaves out disabled connections until they are re-enabled", () => {
+    const h = harness();
+    const atom = h.full.presentationsWithProvidersAtom;
+    const withSecond = (enabled: boolean): EnvironmentCatalogState => ({
+      isReady: true,
+      entries: new Map([
+        [FIRST, entry(FIRST)],
+        [SECOND, { ...entry(SECOND), enabled }],
+      ]),
+    });
+    const stop = h.registry.subscribe(atom, () => {});
+    try {
+      h.registry.set(h.configs(SECOND), config(false, "/second"));
+      h.registry.set(h.catalog, withSecond(false));
+      expect([...h.registry.get(atom).keys()]).toEqual([FIRST]);
+      expect(h.registry.get(h.full.presentationsAtom).has(SECOND)).toBe(true);
+      h.registry.set(h.catalog, withSecond(true));
+      expect([...h.registry.get(atom).keys()]).toEqual([FIRST, SECOND]);
+      expect(h.registry.get(atom).get(SECOND)?.serverConfig?.cwd).toBe("/second");
+    } finally {
+      stop();
+      h.registry.dispose();
+    }
+  });
+
+  it("leaves out unsupported environments", () => {
+    const h = harness();
+    const atom = h.full.presentationsWithProvidersAtom;
+    const stop = h.registry.subscribe(atom, () => {});
+    try {
+      h.registry.set(h.catalog, {
+        isReady: true,
+        entries: new Map<EnvironmentId, ConnectionCatalogEntry>([
+          [FIRST, entry(FIRST)],
+          [SECOND, { ...entry(SECOND), unsupportedReason: "Server is too old." }],
+        ]),
+      });
+      expect([...h.registry.get(atom).keys()]).toEqual([FIRST]);
     } finally {
       stop();
       h.registry.dispose();

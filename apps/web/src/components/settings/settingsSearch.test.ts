@@ -47,10 +47,25 @@ describe("searchSettings", () => {
   it.each(["hub", "phone qr", "pair phone"])("routes %s to the hub card", (query) => {
     const match = searchSettings(query).find((item) => item.id === "hub-device");
     expect(match).toMatchObject({
-      title: "Use this device as a hub",
+      title: "Connect your phone",
       to: "/settings/connections",
     });
     expect(match?.targetId ?? match?.id).toBe("hub-device");
+  });
+
+  it.each([
+    ["use this device as a hub", "hub-device", "/settings/connections"],
+    ["hub devices", "hub-devices", "/settings/hub"],
+    ["devices on this hub", "hub-devices", "/settings/hub"],
+    ["devices on this hub", "hub-nodes", "/settings/hub"],
+    ["opencodex devices", "hub-devices", "/settings/hub"],
+    ["opencodex home", "hub-enabled", "/settings/hub"],
+    ["opencodex home", "providers", "/settings/providers"],
+    ["bot home", "goat-bot-home", "/settings/goat-bot"],
+    ["archive", "archive", "/settings/archived"],
+    ["device hub", "device-hub", "/settings/integrations"],
+  ] as const)("still finds %s after the rename, on %s", (query, id, to) => {
+    expect(searchSettings(query).find((item) => item.id === id)?.to).toBe(to);
   });
 
   it("routes the existing Tailscale search entry to its moved hub control", () => {
@@ -104,6 +119,27 @@ describe("searchSettings", () => {
     expect(searchSettings("update track")).toEqual([]);
   });
 
+  it("hides System glass when the desktop bridge has no material API", () => {
+    const item: SettingsSearchItem = {
+      id: "desktop-system-material",
+      title: "System glass",
+      to: "/settings/appearance",
+      requiresDesktopWindowMaterial: true,
+    };
+    try {
+      vi.stubGlobal("window", { desktopBridge: {} });
+      expect(searchSettings("system glass", [item])).toEqual([]);
+      vi.stubGlobal("window", {
+        desktopBridge: { getWindowMaterialState: vi.fn(), onWindowMaterialStateChanged: vi.fn() },
+      });
+      expect(searchSettings("system glass", [item]).map((result) => result.id)).toEqual([
+        "desktop-system-material",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("hides settings whose controls are unavailable", () => {
     const available = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
@@ -137,7 +173,7 @@ describe("searchSettings", () => {
       "review-guide-model",
       "review-guide-instructions",
       "source-control-writing-style",
-      "t3-connect",
+      "goat-connect",
       "hold-webhooks-while-offline",
       "tailscale-https",
       "wsl-backend",
@@ -175,6 +211,7 @@ describe("searchSettings", () => {
     ["default model", "default-model", "/settings/general"],
     ["new threads", "new-threads", "/settings/general"],
     ["agent browser access", "agent-browser-access", "/settings/integrations"],
+    ["tool listing", "agent-tool-listing", "/settings/integrations"],
     ["goat bot home", "goat-bot-home", "/settings/goat-bot"],
     ["slack", "slack-connection", "/settings/goat-bot"],
     ["imessage", "imessage-channel", "/settings/goat-bot"],

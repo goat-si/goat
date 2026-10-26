@@ -1,4 +1,8 @@
 import { Schema } from "effect";
+import {
+  PreviewAutomationControlReason,
+  previewControlMessage,
+} from "./previewAutomationControl.ts";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
@@ -18,7 +22,7 @@ const BoundedUrl = Schema.String.check(Schema.isTrimmed())
 const URL_GUIDANCE =
   "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.";
 const PROFILE_GUIDANCE =
-  "Browser profile for a new tab, by id or name (case-insensitive) from preview_status profiles. Omit to use the user's default profile. A tab keeps the profile it opened with.";
+  "Browser profile for a new tab, by id or name (case-insensitive) from goat_preview_status profiles. Omit to use the user's default profile. A tab keeps the profile it opened with.";
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0))
     .check(Schema.isLessThanOrEqualTo(60_000))
@@ -66,11 +70,11 @@ const PreviewAutomationTabTargetFields = {
   tabId: Schema.optional(
     PreviewTabId.annotate({
       description:
-        "Exact collaborative browser tab to target, including a tab the user opened (see preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
+        "Exact collaborative browser tab to target, including a tab the user opened (see goat_preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
     }),
   ).annotate({
     description:
-      "Exact collaborative browser tab to target, including a tab the user opened (see preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
+      "Exact collaborative browser tab to target, including a tab the user opened (see goat_preview_status tabs). Omit to use this agent session's current tab, or the user's visible tab when this session has none.",
   }),
 };
 
@@ -209,7 +213,7 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   )
   .annotate({
     description:
-      "Opens the collaborative browser for the current thread. Use preview_navigate afterward when readiness waiting matters.",
+      "Opens the collaborative browser for the current thread. Use goat_preview_navigate afterward when readiness waiting matters.",
   });
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
 
@@ -858,15 +862,18 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
   actionTimeline: Schema.Array(PreviewAutomationActionEvent),
-  screenshot: Schema.Struct({
-    mimeType: Schema.Literal("image/png"),
-    data: Schema.String,
-    width: Schema.Int,
-    height: Schema.Int,
-    fullPage: Schema.optional(Schema.Boolean),
-    clipped: Schema.optional(Schema.Boolean),
-    byteLength: Schema.optional(Schema.Int),
-  }),
+  /** Absent when the request skipped the capture because nothing would show or save it. */
+  screenshot: Schema.optional(
+    Schema.Struct({
+      mimeType: Schema.Literal("image/png"),
+      data: Schema.String,
+      width: Schema.Int,
+      height: Schema.Int,
+      fullPage: Schema.optional(Schema.Boolean),
+      clipped: Schema.optional(Schema.Boolean),
+      byteLength: Schema.optional(Schema.Int),
+    }),
+  ),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
 
@@ -1049,7 +1056,7 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedError<Pr
   },
 ) {
   override get message(): string {
-    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry preview_status, then call preview_open if no tab is available. If it remains unavailable, report the browser connection failure.`;
+    return `No preview automation host is available for ${this.operation} in environment ${this.environmentId}. The server-owned browser may be starting or reconnecting. Retry goat_call {path:"preview.status"}, then call goat_call {path:"preview.open"} if no tab is available. If it remains unavailable, report the browser connection failure.`;
   }
 }
 
@@ -1074,8 +1081,8 @@ export class PreviewAutomationTabNotFoundError extends Schema.TaggedError<Previe
 ) {
   override get message(): string {
     return this.tabId
-      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call preview_open.`
-      : `No active preview tab was found for ${this.operation}. Call preview_open first.`;
+      ? `Preview tab ${this.tabId} was not found for ${this.operation}. Omit tabId to use the current tab, or call goat_call {path:"preview.open"}.`
+      : `No active preview tab was found for ${this.operation}. Call goat_call {path:"preview.open"} first.`;
   }
 }
 
@@ -1092,17 +1099,6 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
   }
 }
 
-export const PreviewAutomationControlReason = Schema.Literals([
-  "agentMismatch",
-  "humanControl",
-  "tabRequired",
-  "closed",
-  "interrupted",
-  "dialogPending",
-  "tabLimit",
-]);
-export type PreviewAutomationControlReason = typeof PreviewAutomationControlReason.Type;
-
 export class PreviewAutomationControlInterruptedError extends Schema.TaggedError<PreviewAutomationControlInterruptedError>()(
   "PreviewAutomationControlInterruptedError",
   {
@@ -1112,20 +1108,10 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
   },
 ) {
   override get message(): string {
-    if (this.reason === "agentMismatch")
-      return "This browser tab belongs to another agent session or a human. Open your own tab.";
-    if (this.reason === "humanControl")
-      return "A human controls this browser tab. Wait until they release control.";
-    if (this.reason === "tabRequired")
-      return "Multiple browser tabs belong to this session. Pass a tabId from preview_open or from the tabs listed by preview_status.";
-    if (this.reason === "dialogPending")
-      return "A browser dialog is pending. Read preview_status and resolve it with preview_dialog.";
-    if (this.reason === "tabLimit")
-      return "Too many server browser tabs are open. Close one with goat_preview_close, or reuse a tabId from preview_status tabs.";
-    if (this.reason === "closed") return "This browser tab is closed. Call preview_open.";
-    if (this.reason === "interrupted")
-      return "Browser control changed. Take a fresh snapshot before trying again.";
-    return `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`;
+    return (
+      previewControlMessage(this.reason) ??
+      `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`
+    );
   }
 }
 
@@ -1308,3 +1294,12 @@ export const PreviewUrlResolution = Schema.Struct({
   environmentId: EnvironmentId,
 });
 export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
+
+/**
+ * Page global holding the time (ms since epoch) until which the server holds a preview tab's input
+ * after Stop or a secret cut an agent action. The desktop relay checks it after its own focus wait,
+ * right before inserting text.
+ */
+export const PREVIEW_AGENT_INPUT_HELD_GLOBAL = "__goatAgentInputHeld";
+/** Longest a hold lasts if its release never reaches the page; agent dispatch takes far less. */
+export const PREVIEW_AGENT_INPUT_HOLD_MAX_MS = 5_000;

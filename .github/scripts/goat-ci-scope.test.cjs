@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const {
   FULL_LABEL,
+  AFFECTED_LABEL,
   SERVER_LABEL,
   MEMORY_LABEL,
   TASKS,
@@ -122,7 +123,7 @@ describe("selectTasks", () => {
   it("runs every dependent task for contracts", () => {
     assert.deepEqual(
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
-      TASKS.filter((task) => task !== "test-memory-growth"),
+      TASKS.filter((task) => task !== "test-memory-growth" && task !== "test-ingest"),
     );
   });
 
@@ -175,6 +176,18 @@ describe("selectTasks", () => {
     assert.deepEqual(tasksFor("infra/relay/src/index.ts"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
+  });
+
+  it("runs the ingest suite for its SQL and config and for the shared allowlist", () => {
+    for (const file of [
+      "infra/ingest/migrations/0001_batches.sql",
+      "infra/ingest/wrangler.jsonc",
+      "infra/ingest/src/store.ts",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-ingest"], file);
+    }
+    assert.ok(tasksFor("packages/shared/src/analyticsAllowlist.ts").includes("test-ingest"));
+    assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-ingest"));
   });
 
   it("always includes check", () => {
@@ -356,8 +369,16 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists fifteen jobs for a full run: eleven tasks and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 15);
+  it("lists sixteen jobs for a full run: twelve tasks and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 16);
+  });
+
+  it("runs the changed tests as one job after typecheck", () => {
+    assert.deepEqual(matrixFor(["test-changed", "typecheck", "check"]).include, [
+      { task: "check", title: "check" },
+      { task: "typecheck", title: "typecheck" },
+      { task: "test-changed", title: "test-changed" },
+    ]);
   });
 });
 
@@ -386,6 +407,8 @@ describe("planRun", () => {
   const failing = async () => ({ ok: false, status: 502 });
   const serverChange = ["apps/server/src/channels/ChannelDispatcher.ts"];
   const pr = (extra = {}) => ({ pull_request: { labels: [], draft: false, ...extra } });
+  const plan = (payload, fetchImpl, files = serverChange) =>
+    planRun({ env, payload, root, fetchImpl, files });
 
   it("follows the lane of a manual run, defaulting to all", async () => {
     const run = (lane) =>
@@ -402,45 +425,119 @@ describe("planRun", () => {
   });
 
   it("runs everything for ci:full from the event, the added label, or the live PR", async () => {
-    const plan = (payload, fetchImpl) =>
-      planRun({ env, payload, root, fetchImpl, files: serverChange });
     assert.equal((await plan(pr({ labels: [{ name: FULL_LABEL }] }), labels([]))).full, true);
     assert.equal((await plan({ ...pr(), label: { name: FULL_LABEL } }, labels([]))).full, true);
     assert.equal((await plan(pr(), labels([FULL_LABEL]))).full, true);
   });
 
-  it("falls back to path selection when the live labels cannot be read", async () => {
-    const result = await planRun({
-      env,
-      payload: pr(),
-      root,
-      fetchImpl: failing,
-      files: serverChange,
+  it("runs a quick run by default: check, typecheck and selected tests", async () => {
+    const result = await plan(pr(), labels([]));
+    assert.equal(result.full, false);
+    assert.equal(result.quick, true);
+    assert.deepEqual(result.tasks, ["check", "typecheck", "test-changed"]);
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelDispatcher.test.ts"),
+    );
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelBotTurns.test.ts"),
+    );
+    assert.equal(new Set(result.changedTests.vitest).size, result.changedTests.vitest.length);
+    assert.deepEqual(result.changedTests.node, []);
+    assert.equal(result.server.mode, "none");
+  });
+
+  it("quick PR includes cross-package importing tests (#1705)", async () => {
+    const result = await plan(pr(), labels([]), [
+      "packages/provider-opencode/src/server/v2/textGeneration.ts",
+    ]);
+    assert.ok(
+      result.changedTests.vitest.includes(
+        "apps/server/src/textGeneration/OpenCode2TextGeneration.test.ts",
+      ),
+    );
+    assert.ok(result.tasks.includes("test-changed"));
+  });
+
+  it("runs the same quick scope for a draft and for a ready pull request", async () => {
+    assert.deepEqual(
+      (await plan(pr({ draft: true }), labels([]))).tasks,
+      (await plan(pr(), labels([]))).tasks,
+    );
+  });
+
+  it("runs changed CI script tests with node --test and skips test-changed without tests", async () => {
+    const scripts = await plan(pr(), labels([]), [".github/scripts/goat-ci-scope.cjs"]);
+    assert.deepEqual(scripts.changedTests, {
+      vitest: [],
+      node: [".github/scripts/goat-ci-scope.test.cjs"],
     });
+    assert.deepEqual(scripts.tasks, ["check", "typecheck", "test-changed"]);
+    const docs = await plan(pr(), labels([]), ["docs/user/memory.md"]);
+    assert.deepEqual(docs.tasks, ["check"]);
+    const workflow = await plan(pr(), labels([]), [".github/workflows/goat-ci.yml"]);
+    assert.deepEqual(workflow.tasks, ["check", "typecheck"]);
+  });
+
+  it("runs an app's React Compiler coverage suite for its source changes, deletions included (#1579)", async () => {
+    const web = "apps/web/src/reactCompilerCoverage.test.ts";
+    const mobile = "apps/mobile/src/reactCompilerCoverage.test.ts";
+    // #1483 changed this component; its quick run passed and the bailout reached dev (#1491).
+    const component = await plan(pr(), labels([]), [
+      "apps/web/src/components/settings/HubNodesSettings.tsx",
+    ]);
+    assert.deepEqual(component.tasks, ["check", "typecheck", "test-changed"]);
+    assert.ok(component.changedTests.vitest.includes(web));
+    assert.ok(!component.changedTests.vitest.includes(mobile));
+    const deleted = await plan(pr(), labels([]), ["apps/mobile/src/features/removed/Removed.tsx"]);
+    assert.deepEqual(deleted.changedTests, { vitest: [mobile], node: [] });
+    const server = await plan(pr(), labels([]));
+    assert.ok(
+      !server.changedTests.vitest.some((file) => file.endsWith("reactCompilerCoverage.test.ts")),
+    );
+  });
+
+  it("keeps the quick run when the live labels cannot be read", async () => {
+    const result = await plan(pr(), failing);
+    assert.equal(result.quick, true);
+    assert.deepEqual(result.tasks, ["check", "typecheck", "test-changed"]);
+  });
+
+  it("runs what the changes reach for ci:affected", async () => {
+    const result = await plan(pr(), labels([AFFECTED_LABEL]));
+    assert.equal(result.quick, false);
     assert.equal(result.full, false);
     assert.equal(result.server.mode, "related");
+    assert.ok(result.tasks.includes("test-server"));
+    assert.ok(!result.tasks.includes("test-changed"));
   });
 
-  it("runs only check and typecheck for a draft", async () => {
-    const result = await planRun({
-      env,
-      payload: pr({ draft: true }),
-      root,
-      fetchImpl: labels([]),
-      files: serverChange,
-    });
-    assert.deepEqual(result.tasks, ["check", "typecheck"]);
-  });
-
-  it("widens a run with ci:server and ci:memory, drafts included", async () => {
-    const result = await planRun({
-      env,
-      payload: pr({ draft: true }),
-      root,
-      fetchImpl: labels([SERVER_LABEL, MEMORY_LABEL]),
-      files: serverChange,
-    });
-    assert.deepEqual(result.tasks, ["check", "typecheck", "test-memory-growth", "test-server"]);
+  it("widens a quick run with ci:server and ci:memory, drafts included", async () => {
+    const result = await plan(pr({ draft: true }), labels([SERVER_LABEL, MEMORY_LABEL]));
+    assert.deepEqual(result.tasks, [
+      "check",
+      "typecheck",
+      "test-changed",
+      "test-memory-growth",
+      "test-server",
+    ]);
     assert.equal(result.server.mode, "full");
+  });
+
+  it("tells a quick run how to request the full run, and a full run that it was one", async () => {
+    const quick = await plan(pr(), labels([]));
+    assert.match(quick.note, /quick run/i);
+    assert.match(quick.note, /ci:full/);
+    assert.match(quick.note, /gh workflow run goat-ci\.yml --ref <branch>/);
+    const full = await plan(pr(), labels([FULL_LABEL]));
+    assert.match(full.note, /^Full run/);
+    assert.doesNotMatch(full.note, /quick/i);
+  });
+
+  it("keeps the note on one output line when a changed file name holds a newline", async () => {
+    const file = 'evil\nmatrix={"include":[]}\r\nserver_files=["x"]';
+    const result = await plan(pr(), labels([AFFECTED_LABEL]), [file]);
+    assert.equal(result.full, true);
+    assert.doesNotMatch(result.note, /[\r\n]/);
+    assert.match(result.note, /evil matrix=/);
   });
 });

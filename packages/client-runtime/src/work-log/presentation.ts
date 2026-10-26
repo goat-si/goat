@@ -12,6 +12,7 @@ import {
 } from "@goat/contracts";
 import {
   resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   type GoatMcpToolDefinition,
   type GoatMcpToolSummaryAction,
 } from "@goat/shared/goatMcpToolPresentation";
@@ -33,14 +34,19 @@ import {
   type GoatToolSummaryCall,
 } from "@goat/client-runtime/goatToolSummary";
 
+import { computerUseDisplayInput } from "./computerUse.ts";
+
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped" | "idle";
 
 export function toolItemForDisplay(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
-    case "command_execution":
-    case "dynamic_tool": {
+    case "command_execution": {
       const { output: _output, ...displayItem } = item;
       return displayItem;
+    }
+    case "dynamic_tool": {
+      const { output: _output, ...displayItem } = item;
+      return { ...displayItem, input: computerUseDisplayInput(item.toolName, item.input) };
     }
     case "file_change": {
       const { diffStr, oldStr: _oldStr, newStr: _newStr, ...displayItem } = item;
@@ -225,17 +231,31 @@ export function formatCommandActionsLabel(
     .join(", ");
 }
 
+/** The tool an entry ran and its arguments; a goat_call reads as the tool its path names. */
+function workEntryCall(
+  entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "structuredPayload">,
+): { readonly toolName: string | null | undefined; readonly input: unknown } {
+  const item = entry.structuredPayload;
+  const data = asRecord(entry.toolData);
+  const input =
+    item?.type === "dynamic_tool" ? item.input : (data?.arguments ?? data?.input ?? data?.rawInput);
+  const toolName =
+    item?.type === "dynamic_tool" && item.toolName
+      ? item.toolName
+      : typeof data?.server === "string" && typeof data.tool === "string"
+        ? `${data.server}.${data.tool}`
+        : typeof data?.toolName === "string"
+          ? data.toolName
+          : resolveGoatMcpToolDefinition(entry.toolTitle)
+            ? entry.toolTitle
+            : entry.label;
+  return resolveGoatMcpItemCall({ toolName, input });
+}
+
 function workEntryToolName(
   entry: Pick<WorkLogPresentationEntry, "label" | "toolTitle" | "toolData" | "structuredPayload">,
-): string | undefined {
-  const item = entry.structuredPayload;
-  if (item?.type === "dynamic_tool" && item.toolName) return item.toolName;
-  const data = asRecord(entry.toolData);
-  if (typeof data?.server === "string" && typeof data.tool === "string") {
-    return `${data.server}.${data.tool}`;
-  }
-  if (typeof data?.toolName === "string") return data.toolName;
-  return resolveGoatMcpToolDefinition(entry.toolTitle) ? entry.toolTitle : entry.label;
+): string | null | undefined {
+  return workEntryCall(entry).toolName;
 }
 
 function workEntryToolOutput(
@@ -304,6 +324,18 @@ export function liveActivityToolStatus(status: string | undefined, presentTense:
   return "completed";
 }
 
+const COMMAND_VERBS: Partial<Record<ReturnType<typeof liveActivityToolStatus>, string>> = {
+  inProgress: "Running",
+  failed: "Failed",
+  declined: "Declined",
+  stopped: "Stopped",
+};
+
+/** The verb a command row leads with, like Codex's "Ran …" and "Running …". */
+export function commandVerb(status: ReturnType<typeof liveActivityToolStatus>): string {
+  return COMMAND_VERBS[status] ?? "Ran";
+}
+
 export function resolveWorkEntryToolPresentation(
   entry: Pick<
     WorkLogPresentationEntry,
@@ -311,12 +343,13 @@ export function resolveWorkEntryToolPresentation(
   >,
   fallbackStatus?: "inProgress" | "completed",
 ) {
-  const definition = resolveGoatMcpToolDefinition(workEntryToolName(entry));
+  const call = workEntryCall(entry);
+  const definition = resolveGoatMcpToolDefinition(call.toolName);
   const status = entry.toolLifecycleStatus ?? fallbackStatus;
   return resolveGoatMcpToolPresentation(
     definition,
     definition && goatToolResultIndicatesFailure(workEntryToolOutput(entry)) ? "failed" : status,
-    entry.toolData,
+    { input: call.input },
   );
 }
 
@@ -328,135 +361,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function commandResultContent(value: unknown): string | null {
-  const direct = nonEmptyString(value);
-  if (direct) return direct;
-
-  const directContent = Array.isArray(value) ? value : null;
-  const record = asRecord(value);
-  const content = record?.content;
-  const contentText = nonEmptyString(content);
-  if (contentText) return contentText;
-  const blocks = directContent ?? (Array.isArray(content) ? content : null);
-  if (!blocks) return null;
-
-  const chunks = blocks.flatMap((entry) => {
-    const text = nonEmptyString(entry) ?? nonEmptyString(asRecord(entry)?.text);
-    return text ? [text] : [];
-  });
-  return chunks.length > 0 ? chunks.join("\n") : null;
-}
-
-export function extractCommandOutputText(dataValue: unknown): string | null {
-  const data = asRecord(dataValue);
-  const item = asRecord(data?.item);
-  const itemResult = asRecord(item?.result);
-  const rawOutput = asRecord(data?.rawOutput);
-  const outputStreams = [
-    nonEmptyString(rawOutput?.stdout),
-    nonEmptyString(rawOutput?.stderr),
-  ].filter((value): value is string => value !== null);
-  const acpContent = Array.isArray(data?.content)
-    ? data.content
-        .flatMap((entryValue) => {
-          const entry = asRecord(entryValue);
-          const content = asRecord(entry?.content);
-          const text = entry?.type === "content" ? nonEmptyString(content?.text) : null;
-          return text ? [text] : [];
-        })
-        .join("\n")
-    : null;
-
-  const candidates = [
-    item?.aggregatedOutput,
-    itemResult?.content,
-    data?.rawOutput,
-    rawOutput?.content,
-    outputStreams.length > 0 ? outputStreams.join("\n") : null,
-    rawOutput?.output,
-    acpContent,
-    data?.result,
-  ];
-  for (const candidate of candidates) {
-    const text = commandResultContent(candidate);
-    if (text) return text;
-  }
-  return null;
-}
-
-/**
- * Ingestion caps tool details at 180 chars and appends "...", so a long command
- * echo no longer equals the command it repeats. Treat a truncated prefix of the
- * command as the same echo.
- */
-function textRepeatsCommand(text: string, commands: ReadonlyArray<string | null>): boolean {
-  const truncated = text.endsWith("...")
-    ? text.slice(0, -3)
-    : text.endsWith("\u2026")
-      ? text.slice(0, -1)
-      : null;
-  return commands.some((candidate) => {
-    const command = candidate?.trim();
-    if (!command) return false;
-    if (command === text) return true;
-    return (
-      truncated !== null &&
-      truncated.length > 0 &&
-      command.length > truncated.length &&
-      command.startsWith(truncated)
-    );
-  });
-}
-
-/**
- * OpenCode stores completed output in `detail` with no other output channel, so
- * plain equality is only treated as synthetic when the payload shape shows the
- * detail came from the command: Codex item metadata, an ACP tool call
- * (`data.toolCallId`, `kind: "execute"`), a Claude tool-name prefix, or no
- * structured command at all.
- */
-export function commandDetailRepeatsCommand(input: {
-  readonly detail: string;
-  readonly command: string | null;
-  readonly rawCommand: string | null;
-  readonly toolName: unknown;
-  readonly data: unknown;
-}): boolean {
-  const toolName = nonEmptyString(input.toolName)?.trim();
-  const detail = input.detail.trim();
-  const commands = [input.command, input.rawCommand];
-  if (toolName) {
-    const prefix = `${toolName}:`;
-    if (detail.toLowerCase().startsWith(prefix.toLowerCase())) {
-      const unprefixed = detail.slice(prefix.length).trim();
-      if (textRepeatsCommand(unprefixed, commands)) return true;
-    }
-  }
-
-  if (!textRepeatsCommand(detail, commands)) return false;
-
-  const data = asRecord(input.data);
-  const item = asRecord(data?.item);
-  const itemInput = asRecord(item?.input);
-  const itemResult = asRecord(item?.result);
-  const hasStructuredCommand = [
-    item?.command,
-    itemInput?.command,
-    itemResult?.command,
-    data?.command,
-  ].some((value) =>
-    Array.isArray(value)
-      ? value.some((part) => nonEmptyString(part) !== null)
-      : nonEmptyString(value) !== null,
-  );
-  return (
-    !hasStructuredCommand ||
-    item !== null ||
-    data?.toolCallId !== undefined ||
-    nonEmptyString(data?.kind)?.toLowerCase() === "execute"
-  );
 }
 
 function workLogEntryIsToolLike(entry: WorkLogPresentationEntry): boolean {
@@ -732,16 +636,8 @@ function exploreSummaryLabel(
 }
 
 function goatToolSummaryCall(entry: WorkLogPresentationEntry): GoatToolSummaryCall {
-  const item = entry.structuredPayload;
-  const data =
-    entry.toolData !== null && typeof entry.toolData === "object"
-      ? (entry.toolData as Record<string, unknown>)
-      : undefined;
   return {
-    input:
-      item?.type === "dynamic_tool"
-        ? item.input
-        : (data?.arguments ?? data?.input ?? data?.rawInput),
+    input: workEntryCall(entry).input,
     output: workEntryToolOutput(entry),
     outcome:
       entry.toolLifecycleStatus === "failed" ||
@@ -834,7 +730,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
     }
   }
   // Two or more exploration kinds share one "Explored …" phrase so they never
-  // crowd a real command or edit out of the two-category summary.
+  // crowd a real command or edit out of the three-category summary.
   const exploreGroups = [...groups.values()].filter(
     (group) => group.goatAction === null && EXPLORE_ACTIONS.has(group.action),
   );
@@ -874,7 +770,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   });
   const selected = [...summaries]
     .sort((a, b) => a.priority - b.priority || a.index - b.index)
-    .slice(0, 2)
+    .slice(0, 3)
     .sort((a, b) => a.index - b.index);
   const labels = selected.map(({ label }) => label);
   if (sources.size > 0) {

@@ -5,7 +5,18 @@
  *
  * Plan and reasons: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  */
+import { RESIDUE_KEEP_RULES } from "./rules-residue.ts";
+import { EXTERNAL_KEEP_RULES } from "./rules-external.ts";
+import { INTERNAL_KEEP_RULES, INTERNAL_TEXT_RULES } from "./rules-internal.ts";
+import { isTest } from "./paths.ts";
+export { isTest } from "./paths.ts";
+
+import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
+import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
+import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
+export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
  * Files no rule touches and the residue check skips. Upstream-owned files
@@ -32,11 +43,6 @@ export const isExempt = (path: string): boolean =>
   // AUR packaging is published only by the disabled upstream workflow.
   path.startsWith("packaging/aur/");
 
-export const isTest = (path: string): boolean =>
-  /\.(?:test|testkit|fixture|bench)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
-    path,
-  );
-
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
 /**
@@ -51,11 +57,14 @@ export const SERVER_SERVICE_KEY =
  * Code identifiers (plan wp4), applied to text and to file names. Substring
  * matches are intended: `useT3ProjectFileScripts` follows `T3ProjectFile`.
  * Not here on purpose: `t3McpApp` and `__t3McpAppReceive` (MCP-app wire format,
- * D17), `T3Connect*` (names the upstream service), `t3Home` (desktop bootstrap
+ * D17), `t3Home` (desktop bootstrap
  * key, D17), `t3CodeRange` (upstream model manifest key) and mobile native
  * modules (wp8).
  */
 const IDENTIFIERS: ReadonlyArray<readonly [from: string, to: string]> = [
+  // Local names around GOAT Connect; the relay wire values stay (relay-wire, relay-identities).
+  ["T3Connect", "GoatConnect"],
+  ["t3Connect", "goatConnect"],
   ["T3ProjectFile", "GoatProjectFile"],
   ["t3ProjectFile", "goatProjectFile"],
   ["T3Mcp", "GoatMcp"],
@@ -112,15 +121,21 @@ export const ENV_NAME = new RegExp(
   "g",
 );
 
-/** The SSH runner and the fixtures that pin its bytes (plan D17). */
+/**
+ * The SSH runner and the fixtures that pin its bytes (plan D17). The ownership scripts are
+ * uploaded byte for byte and hand T3CODE_ names to older runtimes, so a marker would change them.
+ */
 const outsideSshRunner = (path: string) =>
-  !/^packages\/ssh\/src\/(tunnel[^/]*|fixtures\/.*)$/.test(path);
+  !/^packages\/ssh\/src\/(tunnel[^/]*|runtimeOwnershipScripts\.ts|fixtures\/.*)$/.test(path);
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =
-  "namespace-node-imports|no-dom-test-environment|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|require-centered-scroll-gutter|require-disposable-render|require-suppression-reason";
+  "namespace-node-imports|no-dom-test-environment|no-em-dash-copy|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|require-centered-scroll-gutter|require-disposable-render|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
+  ...VISIBLE_TEXT_RULES,
+  ...WIRE_TEXT_RULES,
+  ...INTERNAL_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -442,7 +457,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   {
     id: "otlp-service-identity",
     category: "identities",
-    find: /\bt3code(?=-(?:server|desktop|web)\b)|(?<="service\.namespace": "|"stringValue":")t3code(?=")|(?<="service\.runtime": ")t3(?=-(?:server|web)")/g,
+    find: /\bt3code(?=-(?:server|desktop|web)\b)|(?<="service\.namespace": "|"stringValue":")t3code(?=")|(?<="service\.runtime": ")t3(?=-(?:server|web)")|(?<=")t3code(?=\.(?:server\.managed_by|client\.surface)")/g,
     replace: "goat",
     scope: (path) =>
       /^(?:apps\/server\/src\/(?:config|persistence\/Sqlite|serverLogger\.test)|apps\/desktop\/src\/app\/DesktopObservability(?:\.test)?|apps\/web\/src\/observability\/clientTracing)\.ts$/.test(
@@ -472,6 +487,9 @@ export const TEXT_RULES: readonly TextRule[] = [
     // Upstream tests use the old skill name as sample data; renaming them only adds merge churn.
     scope: (path) => !isTest(path),
   },
+  // Last, so they see text the env, package and identifier rules already renamed.
+  ...LEFTOVER_TEXT_RULES,
+  ...OWNER_TEXT_RULES,
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
@@ -495,6 +513,7 @@ export const PATH_RULES: readonly PathRule[] = [
     find: /^\.agents\/skills\/test-t3-(app|mobile)\//g,
     replace: ".agents/skills/test-goat-$1/",
   },
+  ...LEFTOVER_PATH_RULES,
   {
     // Builds since v0.1.1 read goat.json first and fall back to t3.json (plan 261013 D9).
     id: "repo-project-file",
@@ -517,6 +536,12 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  ...EXTERNAL_KEEP_RULES,
+  ...OWNER_KEEP_RULES,
+  ...RESIDUE_KEEP_RULES,
+  ...VISIBLE_KEEP_RULES,
+  ...WIRE_KEEP_RULES,
+  ...INTERNAL_KEEP_RULES,
   {
     id: "legacy-server-error-reader",
     pattern: /T3 server WebSocket/g,
@@ -535,20 +560,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     pattern: /t3-\$\{input\.backend\}-snap-shot/g,
     scope: (path) => path === "scripts/build-desktop-artifact.ts",
     reason: "Packaging must name the existing shipped native capture binary (D16).",
-  },
-  {
-    id: "upstream-http-client-identities",
-    pattern: /(?<="user-agent": ")t3code/g,
-    scope: (path) => path.startsWith("packages/source-control-"),
-    reason:
-      "Forge operators read this HTTP client identity; coordinate an external-client identity change (D12).",
-  },
-  {
-    id: "existing-pr-clone-directory",
-    pattern: /t3code-pr-/g,
-    scope: (path) => path === "packages/source-control-bitbucket/src/client/definition.ts",
-    reason:
-      "The suggested checkout directory names existing user repositories; retain existing task/checkout paths.",
   },
   {
     id: "shared-ssh-helpers",
@@ -624,7 +635,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "provider-replay-contracts",
-    pattern: /t3\.|t3code-test@example\.com|t3-antigravity-browser-preflight/g,
+    pattern: /t3\.|t3-antigravity-browser-preflight/g,
     scope: (path) =>
       path === "packages/provider-pi/src/server/adapter.ts" ||
       path === "packages/provider-testing/src/replayWorkspace.ts" ||
@@ -673,7 +684,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "retained-browser-and-device-state",
     pattern:
-      /t3-\$\{(?:hash|generation)|t3-page\.localhost|t3-html-render-overflow|t3:(?="navigated)|t3-upload-|t3-pierre-(?:dark|light)|\[t3-\$\{namespace\}/g,
+      /t3-\$\{(?:hash|generation)|t3-page\.localhost|t3-html-render-overflow|t3:(?="navigated)|t3-upload-|t3-pierre-(?:dark|light)/g,
     scope: (path) =>
       path.startsWith("apps/mobile/") ||
       path === "apps/server/src/device/AgentDeviceTarget.ts" ||
@@ -691,8 +702,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "legacy-artifacts",
-    pattern:
-      /t3code@users\.noreply\.github\.com|t3 (?:snapshot|checkpoint) ref=|t3-runtime|t3-link-|t3code\/custom-io-ordered-feed|t3-agent/g,
+    pattern: /t3-link-|t3code\/custom-io-ordered-feed|t3-agent/g,
     scope: (path) =>
       /(?:GitVcsDriver|build-cli-archive|htmlRender|third-party-licenses|AgentScope)\./.test(path),
     reason:
@@ -734,7 +744,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     // entry name, and a renamed package installs beside the old one instead of upgrading it.
     id: "installed-desktop-metadata",
     pattern:
-      /t3codeCommitHash|t3codeWebAuthn|T3 Tools|LICENSE-T3CODE\.txt|t3-black-[a-z0-9-]+|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+      /t3codeCommitHash|t3codeWebAuthn|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
     scope: (path) =>
       /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
         path,
@@ -771,7 +781,8 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "legacy-cli-package",
-    pattern: /\bt3\b|@t3code\/t3-|t3code\/t3|t3code\\\/t3/g,
+    pattern:
+      /@t3code\/t3-|t3code\/t3|t3code\\\/t3|(?<=["'])t3(?=["'])|(?<=`|npx )t3(?=`|@)|(?<=bin\/)t3(?=\.[cm]?js)/g,
     scope: (path) =>
       /(?:invocation|build-npm-launcher|npm-launcher\/|package\.json|install\.|npmRelease|versionSkew)/.test(
         path,
@@ -780,26 +791,13 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
 
   {
+    // Source copy is the recurrence gate; fixtures follow their source (#98/#99, R7 PR4).
     id: "test-fixture-values",
     pattern:
-      /\b(?:[Tt]3(?:code|Code|Tools|tools|dotgg)?(?:[-.:/][A-Za-z0-9_-]+)*|T3B|_t3_unknown|__t3Xss|t3code_codex_(?:missing|first|second)_|t3coderelay[-A-Za-z0-9]*|t3Source|fromT3|missingT3|t3chat-[A-Za-z0-9-]+|host3|project3|bt3kw2qpn)\b|mcp__t3(?:code|-code)__|(?:[Tt]3)_|(?<=\.mount_)[Tt]3[A-Za-z0-9]*|\burn%3At3%3A/g,
+      /\b(?:T3[A-Za-z0-9_]*|t3reviewdiff|[Tt]3(?:code|Code|Tools|tools|dotgg)?(?:[-.:/][A-Za-z0-9_-]+)*|T3B|_t3_unknown|__t3Xss|t3code_codex_(?:missing|first|second)_|t3coderelay[-A-Za-z0-9]*|t3Source|fromT3|missingT3|t3chat-[A-Za-z0-9-]+|host3|project3|bt3kw2qpn)\b|mcp__t3(?:code|-code)__|(?:[Tt]3)_|(?<=\.mount_)[Tt]3[A-Za-z0-9]*|\burn%3At3%3A/g,
     scope: isTest,
     reason:
       "Opaque test fixture paths, mock process/app/repository identities and historical release URLs; these are input samples, not product identifiers.",
-  },
-  {
-    id: "relay-identities",
-    pattern:
-      /T3Connect[A-Za-z]*|T3Connect|t3-(?:env|cloud|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
-    reason:
-      "T3 Connect account names, public client ids, JWT and hosted routing contracts belong to the upstream relay (D12/D14).",
-  },
-  {
-    id: "native-upstream-types",
-    pattern:
-      /T3ComposerClipboard\w*|RCTT3SourceText\w*|T3PresentationSource\w*|T3ContextSheetSize\w*|t3FirstResponder|t3_(?:chats|pull_requests|subscription_widget_enabled)|T3\$\{name\}Stream|react-native-enriched-markdown-[\d.]+-t3\.\d+/g,
-    reason:
-      "Upstream native clipboard and generated device stream bridges require a coordinated native rebuild (D18).",
   },
   {
     id: "legacy-project-source",
@@ -848,7 +846,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "observability-services",
     pattern:
-      /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code/g,
+      /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code|t3code\.(?:component|client\.surface)/g,
     scope: (path) =>
       /(?:relayTracing|apps\/web\/src\/lib\/runtime|apps\/mobile\/src\/features\/observability\/tracing)\./.test(
         path,
@@ -863,14 +861,8 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
 
   {
-    // Also keeps the GNOME capture extension uuid snap-shot@t3.codes, frozen by ADR-0014.
-    id: "attribution",
-    pattern: /pingdotgg\/t3code|t3\.codes|T3 Code|T3 Connect|T3 Chat|t3\.chat/g,
-    reason: "Upstream attribution, the T3 Connect service and product names (prose is T1).",
-  },
-  {
     id: "relay-wire",
-    pattern: /x-t3-relay-[a-z-]+|x-t3-hook-outcome|t3-connect|t3_relay/g,
+    pattern: /x-t3-relay-[a-z-]+|x-t3-hook-outcome|(?<!\[)t3-connect(?!\])|t3_relay/g,
     reason: "T3 Connect relay protocol, owned by the upstream relay.",
   },
   {
@@ -922,17 +914,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     id: "desktop-origin",
     pattern: /\bt3code(?:-dev)?:\/\//g,
     reason: "Desktop renderer origins that key all desktop storage (plan D13).",
-  },
-  {
-    // Frozen by decision in #112 (ADR-0014): module, view, notification-tag and SharedPreferences
-    // names. A rename changes the native fingerprint, orphans posted notifications and turns every
-    // upstream module sync into a conflict. Revisit only with a native rebuild that migrates tags
-    // and prefs and is checked on Android and iOS devices.
-    id: "mobile-native",
-    pattern:
-      /t3-(?:source-text|agent-alert|agent-activity|agent-notifications|composer-editor|markdown-text|native-controls|review-diff|subscription-widget|terminal|widget-expiry)|\bT3(?:SourceText|MenuDismissTouchGate|WorkspaceNavigation|PresentationSources|ComposerEditor|KeyboardCommands|NativeControls|MarkdownText|ReviewDiff|Terminal|SelectableMarkdownText|WidgetExpiry|AgentNotifications|DeviceStream|PreviewStream|Showcase|Demo|Mark|FrostedCutout|LayoutMetrics|NativeFile|NativePresentation|NativeVideo|WorkspaceOrientation|ContextChip)\w*|react-native-screens-[\d.]+-t3\.\d+|t3_terminal\w*|t3(?:agentnotifications|composereditor|markdowntext|nativecontrols|reviewdiff|terminal|widgetexpiry)/g,
-    reason:
-      "Mobile native module, view and font names, frozen through the first stable release (#112, ADR-0014).",
   },
   {
     id: "external-identities",

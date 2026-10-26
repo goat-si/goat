@@ -14,10 +14,11 @@ import {
   type PreviewStreamViewport,
   previewStreamHostSetupMessage,
 } from "@goat/client-runtime/preview/server-browser-stream";
-import type {
-  EnvironmentId,
-  PreviewStreamHostSetup,
-  PreviewViewportSetting,
+import {
+  type EnvironmentId,
+  type PreviewStreamHostSetup,
+  type PreviewViewportSetting,
+  ThreadId,
 } from "@goat/contracts";
 import {
   type FormEvent,
@@ -37,8 +38,11 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
+import { usePreviewTabAgentDriven } from "~/previewStateStore";
 import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/previewStream";
 import { observeResize } from "~/lib/observeResize";
+
+import { boxToViewport, viewportToBox } from "./letterbox";
 
 export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
@@ -46,6 +50,9 @@ export interface ServerBrowserHandle {
   readonly reload: (options?: { readonly ignoreCache?: boolean }) => void;
   readonly viewport: (setting: PreviewViewportSetting) => void;
   readonly canvas: () => HTMLCanvasElement | null;
+  /** Asks the stream for control of the page; onControl reports whether it was granted. */
+  readonly takeControl: () => void;
+  readonly releaseControl: () => void;
 }
 
 const RESIZE_THROTTLE_MS = 150;
@@ -139,7 +146,13 @@ export function ServerBrowserSurface(props: {
   readonly tabId: string;
   readonly visible: boolean;
   readonly followSize?: boolean;
-  readonly controlPosition?: "top" | "bottom";
+  /** none: no control bar, as in a thumbnail that only shows the page. */
+  readonly controlPosition?: "top" | "bottom" | "none";
+  /**
+   * A passive, low-rate view: no input or control grants, frames scaled down on the server to
+   * maxWidth and acked no faster than frameIntervalMs.
+   */
+  readonly thumbnail?: { readonly frameIntervalMs: number; readonly maxWidth: number };
   readonly onFirstFrame?: () => void;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
@@ -153,8 +166,9 @@ export function ServerBrowserSurface(props: {
     threadId,
     tabId,
     visible,
-    followSize = true,
+    followSize: followSizeProp = true,
     controlPosition = "top",
+    thumbnail,
     onFirstFrame,
     onViewport,
     onControl,
@@ -163,6 +177,19 @@ export function ServerBrowserSurface(props: {
     pdfUrl = null,
     ref,
   } = props;
+  // An agent's page keeps its own viewport in every view, so this window's size never changes its
+  // layout or the coordinates the agent acts on; views letterbox it instead.
+  const agentDriven = usePreviewTabAgentDriven(
+    { environmentId, threadId: ThreadId.make(threadId || "none") },
+    tabId,
+  );
+  const followSize = followSizeProp && !agentDriven;
+  // Read when control arrives; an effect event keeps the stream from reconnecting on a change.
+  const followsSize = useEffectEvent(() => followSize);
+  // A secret field stays hidden from this viewer across a reconnect until the stream says otherwise.
+  const privateRef = useRef(false);
+  const thumbnailFrameMs = thumbnail?.frameIntervalMs;
+  const thumbnailWidth = thumbnail?.maxWidth;
   const access = usePreviewStreamAccess(environmentId);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -268,13 +295,14 @@ export function ServerBrowserSurface(props: {
     if (!canvas || !viewport || !hasFrameRef.current || controlRef.current?.controller !== "you")
       return null;
     const rect = canvas.getBoundingClientRect();
-    const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
-    const width = canvas.width * fit;
-    const height = canvas.height * fit;
-    if (!(width > 0 && height > 0)) return null;
-    const scale = viewport.width / width;
-    const x = (clientX - rect.left - (rect.width - width) / 2) * scale;
-    const y = (clientY - rect.top - (rect.height - height) / 2) * (viewport.height / height);
+    const point = boxToViewport(
+      { x: clientX - rect.left, y: clientY - rect.top },
+      rect,
+      canvas,
+      viewport,
+    );
+    if (!point) return null;
+    const { x, y, scale } = point;
     const inside = x >= 0 && y >= 0 && x <= viewport.width && y <= viewport.height;
     if (!inside && !clamp) return null;
     return {
@@ -308,6 +336,8 @@ export function ServerBrowserSurface(props: {
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
       viewport: (setting) => send({ type: "viewport", setting }),
       canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
+      takeControl: () => send({ type: "takeControl" }),
+      releaseControl: () => send({ type: "releaseControl" }),
     }),
     [pdfUrl, send],
   );
@@ -367,8 +397,19 @@ export function ServerBrowserSurface(props: {
       hasFrameRef.current = true;
       firstFrame();
     });
+    painter.setSuppressed(privateRef.current);
     const client = createPreviewStreamClient(
-      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
+      thumbnailFrameMs === undefined || thumbnailWidth === undefined
+        ? { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height }
+        : {
+            access,
+            threadId,
+            tabId,
+            maxWidth: Math.min(cap.width, thumbnailWidth),
+            maxHeight: Math.min(cap.height, thumbnailWidth),
+            interactive: false,
+            ackDelayMs: thumbnailFrameMs,
+          },
       {
         onFrame: (jpeg) => {
           unauthorizedRef.current = 0;
@@ -387,7 +428,12 @@ export function ServerBrowserSurface(props: {
           else inputRef.current?.blur();
         },
         onPointer: (pointer) => {
-          const placed = placeAgentCursor(pointer, canvasRef.current, viewportRef.current);
+          // A thumbnail shows where the agent points, without the click marker's repainting ping.
+          const placed = placeAgentCursor(
+            thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" },
+            canvasRef.current,
+            viewportRef.current,
+          );
           if (placed) setAgentCursor(placed);
         },
         onClipboard: (text) => void copyPageText(text),
@@ -400,6 +446,14 @@ export function ServerBrowserSurface(props: {
         },
         onControl: (next) => {
           const previous = controlRef.current;
+          // The person entering the secret keeps their view; the server sends nobody else frames.
+          const hidden = next.private === true && next.controller !== "you";
+          if (hidden && !privateRef.current) {
+            canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+            setAgentCursor(null);
+          }
+          privateRef.current = hidden;
+          painter.setSuppressed(hidden);
           controlRef.current = next;
           setControl(next);
           controlChanged(next);
@@ -412,7 +466,7 @@ export function ServerBrowserSurface(props: {
             clearInput();
           } else if (previous?.controller !== "you") {
             const size = sizeRef.current;
-            if (followSize && size) client.send({ type: "resize", ...size });
+            if (followsSize() && size) client.send({ type: "resize", ...size });
           }
         },
         onConnectedChange: (connected) => {
@@ -453,9 +507,10 @@ export function ServerBrowserSurface(props: {
     access,
     accessDenied,
     cap,
+    thumbnailFrameMs,
+    thumbnailWidth,
     clearInput,
     environmentId,
-    followSize,
     hostSetup,
     tabId,
     threadId,
@@ -711,28 +766,30 @@ export function ServerBrowserSurface(props: {
       className={cn("relative flex flex-col overflow-hidden", className)}
       data-server-browser-surface={tabId}
     >
-      <div
-        className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
-          controlPosition === "bottom" ? "order-last border-t" : "border-b",
-        )}
-      >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control)}
-        </span>
-        {control?.canOperate ? (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={control.controller === "another-viewer"}
-            onClick={() =>
-              send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-            }
-          >
-            {control.controller === "you" ? "Release control" : "Take control"}
-          </Button>
-        ) : null}
-      </div>
+      {controlPosition === "none" ? null : (
+        <div
+          className={cn(
+            "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
+            controlPosition === "bottom" ? "order-last border-t" : "border-b",
+          )}
+        >
+          <span role="status" className="text-xs text-muted-foreground">
+            {previewStreamControlLabel(control)}
+          </span>
+          {control?.canOperate ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={control.controller === "another-viewer"}
+              onClick={() =>
+                send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
+              }
+            >
+              {control.controller === "you" ? "Release control" : "Take control"}
+            </Button>
+          ) : null}
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         {pdfUrl ? (
           <embed
@@ -913,13 +970,11 @@ function placeAgentCursor(
 ): AgentCursorPlacement | null {
   if (!canvas || !viewport || canvas.width < 1 || canvas.height < 1) return null;
   const box = { width: canvas.clientWidth, height: canvas.clientHeight };
-  const fit = Math.min(box.width / canvas.width, box.height / canvas.height);
-  const width = canvas.width * fit;
-  const height = canvas.height * fit;
+  const { x: left, y: top } = viewportToBox(pointer, box, canvas, viewport);
   return {
     phase: pointer.phase,
     sequence: pointer.sequence,
-    left: (box.width - width) / 2 + (pointer.x * width) / viewport.width,
-    top: (box.height - height) / 2 + (pointer.y * height) / viewport.height,
+    left,
+    top,
   };
 }

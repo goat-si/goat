@@ -251,7 +251,7 @@ export type CloudMachinePreflight = (alias: string) => Effect.Effect<void, Conne
  * wakes a stopped machine, because reconnects and route checks run this too; Resume in Settings
  * does. Loaded lazily: the server state module depends on this connection layer.
  */
-export const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
+const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
   "web.connectionPlatform.ssh.readyCloudMachine",
 )(function* (alias) {
   const [{ serverEnvironment }, { primaryEnvironmentIdAtom }] = yield* Effect.promise(() =>
@@ -316,7 +316,7 @@ const pairingGrantKey = (server: PairingGrantServer, target: DesktopSshEnvironme
       ]);
 
 /** The standard scopes a saved SSH token must still hold to be reused instead of re-paired. */
-export function requiredSshTokenScopes(
+function requiredSshTokenScopes(
   grants: SshPairingGrants,
   server: PairingGrantServer,
   target: DesktopSshEnvironmentTarget,
@@ -449,7 +449,22 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   }
   const access = yield* Effect.tryPromise({
     try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
-    catch: sshPreparationFailure,
+    catch: (cause) => {
+      const error = sshPreparationFailure(cause);
+      // A reused remote server on another build can fail to decode the grant
+      // the desktop's runner just minted, and answers 500 on every retry.
+      if (
+        error._tag !== "ConnectionTransientError" ||
+        descriptor.serverVersion === APP_VERSION ||
+        !error.detail.includes("[ssh_http:500]")
+      ) {
+        return error;
+      }
+      return new ConnectionBlockedError({
+        reason: "configuration",
+        detail: `${descriptor.label} runs GOAT ${descriptor.serverVersion}, but this desktop is ${APP_VERSION}, and that server could not accept its pairing. Restart the GOAT server on ${descriptor.label} so it runs ${APP_VERSION}, then retry.`,
+      });
+    },
   }).pipe(withSshConnectionTiming("pairing"));
   // Reconnects look the record up by the resolved target the bridge returns, which is also
   // what the saved profile keeps.
@@ -760,7 +775,7 @@ const layerCapabilities = Layer.effectContext(
         if (session === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "Sign in to T3 Connect to connect this environment.",
+            detail: "Sign in to GOAT Connect to connect this environment.",
           });
         }
         const token = yield* session.readClerkToken().pipe(
@@ -775,7 +790,7 @@ const layerCapabilities = Layer.effectContext(
         if (token === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",
-            detail: "The T3 Connect session is unavailable.",
+            detail: "The GOAT Connect session is unavailable.",
           });
         }
         return token;
@@ -963,7 +978,7 @@ export function secondsUntil(expiresAt: string | undefined, nowEpochMs: number):
     : 0;
 }
 
-export function secondaryBearerExpiresAtEpochMs(
+function secondaryBearerExpiresAtEpochMs(
   issuedAtEpochMs: number,
   expiresInSeconds: number,
 ): number {

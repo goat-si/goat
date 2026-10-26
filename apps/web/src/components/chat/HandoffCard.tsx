@@ -1,9 +1,17 @@
-import { codexRouteErrorMessage } from "@goat/client-runtime/state/provider-instance-display";
+import {
+  codexRouteErrorMessage,
+  handoffExpiryLabel,
+  handoffRespondErrorMessage,
+} from "@goat/client-runtime/state/provider-instance-display";
+import { computerUseGrantLabel } from "@goat/client-runtime/computerUseGrant";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  AuthSettingsWriteScope,
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
+  computerUseGrantLiveUntil,
   isHandoffPending,
   isProviderHandoffPath,
   PROVIDER_SETUP_HANDOFF_PATH,
@@ -60,6 +68,10 @@ export function HandoffCard(props: HandoffCardProps) {
     props.handoff.target.environmentId,
     AuthProvidersManageScope,
   );
+  const canWriteSettings = useEnvironmentScope(
+    props.handoff.target.environmentId,
+    AuthSettingsWriteScope,
+  );
   const canTargetPermission = useAtomValue(
     (isProviderHandoffPath(props.handoff.target.path)
       ? serverEnvironment.mutateProviderInstance
@@ -69,8 +81,10 @@ export function HandoffCard(props: HandoffCardProps) {
     ).permissionAtom(props.handoff.target.environmentId),
   );
   const canTarget =
-    canTargetPermission &&
-    (!isProviderHandoffPath(props.handoff.target.path) || canManageProviders);
+    props.handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH
+      ? canWriteSettings
+      : canTargetPermission &&
+        (!isProviderHandoffPath(props.handoff.target.path) || canManageProviders);
   return (
     <HandoffCardContent
       key={`${props.environmentId}:${props.handoff.handoffId}:${canOpen}:${canRespond}:${canTarget}`}
@@ -82,7 +96,9 @@ export function HandoffCard(props: HandoffCardProps) {
 function HandoffCardContent(props: HandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
-  const isProvider = isProviderHandoffPath(handoff.target.path);
+  const isComputerUse = handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  // Computer use grants share the provider cards' host-bound review, labels and gating.
+  const isProvider = isProviderHandoffPath(handoff.target.path) || isComputerUse;
   const isProviderHome = handoff.target.path === "provider.home_request";
   const isProviderSetup = handoff.target.path === PROVIDER_SETUP_HANDOFF_PATH;
   const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
@@ -105,6 +121,10 @@ function HandoffCardContent(props: HandoffCardProps) {
     handoff.target.environmentId,
     AuthProvidersManageScope,
   );
+  const canWriteSettings = useEnvironmentScope(
+    handoff.target.environmentId,
+    AuthSettingsWriteScope,
+  );
   const canTargetPermission = useAtomValue(
     (isProvider
       ? serverEnvironment.mutateProviderInstance
@@ -113,7 +133,10 @@ function HandoffCardContent(props: HandoffCardProps) {
         : serverEnvironment.prepareSshHost
     ).permissionAtom(handoff.target.environmentId),
   );
-  const canTarget = canTargetPermission && (!isProvider || canManageProviders);
+  const canTarget = isComputerUse
+    ? canWriteSettings
+    : canTargetPermission && (!isProvider || canManageProviders);
+  const liveUntil = useComputerUseGrantLiveUntil(handoff);
   const canOpen = useAtomValue(serverEnvironment.openHandoff.permissionAtom(props.environmentId));
   const canRespond = useAtomValue(
     serverEnvironment.respondHandoff.permissionAtom(props.environmentId),
@@ -197,7 +220,7 @@ function HandoffCardContent(props: HandoffCardProps) {
           setError(
             isProviderHome
               ? codexRouteErrorMessage(squashAtomCommandFailure(result))
-              : "Could not update this handoff. It may already be resolved or expired.",
+              : handoffRespondErrorMessage(squashAtomCommandFailure(result)),
           );
       }
     };
@@ -217,23 +240,38 @@ function HandoffCardContent(props: HandoffCardProps) {
         <p className="text-sm text-muted-foreground">{handoff.reason}</p>
         {isSsh || isProvider ? (
           pending && handoff.expiresAt ? (
-            <p className="text-xs text-muted-foreground">
-              Expires {DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}
-            </p>
+            <p className="text-xs text-muted-foreground">{handoffExpiryLabel(handoff.expiresAt)}</p>
           ) : null
         ) : (
           <p className="text-xs text-muted-foreground">
             {handoff.kind.replaceAll("_", " ")} · {handoff.state}
-            {handoff.expiresAt && pending
-              ? ` · Expires ${DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}`
-              : ""}
+            {handoff.expiresAt && pending ? ` · ${handoffExpiryLabel(handoff.expiresAt)}` : ""}
           </p>
         )}
       </div>
       {!pending ? (
-        <p className="text-sm text-muted-foreground">
-          {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
-        </p>
+        isComputerUse ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-muted-foreground">
+              {computerUseGrantLabel(handoff, liveUntil)}
+            </p>
+            {liveUntil !== null && !props.inherited ? (
+              <div>
+                <Button
+                  variant="outline"
+                  disabled={busy || !canRespond || !canTarget}
+                  onClick={() => void act("cancelled")}
+                >
+                  End computer use
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
+          </p>
+        )
       ) : props.inherited ? (
         <p className="text-sm text-muted-foreground">Review this request in its original thread.</p>
       ) : (
@@ -474,4 +512,16 @@ function VisibleSshHandoffProgress({
       ) : null}
     </div>
   );
+}
+
+/** An approved computer use admission: when it ends, refreshed once when that time passes. */
+function useComputerUseGrantLiveUntil(handoff: Handoff): Date | null {
+  const [now, setNow] = useState(() => Date.now());
+  const until = computerUseGrantLiveUntil(handoff, now) ?? undefined;
+  useEffect(() => {
+    if (until === undefined) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, until - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [until]);
+  return until === undefined ? null : new Date(until);
 }

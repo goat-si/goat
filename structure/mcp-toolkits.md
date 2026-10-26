@@ -15,8 +15,8 @@ append orchestration events themselves. That write is the [command commit](serve
 
 ## Toolkits
 
-The directories under `apps/server/src/mcp/toolkits/` are `attachment`, `channel`, `connection`,
-`device`, `environment`, `hostStatus`, `html`, `memory`, `memoryAdministration`, `note`, `orchestrator`, `preview`, `previewControls`, `project`,
+The directories under `apps/server/src/mcp/toolkits/` are `agentSurface`, `attachment`, `channel`, `connection`,
+`decision`, `device`, `environment`, `hostStatus`, `html`, `memory`, `memoryAdministration`, `note`, `orchestrator`, `preview`, `previewControls`, `project`,
 `provider`, `pullRequests`, `remoteReport`, `ssh`, `thread`, and `worktree`. `provider` is
 composed beside `McpHttpServer.layer` in `apps/server/src/server.ts`, which provides
 `ProviderDiagnosisService` from the provider registry and host; `goat provider diagnose` runs the
@@ -24,15 +24,19 @@ same checks in-process (`apps/server/src/provider/ProviderDiagnosis.ts`).
 
 Tool names, descriptions, schema references and discovery metadata live in
 [`agentSurface/registry.ts`](../packages/contracts/src/agentSurface/registry.ts). Each entry has
-an explicit `resource.verb` path and retains its current MCP name; this does not change `tools/list`
-or introduce callable aliases. Schemas remain with their owning toolkit or contracts module.
+an explicit `resource.verb` path and the name its toolkit registers, which access declarations and
+analytics key on. `tools/list` shows the path's canonical `goat_<resource>_<verb>` projection
+instead (`McpHttpServer` `withListedNames`). When the registered name differs, `/mcp` still accepts it in
+`tools/call` without listing it and marks the result deprecated
+([`ToolDispatch.ts`](../apps/server/src/mcp/ToolDispatch.ts) `withServedToolNames`). Schemas
+remain with their owning toolkit or contracts module.
 
 `McpToolAccess` declarations carry the effect class. Registration derives the read-only and
 destructive hints from those declarations, overriding presentation metadata. The catalog test
 compares the registry against the production registration layers, including the three image tools
 and the separately composed memory tools, and checks that published strict inputs reject extra keys.
 
-`schedule_task` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
+`goat_schedule_create` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion
 notifications are left on; a launch from outside any thread is watched only when the completion
 webhook takes it. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
@@ -44,7 +48,7 @@ caller named except `restart`. `OrchestratorMcpService` passes the call through
 `steer_when_ready` for that case and for every `auto` send. The message joins a running turn,
 waits for a turn that is still starting, or starts an idle thread. When a child's latest task is
 a finished review and no task is active, it refuses new agent follow-ups; start a new review
-round with `delegate_task`. Retrying an already delivered send returns its existing result.
+round with `goat_task_create`. Retrying an already delivered send returns its existing result.
 A provider that cannot steer,
 a turn that is already finishing, and the slash commands `/compact`, `/logout`, and `/goal` take
 it as the next turn. A thread sending to itself, and a client that is not inside a GOAT thread,
@@ -65,6 +69,7 @@ launches that skip this one.
 
 The registered names include `goat_*` forms, unprefixed names, and `channel_*`, `preview_*`,
 `device_*`, `html_*`, and `memory_*` tools. Presentation of older `t3_*` tool names, when it exists, is display recovery for history.
-Registration uses the current names.
+Toolkits register the shipped names and `/mcp` lists the canonical ones. Presentation maps a
+canonical name to the shipped tool it ran.
 
 > Decision record: [ADR-0007](decisions/ADR-0007-mcp-tool-names.md)

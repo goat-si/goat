@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { SshRuntimeSettingsRow } from "./SshRuntimeSettingsRow";
+import { useConnectionRowLiveState } from "./useConnectionRowLiveState";
 import { SshPreflightChecklist } from "./SshPreflightChecklist";
 import {
   parseDesktopSshTarget,
@@ -16,6 +17,9 @@ import {
 import { sshRuntime } from "~/state/sshRuntime";
 import { sshRuntimeTargetKey } from "@goat/client-runtime/state/sshRuntime";
 import {
+  formatDesktopSshConnectionError,
+  parsePairingUrlFields,
+  parseRemotePairingFields,
   isSshConnectionSuperseded,
   savedConnectionPresentation,
   savedConnectionSshRoute,
@@ -54,7 +58,7 @@ import {
   connectionRoutes,
   environmentMcpUrl,
   hasSavedBearerRoute,
-  offlineSnapshotAgeLabel,
+  connectionAttemptRunning,
 } from "@goat/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
@@ -63,13 +67,12 @@ import {
 import * as Option from "effect/Option";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useCopyConnectionDiagnostic } from "../../hooks/useCopyConnectionDiagnostic";
-import { useNowMinute } from "../../hooks/useNowMinute";
-import { useEnvironmentSnapshotCapturedAt } from "../../state/presentation";
 import { cn } from "../../lib/utils";
 import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { WorktreeCheckoutHealthNotice } from "./WorktreeCheckoutHealthNotice";
 import {
   ConnectionDiagnosisPanel,
   ConnectionDiagnosisSummary,
@@ -117,8 +120,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
-import { getPairingTokenFromUrl } from "../../pairingUrl";
-import { readHostedPairingRequest } from "../../hostedPairing";
+
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import {
   resolveServerConfigVersionMismatch,
@@ -127,7 +129,7 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
+import { RemoveGoatConnectEnvironmentDialog } from "../clerk/RemoveGoatConnectEnvironmentDialog";
 import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
@@ -168,66 +170,6 @@ import {
 
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 const NO_SSH_RUNTIME_STATUS = Atom.make(null);
-function parsePairingUrlFields(
-  input: string,
-): { readonly host: string; readonly pairingCode: string } | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  try {
-    const urlLikeInput =
-      /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//u.test(trimmed) || trimmed.startsWith("//")
-        ? trimmed
-        : `https://${trimmed}`;
-    const url = new URL(urlLikeInput, window.location.origin);
-    const hostedPairingRequest = readHostedPairingRequest(url);
-    if (hostedPairingRequest) {
-      return {
-        host: hostedPairingRequest.host,
-        pairingCode: hostedPairingRequest.token,
-      };
-    }
-
-    const pairingCode = getPairingTokenFromUrl(url);
-    if (!pairingCode) return null;
-    return {
-      host: url.origin,
-      pairingCode,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseRemotePairingFields(input: { readonly host: string; readonly pairingCode: string }): {
-  readonly host: string;
-  readonly pairingCode: string;
-} {
-  const parsedPairingUrl = parsePairingUrlFields(input.host);
-  if (parsedPairingUrl) return parsedPairingUrl;
-
-  const host = input.host.trim();
-  const pairingCode = input.pairingCode.trim();
-  if (!host) {
-    throw new Error("Enter a backend host.");
-  }
-  if (!pairingCode) {
-    throw new Error("Enter a pairing code.");
-  }
-  return { host, pairingCode };
-}
-
-function formatDesktopSshConnectionError(error: unknown): string {
-  const fallback = "Failed to connect SSH host.";
-  const rawMessage = error instanceof Error ? error.message : fallback;
-  const withoutIpcPrefix = rawMessage.replace(
-    /^Error invoking remote method 'desktop:ensure-ssh-environment':\s*/u,
-    "",
-  );
-  const withoutTaggedErrorPrefix = withoutIpcPrefix.replace(/^Ssh[A-Za-z]+Error:\s*/u, "");
-  return withoutTaggedErrorPrefix.trim() || fallback;
-}
-
 const isSshHostAlias = Schema.is(SshHostAlias);
 const isSshHostProbeError = Schema.is(SshHostProbeError);
 
@@ -340,7 +282,7 @@ function SavedBackendListRow({
       toastManager.add({
         type: "success",
         title: "MCP URL copied",
-        description: `Add it to an agent, e.g. claude mcp add --transport http t3 ${url}`,
+        description: `Add it to an agent, e.g. claude mcp add --transport http goat ${url}`,
       });
     },
     onError: (error) => {
@@ -359,6 +301,9 @@ function SavedBackendListRow({
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const status = savedConnectionPresentation({ environment, runtimeStatus });
   const retryNow = useAtomCommand(environmentCatalog.retryNow);
+  const retry = () => void retryNow(environmentId);
+  const { connection } = environment;
+  const live = useConnectionRowLiveState({ environmentId, connection, enabled, retry });
   const {
     diagnosis: currentDiagnosis,
     state: connectionState,
@@ -373,7 +318,7 @@ function SavedBackendListRow({
       ? null
       : currentDiagnosis;
   const serverVersion = environment.serverConfig?.environment.serverVersion ?? null;
-  // A saved T3 Connect machine this device has never reached (unsupported,
+  // A saved GOAT Connect machine this device has never reached (unsupported,
   // or not yet connected) still has a descriptor from relay discovery, so
   // it can wear its detected glyph instead of the generic server. Discovery
   // empties its map on every refresh, so hold the last descriptor seen or
@@ -397,12 +342,7 @@ function SavedBackendListRow({
     setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
   }
   const prepared = usePreparedConnection(environmentId);
-  const snapshotCapturedAt = useEnvironmentSnapshotCapturedAt(environmentId);
-  const nowMinute = useNowMinute();
-  const snapshotAge =
-    isConnected || !enabled
-      ? null
-      : offlineSnapshotAgeLabel(snapshotCapturedAt, Date.parse(`${nowMinute}:59.999Z`));
+  const snapshotAge = live.snapshotAge;
   const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
     entry: environment.entry,
@@ -534,6 +474,9 @@ function SavedBackendListRow({
                 ? { preparationProgress: { phase: status.preparationPhase } }
                 : {})}
               onReviewTrust={() => onReviewTrust(environment)}
+              onRetry={retry}
+              connecting={enabled && connectionAttemptRunning(connection)}
+              onRefreshConnection={live.refreshConnection}
             />
           ) : serverUpdateState.status !== "idle" ? (
             <div className="mt-1 max-w-md">
@@ -550,6 +493,12 @@ function SavedBackendListRow({
               diagnosis={diagnosis}
               onRetry={() => void retryNow(environmentId)}
               onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
+            />
+          ) : null}
+          {enabled ? (
+            <WorktreeCheckoutHealthNotice
+              health={environment.serverConfig?.worktreeCheckoutHealth}
+              hostLabel={environment.label}
             />
           ) : null}
           {routesOpen && (
@@ -678,7 +627,7 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
         <EmptyTitle>No saved remote environments</EmptyTitle>
         <EmptyDescription>
           {cloudEnabled
-            ? "Click “Add device” to pair another environment, or connect one from T3 Connect."
+            ? "Click “Add device” to pair another environment, or connect one from GOAT Connect."
             : "Click “Add device” to pair another environment."}
         </EmptyDescription>
       </EmptyHeader>
@@ -1371,13 +1320,13 @@ export function ConnectionEnvironmentsSection({
 
   // Removing forgets the pairing, credentials, and cached threads on this
   // device. Switching off is the reversible path, so removal always confirms.
-  // T3 Connect environments get their own dialog: removing one here leaves its
+  // GOAT Connect environments get their own dialog: removing one here leaves its
   // account registration, so it points to where that can be deregistered.
-  const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
+  const [pendingGoatConnectRemoval, setPendingGoatConnectRemoval] =
     useState<EnvironmentPresentation | null>(null);
   const handleRemoveSavedBackend = async (environment: EnvironmentPresentation) => {
     if (environment.relayManaged && hasCloudPublicConfig()) {
-      setPendingT3ConnectRemoval(environment);
+      setPendingGoatConnectRemoval(environment);
       return;
     }
     // Fail closed: no mounted confirm host means no removal.
@@ -1508,7 +1457,7 @@ export function ConnectionEnvironmentsSection({
       </div>
     </div>
   );
-  // T3 Connect is offered as a route when this account can reach the machine
+  // GOAT Connect is offered as a route when this account can reach the machine
   // through it and it is not one of the machine's routes yet.
   const relayRouteOffer =
     hasCloudPublicConfig() &&
@@ -1540,7 +1489,7 @@ export function ConnectionEnvironmentsSection({
     toastManager.add({
       type: "success",
       title: "Route added",
-      description: `${routeTarget.label} falls back to T3 Connect when its other routes are unreachable.`,
+      description: `${routeTarget.label} falls back to GOAT Connect when its other routes are unreachable.`,
     });
   };
   const renderRemoteModeBody = () => (
@@ -1548,7 +1497,7 @@ export function ConnectionEnvironmentsSection({
       {relayRouteOffer !== null ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
           <p className="text-xs text-muted-foreground">
-            This machine is on your T3 Connect account. Use it as a fallback route.
+            This machine is on your GOAT Connect account. Use it as a fallback route.
           </p>
           <Button
             size="xs"
@@ -1556,7 +1505,7 @@ export function ConnectionEnvironmentsSection({
             disabled={isAddingSavedBackend}
             onClick={() => void addRelayRoute()}
           >
-            Add T3 Connect
+            Add GOAT Connect
           </Button>
         </div>
       ) : null}
@@ -1910,13 +1859,13 @@ export function ConnectionEnvironmentsSection({
         />
       </SettingsSection>
       {hasCloudPublicConfig() ? (
-        <RemoveT3ConnectEnvironmentDialog
-          environmentLabel={pendingT3ConnectRemoval?.label ?? null}
-          onCancel={() => setPendingT3ConnectRemoval(null)}
+        <RemoveGoatConnectEnvironmentDialog
+          environmentLabel={pendingGoatConnectRemoval?.label ?? null}
+          onCancel={() => setPendingGoatConnectRemoval(null)}
           onConfirm={() => {
-            if (!pendingT3ConnectRemoval) return;
-            setPendingT3ConnectRemoval(null);
-            void removeSavedBackend(pendingT3ConnectRemoval);
+            if (!pendingGoatConnectRemoval) return;
+            setPendingGoatConnectRemoval(null);
+            void removeSavedBackend(pendingGoatConnectRemoval);
           }}
         />
       ) : null}

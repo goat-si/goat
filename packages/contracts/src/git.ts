@@ -361,9 +361,13 @@ export const GitCommandFailureReason = Schema.Literals([
   "host_key_unverified",
   "not_a_repository",
   "path_already_exists",
+  "push_rejected_by_remote",
+  "push_rejected_non_fast_forward",
   "ref_not_found",
   "remote_unreachable",
+  "stalled",
   "tag_would_be_clobbered",
+  "timed_out",
 ]);
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
 

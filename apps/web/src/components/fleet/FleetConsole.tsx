@@ -1,37 +1,57 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { FleetSnapshot } from "@goat/client-runtime/state/fleet";
+import {
+  BOAT_MACHINE_STATUS_LABEL,
+  type BoatMachineIdentity,
+} from "@goat/client-runtime/cloud-machines";
+import { fleetSshConfigScopes, type FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { FleetHeatTier, FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
+import {
+  presentConnectionWait,
+  presentHostStorage,
+} from "@goat/client-runtime/state/fleet-host-health";
 import { cpuPercent, memoryPercent } from "@goat/client-runtime/state/host-metrics";
+import { hubSnapshot } from "@goat/client-runtime/state/hub-fleet";
+import type { EnvironmentId, ServerEventLoopStall } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { memo, useEffect, useRef } from "react";
 
 import { ChevronDownIcon } from "~/components/solar";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useNowWhile } from "~/hooks/useNowWhile";
 import { cn } from "~/lib/utils";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { fleetEnvironmentsAtom, fleetPageEnvironmentsAtom } from "~/state/fleet";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import { environmentServerConfigsAtom } from "~/state/server";
 import { environmentThreadShells } from "~/state/threads";
 import { useUiStateStore } from "~/uiStateStore";
 
 import { platformLabel } from "../settings/hostStatusView";
+import { BoatIcon } from "../Icons";
 import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import type { FleetConnection } from "./fleetConnection";
+import { fleetHostCount } from "./fleetCount";
+import { FleetAlertAction } from "./FleetAlertAction";
+import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
 import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
+import { FleetHubSummary } from "./FleetHubSummary";
+import { FleetUncountedHosts } from "./FleetUncountedHosts";
+import { fleetQuota } from "./fleetQuota";
 import {
   fleetAlerts,
+  fleetChildSetups,
   fleetThroughput,
   fleetHostRows,
   hottestHost,
   hottestReading,
   signalTier,
-  quotaRows,
   sparklinePath,
   throughputEqual,
   THROUGHPUT_BUCKETS,
+  type FleetAlert,
   type FleetAlertTone,
   type FleetHostRow,
   type FleetThroughput,
@@ -64,6 +84,27 @@ const Label = ({ children, className }: { children: React.ReactNode; className?:
     {children}
   </span>
 );
+
+function QuotaDetails(props: {
+  readonly detail: string | undefined;
+  readonly label?: string;
+  readonly children: React.ReactNode;
+}) {
+  if (props.detail === undefined) return props.children;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={props.label}
+        render={<span className="outline-hidden" tabIndex={0} />}
+      >
+        {props.children}
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <span className="whitespace-pre-line">{props.detail}</span>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
 
 /** A reading colored on the graph's heat thresholds and palette; muted when the host sent none. */
 const tone = (key: Parameters<typeof signalTier>[0], value: number | null) =>
@@ -132,40 +173,71 @@ function formatPercent(value: number | null) {
   return value === null ? "–" : Math.round(value) + "%";
 }
 
-/** Why a machine has no host status yet: its connection is not up, or an answer is on its way. */
-function noMetricsText(connection: FleetConnection | undefined, reading: boolean): string {
+/**
+ * Why a machine has no host status yet: its connection is not up, or an answer is on its way.
+ * A connection attempt says how long it has run and which step it is on.
+ */
+function noMetricsText(
+  connection: FleetConnection | undefined,
+  reading: boolean,
+  now: number,
+): string {
+  if (
+    connection !== undefined &&
+    isFleetConnectionWait(connection.state) &&
+    connection.since !== undefined
+  ) {
+    return presentConnectionWait({
+      step: connection.step ?? null,
+      sinceMs: connection.since,
+      nowMs: now,
+    }).text;
+  }
   switch (connection?.state) {
     case "connecting":
     case "reconnecting":
     case "unreachable":
     case "offline":
+    case "stopped":
       return connection.label;
     default:
       return reading ? "Reading…" : "No metrics";
   }
 }
 
-/** "macmini · macOS · 10 cores", with how old the numbers are when the host stopped answering. */
+/**
+ * "macmini · macOS · 10 cores", with how old the numbers are when the host stopped answering,
+ * and its storage against both budgets.
+ */
 function hostDetail(row: FleetHostRow, lastSeen: HostLastSeen, now: number): string {
   const metrics = row.entry?.metrics;
   const parts = [row.label, platformLabel(metrics?.platform)];
   if (metrics !== undefined)
     parts.push(metrics.cpuCount + (metrics.cpuCount === 1 ? " core" : " cores"));
   parts.push(lastKnownLabel(row, lastSeen, now));
+  if (metrics?.storage !== undefined) {
+    const storage = presentHostStorage(metrics.storage, now);
+    parts.push(storage.summary, storage.archive);
+  }
   if (row.tone === "none") parts.push("no host status describes this machine");
   return parts.filter((part) => part !== null).join(" · ");
 }
 
 function HostRow({
   row,
+  boat,
   samples,
   lastSeen,
   observedAt,
   heatTier,
   connection,
   reading,
+  now,
+  answeringLate,
+  viaHub,
 }: {
   readonly row: FleetHostRow;
+  readonly boat: BoatMachineIdentity | null;
   readonly samples: ReadonlyArray<HostSample>;
   readonly lastSeen: HostLastSeen;
   readonly observedAt: number;
@@ -174,16 +246,22 @@ function HostRow({
   readonly connection: FleetConnection | undefined;
   /** A host-status read is still on its way, so a row without an answer may yet get one. */
   readonly reading: boolean;
+  readonly now: number;
+  /** The host is connected but not answering, or froze recently: its alert's tone. */
+  readonly answeringLate: FleetAlertTone | null;
+  readonly viaHub: string | null | undefined;
 }) {
   const metrics = row.entry?.metrics;
   const stale = row.tone === "stale";
   const statusText =
     row.tone === "none"
-      ? noMetricsText(connection, reading)
+      ? noMetricsText(connection, reading, now)
       : row.tone === "unsupported"
         ? "Update GOAT to report"
         : metrics === undefined
-          ? "Unreachable"
+          ? boat !== null && boat.status !== "running" && boat.status !== "unknown"
+            ? BOAT_MACHINE_STATUS_LABEL[boat.status]
+            : "Unreachable"
           : null;
   // The graph's rounded helpers, so a reading on a threshold gets the same color as the ring.
   const cpu = metrics === undefined ? null : cpuPercent(metrics);
@@ -199,26 +277,43 @@ function HostRow({
           aria-hidden
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            row.tone === "ok"
-              ? heatTier === "normal"
-                ? "bg-success"
-                : HEAT_DOT[heatTier]
-              : row.tone === "stale" || row.tone === "unreachable"
-                ? "bg-warning"
-                : "border border-muted-foreground",
+            row.tone === "ok" && answeringLate !== null
+              ? answeringLate === "destructive"
+                ? "bg-destructive"
+                : "bg-warning"
+              : row.tone === "ok"
+                ? heatTier === "normal"
+                  ? "bg-success"
+                  : HEAT_DOT[heatTier]
+                : row.tone === "stale" || row.tone === "unreachable"
+                  ? "bg-warning"
+                  : "border border-muted-foreground",
           )}
         />
+        {boat !== null ? (
+          <BoatIcon role="img" aria-label="Boat" className="size-3 shrink-0" />
+        ) : null}
         <Tooltip>
           <TooltipTrigger
-            render={<span className="truncate font-medium outline-hidden" tabIndex={0} />}
+            render={<span className="min-w-0 font-medium outline-hidden" tabIndex={0} />}
           >
-            {row.label}
+            <span className="block truncate">{row.label}</span>
+            {viaHub === undefined ? null : (
+              <span className="block truncate font-mono text-3xs text-muted-foreground">
+                via Hub{viaHub === null ? "" : ` ${viaHub}`}
+              </span>
+            )}
           </TooltipTrigger>
-          <TooltipPopup side="top">{hostDetail(row, lastSeen, observedAt)}</TooltipPopup>
+          <TooltipPopup side="top">
+            {hostDetail(row, lastSeen, observedAt)}
+            {viaHub === undefined ? null : ` · via Hub${viaHub === null ? "" : ` ${viaHub}`}`}
+          </TooltipPopup>
         </Tooltip>
       </span>
       {statusText !== null ? (
-        <span className="col-span-3 font-mono text-2xs text-muted-foreground">{statusText}</span>
+        <span className="col-span-3 truncate font-mono text-2xs text-muted-foreground">
+          {statusText}
+        </span>
       ) : (
         <>
           <MetricCell
@@ -349,24 +444,77 @@ function FleetConsoleExpanded(props: {
   const environments = useAtomValue(fleetPageEnvironmentsAtom);
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const throughput = useAtomValue(fleetThroughputAtom);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const scopes = fleetSshConfigScopes(environments);
+  const primaryScope = primaryEnvironmentId === null ? null : scopes.get(primaryEnvironmentId);
   const rows = fleetHostRows({
     machines: snapshot.machines,
     sshAliases: new Map(environments.map((env) => [env.environmentId, env.sshAliases] as const)),
     reports: status.reports,
     primaryEnvironmentId,
+    sharedSshConfigEnvironmentIds: new Set(
+      environments.flatMap((env) =>
+        primaryScope !== undefined && scopes.get(env.environmentId) === primaryScope
+          ? [env.environmentId]
+          : [],
+      ),
+    ),
   });
   const unreadable = status.failed.map((environmentId) => ({
     key: environmentId,
     label: environments.find((env) => env.environmentId === environmentId)?.label ?? environmentId,
   }));
-  const alerts = fleetAlerts(rows, connections, status.observedAt, {
+  const environmentOf = new Map<string, EnvironmentId>(
+    snapshot.machines.flatMap((machine) =>
+      machine.environmentId === null ? [] : [[machine.id, machine.environmentId] as const],
+    ),
+  );
+  const stalls = new Map<EnvironmentId, ServerEventLoopStall>();
+  for (const [environmentId, config] of configs) {
+    if (config.lastEventLoopStall !== undefined)
+      stalls.set(environmentId, config.lastEventLoopStall);
+  }
+  // Ticks only while something is in progress, so waits show elapsed time and turn slow on time.
+  const inProgress =
+    status.pendingSince.size > 0 ||
+    [...connections.values()].some((connection) => isFleetConnectionWait(connection.state)) ||
+    rows.some((row) => row.entry?.metrics?.storage?.compactingSince !== undefined);
+  const now = Math.max(useNowWhile(inProgress), status.observedAt);
+  const alerts = fleetAlerts(rows, connections, now, {
     unreadable,
     lastSeen: status.lastSeen,
+    environmentOf,
+    pendingSince: status.pendingSince,
+    stalls,
+    childSetups: fleetChildSetups(rows, snapshot.machines, status.reports),
   });
+  // A host that is not answering takes its alert's color on the row, so both say the same.
+  const answeringLate = new Map(
+    alerts.flatMap((alert) =>
+      alert.key.endsWith(":responsive")
+        ? [[alert.key.slice(0, -":responsive".length), alert.tone] as const]
+        : [],
+    ),
+  );
   const hottest = hottestHost(rows, heat);
-  const quotas = quotaRows(rows).slice(0, 3);
+  const quota = fleetQuota(rows);
+  const hub = hubSnapshot(rows);
+  // A linked Child names its Home even when no pool reading routes its quota there.
+  const viaHub = (row: FleetHostRow) => {
+    const pooled = quota.viaHub.get(row.key);
+    if (pooled !== undefined) return pooled;
+    const link = row.entry?.metrics?.opencodex?.link;
+    return link?.role === "child" ? (link.homeName ?? null) : undefined;
+  };
+  const quotas = quota.quotas.slice(0, 3);
+  const hiddenQuotas = quota.quotas.slice(quotas.length);
   const { totals } = snapshot;
-  const reporting = rows.filter((row) => row.tone === "ok").length;
+  const hostCount = fleetHostCount({ rows, machines: snapshot.machines, connections });
+  const boatByMachine = new Map(
+    snapshot.machines.flatMap((machine) =>
+      machine.boat === null ? [] : [[machine.id, machine.boat] as const],
+    ),
+  );
 
   return (
     <>
@@ -420,10 +568,13 @@ function FleetConsoleExpanded(props: {
           aria-label="Hosts"
           className="flex min-h-0 flex-col border-b p-3 md:border-r md:border-b-0"
         >
-          <div className="mb-1 grid grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] gap-3">
-            <Label>
-              Hosts {reporting}/{rows.length}
-            </Label>
+          <div className="mb-1 grid grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+            <span className="flex min-w-0 items-center gap-1">
+              <Label>
+                Hosts {hostCount.reporting}/{totals.machines}
+              </Label>
+              <FleetUncountedHosts hosts={hostCount.uncounted} />
+            </span>
             <Label>CPU</Label>
             <Label>Mem</Label>
             <Label>Load 1m</Label>
@@ -436,6 +587,8 @@ function FleetConsoleExpanded(props: {
                 <HostRow
                   key={row.key}
                   row={row}
+                  boat={row.machineId === null ? null : (boatByMachine.get(row.machineId) ?? null)}
+                  viaHub={viaHub(row)}
                   lastSeen={status.lastSeen}
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
@@ -443,6 +596,8 @@ function FleetConsoleExpanded(props: {
                   connection={row.machineId === null ? undefined : connections.get(row.machineId)}
                   reading={status.loading}
                   observedAt={status.observedAt}
+                  now={now}
+                  answeringLate={answeringLate.get(row.key) ?? null}
                   samples={
                     (row.sourceKey === null ? undefined : status.history.get(row.sourceKey)) ??
                     NO_SAMPLES
@@ -454,40 +609,84 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
+          {hub === null ? null : (
+            <FleetHubSummary hub={hub} homeEnvironmentId={environmentOf.get(hub.homeKey) ?? null} />
+          )}
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
-              <Label>Quota</Label>
+              <span className="flex items-baseline justify-between gap-2">
+                <Label>Quota</Label>
+                {quota.quotas.some((row) => row.detail !== undefined) && hiddenQuotas.length > 0 ? (
+                  <span className="font-mono text-2xs text-muted-foreground">
+                    <QuotaDetails
+                      label={`Show ${hiddenQuotas.length} more quota entries`}
+                      detail={hiddenQuotas
+                        .map(
+                          (row) =>
+                            row.detail ??
+                            `${row.label}${row.host === null ? "" : ` · ${row.host}`}`,
+                        )
+                        .join("\n")}
+                    >
+                      +{hiddenQuotas.length} more
+                    </QuotaDetails>
+                  </span>
+                ) : null}
+              </span>
               {quotas.map((quota) => (
-                <div key={quota.key} className="flex flex-col gap-0.5">
-                  <span className="flex items-baseline gap-2 text-xs">
+                <div key={quota.key} data-fleet-quota className="flex flex-col gap-0.5">
+                  <span
+                    className={cn(
+                      "flex items-baseline gap-2 text-xs",
+                      quota.detail && "flex-wrap gap-y-0",
+                    )}
+                  >
                     <span className="truncate">
-                      {quota.label}
-                      {quota.host === null ? null : (
-                        <span className="text-muted-foreground"> · {quota.host}</span>
-                      )}
+                      <QuotaDetails detail={quota.detail}>
+                        {quota.label}
+                        {quota.host === null ? null : (
+                          <span className="text-muted-foreground"> · {quota.host}</span>
+                        )}
+                      </QuotaDetails>
                     </span>
-                    <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground tabular-nums">
+                    <span
+                      className={cn(
+                        "ml-auto font-mono text-2xs text-muted-foreground tabular-nums",
+                        quota.detail === undefined ? "shrink-0" : "min-w-0 text-right",
+                      )}
+                    >
                       {quota.windows
                         .map((window) => window.label + " " + Math.round(window.usedPercent) + "%")
                         .join(" · ")}
+                      {quota.peak === null ? "Quota unknown" : null}
+                      {quota.hidden > 0 ? (
+                        <QuotaDetails
+                          detail={quota.detail}
+                          label={`Show ${quota.hidden} more quota details`}
+                        >
+                          {` +${quota.hidden}`}
+                        </QuotaDetails>
+                      ) : null}
                     </span>
                   </span>
-                  <span
-                    className="h-1 overflow-hidden rounded-full bg-muted"
-                    role="meter"
-                    aria-label={quota.label + " quota used"}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(quota.peak)}
-                  >
+                  {quota.peak === null ? null : (
                     <span
-                      className={cn(
-                        "block h-full rounded-full",
-                        TONE_BAR[tone("quota", quota.peak)],
-                      )}
-                      style={{ width: Math.max(2, quota.peak) + "%" }}
-                    />
-                  </span>
+                      className="h-1 overflow-hidden rounded-full bg-muted"
+                      role="meter"
+                      aria-label={quota.label + " quota used"}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(quota.peak)}
+                    >
+                      <span
+                        className={cn(
+                          "block h-full rounded-full",
+                          TONE_BAR[tone("quota", quota.peak)],
+                        )}
+                        style={{ width: Math.max(2, quota.peak) + "%" }}
+                      />
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -499,35 +698,29 @@ function FleetConsoleExpanded(props: {
             ) : (
               <ul className="flex flex-col gap-0.5">
                 {alerts.slice(0, 3).map((alert) => (
-                  <li
-                    key={alert.key}
-                    data-fleet-alert
-                    className="flex min-w-0 items-start gap-1.5 text-xs leading-4"
-                  >
-                    <span
-                      aria-hidden
-                      className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", ALERT_DOT[alert.tone])}
-                    />
-                    <span className="shrink-0 font-medium">{alert.label}</span>
-                    {/* Versions and SSH errors run long: two lines, broken anywhere, then the tooltip. */}
-                    <Tooltip>
-                      <TooltipTrigger
+                  <AlertRow key={alert.key} alert={alert} />
+                ))}
+                {alerts.length > 3 ? (
+                  <li>
+                    <Popover>
+                      <PopoverTrigger
                         render={
-                          <span
-                            className="line-clamp-2 min-w-0 text-muted-foreground wrap-anywhere outline-hidden"
-                            tabIndex={0}
+                          <button
+                            type="button"
+                            className="rounded-sm font-mono text-2xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                           />
                         }
                       >
-                        {alert.detail}
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">{alert.detail}</TooltipPopup>
-                    </Tooltip>
-                  </li>
-                ))}
-                {alerts.length > 3 ? (
-                  <li className="font-mono text-2xs text-muted-foreground">
-                    +{alerts.length - 3} more
+                        +{alerts.length - 3} more
+                      </PopoverTrigger>
+                      <PopoverPopup side="top" align="start" width="md">
+                        <ul aria-label="More alerts" className="flex flex-col gap-1">
+                          {alerts.slice(3).map((alert) => (
+                            <AlertRow key={alert.key} alert={alert} />
+                          ))}
+                        </ul>
+                      </PopoverPopup>
+                    </Popover>
                   </li>
                 ) : null}
               </ul>
@@ -536,6 +729,54 @@ function FleetConsoleExpanded(props: {
         </section>
       </div>
     </>
+  );
+}
+
+/** One alert: what is wrong, where, and its one next step. Long details clamp to two lines. */
+function AlertRow({ alert }: { readonly alert: FleetAlert }) {
+  return (
+    <li data-fleet-alert className="flex min-w-0 items-start gap-1.5 text-xs leading-4">
+      <span
+        aria-hidden
+        className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", ALERT_DOT[alert.tone])}
+      />
+      {/*
+       * The host and what is wrong read as one sentence, so the detail wraps under the host
+       * name and leaves room for the action. Long ones clamp to two lines, then the tooltip.
+       */}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className="line-clamp-2 min-w-0 flex-1 text-muted-foreground wrap-anywhere outline-hidden"
+              tabIndex={0}
+            />
+          }
+        >
+          <span className="font-medium text-foreground">{alert.label}</span>{" "}
+          <span>{alert.detail}</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          <span className="flex max-w-sm flex-col gap-0.5">
+            <span>{alert.detail}</span>
+            {alert.lines?.map((line) => (
+              <span key={line} className="font-mono text-2xs opacity-80">
+                {line}
+              </span>
+            ))}
+          </span>
+        </TooltipPopup>
+      </Tooltip>
+      {alert.action === undefined ? null : (
+        <span className="-my-0.5 flex min-w-0 shrink-0 items-center gap-1.5">
+          <FleetAlertAction
+            kind={alert.action.kind}
+            environmentId={alert.action.environmentId}
+            label={alert.label}
+          />
+        </span>
+      )}
+    </li>
   );
 }
 

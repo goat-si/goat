@@ -22,13 +22,14 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/069_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/070_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/073_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/074_RemoteReportRelay.ts";
+import migration from "../persistence/Migrations/070_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
+import fencesMigration from "../persistence/Migrations/106_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -69,11 +70,12 @@ const stored = (thread: ThreadId, sequence: number) =>
   }) as unknown as OrchestrationV2StoredEvent;
 
 const setup = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
   yield* migration;
   yield* dispatchMigration;
   yield* threadRunResultsMigration;
+  yield* observedChecksMigration;
   yield* relayMigration;
+  yield* fencesMigration;
   const childEvents = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const childStreamOpened = yield* Deferred.make<void>();
   const childEventSeen = yield* Deferred.make<string>();

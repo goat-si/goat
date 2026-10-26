@@ -20,6 +20,11 @@ Representative modules:
 | `packages/contracts/src/channelGateway.ts`  | Inbound channel messages and `CHANNEL_MCP_TOOL_NAMES`       |
 | `packages/contracts/src/ipc.ts`             | Desktop IPC, including `DesktopDiscoveredSshHost`           |
 | `packages/contracts/src/hubProxy.ts`        | `hub:proxy` rights on nodes and the hub proxy method policy |
+| `packages/contracts/src/quotaPool.ts`       | OpenCodex's provider-neutral `ocx.quota-pool/1` evidence    |
+
+Quota pools preserve OpenCodex's account references and pooled evidence. Unknown array entries
+decode away; absent readings remain unknown. The legacy-window projection omits a window without
+a percentage rather than presenting it as unused quota.
 
 The [command commit](server.md#command-commit) persists values decoded with these schemas.
 Replay has to keep decoding events that were written by older servers. Compatibility belongs in

@@ -41,6 +41,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -66,7 +67,7 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
 
 const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   description: agentSurfaceRegistry["preview.open"].description,
-  parameters: PreviewAutomationOpenInput,
+  parameters: withClientRequestId(PreviewAutomationOpenInput),
   success: PreviewAutomationStatus,
   failure: PreviewToolFailure,
   dependencies,
@@ -249,13 +250,13 @@ const PreviewEvaluateTool = Tool.make(agentSurfaceRegistry["preview.evaluate"].n
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.evaluate"]));
 
-const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait_for"].name, {
-  description: agentSurfaceRegistry["preview.wait_for"].description,
+const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait"].name, {
+  description: agentSurfaceRegistry["preview.wait"].description,
   parameters: PreviewAutomationWaitForInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.wait_for"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.wait"]));
 
 const PreviewRecordingStartTool = Tool.make(agentSurfaceRegistry["preview.recording_start"].name, {
   description: agentSurfaceRegistry["preview.recording_start"].description,

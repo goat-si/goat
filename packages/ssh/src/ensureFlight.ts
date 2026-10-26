@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { SshEnsureSupersededError, SshPreparationTimeoutError } from "./errors.ts";
 
-export const SSH_PREPARATION_TIMEOUT_MS = 900_000;
+const SSH_PREPARATION_TIMEOUT_MS = 900_000;
 export const supersededPreparation = () =>
   new SshEnsureSupersededError({
     message: "SSH preparation superseded by a newer connection intent.",
@@ -315,5 +315,14 @@ export const makeEnsureFlights = <A, E>(options: {
           return { value, operationId: flight.operationId };
         }),
       );
-    return { join, retire };
+    /**
+     * A preparation for `key` is still running, so its published phase is current. Status reads
+     * trust a "preparing" snapshot only while this holds: a preparation that died without
+     * publishing its outcome (a defect) must not pin the host at "preparing".
+     */
+    const isActive = (key: string) => {
+      const flight = flights.get(key);
+      return flight !== undefined && !flight.settled;
+    };
+    return { join, retire, isActive };
   });

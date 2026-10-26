@@ -1,0 +1,281 @@
+import type { ComputerUseEvent, ComputerUseWindowTarget } from "@goat/contracts";
+
+import type { SecureFocus } from "./atspiFocus.ts";
+import type { HumanInputSource } from "./humanInputSource.ts";
+
+/**
+ * The safety signals a Linux helper raises while an agent session watches windows (#1235, D6,
+ * D7). Nothing runs until watch: the focus probe and the idle counter are read only while a
+ * session asks for them, and neither records what was typed.
+ *
+ * Private mode follows AT-SPI focus per watched window. Right after a watch is answered, every
+ * target's state is reported once; after that, only changes. Focus that cannot be read counts
+ * as private, as in observation. Before a target leaves (its window closes, a new watch drops
+ * it, or unwatch), an active one is reported inactive under the watch it belonged to, and the
+ * new watch or unwatch is answered only after that.
+ *
+ * Focus is probed on a timer and again on every focus change the accessibility bus reports
+ * (atspiFocusEvents.ts), so a password field taking focus turns private mode on within one
+ * probe, not one timer interval (#1638). A probe reads focus over many calls; when a focus
+ * change arrives while it runs, its "not secret" answer may describe a moment that is gone, so
+ * it is dropped and the window is read again. Without the event stream the timer still runs.
+ *
+ * Human input comes from the person's own input devices (humanInputSource.ts), which already
+ * leaves out the helper's own input, so nothing here guesses by timing. If that source breaks,
+ * the watch cannot see a person any more: it reports human input once and tells the helper,
+ * which ends so a restart reports the signal unsupported. The server does not pause agents.
+ */
+
+const PRIVATE_MODE_EVERY_MS = 500;
+const HUMAN_INPUT_EVERY_MS = 250;
+/** A focus probe slower than this counts as unreadable, which is private. */
+const FOCUS_PROBE_LIMIT_MS = 3_000;
+/** Probes in a row that focus changes overlapped before the window counts as unreadable. */
+const OVERLAPPED_PROBE_LIMIT = 3;
+const UNREADABLE: SecureFocus = { known: false, secure: false, windows: 0 };
+/** At most one human input event per this long; the server classifies events without pausing. */
+const HUMAN_INPUT_QUIET_MS = 1_000;
+
+export interface SignalMonitorDependencies {
+  readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+  /** False once the window is gone; undefined when that cannot be told right now. */
+  readonly windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined>;
+  /** Undefined when this desktop offers no way to see a person's input: humanInput is unsupported. */
+  readonly input: HumanInputSource | undefined;
+  /** Focus changes as the accessibility bus reports them; undefined leaves only the timer. */
+  readonly focusEvents?: { readonly subscribe: (listener: () => void) => () => void };
+  /** The input source broke; the helper ends after the pause it caused goes out. */
+  readonly inputLost: () => void;
+  /** A monotonic clock, for spacing human input events; never wall time, which can step back. */
+  readonly now: () => number;
+  /** Runs task every ms until the returned function is called. */
+  readonly every: (ms: number, task: () => Promise<void>) => () => void;
+  /** Resolves after ms; bounds a focus probe that does not answer. */
+  readonly delay: (ms: number) => Promise<void>;
+  /** Runs task after the current reply has been written. */
+  readonly afterReply: (task: () => Promise<void>) => void;
+  readonly emit: (watchId: string, event: ComputerUseEvent) => void;
+}
+
+export interface SignalMonitor {
+  /** Ends the current watch's targets that are not in the new one, then starts it. */
+  readonly watch: (
+    watchId: string,
+    targets: ReadonlyArray<ComputerUseWindowTarget>,
+  ) => Promise<void>;
+  /**
+   * Clears every active target, then stops reading. A helper shutting down stops without the
+   * clearing events: it has not seen the secrets go, and its exit already ends every target of
+   * its generation for the client, which then holds them until a later helper sees them clear.
+   */
+  readonly unwatch: (options?: { readonly announce?: boolean }) => Promise<void>;
+  readonly watching: () => ReadonlyArray<ComputerUseWindowTarget>;
+}
+
+const keyOf = (target: ComputerUseWindowTarget) => target.pid + ":" + target.windowId;
+
+/** Initial reports always; ticks first ask whether the window is still open; focus changes do not. */
+type CheckReason = "initial" | "tick" | "focus";
+
+export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonitor {
+  let watchId: string | undefined;
+  // Every watch and unwatch starts a new incarnation: a watch id can be reused, so deferred
+  // work and running checks compare this, never the id.
+  let incarnation = 0;
+  let targets: ComputerUseWindowTarget[] = [];
+  const active = new Map<string, boolean>();
+  let stops: Array<() => void> = [];
+  let lastInputOrder = 0;
+  let lostReported = false;
+  let lastEventAt = -Infinity;
+  /** Targets whose focus check is running; each target is checked on its own. */
+  // Each running check owns its target's entry, so a check left over from an earlier watch
+  // never releases the entry a newer check holds.
+  const checking = new Map<string, object>();
+  /** Focus changes seen so far; a probe compares this before and after it reads. */
+  let focusChanges = 0;
+  /** Targets to read again once their running check ends, and whether that read reports. */
+  const recheck = new Map<string, boolean>();
+  /** Probes in a row a focus change overlapped, per target. */
+  const overlapped = new Map<string, number>();
+
+  /** Reports a target inactive if it was active, and forgets it. */
+  const release = (id: string, target: ComputerUseWindowTarget) => {
+    const key = keyOf(target);
+    if (active.get(key)) deps.emit(id, { type: "privateMode", active: false, target });
+    active.delete(key);
+  };
+
+  const readFocus = async (
+    id: string,
+    mine: number,
+    target: ComputerUseWindowTarget,
+    report: boolean,
+    scan: (probe: Promise<unknown>) => void,
+  ) => {
+    const changesBefore = focusChanges;
+    const probe = deps.secureFocus(target.pid);
+    scan(probe);
+    const focus = await Promise.race([
+      probe,
+      deps.delay(FOCUS_PROBE_LIMIT_MS).then(() => UNREADABLE),
+    ]);
+    // The watch may have changed while AT-SPI answered.
+    if (incarnation !== mine || !targets.includes(target)) return;
+    let now = focus.secure || !focus.known;
+    const key = keyOf(target);
+    if (!now && focusChanges !== changesBefore) {
+      const count = (overlapped.get(key) ?? 0) + 1;
+      if (count < OVERLAPPED_PROBE_LIMIT) {
+        overlapped.set(key, count);
+        recheck.set(key, report || (recheck.get(key) ?? false));
+        return;
+      }
+      // Focus moved under every probe: it cannot be read, which is private.
+      now = true;
+    }
+    overlapped.delete(key);
+    if (!report && active.get(key) === now) return;
+    active.set(key, now);
+    deps.emit(id, { type: "privateMode", active: now, target });
+  };
+
+  /**
+   * One target's check: first its initial report, then changes. Targets run independently, so
+   * one slow probe never holds back another window's private mode or human input.
+   */
+  const checkTarget = async (
+    id: string,
+    mine: number,
+    target: ComputerUseWindowTarget,
+    reason: CheckReason,
+  ) => {
+    const key = keyOf(target);
+    if (checking.has(key)) return;
+    const owner = {};
+    checking.set(key, owner);
+    // A probe past its time limit has already reported the window private, but its AT-SPI scan
+    // keeps running; the window stays held until that scan ends so slow scans never pile up.
+    let running: Promise<unknown> | undefined;
+    try {
+      if (reason === "tick") {
+        const open = await deps.windowOpen(target);
+        if (incarnation !== mine) return;
+        // Only a list that lacks the window proves it closed; an error proves nothing.
+        if (open === false) {
+          release(id, target);
+          targets = targets.filter((entry) => entry !== target);
+          return;
+        }
+      }
+      await readFocus(id, mine, target, reason === "initial", (probe) => {
+        running = probe;
+      });
+    } finally {
+      const free = () => {
+        if (checking.get(key) !== owner) return;
+        checking.delete(key);
+        // A focus change during this check asked for another read; it starts now.
+        const report = recheck.get(key);
+        if (report === undefined) return;
+        recheck.delete(key);
+        if (incarnation === mine && targets.includes(target))
+          void checkTarget(id, mine, target, report ? "initial" : "focus");
+      };
+      if (running) void running.then(free, free);
+      else free();
+    }
+  };
+
+  const checkFocus = async () => {
+    const id = watchId;
+    const mine = incarnation;
+    if (id === undefined) return;
+    // A target still being checked is skipped at once, so a stuck probe holds only itself.
+    await Promise.all(targets.map((target) => checkTarget(id, mine, target, "tick")));
+  };
+
+  const focusChanged = () => {
+    focusChanges++;
+    const id = watchId;
+    const mine = incarnation;
+    if (id === undefined) return;
+    for (const target of targets) {
+      const key = keyOf(target);
+      if (!checking.has(key)) void checkTarget(id, mine, target, "focus");
+      else if (!recheck.has(key)) recheck.set(key, false);
+    }
+  };
+
+  const checkInput = async () => {
+    const input = deps.input;
+    const id = watchId;
+    if (!input || id === undefined) return;
+    if (input.lost()) {
+      if (lostReported) return;
+      lostReported = true;
+      // Unable to see a person: report the lost input source before restarting the helper.
+      deps.emit(id, { type: "humanInput", source: "unknown" });
+      deps.inputLost();
+      return;
+    }
+    const latest = input.latest();
+    if (!latest || latest.order <= lastInputOrder) return;
+    lastInputOrder = latest.order;
+    const now = deps.now();
+    if (now - lastEventAt < HUMAN_INPUT_QUIET_MS) return;
+    lastEventAt = now;
+    deps.emit(id, { type: "humanInput", source: latest.source });
+  };
+
+  const stop = () => {
+    for (const cancel of stops) cancel();
+    stops = [];
+  };
+
+  return {
+    watch: async (id, next) => {
+      stop();
+      const previous = watchId;
+      const kept = new Set(next.map(keyOf));
+      if (previous !== undefined)
+        for (const target of targets) if (!kept.has(keyOf(target))) release(previous, target);
+      watchId = id;
+      const mine = ++incarnation;
+      targets = [...next];
+      // A retained target keeps its state until its first reading under this watch, so an
+      // unwatch before then still clears it.
+      for (const key of Array.from(active.keys())) if (!kept.has(key)) active.delete(key);
+      // Input from before this watch is not its concern.
+      lastInputOrder = deps.input?.latest()?.order ?? 0;
+      lastEventAt = -Infinity;
+      checking.clear();
+      recheck.clear();
+      overlapped.clear();
+      deps.afterReply(async () => {
+        if (incarnation !== mine) return;
+        // Each target's first report starts now and marks it as being checked, so the timer
+        // or a focus change never reports a change before it; human input is watched from the
+        // same moment, not after the slowest first report.
+        const initial = targets.map((target) => checkTarget(id, mine, target, "initial"));
+        stops = [
+          deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
+          ...(deps.input ? [deps.every(HUMAN_INPUT_EVERY_MS, checkInput)] : []),
+          ...(deps.focusEvents ? [deps.focusEvents.subscribe(focusChanged)] : []),
+        ];
+        await Promise.all(initial);
+      });
+    },
+    unwatch: async (options) => {
+      stop();
+      incarnation++;
+      if (watchId !== undefined)
+        for (const target of targets)
+          if (options?.announce === false) active.delete(keyOf(target));
+          else release(watchId, target);
+      watchId = undefined;
+      targets = [];
+    },
+    watching: () => targets,
+  };
+}

@@ -1,13 +1,15 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HostPressureSettings } from "./hostPressure.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /**
  * Fleet limits, placement and model fallback chains (docs/internals/agentic-k8s.md, T3).
- * Every field is optional and off by default: nothing changes until a limit or a chain is set.
+ * Limits and fallback chains are optional and off by default. Checkpoint replication preserves
+ * existing channel defaults; ordinary watches require opt-in.
  */
 
 /** A provider failure class or a step that cannot start (disabled, missing, out of quota). */
@@ -62,6 +64,8 @@ export type FallbackChain = typeof FallbackChain.Type;
 export const FLEET_LOCAL_HOST_KEY = "local";
 
 export const FleetHostLimits = Schema.Struct({
+  /** Off stops new copies and retains existing copies until their normal expiry. Omitted preserves channel copies; ordinary watches require opt-in. */
+  checkpointReplication: Schema.optional(Schema.Literals(["on", "off"])),
   /** Running plus queued threads this host may hold before goal work is refused. */
   maxThreads: Schema.optional(Schema.NullOr(PositiveInt)),
   allowGoals: Schema.optional(Schema.Boolean),
@@ -101,6 +105,8 @@ export const FleetSettings = Schema.Struct({
   fallbackChains: Schema.optional(Schema.Record(FallbackChainId, FallbackChain)),
   /** Used by goals that name no chain. */
   defaultFallbackChain: Schema.optional(Schema.NullOr(FallbackChainId)),
+  /** Resource pressure thresholds, notices and launch admission (ADR-0020). On by default. */
+  pressure: Schema.optional(HostPressureSettings),
 });
 export type FleetSettings = typeof FleetSettings.Type;
 
@@ -114,6 +120,7 @@ export const PlacementRefusalCode = Schema.Literals([
   "host_cap",
   "global_cap",
   "goals_not_allowed",
+  "host_pressure",
   "placement_unavailable",
 ]);
 export type PlacementRefusalCode = typeof PlacementRefusalCode.Type;

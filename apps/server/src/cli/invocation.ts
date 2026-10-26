@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 
 import type { ServerInstallation } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CLI_NPM_PACKAGE_NAME, cliNpmExecCommand, cliNpmPackageUrl } from "@goat/shared/cliRelease";
 import { isCommandAvailable } from "@goat/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -43,6 +44,37 @@ const InstallManifest = Schema.Struct({
 });
 const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(InstallManifest));
 
+// `t3` and `bin/t3.mjs` are launchers built before the GOAT rename. goat-rename: legacy
+const POSIX_NPM_GLOBAL_ENTRY =
+  /^(.*)\/lib\/node_modules\/(@goat-si\/goat|goat|t3)\/(?:dist\/bin\.mjs|bin\/(?:goat|t3)\.mjs)$/;
+const WINDOWS_NPM_GLOBAL_ENTRY =
+  /^(.*)\/node_modules\/(@goat-si\/goat|goat|t3)\/(bin\/(?:goat|t3)\.mjs|dist\/bin\.mjs)$/; // goat-rename: legacy
+
+/**
+ * Windows npm puts packages in `<prefix>\node_modules` and a `<prefix>\goat.cmd`
+ * shim beside them, with no `lib` or `bin`. The shim naming this exact script
+ * is the ownership proof. The prefix keeps the entry's own separators, since
+ * it is shown to people in a PowerShell command.
+ */
+const resolveWindowsNpmGlobal = Effect.fn("invocation.resolveWindowsNpmGlobal")(function* (
+  entry: string,
+) {
+  const match = WINDOWS_NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"));
+  if (!match?.[1] || match[1].includes("/node_modules/")) return null;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const prefix = entry.slice(0, match[1].length);
+  const script = `node_modules/${match[2]}/${match[3]}`;
+  for (const bin of ["goat", "t3"]) {
+    // goat-rename: legacy
+    const shim = yield* fs.readFileString(path.join(prefix, `${bin}.cmd`)).pipe(Effect.option);
+    if (Option.isSome(shim) && shim.value.replaceAll("\\", "/").includes(`%dp0%/${script}`)) {
+      return { kind: "npm-global", prefix } satisfies ServerInstallation;
+    }
+  }
+  return null;
+});
+
 /**
  * The script this CLI was started through: the `goat` npm launcher that
  * downloaded and ran this executable (it names itself in
@@ -53,7 +85,7 @@ const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(I
  * counts only when its package is this exact version: a different `goat` run
  * from an agent's shell must not claim to be the npm install.
  */
-const resolveEntryPath = Effect.gen(function* () {
+export const resolveEntryPath = Effect.gen(function* () {
   const npmLauncher = (yield* HostProcess.Environment).GOAT_NPM_LAUNCHER_PATH?.trim();
   if (npmLauncher) {
     const fs = yield* FileSystem.FileSystem;
@@ -63,7 +95,8 @@ const resolveEntryPath = Effect.gen(function* () {
       .pipe(Effect.flatMap(decodeInstallManifest), Effect.option);
     if (
       Option.isSome(manifest) &&
-      (manifest.value.name === "goat" || manifest.value.name === "t3") &&
+      [CLI_NPM_PACKAGE_NAME, "goat", "t3"].includes(manifest.value.name) &&
+      (manifest.value.bin?.goat !== undefined || manifest.value.bin?.t3 !== undefined) &&
       manifest.value.version === packageJson.version
     ) {
       return npmLauncher;
@@ -78,21 +111,25 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
-  // `t3` and `bin/t3.mjs` are launchers built before the GOAT rename. goat-rename: legacy
+  if (platform === "win32") {
+    const owned = yield* resolveWindowsNpmGlobal(entry);
+    if (owned !== null) return owned;
+  }
+  // Matched with `/` so the layout reads the same whatever separators the host returns.
   const match =
-    /^(.*)\/lib\/node_modules\/(goat|t3)\/(?:dist\/bin\.mjs|bin\/(?:goat|t3)\.mjs)$/.exec(entry);
+    platform === "win32" ? null : POSIX_NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"));
   if (!match) {
     const runner = detectCliRunner(entry);
     return runner === null
       ? null
       : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
   }
-  if (platform === "win32") return null;
-  const prefix = match[1] || "/";
+  const layoutPrefix = match[1] ?? "";
+  const prefix = entry.slice(0, layoutPrefix.length) || "/";
   if (
-    prefix.includes("/node_modules/") ||
-    /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
-    /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
+    layoutPrefix.includes("/node_modules/") ||
+    /\/(?:Cellar|Caskroom)\//i.test(layoutPrefix) ||
+    /\/mise\/installs\/(?!node\/)[^/]+\//.test(layoutPrefix)
   )
     return null;
 
@@ -111,15 +148,6 @@ export const resolveServerInstallation = Effect.gen(function* () {
   return { kind: "npm-global", prefix } satisfies ServerInstallation;
 }).pipe(Effect.orElseSucceed(() => null));
 
-/**
- * The literal spec the user typed (e.g. `goat@nightly`) is resolved away before
- * our process starts, so re-derive it from the running version: nightly builds
- * re-suggest the nightly channel, anything else suggests the bare package.
- */
-function suggestedPackageSpec(version: string): string {
-  const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "goat" : `goat@${channel}`;
-}
 function formatCliCommand(input: {
   readonly subcommand: string;
   readonly entryPath: string;
@@ -129,7 +157,7 @@ function formatCliCommand(input: {
   if (runner === null) {
     return `goat ${input.subcommand}`;
   }
-  return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
+  return `${cliNpmExecCommand(input.version)} ${input.subcommand}`;
 }
 
 export const resolveCliCommand = (subcommand: string) =>
@@ -155,6 +183,25 @@ const powershellWord = (value: string) =>
 /** Quotes a word for the host's shell: POSIX, or PowerShell on Windows. */
 const hostShellWord = (platform: NodeJS.Platform, value: string) =>
   platform === "win32" ? powershellWord(value) : shellWord(value);
+
+/** npm owns its wrapper; updating the native runtime cannot change that version pin. */
+export const resolveNpmUpdateCommand = Effect.fn("invocation.resolveNpmUpdateCommand")(function* (
+  version: string,
+) {
+  const installation = yield* resolveServerInstallation;
+  if (installation?.kind === "npm-global") {
+    const prefix = hostShellWord(yield* HostProcess.Platform, installation.prefix);
+    return `npm --prefix ${prefix} install --global ${cliNpmPackageUrl(version)}`;
+  }
+  const entry = yield* resolveEntryPath;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  // A Windows launcher without a proven global shim is run through `npm exec`.
+  if (platform === "win32" && entry === environment.GOAT_NPM_LAUNCHER_PATH?.trim()) {
+    return cliNpmExecCommand(version);
+  }
+  return detectCliRunner(entry) === null ? undefined : cliNpmExecCommand(version);
+});
 
 /**
  * The launcher a person can type to run this install when `goat` is not on

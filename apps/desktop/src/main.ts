@@ -71,6 +71,7 @@ import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
 import * as DesktopRendererOriginMigration from "./app/DesktopRendererOriginMigration.ts";
 import * as DesktopSafeStorageKeyMigration from "./app/DesktopSafeStorageKeyMigration.ts";
 import * as DesktopSafeStorageSiblingKeys from "./app/DesktopSafeStorageSiblingKeys.ts";
+import * as DesktopCuaDriver from "./cua/DesktopCuaDriver.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
@@ -81,6 +82,10 @@ import * as DesktopBrowserHost from "./preview/DesktopBrowserHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PreviewPasskeys from "./preview/Passkeys.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
+import * as DesktopWindowMaterial from "./window/material/DesktopWindowMaterial.ts";
+import * as WindowMaterialAdapters from "./window/material/adapters.ts";
+import * as MaterialPlatform from "./window/material/materialPlatform.ts";
+import * as MacosObjcRuntime from "./electron/MacosObjcRuntime.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
@@ -169,8 +174,7 @@ const layerElectron = Layer.mergeAll(
   ElectronShell.layer,
   ElectronTheme.layer,
   ElectronUpdater.layer,
-  ElectronWindow.layer,
-  DesktopIpc.layer(Electron.ipcMain),
+  DesktopIpc.layer(Electron.ipcMain).pipe(Layer.provideMerge(ElectronWindow.layer)),
 );
 
 const layerDesktopFoundation = Layer.mergeAll(
@@ -214,7 +218,23 @@ const layerDesktopPreview = PreviewManager.layer.pipe(
   Layer.provideMerge(layerDesktopFoundation),
 );
 
+const layerDesktopMaterial = DesktopWindowMaterial.layer.pipe(
+  Layer.provide(
+    MaterialPlatform.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          WindowMaterialAdapters.layer,
+          MaterialPlatform.layerMacosVersion,
+          MacosObjcRuntime.layer,
+        ),
+      ),
+    ),
+  ),
+  Layer.provideMerge(layerDesktopFoundation),
+);
+
 const layerDesktopWindow = DesktopWindow.layer.pipe(
+  Layer.provideMerge(layerDesktopMaterial),
   Layer.provideMerge(layerDesktopServerExposure),
   Layer.provideMerge(layerDesktopPreview),
 );
@@ -257,6 +277,7 @@ const layerDesktopApplication = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
   Layer.provideMerge(DesktopUpdates.layer),
+  Layer.provideMerge(DesktopCuaDriver.layer),
   Layer.provideMerge(layerDesktopWslBackend),
   Layer.provideMerge(layerDesktopLocalEnvironmentAuth),
 );

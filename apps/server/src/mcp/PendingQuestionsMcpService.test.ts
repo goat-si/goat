@@ -1,23 +1,18 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
   OrchestratorMcpPendingRequestRespondInput,
   EnvironmentId,
-  NodeId,
   ProviderInstanceId,
-  RunId,
   RuntimeRequestId,
   ThreadId,
-  TurnItemId,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2RuntimeRequest,
-  type OrchestrationV2TurnItem,
   type OrchestrationV2ServerCommand,
-  type OrchestrationV2UserInputQuestion,
   type UserInputRespondedBy,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
@@ -35,13 +30,17 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestions from "./PendingQuestionsMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
+import {
+  approvalProjection,
+  now,
+  questionProjection,
+  requestId,
+  targetId,
+} from "./PendingQuestionsMcpService.testkit.ts";
 import { OrchestratorQuestionAlreadyAnsweredError } from "../orchestration-v2/Orchestrator.ts";
 
 const decodeRespondInput = Schema.decodeUnknownSync(OrchestratorMcpPendingRequestRespondInput);
 const callerId = ThreadId.make("caller");
-const targetId = ThreadId.make("asking");
-const requestId = RuntimeRequestId.make("question");
-const now = DateTime.makeUnsafe("2026-10-12T00:00:00Z");
 const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("origin"),
   requestNamespace: "caller",
@@ -73,64 +72,6 @@ const foreign: UserInputRespondedBy = {
 };
 const answers = { q: "  exact label\n" };
 const respondInput = { threadId: targetId, requestId, reason, answers };
-const questionProjection = (
-  id = targetId,
-  rid = requestId,
-  questions: ReadonlyArray<OrchestrationV2UserInputQuestion> = [
-    { id: "q", header: "Choice", question: "Use the existing API?", options: [] },
-  ],
-): OrchestrationV2ThreadProjection => {
-  const projection = idleThreadProjection(liveThreadShell(id));
-  const request: OrchestrationV2RuntimeRequest = {
-    id: rid,
-    nodeId: NodeId.make(`node:${rid}`),
-    providerTurnId: null,
-    nativeRequestRef: null,
-    kind: "user_input",
-    status: "pending",
-    responseCapability: { type: "message" },
-    createdAt: now,
-    resolvedAt: null,
-  };
-  const item: OrchestrationV2TurnItem = {
-    id: TurnItemId.make(`item:${rid}`),
-    type: "user_input_request",
-    threadId: id,
-    runId: RunId.make("asking-run"),
-    nodeId: request.nodeId,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal: 0,
-    status: "waiting",
-    title: null,
-    startedAt: now,
-    completedAt: null,
-    updatedAt: now,
-    requestId: rid,
-    questions,
-  };
-  return { ...projection, runtimeRequests: [request], turnItems: [item] };
-};
-const approvalProjection = (): OrchestrationV2ThreadProjection => {
-  const projection = questionProjection();
-  const request = projection.runtimeRequests[0]!;
-  const item = projection.turnItems[0]!;
-  return {
-    ...projection,
-    runtimeRequests: [{ ...request, kind: "command" }],
-    turnItems: [
-      {
-        ...item,
-        type: "approval_request",
-        requestId,
-        requestKind: "command",
-        prompt: "hostname",
-      } as OrchestrationV2TurnItem,
-    ],
-  };
-};
 const decideInput = { threadId: targetId, requestId, reason, decision: "accept" as const };
 const remoteQuestion = (env = "remote", rid = "question") => ({
   host: null,
@@ -182,10 +123,19 @@ const runService = <A, E>(
         reads.push({ threadId: id, filter });
         return records.get(id)!;
       }),
-    getProjectThreadRecords: (input) =>
-      Effect.succeed(
-        records.get(input.threadId) ?? idleThreadProjection(liveThreadShell(input.threadId)),
-      ),
+    // Applies the item type filter as the projection store does.
+    getProjectThreadRecords: (input, _fields, filter) =>
+      Effect.sync(() => {
+        const projection =
+          records.get(input.threadId) ?? idleThreadProjection(liveThreadShell(input.threadId));
+        const types = filter?.turnItemTypes;
+        return types === undefined
+          ? projection
+          : {
+              ...projection,
+              turnItems: projection.turnItems.filter((item) => types.includes(item.type)),
+            };
+      }),
     getLaunchedPendingQuestions: (input) =>
       Effect.suspend(() => {
         queries.push(input);
@@ -240,9 +190,14 @@ const runService = <A, E>(
       }),
   });
   const hostLayer = HostThreads.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provide(Layer.mock(ThreadResults.ThreadResultService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-    Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(transport),
     Layer.provide(threadLayer),
@@ -558,7 +513,7 @@ describe("PendingQuestionsMcpService", () => {
         expect(run.result).toMatchObject({
           failure: {
             code: "invalid_request",
-            message: expect.stringContaining('Allowed options: "yes-id", "No".'),
+            message: expect.stringContaining('Allowed options: "yes-id" (Yes), "No".'),
           },
         });
         expect(run.commands).toEqual([]);
@@ -567,7 +522,7 @@ describe("PendingQuestionsMcpService", () => {
   it.effect.each([
     { answer: "Yes", multiSelect: false, allowCustomAnswer: false },
     { answer: "yes-id", multiSelect: false, allowCustomAnswer: false },
-    { answer: ["yes-id", "No"], multiSelect: true, allowCustomAnswer: false },
+    { answer: ["yes-id", " NO "], multiSelect: true, allowCustomAnswer: false },
     { answer: "  custom text\n", multiSelect: false, allowCustomAnswer: true },
     { answer: ["Yes", "custom"], multiSelect: true, allowCustomAnswer: undefined },
   ])(

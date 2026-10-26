@@ -27,6 +27,7 @@ interface ThreadFixture {
   readonly status?: OrchestrationV2ShellThreadStatus;
   readonly activeRunId?: string | null;
   readonly archived?: boolean;
+  readonly branch?: string;
 }
 
 const shell = (fixture: ThreadFixture) =>
@@ -34,7 +35,7 @@ const shell = (fixture: ThreadFixture) =>
     id: ThreadId.make(fixture.id),
     projectId: ProjectId.make("project-1"),
     title: "Thread " + fixture.id,
-    branch: null,
+    branch: fixture.branch ?? null,
     worktreePath: fixture.worktreePath,
     status: fixture.status ?? "completed",
     activeRunId: fixture.activeRunId ?? null,
@@ -236,6 +237,31 @@ describe("WorktreeInventoryService", () => {
       expect(yield* fs.exists(path)).toBe(false);
       const branches = yield* run(repo, ["branch", "--list", "unpushed"]);
       expect(branches.stdout.trim()).toBe("");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("promises a recreated checkout only where turn start would recreate it", () =>
+    Effect.gen(function* () {
+      const { service, fs, root, addWorktree, setThreads } = yield* fixture;
+      const worktreesDir = yield* fs.realPath((yield* ServerConfig.ServerConfig).worktreesDir);
+      const placed = yield* addWorktree("placed", worktreesDir + "/repo/placed");
+      const outside = yield* addWorktree("outside", root + "/elsewhere/outside");
+      setThreads([
+        { id: "placed-thread", worktreePath: placed, branch: "placed" },
+        // Turn start recreates nothing for a thread with no branch.
+        { id: "branchless-thread", worktreePath: placed },
+        { id: "outside-thread", worktreePath: outside, branch: "outside" },
+      ]);
+
+      const recreatable = yield* service.remove({ path: placed });
+      expect(recreatable.notes).toEqual([
+        "Thread placed-thread still points at this path; it recreates the checkout from branch placed if it runs again.",
+        "Thread branchless-thread still points at this path and cannot recreate its checkout.",
+      ]);
+      const unmanaged = yield* service.remove({ path: outside });
+      expect(unmanaged.notes).toHaveLength(1);
+      expect(unmanaged.notes[0]).toContain("outside-thread");
+      expect(unmanaged.notes[0]).toContain("will not recreate");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

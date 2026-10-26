@@ -75,7 +75,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
 vi.mock(import("@tanstack/react-router"), async (original) => ({
   ...(await original()),
   useLocation: ((options?: { select?: (location: unknown) => unknown }) => {
-    const location = { hash: "", state: {} };
+    const location = { pathname: "/settings/goat-bot", hash: "", state: {} };
     return options?.select ? options.select(location) : location;
   }) as never,
   useNavigate: (() => vi.fn()) as never,

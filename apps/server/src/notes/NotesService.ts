@@ -6,7 +6,6 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import {
   NOTE_BODY_MAX_BYTES,
-  NOTE_TITLE_MAX_LENGTH,
   NoteConflictError,
   NoteError,
   NoteFolder,
@@ -21,6 +20,8 @@ import {
   type NotesMoveInput,
   type NotesReadInput,
   type NotesWriteInput,
+  type NotesUpdateInput,
+  type NoteThreadRef,
   type NoteSummary,
   type NoteThreadLink,
   type ThreadResult,
@@ -37,8 +38,10 @@ import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Projections from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerConfig from "../config.ts";
 import { parseNote, serializeNote, type NoteContents } from "./frontmatter.ts";
+import { bodySummary } from "./noteSummary.ts";
 import * as NotesGit from "./NotesGit.ts";
 import * as NoteResults from "./NoteResults.ts";
 
@@ -49,11 +52,6 @@ const isFolder = Schema.is(NoteFolder);
 const LIST_LIMIT = 500;
 const MAX_FILE_BYTES = NOTE_BODY_MAX_BYTES + 256 * 1024;
 const summary = ({ body: _body, ...note }: NoteDocument): NoteSummary => note;
-const displayTitle = (title: string) => {
-  if (title.length <= NOTE_TITLE_MAX_LENGTH) return title;
-  const cut = title.slice(0, NOTE_TITLE_MAX_LENGTH - 1);
-  return `${/[\uD800-\uDBFF]$/u.test(cut) ? cut.slice(0, -1) : cut}…`;
-};
 const sha256 = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");
 
 export class NotesService extends Context.Service<
@@ -65,6 +63,7 @@ export class NotesService extends Context.Service<
       input: NotesWriteInput,
       author: NoteAuthor,
     ) => Effect.Effect<NoteDocument, NoteError | NoteConflictError>;
+    readonly update: (input: NotesUpdateInput) => Effect.Effect<NoteDocument, NoteError>;
     readonly move: (
       input: NotesMoveInput,
       author: NoteAuthor,
@@ -101,6 +100,7 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const git = yield* NotesGit.NotesGit;
   const results = yield* NoteResults.NoteResults;
+  const projections = yield* Projections.ProjectionStoreV2;
   const lock = yield* Semaphore.make(1);
   const events = yield* PubSub.unbounded<NotesEvent>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(events));
@@ -283,9 +283,9 @@ const make = Effect.gen(function* () {
         const document: NoteDocument = {
           path: name,
           folder: name.includes("/") ? name.split("/")[0]! : null,
-          title: displayTitle(
-            /^#{1,6}\s+(.+?)\s*#*\s*$/mu.exec(contents.body)?.[1] ?? path.basename(name, ".md"),
-          ),
+          ...bodySummary(contents.body, path.basename(name, ".md")),
+          pinned: contents.pinned,
+          related: contents.related,
           status: contents.status,
           threads: contents.threads,
           updatedBy: contents.updatedBy,
@@ -421,10 +421,64 @@ const make = Effect.gen(function* () {
         const directory = yield* pinDirectory(name);
         yield* directory.verifyFile;
         yield* expectOnDisk(name, directory.absolute, expected);
-        // As in persist, an edit between this check and unlink(2) is the remaining window.
-        yield* io(name, () => NodeFSP.unlink(directory.absolute));
+        // POSIX has no compare-and-unlink. rename(2) takes whatever is at the path at that instant,
+        // so an edit after the check above is caught and linked back; only a writer that keeps the
+        // file open past the second check still loses its edit. Captured bytes leave the disk only
+        // once they prove to be the expected revision or are linked back.
+        let captured = false;
+        const aside = yield* Effect.acquireRelease(
+          fs
+            .makeTempDirectory({ directory: directory.parent, prefix: ".note-" })
+            .pipe(Effect.mapError(() => storage)),
+          (temporary) =>
+            captured
+              ? Effect.void
+              : fs.remove(temporary, { recursive: true }).pipe(Effect.ignore({ log: true })),
+        );
+        yield* directory.pinTemporary(aside);
+        const removed = path.join(aside, "removed.md");
+        const unmoved = new NoteError({
+          reason: "storage",
+          message: "The note was kept because it could not be moved aside for removal.",
+          path: name,
+        });
+        // Stopping between the rename and its outcome would leave the note's path empty.
+        const changed = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            // No copy-and-unlink fallback (EXDEV, EBUSY on a bind mount): the note stays put.
+            yield* io(name, () => NodeFSP.rename(directory.absolute, removed)).pipe(
+              Effect.mapError((error) => (error.reason === "storage" ? unmoved : error)),
+            );
+            captured = true;
+            const revision = yield* diskRevision(name, removed).pipe(
+              Effect.orElseSucceed(() => undefined),
+            );
+            // Verify containment before discarding anything: a failure after the bytes are gone
+            // would make a move roll back its destination too.
+            const verified = yield* directory.verify.pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+            if (revision === expected && verified) return (captured = false);
+            // link(2) never replaces a file created at the path meanwhile, and unlike a copy the
+            // restored note is complete the moment it is visible.
+            captured = yield* Effect.tryPromise(() =>
+              NodeFSP.link(removed, directory.absolute),
+            ).pipe(
+              Effect.as(false),
+              Effect.orElseSucceed(() => true),
+            );
+            return true;
+          }),
+        );
+        if (captured)
+          return yield* new NoteError({
+            reason: "storage",
+            message: `The note changed while it was being removed and could not be put back. Its contents are in ${path.relative(root, removed)}.`,
+            path: name,
+          });
+        if (changed) return yield* changedOnDisk(name, expected);
         forget(name);
-        yield* directory.verify;
       }),
     );
   const checkRevision = (document: NoteDocument, revision: string) =>
@@ -465,6 +519,10 @@ const make = Effect.gen(function* () {
     expected: string | null,
   ) {
     if ((yield* diskRevision(name, absolute)) === expected) return;
+    return yield* changedOnDisk(name, expected);
+  });
+  /** The error for a note whose file no longer holds the expected revision. */
+  const changedOnDisk = Effect.fnUntraced(function* (name: NotePath, expected: string | null) {
     const current = yield* optionalLoad(name);
     if (!current)
       return yield* new NoteError({
@@ -516,7 +574,7 @@ const make = Effect.gen(function* () {
             : Effect.fail(storage),
       ),
     );
-  /** link and complete own no user revision, so a racing edit makes them read again. */
+  /** Header updates, link and complete own no user revision, so a racing edit makes them read again. */
   const rereadOnConflict = <A>(effect: Effect.Effect<A, NoteError | NoteConflictError>) =>
     effect.pipe(
       Effect.retry({ times: 3, while: (error) => error._tag === "NoteConflictError" }),
@@ -623,6 +681,8 @@ const make = Effect.gen(function* () {
               body: input.body,
               status: input.status ?? existing?.contents.status ?? "idea",
               threads: existing?.contents.threads ?? [],
+              pinned: existing?.contents.pinned ?? false,
+              related: existing?.contents.related ?? [],
               updatedBy: author,
             },
             existing?.document.revision ?? null,
@@ -630,6 +690,60 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.flatMap(enrich));
+  const update = Effect.fn("NotesService.update")(function* (input: NotesUpdateInput) {
+    return yield* lock
+      .withPermits(1)(
+        rereadOnConflict(
+          Effect.gen(function* () {
+            const source = yield* load(input.path);
+            const sameRef = (left: NoteThreadRef, right: NoteThreadRef) =>
+              left.threadId === right.threadId && left.host === right.host;
+            const pinned = input.pinned ?? source.contents.pinned;
+            let related = source.contents.related;
+            const ref = input.relate;
+            if (
+              ref &&
+              ![...source.contents.threads, ...related].some((entry) => sameRef(entry, ref))
+            ) {
+              if (ref.host === null) {
+                const thread = yield* projections.getThread(ref.threadId).pipe(
+                  Effect.catchTags({
+                    ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                  }),
+                  Effect.mapError(() => storage),
+                );
+                if (!thread || thread.deletedAt !== null)
+                  return yield* new NoteError({
+                    reason: "not_found",
+                    message: "The thread was not found in this environment.",
+                    path: input.path,
+                  });
+              }
+              related = [...related, ref];
+            }
+            if (input.unrelate) {
+              const ref = input.unrelate;
+              related = related.filter((entry) => !sameRef(entry, ref));
+            }
+            if (
+              pinned === source.contents.pinned &&
+              related.length === source.contents.related.length &&
+              related.every((entry, index) => {
+                const before = source.contents.related[index];
+                return before !== undefined && sameRef(entry, before);
+              })
+            )
+              return source.document;
+            return yield* persist(
+              input.path,
+              { ...source.contents, pinned, related },
+              source.document.revision,
+            );
+          }),
+        ),
+      )
+      .pipe(Effect.flatMap(enrich));
+  });
   const move: NotesService["Service"]["move"] = (input, author) =>
     lock
       .withPermits(1)(
@@ -645,10 +759,26 @@ const make = Effect.gen(function* () {
             });
           const contents: NoteContents = { ...source.contents, updatedBy: author };
           const document = yield* persist(input.to, contents, null, false);
-          // Roll back only the bytes this move placed; a destination edited since then stays.
+          // Roll back only the bytes this move placed; a destination edited since then stays. A
+          // storage failure there can hold a captured edit, so it is reported with the first error.
           const placed = sha256(new TextEncoder().encode(serializeNote(contents)));
           yield* unlink(source.document.path, source.document.revision).pipe(
-            Effect.tapError(() => unlink(input.to, placed).pipe(Effect.ignore({ log: true }))),
+            Effect.catch((error) =>
+              unlink(input.to, placed).pipe(
+                Effect.catch((rollback) =>
+                  rollback._tag === "NoteError" && rollback.reason === "storage"
+                    ? Effect.fail(
+                        new NoteError({
+                          reason: "storage",
+                          message: `${error.message} The moved copy could not be removed: ${rollback.message}`,
+                          path: input.to,
+                        }),
+                      )
+                    : Effect.void,
+                ),
+                Effect.andThen(Effect.fail(error)),
+              ),
+            ),
           );
           yield* publish(document);
           yield* removed(input.from);
@@ -840,6 +970,7 @@ const make = Effect.gen(function* () {
     list,
     read,
     write,
+    update,
     move,
     delete: remove,
     subscribe,

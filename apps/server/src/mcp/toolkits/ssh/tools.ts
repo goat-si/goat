@@ -1,7 +1,9 @@
+import * as Crypto from "effect/Crypto";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
-import { RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
+import { GoatclawRole, RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   AuthMcpClientAccess,
@@ -9,6 +11,8 @@ import {
   CloudMachineAlias,
   CloudMachinesCreateInput,
   CloudMachinesListResult,
+  GoatclawCeilingAdvice,
+  HostPressureAdvice,
   ModelSelection,
   ProjectId,
   ThreadId,
@@ -16,6 +20,8 @@ import {
   OrchestratorMcpFailure,
   ProviderInteractionMode,
   RuntimeMode,
+  RepositoryLaunchSelection,
+  RepositoryReferences,
   TrimmedNonEmptyString,
   SshLaunchWorkspace,
   SshWorkspaceCode,
@@ -24,6 +30,7 @@ import {
   SshHostStatusInput,
   SshRuntimeUpdateInput,
   SshHostResult,
+  SshHostSettledResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -35,16 +42,21 @@ import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
+import { KeyedClientRequestId, withClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: [
     McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    Crypto.Crypto,
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
     SshHostSetup.SshHostSetup,
@@ -56,7 +68,7 @@ const shared = {
 
 const SshHost = Schema.Struct({
   alias: Schema.String,
-  source: Schema.Literals(["ssh-config", "known-hosts"]),
+  source: Schema.Literals(["ssh-config", "known-hosts", "cloud-machine"]),
   reachable: Schema.optional(Schema.Boolean),
   probeError: Schema.optional(Schema.String),
 });
@@ -78,7 +90,7 @@ const RemoteEntry = Schema.Struct({
 
 const HostAlias = TrimmedNonEmptyString.annotate({
   description:
-    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config or known_hosts).",
+    "An SSH host alias from goat_ssh_host_list (this machine's ~/.ssh/config, known_hosts, or a cloud machine it manages).",
 });
 
 const SshHostListTool = Tool.make(agentSurfaceRegistry["ssh.host_list"].name, {
@@ -102,22 +114,24 @@ const LinkedHost = Schema.Struct({
 const HostLinkCreateTool = Tool.make(agentSurfaceRegistry["host_link.create"].name, {
   ...shared,
   description: agentSurfaceRegistry["host_link.create"].description,
-  parameters: Schema.Struct({
-    name: TrimmedNonEmptyString.annotate({
-      description:
-        "What to call the host in the host parameter of other tools: lowercase letters, digits, '.', '_' and '-'. Must not be an SSH alias from goat_ssh_host_list.",
-    }),
-    url: TrimmedNonEmptyString.annotate({
-      description:
-        "The pairing URL from goat pair or goat auth pairing create on that host, or the host's https address (then pass code).",
-    }),
-    code: Schema.optional(
-      TrimmedNonEmptyString.annotate({
-        description: "A pairing code from that host, when url is only its address.",
+  parameters: withClientRequestId(
+    Schema.Struct({
+      name: TrimmedNonEmptyString.annotate({
+        description:
+          "What to call the host in the host parameter of other tools: lowercase letters, digits, '.', '_' and '-'. Must not be an SSH alias from goat_ssh_host_list.",
       }),
-    ),
-    access: Schema.optional(AuthMcpClientAccess),
-  }),
+      url: TrimmedNonEmptyString.annotate({
+        description:
+          "The pairing URL from goat pair or goat auth pairing create on that host, or the host's https address (then pass code).",
+      }),
+      code: Schema.optional(
+        TrimmedNonEmptyString.annotate({
+          description: "A pairing code from that host, when url is only its address.",
+        }),
+      ),
+      access: Schema.optional(AuthMcpClientAccess),
+    }),
+  ),
   success: Schema.Struct({ host: LinkedHost, replaced: Schema.Boolean }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host_link.create"]));
 
@@ -138,12 +152,13 @@ const HostLinkRemoveTool = Tool.make(agentSurfaceRegistry["host_link.remove"].na
 // HandoffSummary contains DateTime.Utc. MCP structuredContent accepts JSON values,
 // so encode the domain result through its JSON codec before CallToolResult validates it.
 const SshHostResultJson = Schema.toCodecJson(SshHostResult);
+const SshHostSettledResultJson = Schema.toCodecJson(SshHostSettledResult);
 
 const SshHostStatusTool = Tool.make(agentSurfaceRegistry["ssh.host_status"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_status"].description,
   parameters: SshHostStatusInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_status"]));
 
 const SshHostAddTool = Tool.make(agentSurfaceRegistry["ssh.host_add"].name, {
@@ -163,12 +178,12 @@ const SshHostForgetTool = Tool.make(agentSurfaceRegistry["ssh.host_forget"].name
   ...shared,
   description: agentSurfaceRegistry["ssh.host_forget"].description,
   parameters: SshHostForgetInput,
-  success: SshHostResultJson,
+  success: SshHostSettledResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_forget"]));
 const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.runtime_update"].description,
-  parameters: SshRuntimeUpdateInput,
+  parameters: withClientRequestId(SshRuntimeUpdateInput),
   success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.runtime_update"]));
 
@@ -197,12 +212,23 @@ const SshBrowseTool = Tool.make(agentSurfaceRegistry["ssh.browse"].name, {
 
 const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].name, {
   ...shared,
+  dependencies: [
+    ...shared.dependencies,
+    RepositoryLaunchMcpService.RepositoryLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
   description: agentSurfaceRegistry["ssh.thread_launch"].description,
   parameters: Schema.Struct({
+    repository: Schema.optional(RepositoryLaunchSelection).annotate({
+      description:
+        "Verify this normalized origin key at the selected absolute cwd (or existing_worktree path) before launch. Refuses missing, mismatched or unsupported inventory; suggests matching local/explicit candidateHosts checkouts. Does not fetch, install, or choose a host.",
+    }),
+    references: Schema.optional(RepositoryReferences),
     host: TrimmedNonEmptyString.annotate({
       description:
         "An SSH host alias from goat_ssh_host_list, or a linked host name from goat_host_link_list.",
     }),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
     cwd: TrimmedNonEmptyString.annotate({
       description: "Absolute path (or ~/path) of the folder on the remote machine.",
     }),
@@ -212,6 +238,12 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     projectTitle: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
+    goatclawRole: Schema.optional(
+      GoatclawRole.annotate({
+        description:
+          "Only while goatclaw is on: launch as a goatclaw role (supervisor, domain-manager, merge-manager, issue-sweeper). The remote enforces that role's permission profile narrowed by yours, and message is preceded by the role's instructions and report protocol. Needs message.",
+      }),
+    ),
     interactionMode: Schema.optional(ProviderInteractionMode),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
     standingInstructions: Schema.optional(
@@ -245,7 +277,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     notifyTarget: Schema.optional(
       NotifyTargetInput.annotate({
         description:
-          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
+          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from goat_handoff_create and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
       }),
     ),
   }),
@@ -260,10 +292,14 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     correlationId: Schema.NullOr(Schema.String),
     workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
     runtimeMode: RuntimeMode,
-    remoteServerKind: Schema.NullOr(Schema.Literals(["external", "managed"])),
+    remoteServerKind: Schema.NullOr(Schema.Literals(["app", "external", "managed"])),
     /** Whether the calling thread will be told when the remote thread finishes. */
     watching: Schema.Boolean,
     notes: Schema.Array(Schema.String),
+    /** Set when that host was under resource pressure at its last status read. */
+    pressure: Schema.optional(HostPressureAdvice),
+    /** Set when that host has not confirmed it enforces the forwarded goatclaw ceiling. */
+    ceiling: Schema.optional(GoatclawCeilingAdvice),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 
@@ -278,16 +314,18 @@ const SshThreadHandoffTool = Tool.make(agentSurfaceRegistry["ssh.thread_handoff"
   dependencies: [...shared.dependencies, SshWorkspaceSync.SshWorkspaceSync],
   failure: Schema.Union([OrchestratorMcpFailure, SshThreadHandoffFailure]),
   description: agentSurfaceRegistry["ssh.thread_handoff"].description,
-  parameters: Schema.Struct({
-    host: HostAlias,
-    threadId: Schema.optional(
-      ThreadId.annotate({ description: "Defaults to the calling thread." }),
-    ),
-    message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
-    modelSelection: Schema.optional(ModelSelection),
-    runtimeMode: Schema.optional(RuntimeMode),
-    interactionMode: Schema.optional(ProviderInteractionMode),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      host: HostAlias,
+      threadId: Schema.optional(
+        ThreadId.annotate({ description: "Defaults to the calling thread." }),
+      ),
+      message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
+      modelSelection: Schema.optional(ModelSelection),
+      runtimeMode: Schema.optional(RuntimeMode),
+      interactionMode: Schema.optional(ProviderInteractionMode),
+    }),
+  ),
   success: Schema.Struct({
     host: Schema.String,
     operationId: Schema.String,
@@ -315,6 +353,7 @@ const cloudShared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     CloudMachineService.CloudMachineService,
+    Profiles.PermissionProfiles,
   ],
 };
 const CloudAliasParameters = Schema.Struct({
@@ -333,7 +372,7 @@ const CloudMachineListTool = Tool.make(agentSurfaceRegistry["cloud_machine.list"
 const CloudMachineCreateTool = Tool.make(agentSurfaceRegistry["cloud_machine.create"].name, {
   ...cloudShared,
   description: agentSurfaceRegistry["cloud_machine.create"].description,
-  parameters: CloudMachinesCreateInput,
+  parameters: withClientRequestId(CloudMachinesCreateInput),
   success: CloudMachine,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_machine.create"]));
 

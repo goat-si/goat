@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -247,7 +248,7 @@ it.effect(
           Layer.mock(Ssh.SshRemoteDispatch)({}),
         );
         const tasks = Tasks.layer.pipe(Layer.provideMerge(dependencies));
-        return Mcp.layer.pipe(Layer.provideMerge(tasks));
+        return Mcp.layer.pipe(Layer.provide(layerNoFleetSync), Layer.provideMerge(tasks));
       };
       // Close both the service and SQL connection before opening the same file again.
       yield* Effect.gen(function* () {

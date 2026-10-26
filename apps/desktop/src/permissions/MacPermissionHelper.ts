@@ -10,7 +10,7 @@ import {
 
 import { MAC_PERMISSION_TITLES, type MacPermission } from "./MacPermission.ts";
 
-const permissionGranted = (permission: MacPermission) => {
+export const macPermissionGranted = (permission: MacPermission) => {
   if (permission === "screen-recording")
     return Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
   if (permission === "accessibility")
@@ -38,8 +38,15 @@ const escapeHtml = (value: string) =>
     }
   });
 
-function helperHtml(permission: MacPermission, icon: string) {
+/** The app the person drags into a System Settings list, when it is not GOAT itself. */
+export interface MacPermissionTarget {
+  readonly bundlePath: string;
+  readonly name: string;
+}
+
+function helperHtml(permission: MacPermission, icon: string, name: string) {
   const title = MAC_PERMISSION_TITLES[permission];
+  const label = escapeHtml(name);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <title>Set up ${title}</title><style>
@@ -49,19 +56,33 @@ function helperHtml(permission: MacPermission, icon: string) {
 html { background: transparent; }
 body { margin: 0; background: transparent; color: var(--text); font: 15px/22px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; }
 #panel { position: relative; margin: 2px; padding: 20px; height: 136px; border: 1px solid var(--line); border-radius: 24px; background: var(--base); }
-header { font-weight: 600; white-space: nowrap; }
+header { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button { font: inherit; color: inherit; }
 button:focus-visible { outline: 2px solid #007aff; outline-offset: -2px; }
 #close { position: absolute; right: 8px; top: 6px; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: var(--base); font-size: 18px; cursor: pointer; opacity: 0; }
 #panel:hover #close, #close:focus-visible { opacity: 1; }
 #app { display: flex; align-items: center; gap: 12px; width: 100%; height: 52px; margin-top: 20px; padding: 8px 12px; border: 0; border-radius: 10px; background: var(--row); cursor: grab; text-align: left; font-size: 16px; font-weight: 600; }
+#app span { margin-left: auto; font-size: 13px; font-weight: 400; opacity: 0.7; white-space: nowrap; }
 #app:active { cursor: grabbing; }
 img { width: 32px; height: 32px; pointer-events: none; }
 </style></head><body><main id="panel">
 <button id="close" aria-label="Close permission helper">×</button>
-<header>↑ Drag GOAT into the list above</header>
-<button id="app" draggable="true" aria-label="Drag GOAT to System Settings, or click to reveal in Finder"><img src="${escapeHtml(icon)}" alt="" draggable="false">GOAT</button>
+<header>Drag ${label} into the list, then turn it on</header>
+<button id="app" draggable="true" aria-label="Drag ${label} to System Settings, or click to reveal in Finder"><img src="${escapeHtml(icon)}" alt="" draggable="false">${label}<span>Click to show in Finder</span></button>
 </main></body></html>`;
+}
+
+// Finder's own icon for the bundle is what System Settings lists, so the panel shows the same one.
+async function bundleIcon(bundlePath: string): Promise<Electron.NativeImage | undefined> {
+  try {
+    const image = await Electron.nativeImage.createThumbnailFromPath(bundlePath, {
+      width: 64,
+      height: 64,
+    });
+    return image.isEmpty() ? undefined : image;
+  } catch {
+    return undefined;
+  }
 }
 
 export class MacPermissionHelper {
@@ -79,20 +100,24 @@ export class MacPermissionHelper {
     preload: string,
     owner: Electron.BrowserWindow | null,
     iconPaths: readonly string[],
-    isGranted: () => boolean | Promise<boolean> = () => permissionGranted(permission),
+    isGranted: () => boolean | Promise<boolean> = () => macPermissionGranted(permission),
+    target?: MacPermissionTarget,
   ) {
     this.close();
     const generation = this.generation;
     if (await isGranted()) return;
     if (generation !== this.generation) return;
-    const bundle = macAppBundlePath(Electron.app.getPath("exe"));
+    const bundle = target?.bundlePath ?? macAppBundlePath(Electron.app.getPath("exe"));
     if (!bundle) return;
     if (owner?.isDestroyed()) return;
-    // Finder's bundle-icon lookup can return the generic app icon for mounted artifacts.
-    // Use the same PNG that packaging uses to generate the app's macOS icon.
-    const appIcon = iconPaths
-      .map((iconPath) => Electron.nativeImage.createFromPath(iconPath))
-      .find((image) => !image.isEmpty());
+    // For GOAT itself, Finder's bundle-icon lookup can return the generic app icon for mounted
+    // artifacts, so use the same PNG that packaging uses to generate the app's macOS icon.
+    const appIcon =
+      (target ? await bundleIcon(target.bundlePath) : undefined) ??
+      iconPaths
+        .map((iconPath) => Electron.nativeImage.createFromPath(iconPath))
+        .find((image) => !image.isEmpty());
+    if (generation !== this.generation) return;
     if (!appIcon) throw new Error("The packaged GOAT icon is missing.");
     const icon = appIcon.resize({ width: 64, height: 64 });
     const window = new Electron.BrowserWindow({
@@ -164,7 +189,10 @@ export class MacPermissionHelper {
         window.hide();
         return;
       }
-      const bounds = settingsHelperBounds(settingsWindow);
+      const bounds = settingsHelperBounds(
+        settingsWindow,
+        Electron.screen.getDisplayMatching(settingsWindow).workArea,
+      );
       const current = window.getBounds();
       if (
         current.x !== bounds.x ||
@@ -180,7 +208,8 @@ export class MacPermissionHelper {
     window.on("blur", syncPosition);
     const onOwnerClosed = () => window.destroy();
     Electron.ipcMain.on(MAC_PERMISSION_HELPER_CHANNEL, onMessage);
-    const timer = setInterval(check, 1_000);
+    // A helper check starts two processes, so it runs less often than GOAT's in-process one.
+    const timer = setInterval(check, target ? 1_500 : 1_000);
     owner?.once("closed", onOwnerClosed);
     window.once("closed", () => {
       clearInterval(timer);
@@ -193,7 +222,7 @@ export class MacPermissionHelper {
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     try {
       await window.loadURL(
-        `data:text/html;charset=utf-8,${encodeURIComponent(helperHtml(permission, icon.toDataURL()))}`,
+        `data:text/html;charset=utf-8,${encodeURIComponent(helperHtml(permission, icon.toDataURL(), target?.name ?? "GOAT"))}`,
       );
       if (!window.isDestroyed()) {
         stopTracking = watchMacSettingsWindow(

@@ -215,10 +215,11 @@ transcription or cancellation; only the message text is sent when you submit.
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
-empty. Adding text or attachments replaces it with a steer arrow. Click it to send a message into
-the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
-switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
-`Ctrl+Enter` on desktop, to queue the message for after the active turn.
+empty. Adding text or attachments replaces it with a send button that shows your
+[Follow-up behavior](#send-while-the-agent-is-working): a queue icon for Queue or a steer arrow for
+Steer. Click it or press your send shortcut to use that action. Hold `Cmd` on macOS or `Ctrl` on
+Windows and Linux to switch the button to the opposite action, then click, or use the opposite-action
+shortcut described above.
 
 Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
 the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
@@ -253,14 +254,21 @@ and your next message starts the agent again with the new setup.
 Provider commands must start the message to run. GOAT commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
+GOAT also ships built-in skills, marked **Built in** in the `$` menu. **Development
+discipline** (`$goat-discipline`) gives the agent GOAT's longer guidance for code changes: how
+much process a change needs, what counts as proof, what needs your approval, and how to brief
+subagents. Every agent already gets a short version; the full guidance goes only to the turn
+whose message names the skill, on Codex, Claude, Cursor, Grok, Antigravity, ACP registry agents,
+OpenCode and Pi. It needs no agent restart. A message that starts with a provider command does not
+load it, and neither does a skill name inside an attachment. Agents can name it in briefs for the
+tasks they delegate. Turn it off for every project, or for one project, in **Settings →
+Integrations → Agent tools**; on mobile, under **Agent behavior**.
+
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
-Enable **Compact idle Claude threads (beta)** in **Settings > General** to compact
-an idle Claude thread with at least 200,000 tokens of context shortly before its
-prompt cache expires, so coming back does not reprocess the whole conversation.
-The cache lasts 1 hour on Claude subscriptions and 5 minutes with an API key. The
-compaction appears in the thread as a `/compact` turn sent by GOAT.
+Claude instances can also compact idle threads for you. See
+[compact long conversations](./providers-claude.md#compact-long-conversations).
 
 ## Side chat
 
@@ -269,11 +277,14 @@ adding to it. The question opens in a **Side chat** tab in the right panel, and 
 answers never enter the thread's history. Send `/side` alone, use the side chat button
 in the thread header, or press `Mod+/` to open or close the tab.
 
-The side chat starts from the conversation up to the last finished turn, so you can
-ask while the agent is still working. It has the full composer, with the thread's
-model, workspace, and permission mode. It is meant for questions and leaves files alone
-unless you ask it to change something. Use **Start a new side chat** to discard it and
-pick up the latest conversation, or **Open as a full thread** to continue it on its own.
+The side chat starts from the conversation up to the last finished turn, and every
+question you send it also carries the thread's current state: whether it is working,
+interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
+ask what the thread is doing while the agent is still working, and the side chat header
+shows the thread's status. It has the full composer, with the thread's model, workspace,
+and permission mode. It is meant for questions and leaves files alone unless you ask it
+to change something. Use **Start a new side chat** to discard it, or **Open as a full
+thread** to continue it on its own.
 
 ## Goals
 
@@ -307,8 +318,8 @@ pull request is older than the recent list. Type a single word after `#` to sear
 the repository by text. Choose a result to insert it as a chip.
 
 Another thread can be context too. Type `@` followed by part of its title to pick one from
-the same server, or on web and desktop drag a thread out of the sidebar and drop it on the
-composer; a multi-selection drops together. The chip shows the thread's current title and
+the same server, or on web and desktop drag a thread from the sidebar or Fleet onto the
+composer; a sidebar multi-selection drops together. The chip shows the thread's current title and
 opens it when selected. Your prompt only carries a reference: the agent reads the thread's
 history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
 thread does not change it, and the agent cannot send messages to it unless you ask.
@@ -319,9 +330,10 @@ saved text context at the time of the drop; later messages and the contents of a
 are not copied. The agent can read the saved transcript after the source disconnects. Normal
 file attachment limits apply.
 
-In the desktop app, a thread from a machine you connected over SSH dropped into a thread that
-runs on this computer is attached as a reference instead; the agent reads it through that SSH
-connection.
+In the desktop app, threads from SSH hosts can also be picked with `@` or dragged into a thread
+that runs on this computer. They attach as references with their SSH host alias; the agent reads
+them through SSH. If a host is disconnected, its chip shows “Host not connected”. You can still
+send, and the agent will try to read it.
 
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing

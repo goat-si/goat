@@ -1,386 +1,33 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import {
-  EnvironmentAuthorizationError,
-  EnvironmentId,
-  EventId,
-  type OrchestrationV2AppThread,
-  type OrchestrationV2CloudTask,
-  OrchestratorMcpFailure,
-  ProjectId,
-  type ProviderDiagnosis,
-  ProviderDriverKind,
-  ProviderHostSyncError,
-  ProviderInstanceId,
-  ProviderThreadId,
-  ThreadId,
-} from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
+import { OrchestratorMcpFailure, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 import { TestClock } from "effect/testing";
 
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
-import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { liveThreadsLayer } from "../mcp/McpToolAccess.testkit.ts";
-import * as ThreadLaunchMcp from "../mcp/ThreadLaunchMcpService.ts";
+import { liveThreadsLayer, layerPermissionProfilesOff } from "../mcp/McpToolAccess.testkit.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import * as Routing from "../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../provider/ProviderHostSync.ts";
 import * as Onboarding from "../provider/ProviderOnboarding.ts";
+import * as ProviderSettingsService from "../provider/ProviderSettings.ts";
 import { ProviderToolkit } from "../mcp/toolkits/provider/tools.ts";
 import * as ProviderHandlers from "../mcp/toolkits/provider/handlers.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as Project from "../project/ProjectService.ts";
-import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as CloudAgents from "./CloudAgentService.ts";
-
-const SECRET = "sk-live-0123456789abcdefSECRET";
-const projectId = ProjectId.make("project:goat");
-const agent = "bc-1a2b3c4d-5e6f-7a8b-9c0d-112233445566";
-
-const scope = (
-  access: "read-only" | "approval-required" | "full-access",
-): Invocation.McpInvocationScope => ({
-  environmentId: EnvironmentId.make("macmini"),
-  requestNamespace: `test:${access}`,
-  capabilities: new Set(["orchestration"]),
-  issuedAt: 0,
-  thread: undefined,
-  client: { sessionId: access, label: "Grok Bot", access },
-});
-
-const ready = (driver: string): ProviderDiagnosis => ({
-  instanceId: ProviderInstanceId.make(driver),
-  driver: ProviderDriverKind.make(driver),
-  configured: true,
-  ready: true,
-  checks: [{ id: "auth", status: "pass", summary: "Signed in." }],
-});
-const cloudCell = (driver: string, ready: boolean, activeRuns = 0) =>
-  ready
-    ? {
-        ready: true,
-        instanceId: ProviderInstanceId.make(driver),
-        ...(driver === "cursorCloud" ? { accountLabel: "Jun" } : {}),
-        activeRuns,
-      }
-    : { ready: false, reason: "Not signed in." };
-
-const localCloud = (readyDrivers: ReadonlySet<string>) => ({
-  claudeCloud: cloudCell("claudeCloud", readyDrivers.has("claudeCloud")),
-  cursorCloud: cloudCell("cursorCloud", readyDrivers.has("cursorCloud")),
-  devinCloud: cloudCell("devinCloud", readyDrivers.has("devinCloud")),
-});
-
-interface World {
-  readonly readyDrivers: Set<string>;
-  readonly hosts: Array<string>;
-  matrixFailure: "settings" | "auth" | undefined;
-  readonly matrixCalls: Array<{
-    readonly localOnly: boolean | undefined;
-    readonly cloud: boolean | undefined;
-  }>;
-  readonly hostReads: Array<{
-    host: string;
-    tool: string;
-    arguments: Record<string, unknown>;
-  }>;
-  readonly hostWrites: Array<{ host: string; tool: string; arguments: Record<string, unknown> }>;
-  readonly launches: Array<{
-    input: Record<string, unknown>;
-    cloudRun: ThreadLaunchMcp.CloudRunLaunch | undefined;
-  }>;
-  readonly dispatched: Array<unknown>;
-}
-
-const makeWorld = (): World => ({
-  readyDrivers: new Set(["cursorCloud"]),
-  hosts: [],
-  matrixFailure: undefined,
-  matrixCalls: [],
-  hostReads: [],
-  hostWrites: [],
-  launches: [],
-  dispatched: [],
-});
-
-const appThread = (threadId: ThreadId, title: string, externalLauncher?: string) =>
-  Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    return {
-      createdBy: "agent",
-      creationSource: "mcp",
-      id: threadId,
-      projectId,
-      title,
-      providerInstanceId: ProviderInstanceId.make("cursorCloud"),
-      modelSelection: { instanceId: ProviderInstanceId.make("cursorCloud"), model: "default" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-      ...(externalLauncher === undefined ? {} : { externalLauncher }),
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    } satisfies OrchestrationV2AppThread;
-  });
-
-/** Stands in for the orchestrator: records the thread and its cloud task as the launch would. */
-const storeCloudThread = (input: {
-  readonly threadId: ThreadId;
-  readonly title: string;
-  readonly driver: string;
-  readonly nativeId: string;
-  readonly cloudTask: OrchestrationV2CloudTask;
-  readonly externalLauncher?: string;
-  readonly active: boolean;
-}) =>
-  Effect.gen(function* () {
-    const store = yield* ProjectionStore.ProjectionStoreV2;
-    const now = yield* DateTime.now;
-    yield* store.apply({
-      id: EventId.make(`event:${input.threadId}:thread`),
-      type: "thread.created",
-      threadId: input.threadId,
-      occurredAt: now,
-      payload: yield* appThread(input.threadId, input.title, input.externalLauncher),
-    });
-    yield* store.apply({
-      id: EventId.make(`event:${input.threadId}:provider`),
-      type: "provider-thread.updated",
-      threadId: input.threadId,
-      occurredAt: now,
-      payload: {
-        id: ProviderThreadId.make(`pt:${input.threadId}`),
-        driver: ProviderDriverKind.make(input.driver),
-        providerInstanceId: ProviderInstanceId.make(input.driver),
-        providerSessionId: null,
-        appThreadId: input.threadId,
-        ownerNodeId: null,
-        nativeThreadRef: {
-          driver: ProviderDriverKind.make(input.driver),
-          nativeId: input.nativeId,
-          strength: "strong",
-        },
-        nativeConversationHeadRef: null,
-        status: input.active ? "active" : "not_loaded",
-        firstRunOrdinal: null,
-        lastRunOrdinal: null,
-        handoffIds: [],
-        forkedFrom: null,
-        cloudTask: input.cloudTask,
-        createdAt: now,
-        updatedAt: now,
-      },
-    } as never);
-  });
-
-const layerFor = (world: World) => {
-  const store = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
-  const deps = Layer.mergeAll(
-    Layer.mock(HostSync.ProviderHostSync)({
-      matrix: (input) => {
-        world.matrixCalls.push({ localOnly: input.localOnly, cloud: input.cloud });
-        if (world.matrixFailure === "auth")
-          return Effect.fail(
-            new EnvironmentAuthorizationError({
-              message: "Installing a provider needs a person's approval.",
-              requiredScope: "providers:manage",
-            }),
-          );
-        if (world.matrixFailure === "settings")
-          return Effect.fail(
-            new ProviderHostSyncError({ code: "unavailable", detail: "The matrix is down." }),
-          );
-        return Effect.succeed({
-          rows: [
-            {
-              host: null,
-              status: "ok" as const,
-              providers: [],
-              cloud: localCloud(world.readyDrivers),
-            },
-          ],
-        });
-      },
-    }),
-    Layer.mock(ProviderRegistry.ProviderRegistry)({
-      getProviders: Effect.succeed([
-        {
-          instanceId: ProviderInstanceId.make("cursorCloud"),
-          auth: { status: "authenticated", label: "Jun", profileId: SECRET, workspaceId: SECRET },
-          models: [{ slug: "composer-2", isDefault: true }],
-        },
-      ] as never),
-    }),
-    Layer.mock(HostThreads.HostThreadsMcpService)({
-      readOnHost: (_scope, input, decode) =>
-        Effect.gen(function* () {
-          world.hostReads.push({
-            host: input.host,
-            tool: input.tool,
-            arguments: { ...input.arguments },
-          });
-          if (input.host === "down")
-            return yield* new OrchestratorMcpFailure({
-              code: "host_unavailable",
-              message: "down timed out",
-            });
-          if (input.host === "garbled")
-            return yield* new OrchestratorMcpFailure({
-              code: "invalid_request",
-              message: "GOAT on garbled could not read its provider list.",
-            });
-          if (input.host === "old" && input.tool === "goat_provider_host_matrix")
-            return yield* new OrchestratorMcpFailure({
-              code: "invalid_request",
-              message: "GOAT on old does not have goat_provider_host_matrix; it runs 0.1.0.",
-            });
-          if (input.host === "old" && input.tool === "goat_cloud_holders")
-            return yield* new OrchestratorMcpFailure({
-              code: "invalid_request",
-              message: "GOAT on old does not have goat_cloud_holders; it runs 0.1.0.",
-            });
-          const raw =
-            input.tool === "goat_provider_host_matrix"
-              ? input.host === "aged"
-                ? { rows: [{ host: null, status: "ok", providers: [] }] }
-                : {
-                    rows: [
-                      {
-                        host: null,
-                        status: "ok",
-                        providers: [],
-                        cloud: {
-                          claudeCloud: { ready: false, reason: "Not signed in." },
-                          cursorCloud: {
-                            ready: true,
-                            instanceId: "cursorCloud",
-                            activeRuns: 3,
-                          },
-                          devinCloud: { ready: false, reason: "Not signed in." },
-                        },
-                      },
-                    ],
-                  }
-              : input.tool === "goat_cloud_holders"
-                ? {
-                    holders: [
-                      {
-                        provider: "cursorCloud",
-                        host: null,
-                        ready: true,
-                        runtime: "current",
-                        activeRuns: input.host === "aged" ? 0 : 3,
-                      },
-                    ],
-                  }
-                : { checkedBy: "server", diagnoses: [ready(String(input.arguments.driver))] };
-          const decoded = yield* decode(raw).pipe(Effect.orDie);
-          return { ...decoded, host: input.host };
-        }),
-      writeOnHost: (_scope, input, decode) =>
-        Effect.gen(function* () {
-          world.hostWrites.push({
-            host: input.host,
-            tool: input.tool,
-            arguments: { ...input.arguments },
-          });
-          const decoded = yield* decode({
-            holder: { provider: "cursorCloud", host: null, ready: true, runtime: "current" },
-            dryRun: false,
-            threadId: "thread:remote",
-          }).pipe(Effect.orDie);
-          return { ...decoded, host: input.host };
-        }),
-    }),
-    Layer.mock(SshDispatch.SshRemoteDispatch)({
-      connectedHosts: Effect.sync(() => [...world.hosts]),
-    }),
-    Layer.mock(Project.ProjectService)({
-      snapshot: Effect.succeed({
-        projects: [
-          {
-            id: projectId,
-            deletedAt: null,
-            repositoryIdentity: {
-              canonicalKey: "github.com/goat-si/goat",
-              locator: { source: "git-remote", remoteName: "origin", remoteUrl: "x" },
-              owner: "goat-si",
-              name: "goat",
-            },
-          },
-        ],
-      } as never),
-    }),
-    Layer.mock(ThreadManagement.ThreadManagementService)({
-      dispatch: (command) =>
-        Effect.sync(() => {
-          world.dispatched.push(command);
-          return {} as never;
-        }),
-    }),
-  );
-  const launches = Layer.effect(
-    ThreadLaunchMcp.ThreadLaunchMcpService,
-    Effect.gen(function* () {
-      const context = yield* Effect.context<ProjectionStore.ProjectionStoreV2>();
-      return ThreadLaunchMcp.ThreadLaunchMcpService.of({
-        launch: (_scope, input, _modes, cloudRun) =>
-          Effect.gen(function* () {
-            world.launches.push({ input: { ...input }, cloudRun });
-            const threadId =
-              cloudRun?.threadId ?? ThreadId.make(`thread:launch:${world.launches.length}`);
-            const imported = cloudRun?.importedNativeThread;
-            if (imported?.cloudTask !== undefined) {
-              const following = input.message !== undefined;
-              yield* storeCloudThread({
-                threadId,
-                title: input.title,
-                driver: imported.ref.driver,
-                nativeId: imported.ref.nativeId,
-                cloudTask: following
-                  ? { ...imported.cloudTask, acceptedAppRunId: "run:attach" as never }
-                  : imported.cloudTask,
-                ...(cloudRun?.externalLauncher === undefined
-                  ? {}
-                  : { externalLauncher: cloudRun.externalLauncher }),
-                active: following,
-              });
-            }
-            return { threadId, projectId } as never;
-          }).pipe(Effect.provideContext(context), Effect.orDie),
-      });
-    }),
-  );
-  return CloudAgents.layer.pipe(
-    Layer.provide(launches),
-    Layer.provide(deps),
-    Layer.provideMerge(store),
-    Layer.provide(NodeServices.layer),
-  );
-};
-
-const run = <A, E>(
-  world: World,
-  body: Effect.Effect<A, E, CloudAgents.CloudAgentService | ProjectionStore.ProjectionStoreV2>,
-) => body.pipe(Effect.provide(layerFor(world)));
-
-const full = Effect.succeed({ runtimeMode: "full-access", interactionMode: "default" } as const);
+import {
+  SECRET,
+  projectId,
+  agent,
+  scope,
+  makeWorld,
+  storeCloudThread,
+  layerFor,
+  run,
+  full,
+} from "./CloudAgentService.testkit.ts";
 
 it.effect("probes holders once a minute, falls back for old runtimes, and drops gone hosts", () =>
   Effect.gen(function* () {
@@ -553,6 +200,35 @@ it.effect(
     }),
 );
 
+it.effect("a Claude Cloud dry run says folder trust is accepted automatically", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    world.readyDrivers.add("claudeCloud");
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const input = { repo: "goat-si/goat", prompt: "Probe", dryRun: true } as const;
+        const claude = yield* service.launch(
+          scope("full-access"),
+          { ...input, provider: "claudeCloud" },
+          full,
+        );
+        const cursor = yield* service.launch(
+          scope("full-access"),
+          { ...input, provider: "cursorCloud" },
+          full,
+        );
+        assert.deepEqual(
+          [claude.dryRun, claude.holder.ready, claude.note, cursor.note],
+          [true, true, CloudAgents.CLAUDE_TRUST_NOTE, undefined],
+        );
+        assert.equal(world.launches.length, 0);
+      }),
+    );
+  }),
+);
+
 it.effect("launches on the chosen holder: dry run, a preferred host, and this environment", () =>
   Effect.gen(function* () {
     const world = makeWorld();
@@ -601,6 +277,35 @@ it.effect("launches on the chosen holder: dry run, a preferred host, and this en
           .launch(scope("full-access"), { ...input, provider: "claudeCloud" }, full)
           .pipe(Effect.flip);
         assert.match(noLogin.message, /No connected host holds a Claude Cloud login/u);
+      }),
+    );
+  }),
+);
+
+it.effect("finds a registered project whose identity cache is cold, with or without a branch", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    world.coldIdentity = true;
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const input = { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Probe" } as const;
+        const withBranch = yield* service.launch(
+          scope("full-access"),
+          { ...input, branch: "dev" },
+          full,
+        );
+        const without = yield* service.launch(scope("full-access"), input, full);
+        assert.deepEqual(
+          [withBranch.holder.host, without.holder.host, world.identityLookups],
+          [null, null, ["/fixture/goat", "/fixture/goat"]],
+        );
+        assert.deepEqual(
+          world.launches.map((launch) => launch.input.workspaceStrategy),
+          [{ type: "root", branch: "dev" }, { type: "root" }],
+        );
+        assert.match(withBranch.note ?? "", /from dev;/u);
       }),
     );
   }),
@@ -742,6 +447,133 @@ it.effect("forgets only registered runs, by deleting their thread", () =>
   }),
 );
 
+const cloudRun = (
+  threadId: string,
+  driver: "claudeCloud" | "cursorCloud" | "devinCloud",
+  attach?: "registered",
+) =>
+  storeCloudThread({
+    threadId: ThreadId.make(threadId),
+    title: threadId,
+    driver,
+    nativeId: `native-${threadId}`,
+    cloudTask: {
+      taskId: `task-${threadId}`,
+      status: "running",
+      tracking: "link-only",
+      ...(attach === undefined ? {} : { attach }),
+      source: { repository: "https://github.com/goat-si/goat", branch: "dev" },
+      localChangesExcluded: true,
+      updatedAt: "2026-10-20T00:00:00.000Z",
+    },
+    active: false,
+  }).pipe(Effect.andThen(TestClock.adjust("1 second")));
+
+it.effect("lists a provider's run that sits behind newer runs of another provider", () =>
+  Effect.gen(function* () {
+    yield* run(
+      makeWorld(),
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        yield* cloudRun("thread:claude-old", "claudeCloud");
+        yield* cloudRun("thread:cursor-new", "cursorCloud");
+        yield* cloudRun("thread:cursor-newest", "cursorCloud");
+
+        const claude = yield* service.list({ provider: "claudeCloud", limit: 1 });
+        assert.deepEqual(
+          [claude.runs.map((entry) => entry.threadId), claude.truncated],
+          [["thread:claude-old"], false],
+        );
+        const newest = yield* service.list({ limit: 2 });
+        assert.deepEqual(
+          [newest.runs.map((entry) => entry.threadId), newest.truncated],
+          [["thread:cursor-newest", "thread:cursor-new"], true],
+        );
+        const rest = yield* service.list({ limit: 2, cursor: newest.nextCursor! });
+        assert.deepEqual(
+          [rest.runs.map((entry) => entry.threadId), rest.truncated, rest.nextCursor],
+          [["thread:claude-old"], false, undefined],
+        );
+        const everything = yield* service.list({ limit: 3 });
+        assert.deepEqual([everything.runs.length, everything.truncated], [3, false]);
+        const forged = yield* service.list({ cursor: "not-a-cursor" }).pipe(Effect.flip);
+        assert.equal(forged.code, "invalid_request");
+      }),
+    );
+  }),
+);
+
+it.effect("calls a page truncated only when another run it can return follows", () =>
+  Effect.gen(function* () {
+    yield* run(
+      makeWorld(),
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const sql = yield* SqlClient.SqlClient;
+        yield* cloudRun("thread:claude-oldest", "claudeCloud");
+        yield* cloudRun("thread:cursor-unreadable", "cursorCloud");
+        yield* cloudRun("thread:cursor-newest", "cursorCloud");
+        yield* sql`
+          UPDATE orchestration_v2_projection_provider_threads
+          SET payload_json = json_set(payload_json, '$.cloudTask.status', 'unknown-status')
+          WHERE thread_id = 'thread:cursor-unreadable'
+        `;
+
+        const cursor = yield* service.list({ provider: "cursorCloud", limit: 1 });
+        assert.deepEqual(
+          [cursor.runs.map((entry) => entry.threadId), cursor.truncated],
+          [["thread:cursor-newest"], false],
+        );
+        const first = yield* service.list({ limit: 1 });
+        assert.deepEqual(
+          [first.runs.map((entry) => entry.threadId), first.truncated],
+          [["thread:cursor-newest"], true],
+        );
+        const second = yield* service.list({ limit: 1, cursor: first.nextCursor! });
+        assert.deepEqual(
+          [second.runs.map((entry) => entry.threadId), second.truncated],
+          [["thread:claude-oldest"], false],
+        );
+        const both = yield* service.list({ limit: 2 });
+        assert.deepEqual(
+          [both.runs.map((entry) => entry.threadId), both.truncated],
+          [["thread:cursor-newest", "thread:claude-oldest"], false],
+        );
+      }),
+    );
+  }),
+);
+
+it.effect("forgets a registered run that has more than 200 newer runs ahead of it", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const old = ThreadId.make("thread:registered-old");
+        yield* cloudRun(old, "devinCloud", "registered");
+        yield* Effect.forEach(
+          Array.from({ length: 201 }, (_, index) => index),
+          (index) => cloudRun(`thread:newer-${index}`, "cursorCloud"),
+        );
+
+        assert.deepEqual(yield* service.forget({ threadId: old }), {
+          threadId: old,
+          forgotten: true,
+        });
+        assert.deepEqual(
+          world.dispatched.map((command) => {
+            const { type, threadId } = command as { type: string; threadId: string };
+            return [type, threadId];
+          }),
+          [["thread.delete", old]],
+        );
+      }),
+    );
+  }),
+);
+
 const mcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -762,12 +594,18 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       ProviderToolkit,
       ProviderHandlers.layer,
     ).pipe(
+      Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
       Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
       Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
       Layer.provide(Layer.mock(Onboarding.ProviderOnboarding)({})),
+      Layer.provide(
+        Layer.mock(ProviderSettingsService.ProviderSettings)({
+          presentDiagnosis: (result) => Effect.succeed(result),
+        }),
+      ),
       Layer.provide(layerFor(world)),
     );
     const call = (
@@ -782,9 +620,9 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       );
     yield* Effect.gen(function* () {
       const writes = [
-        ["goat_cloud_launch", { provider: "cursorCloud", repo: "goat-si/goat", prompt: "x" }],
+        ["goat_cloud_agent_launch", { provider: "cursorCloud", repo: "goat-si/goat", prompt: "x" }],
         [
-          "goat_cloud_run_register",
+          "goat_cloud_agent_run_register",
           {
             provider: "devinCloud",
             externalId: "abc123def456",
@@ -792,7 +630,7 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
             launchedBy: "Bot",
           },
         ],
-        ["goat_cloud_run_forget", { threadId: "thread:any" }],
+        ["goat_cloud_agent_run_forget", { threadId: "thread:any" }],
       ] as const;
       for (const access of ["read-only", "approval-required"] as const) {
         for (const [name, args] of writes) {
@@ -803,9 +641,9 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       }
       assert.equal(world.launches.length, 0);
       const outputs = [
-        yield* call("read-only", "goat_cloud_holders", { local: true }),
-        yield* call("read-only", "goat_cloud_run_list", {}),
-        yield* call("full-access", "goat_cloud_launch", {
+        yield* call("read-only", "goat_cloud_agent_holders", { local: true }),
+        yield* call("read-only", "goat_cloud_agent_run_list", {}),
+        yield* call("full-access", "goat_cloud_agent_launch", {
           provider: "cursorCloud",
           repo: "goat-si/goat",
           prompt: "x",
@@ -821,4 +659,79 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       );
     }).pipe(Effect.provide(registered));
   }),
+);
+
+it.effect.each(["worker", "manager", "owner"])(
+  "cloud launch checks profile %s before choosing or launching a holder",
+  (profile) => {
+    const world = makeWorld();
+    return Effect.gen(function* () {
+      const service = yield* CloudAgents.CloudAgentService;
+      const sql = yield* SqlClient.SqlClient;
+      const input = {
+        provider: "cursorCloud",
+        repo: "goat-si/goat",
+        prompt: "Inspect",
+        holder: "local",
+      } as const;
+      // A decision this caller filed itself approves no launch, even once a person answers it.
+      yield* sql`INSERT INTO decision_items (id, title, context, options_json, required_profile, status, answer, answered_by, created_at, updated_at)
+        VALUES ('go', 'Launch?', '', '[]', 'owner', 'answered', 'approve', 'client:phone', '2026-10-21', '2026-10-21')`;
+      let decisionId = "go";
+      if (profile === "owner") {
+        const unapproved = yield* service
+          .launch(scope("full-access"), input, full)
+          .pipe(Effect.flip);
+        assert.include(unapproved.message, "bills a paid account");
+        assert.equal(world.launches.length, 0);
+        // A person approves the decision GOAT filed for exactly this launch.
+        decisionId = /decision (decision:\S+) for/.exec(unapproved.message)![1]!;
+        yield* sql`UPDATE decision_items SET status = 'answered', answer = 'approve',
+          answered_by = 'client:phone' WHERE id = ${decisionId}`;
+        // The approval covers the branch checked out when GOAT asked, not whatever is there later.
+        world.checkedOut = "feature";
+        const moved = yield* service
+          .launch(scope("full-access"), { ...input, decisionId }, full)
+          .pipe(Effect.flip);
+        assert.include(moved.message, "was not filed by GOAT for this launch");
+        world.checkedOut = "main";
+      }
+      const result = yield* service
+        .launch(scope("full-access"), { ...input, decisionId }, full)
+        .pipe(Effect.result);
+      if (profile === "owner") {
+        assert.equal(result._tag, "Success");
+        assert.deepEqual(
+          world.launches.map((l) => l.input["workspaceStrategy"]),
+          [{ type: "root", branch: "main" }],
+        );
+      } else {
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure.code, "capability_denied");
+        assert.equal(world.launches.length, 0);
+        assert.equal(world.hostWrites.length, 0);
+      }
+    }).pipe(Effect.provide(layerFor(world, profile)));
+  },
+);
+
+it.effect(
+  "refuses an enabled remote cloud holder before forwarding outside the lane ledger",
+  () => {
+    const world = makeWorld();
+    world.hosts.push("new");
+    return Effect.gen(function* () {
+      const service = yield* CloudAgents.CloudAgentService;
+      const error = yield* service
+        .launch(
+          scope("full-access"),
+          { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Inspect", holder: "new" },
+          full,
+        )
+        .pipe(Effect.flip);
+      assert.equal(error.code, "capability_denied");
+      assert.equal(world.hostWrites.length, 0);
+      assert.equal(world.launches.length, 0);
+    }).pipe(Effect.provide(layerFor(world, "owner")));
+  },
 );

@@ -38,6 +38,8 @@ describe("shouldBundleCliDependency", () => {
       "@napi-rs/keyring",
       "@clerk/electron-passkeys",
       "node-addon-api",
+      "@trycua/cua-driver/embedded",
+      "@ubjs/node",
     ]) {
       assert.strictEqual(shouldBundleCliDependency(id), false, id);
     }

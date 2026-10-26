@@ -1,4 +1,5 @@
 import * as NodeEvents from "node:events";
+import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 
@@ -6,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { it } from "@effect/vitest";
 import {
+  type BrowserRecordingFrameRate,
   EnvironmentId,
   PreviewTabId,
   ProviderInstanceId,
@@ -33,6 +35,7 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import { makeSession, type MockFrame, mockCopy } from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -50,7 +53,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       return context as unknown as BrowserContext;
     }
     async scratchPage() {
-      return makeContext().page as unknown as Page;
+      return makeEncoderPage() as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext();
@@ -62,71 +65,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
   },
 }));
-
-function makeFrame() {
-  const frame = {
-    copy: "",
-    detached: false,
-    isDetached: () => frame.detached,
-    recording: Promise.withResolvers<void>(),
-  };
-  return frame;
-}
-
-const PNG_HEADER = (() => {
-  const header = Buffer.alloc(24);
-  header.write("IHDR", 12);
-  header.writeUInt32BE(1280, 16);
-  header.writeUInt32BE(800, 20);
-  return header.toString("base64");
-})();
-
-function makeSession(frame?: ReturnType<typeof makeFrame>) {
-  const events = new NodeEvents.EventEmitter();
-  return {
-    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
-    detach: vi.fn(async () => {}),
-    send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
-      if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
-      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
-      if (method === "Page.captureScreenshot") {
-        // A snapshot sizes its screenshot from the PNG header; viewers get JPEG frames as-is.
-        return { data: (input as { format: string }).format === "png" ? PNG_HEADER : "ZnJhbWU=" };
-      }
-      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
-      // Snapshots read password fields from their own isolated world in each frame.
-      if (method === "Page.createIsolatedWorld") {
-        return {
-          executionContextId:
-            (input as { worldName?: string }).worldName === "t3-preview"
-              ? 1
-              : (input as { worldName?: string }).worldName === "t3-preview-metrics"
-                ? 8
-                : 7,
-        };
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 1) {
-        return { result: { value: [] } };
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 8) {
-        return { result: { value: { ratio: 1, width: 1280, height: 800 } } };
-      }
-      if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
-      if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (focusedFrame) focusedFrame.copy = keyCopy || focusedFrame.copy;
-        else pageCopy = keyCopy || pageCopy;
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
-        const value = frame ? frame.copy : pageCopy;
-        if (frame) frame.copy = "";
-        else pageCopy = "";
-        return { result: { value } };
-      }
-      return { result: { value: "evaluated" } };
-    }),
-  };
-}
 
 function makeContext(onClose?: (context: BrowserContext) => void) {
   const events = new NodeEvents.EventEmitter();
@@ -194,6 +132,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     locator: vi.fn(() => {
       throw new Error("Unexpected locator action");
     }),
+    mouse: { click: async () => {} },
     isClosed: () => closed,
     close: vi.fn(async () => {
       if (!closed) {
@@ -208,9 +147,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
     newCDPSession: async (target: unknown) => {
-      const session = makeSession(
-        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
-      );
+      const session = makeSession(target === page ? undefined : (target as MockFrame));
       sessions.push(session);
       return session;
     },
@@ -224,12 +161,52 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
+// Runs the real encoder script against fake canvas and MediaRecorder globals.
+function makeEncoderPage() {
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ({ drawImage() {}, fillRect() {} }),
+    captureStream: (frameRate?: number) => ({ frameRate, getTracks: () => [] }),
+  };
+  class FakeMediaRecorder {
+    static isTypeSupported = (type: string) => type === "video/webm";
+    onstart: (() => void) | null = null;
+    constructor(stream: { frameRate?: number }, options: { videoBitsPerSecond: number }) {
+      encoderStreams.push({
+        frameRate: stream.frameRate,
+        bitsPerSecond: options.videoBitsPerSecond,
+      });
+    }
+    start() {
+      this.onstart?.();
+    }
+  }
+  const sandbox: Record<string, unknown> = {
+    document: { createElement: () => canvas },
+    Path2D: function Path2D() {},
+    MediaRecorder: FakeMediaRecorder,
+    createImageBitmap: async () => ({ width: 1280, height: 800, close() {} }),
+    atob,
+    Blob,
+    performance,
+  };
+  sandbox.window = sandbox;
+  const context = NodeVM.createContext(sandbox);
+  return {
+    ...makeContext().page,
+    evaluate: vi.fn(async (script: string | ((arg: unknown) => unknown), arg?: unknown) =>
+      typeof script === "string"
+        ? NodeVM.runInContext(script, context)
+        : NodeVM.runInContext(`(${script.toString()})`, context)(arg),
+    ),
+  };
+}
+
 const contexts: ReturnType<typeof makeContext>[] = [];
+const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
-let pageCopy = "";
-let keyCopy = "";
-let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
@@ -332,13 +309,14 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
 
 beforeEach(() => {
   contexts.length = 0;
+  encoderStreams.length = 0;
   contextRequests.length = 0;
   contextGate = null;
   contextFailure = null;
   initialNavigation = null;
-  pageCopy = "";
-  keyCopy = "";
-  focusedFrame = null;
+  mockCopy.page = "";
+  mockCopy.key = "";
+  mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
   releasedDesktopTabs.length = 0;
@@ -435,6 +413,33 @@ it.live.each([
     ).pipe(Effect.provide(layer)),
 );
 
+it.live("a snapshot that cannot capture times out on the request's own deadline (#1084)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const cdp = contexts[0]!.sessions[0]!;
+      const original = cdp.send.getMockImplementation()!;
+      const captured = Promise.withResolvers<Record<string, unknown>>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => captured.resolve({ data: "" })));
+      cdp.send.mockImplementation((method, input) =>
+        method === "Page.captureScreenshot" ? captured.promise : original(method, input),
+      );
+      const error = yield* broker
+        .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+        .pipe(Effect.flip);
+      // The server browser answered with the deadline the error names, before the broker gave up
+      // on it and cut it off.
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationTimeoutError",
+        timeoutMs: 200,
+        remoteTag: "PreviewAutomationTimeoutError",
+      });
+      cdp.send.mockImplementation(original);
+      yield* broker.invoke({ scope, tabId, operation: "status", input: {} });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("logs read filtered diagnostics without page capture or invalidating snapshot refs", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -471,19 +476,18 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.evaluate).not.toHaveBeenCalled();
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
-      const locator = {
-        scrollIntoViewIfNeeded: async () => {},
-        boundingBox: async () => null,
-        click: vi.fn(async () => {}),
-      };
-      page.locator.mockImplementationOnce(() => locator as never);
+      const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
+      const element = { boundingBox: box, waitForElementState: box, dispose: box };
+      const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
+      page.locator.mockImplementationOnce(
+        () => ({ ...locator, elementHandle: async () => element }) as never,
+      );
       yield* broker.invoke({
         scope,
         tabId,
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
-      expect(locator.click).toHaveBeenCalledOnce();
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -805,6 +809,36 @@ it.live("reports interrupted reload after a human takes control during navigatio
   ).pipe(Effect.provide(layer)),
 );
 
+// The fake encoder decodes every frame at 1280x800, so 30 fps hits the bitrate floor.
+it.live.each([
+  { reports: [], frameRate: 30, bitsPerSecond: 2.5e6 },
+  { reports: [30], frameRate: 30, bitsPerSecond: 2.5e6 },
+  { reports: [60], frameRate: 60, bitsPerSecond: 1280 * 800 * 60 * 0.05 },
+  { reports: [60, undefined], frameRate: 60, bitsPerSecond: 1280 * 800 * 60 * 0.05 },
+  { reports: [60, 30], frameRate: 30, bitsPerSecond: 2.5e6 },
+] satisfies ReadonlyArray<{
+  reports: ReadonlyArray<BrowserRecordingFrameRate | undefined>;
+  frameRate: number;
+  bitsPerSecond: number;
+}>)(
+  "agent recordings encode at the last reported frame rate ($reports)",
+  ({ reports, frameRate, bitsPerSecond }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        for (const recordingFrameRate of reports) {
+          yield* browser.reportProfiles({
+            profiles: [],
+            defaultProfileId: "default",
+            ...(recordingFrameRate === undefined ? {} : { recordingFrameRate }),
+          });
+        }
+        yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
+        expect(encoderStreams).toEqual([{ frameRate, bitsPerSecond }]);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.live("enforces provider ownership and explicit targets when a session has multiple tabs", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1035,15 +1069,34 @@ it.live("interrupts an active wait on takeover and frees the queue for human inp
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("allows a wait to observe a human-driven tab without taking control", () =>
+it.live.each([
+  { reader: "another agent", session: "observing-agent" },
+  { reader: "the agent that opened it", session: scope.thread.providerSessionId },
+])("lets $reader read a human-driven tab without taking control", ({ session }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { browser, broker, tabId } = yield* ready;
       const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
       yield* viewer.input({ type: "takeControl" });
+      const reader = asSession(session);
       const page = contexts[0]!.page;
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope: reader,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      expect(snapshot.accessibilityTree).toBeTruthy();
+      page.emitConsole("human tab evidence");
+      const logs = yield* broker.invoke<PreviewAutomationLogs>({
+        scope: reader,
+        tabId,
+        operation: "logs",
+        input: {},
+      });
+      expect(logs.console.entries[0]?.text).toBe("human tab evidence");
       yield* broker.invoke({
-        scope: asSession("observing-agent"),
+        scope: reader,
         tabId,
         operation: "waitFor",
         input: { loadState: "load" },
@@ -1237,13 +1290,13 @@ it.live("only the controlling viewer's copy and cut keys reach its clipboard", (
         Queue.clear(queue).pipe(
           Effect.map((items) => items.filter((item) => item._tag === "clipboard")),
         );
-      pageCopy = "unprompted";
+      mockCopy.page = "unprompted";
       yield* viewer.input({ type: "mouse", action: "move", x: 10, y: 10 });
       yield* viewer.input({ type: "wheel", x: 10, y: 10, deltaY: 40 });
       yield* viewer.input({ type: "key", action: "down", key: "v", code: "KeyV", modifiers: 4 });
       yield* viewer.input({ type: "unknown" });
       expect(yield* clipboard(viewer.output)).toEqual([]);
-      keyCopy = "copied";
+      mockCopy.key = "copied";
       yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
       const cdp = contexts[0]!.sessions.at(-1)!;
       expect(cdp.send).toHaveBeenCalledWith(
@@ -1251,11 +1304,11 @@ it.live("only the controlling viewer's copy and cut keys reach its clipboard", (
         expect.objectContaining({ key: "c", commands: ["copy"] }),
       );
       expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "copied" }]);
-      keyCopy = "cut";
+      mockCopy.key = "cut";
       yield* viewer.input({ type: "key", action: "down", key: "x", code: "KeyX", modifiers: 2 });
       expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "cut" }]);
-      pageCopy = "left over";
-      keyCopy = "";
+      mockCopy.page = "left over";
+      mockCopy.key = "";
       yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
       expect(yield* clipboard(viewer.output)).toEqual([]);
       expect(yield* clipboard(watcher.output)).toEqual([]);

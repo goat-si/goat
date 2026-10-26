@@ -1,3 +1,7 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
+import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import { describe, expect, it } from "@effect/vitest";
@@ -109,6 +113,10 @@ const remoteCloudTask: OrchestratorMcpCloudTask = {
 const runService = <A, E>(
   options: {
     readonly interactionMode: "default" | "plan";
+    readonly goatclawEnabled?: boolean;
+    /** What goatclaw fleet sync reports for the destination; absent leaves the service out. */
+    readonly fleetReach?: FleetSync.HostReach;
+    readonly onSettle?: (sent: boolean) => void;
     readonly taskThread?: boolean;
     readonly reviewFinished?: boolean | (() => boolean);
     readonly relayReceipt?: {
@@ -178,7 +186,7 @@ const runService = <A, E>(
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         rearm: (input) => Effect.sync(() => void rearms.push(input)),
         find: () => Effect.succeed(options.watch ?? null),
-      }),
+      }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
     ),
     Layer.provide(
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
@@ -189,12 +197,25 @@ const runService = <A, E>(
     ),
     Layer.provide(
       Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
+        admitRemoteSend: () =>
+          Effect.succeed({
+            ceiling:
+              options.goatclawEnabled === true ? BUILTIN_PERMISSION_PROFILES.worker! : undefined,
+            settle: (sent: boolean) => Effect.sync(() => options.onSettle?.(sent)),
+          }),
         listThreads: () => Effect.succeed(localList),
         readThread: () =>
           options.localRead === undefined
             ? Effect.die("unused local read")
             : Effect.succeed(options.localRead),
       }),
+    ),
+    Layer.provide(
+      options.fleetReach === undefined
+        ? layerNoFleetSync
+        : Layer.mock(FleetSync.GoatclawFleetSync)({
+            ensure: () => Effect.succeed(options.fleetReach!),
+          }),
     ),
     Layer.provide(
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
@@ -487,6 +508,54 @@ describe("HostThreadsMcpService", () => {
       }),
   );
 
+  it.effect(
+    "returns local replica status when the source is unreachable without exposing contents",
+    () =>
+      Effect.gen(function* () {
+        const watch = {
+          pendingRuns: [],
+          reportedRuns: [],
+          notifyWebhook: false,
+          webhookTarget: null,
+          title: "Offline work",
+          updatedAt: 1000,
+          checkpointReplication: "on",
+          replica: {
+            runId: "copy-run",
+            capturedAt: "2026-10-13T01:00:00.000Z",
+            bytes: 100,
+            sha256: "a".repeat(64),
+            contextSha256: "b".repeat(64),
+            repositoryKey: "github.com/example/repo",
+          },
+        } as unknown as LaunchWatch;
+        const { result } = yield* runService(
+          {
+            interactionMode: "default",
+            watch,
+            hostCall: () =>
+              Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "offline",
+                }),
+              ),
+          },
+          (service) =>
+            service.threadStatus(scope, { host: "box", threadId: ThreadId.make("remote") }),
+        );
+        expect(result._tag).toBe("Success");
+        if (result._tag !== "Success") return;
+        expect(result.success.remoteUnavailable).toBe(true);
+        expect(result.success.terminal).toBe(false);
+        expect(result.success.run).toBeNull();
+        expect(result.success.replicaStatus?.replica?.runId).toBe("copy-run");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("bundleBase64");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("context");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("file");
+      }),
+  );
+
   it.effect("bounds a remote status and names only the next pending run", () =>
     Effect.gen(function* () {
       const at = "2026-10-13T01:00:00.000Z";
@@ -593,7 +662,7 @@ describe("HostThreadsMcpService", () => {
         expect(result._tag).toBe("Failure");
         if (result._tag !== "Failure") return;
         expect(result.failure.message).toContain("started from orchestrator-laptop");
-        expect(result.failure.message).toContain("goat_origin_report");
+        expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         expect(relays).toEqual([]);
       }),
   );
@@ -631,9 +700,9 @@ describe("HostThreadsMcpService", () => {
         expect(result.failure.message).toContain("is not in this machine's SSH config");
         if (mentionsOrigin) {
           expect(result.failure.message).toContain("started from orchestrator-laptop");
-          expect(result.failure.message).toContain("goat_origin_report");
+          expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         } else {
-          expect(result.failure.message).not.toContain("goat_origin_report");
+          expect(result.failure.message).not.toContain('path:"origin.report"');
         }
       }),
   );
@@ -682,11 +751,11 @@ describe("HostThreadsMcpService", () => {
             host: "box",
             threadId: ThreadId.make("remote-1"),
             message: "status?",
+            capabilities: [],
           }),
       );
       expect(result._tag === "Success" && result.success.host).toBe("box");
-      expect(calls[0]?.tool).toBe("goat_thread_send");
-      expect(calls[0]?.writes).toBe(true);
+      expect([calls[0]?.tool, calls[0]?.writes]).toEqual(["goat_thread_send", true]);
       expect(calls[0]?.arguments).toEqual({ threadId: "remote-1", message: "status?" });
       // The caller's watch on that thread, if any, follows the run the send joined.
       expect(rearms).toEqual([
@@ -835,7 +904,7 @@ it.effect("refuses a launch watch for a remote delegated task", () =>
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
           expect(result.failure.code).toBe("invalid_request");
-          expect(result.failure.message).toContain("task_status");
+          expect(result.failure.message).toContain('goat_call {path:"task.read"}');
         }
       }),
   ),
@@ -923,7 +992,7 @@ it.effect("refuses a finished remote review before forwarding or relaying", () =
     expect(result._tag).toBe("Failure");
     if (result._tag !== "Failure") return;
     expect(result.failure).toMatchObject({ code: "thread_not_sendable" });
-    expect(result.failure.message).toContain("delegate_task");
+    expect(result.failure.message).toContain("goat_task_create");
     expect(calls).toHaveLength(0);
     expect(relays).toHaveLength(0);
   }),
@@ -1035,4 +1104,68 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
     ),
     Effect.asVoid,
   ),
+);
+
+it.effect(
+  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state, and says when it is unconfirmed",
+  () =>
+    Effect.gen(function* () {
+      // Hub steering must not stall while sync is pending or the destination is too old to answer it.
+      const reaches = [
+        { sync: { state: "applied" as const }, enforcesCeilings: true },
+        { sync: { state: "outdated" as const }, enforcesCeilings: false },
+        {
+          sync: { state: "pending" as const, message: "box is offline." },
+          enforcesCeilings: false,
+        },
+        undefined,
+      ];
+      for (const goatclawEnabled of [true, false]) {
+        for (const fleetReach of reaches) {
+          const settled: Array<boolean> = [];
+          const { result, calls } = yield* runService(
+            {
+              interactionMode: "default",
+              goatclawEnabled,
+              ...(fleetReach === undefined ? {} : { fleetReach }),
+              onSettle: (sent) => settled.push(sent),
+              hostCall: () =>
+                Effect.succeed({
+                  threadId: "remote",
+                  messageId: "message-1",
+                  runId: "run-1",
+                  status: "running",
+                  delivery: "steered",
+                }),
+            },
+            (service) =>
+              service.sendToThread(scope, {
+                host: "box",
+                threadId: ThreadId.make("remote"),
+                message: "Continue",
+              }),
+          );
+          expect(result._tag).toBe("Success");
+          expect(calls[0]?.tool).toBe("goat_thread_send");
+          expect(calls[0]?.arguments.permissionProfileCeiling).toEqual(
+            goatclawEnabled ? BUILTIN_PERMISSION_PROFILES.worker : undefined,
+          );
+          expect(settled).toEqual([true]);
+          // Delivery is never blocked; the result tells the caller the ceiling may not bind yet.
+          const sent = result._tag === "Success" ? result.success : undefined;
+          const confirmed = fleetReach?.enforcesCeilings === true;
+          expect(sent?.delivery).toBe("steered");
+          expect(sent !== undefined && "ceiling" in sent ? sent.ceiling : undefined).toEqual(
+            goatclawEnabled && !confirmed
+              ? {
+                  enforcement: "unconfirmed",
+                  host: "box",
+                  sync: fleetReach?.sync ?? { state: "pending" },
+                  message: expect.stringContaining("box has not confirmed"),
+                }
+              : undefined,
+          );
+        }
+      }
+    }),
 );

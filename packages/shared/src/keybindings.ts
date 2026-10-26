@@ -170,6 +170,42 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+0", command: "preview.resetZoom", when: "previewFocus" },
   { key: "mod+k", command: "commandPalette.toggle", when: "!terminalFocus" },
   { key: "mod+p", command: "filePicker.toggle", when: "!terminalFocus" },
+  // VS Code's and Zed's explorer pair. JetBrains' mod+shift+c is thread.copyReference here.
+  { key: "mod+alt+c", command: "files.copyPath", when: "fileViewFocus && !editableFocus" },
+  {
+    key: "mod+alt+shift+c",
+    command: "files.copyRelativePath",
+    when: "fileViewFocus && !editableFocus",
+  },
+  // Tree-only keys. The tree's own arrows, Home/End, Enter/Space and selection keys stay built in.
+  { key: "pagedown", command: "files.pageDown", when: "fileTreeFocus && !editableFocus" },
+  { key: "pageup", command: "files.pageUp", when: "fileTreeFocus && !editableFocus" },
+  { key: "mod+arrowdown", command: "files.open", when: "fileTreeFocus && !editableFocus" },
+  {
+    key: "alt+arrowright",
+    command: "files.expandRecursive",
+    when: "fileTreeFocus && !editableFocus",
+  },
+  {
+    key: "alt+arrowleft",
+    command: "files.collapseRecursive",
+    when: "fileTreeFocus && !editableFocus",
+  },
+  { key: "mod+arrowright", command: "files.expandAll", when: "fileTreeFocus && !editableFocus" },
+  { key: "mod+arrowleft", command: "files.collapseAll", when: "fileTreeFocus && !editableFocus" },
+  // Shares mod+f with chat.find, whose !previewFocus never holds in the right panel's file views.
+  { key: "mod+f", command: "files.find", when: "fileViewFocus" },
+  // Cmd+L stays the browser's address bar and preview.focusUrl; Ctrl+G matches VS Code and Zed.
+  { key: "ctrl+g", command: "files.goToLine", when: "fileViewFocus" },
+  {
+    key: "mod+alt+r",
+    command: "files.revealInFileManager",
+    when: "fileViewFocus && !editableFocus",
+  },
+  // JetBrains' Synchronize key; mod+r reloads the app.
+  { key: "mod+alt+y", command: "files.refresh", when: "fileViewFocus && !editableFocus" },
+  // mod+shift+e (VS Code's Explorer focus) is composer.effort here.
+  { key: "mod+alt+e", command: "files.toggleFocus", when: "fileViewFocus" },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
   { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
   { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
@@ -198,6 +234,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
+  // After chat.new: resolution walks backwards, so on the Notes page this rule wins.
+  { key: "mod+n", command: "notes.new", when: "notesPageOpen && !terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus && !previewFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },

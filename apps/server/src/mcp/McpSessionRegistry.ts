@@ -9,13 +9,18 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { registerCredentialRunTag } from "./goatCredentialRedaction.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 export interface McpMemoryPolicy {
@@ -104,6 +109,15 @@ export interface McpSessionRegistryShape {
     options?: { readonly exceptProviderSessionId?: string },
   ) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
+  readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
+  /**
+   * The thread a token still authorizes and when to ask again, judged as resolve would but
+   * without counting the check as use: a stream that only watches a credential must not keep
+   * it alive.
+   */
+  readonly inspect: (
+    rawToken: string,
+  ) => Effect.Effect<{ readonly threadId: ThreadId; readonly recheckAt: number } | undefined>;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -206,6 +220,10 @@ const withoutMemoryAuthority = (
 export interface McpSessionRegistryOptions {
   readonly livenessWindowMs?: number;
   readonly now?: () => number;
+  /** Makes (or reuses) the directory a thread's agent gets as TMPDIR; none when absent. */
+  readonly makeThreadTemporaryDirectory?: (threadKey: string) => Effect.Effect<string | undefined>;
+  /** The system temporary directory those thread directories stand in for. */
+  readonly systemTemporaryDirectory?: string;
 }
 
 /**
@@ -245,9 +263,11 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make(registryState(new Map(), new Map()));
+  const changes = yield* PubSub.sliding<void>(1);
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const runTag = yield* crypto.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
+  registerCredentialRunTag(runTag);
   const endpoint = NetAddress.isInetAddress(httpServer.address)
     ? "http://" +
       getHttpMcpEndpointHost(httpServer.address.address) +
@@ -330,6 +350,12 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           : yield* hashToken(renewToken);
       const freshHash = yield* hashToken(freshToken);
       const browserToolsAvailable = request.browserToolsAvailable ?? true;
+      const temporaryDirectory =
+        options.makeThreadTemporaryDirectory === undefined
+          ? undefined
+          : yield* options.makeThreadTemporaryDirectory(
+              (yield* hashToken(request.threadId)).slice(0, 16),
+            );
 
       const makeRecord = (
         tokenHash: string,
@@ -346,6 +372,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           reauthorize: (required) =>
             Effect.gen(function* () {
               const resolved = yield* resolveHash(tokenHash);
+              const missingScope = required.find(
+                (scope) => !resolved?.grantedScopes?.includes(scope),
+              );
               const denied =
                 !resolved ||
                 (required.some((scope) => scope === "memory:read" || scope === "memory:write") &&
@@ -356,18 +385,19 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
                     (required.includes("memory:write") &&
                       request.memoryPolicy.grant !== "read_write"))) ||
                 (request.isLiveCaller && !(yield* request.isLiveCaller)) ||
-                required.some((scope) => !resolved.grantedScopes?.includes(scope)) ||
+                missingScope !== undefined ||
                 (request.readOnly && required.includes("memory:write"));
               // A permit taken under replaced authority must not pass under the
               // replacement's grants: the token is the same, the generation is not.
               // Checked last, after every suspension above.
-              if (denied || (yield* liveRecord(tokenHash))?.generation !== generation)
+              const generationChanged = (yield* liveRecord(tokenHash))?.generation !== generation;
+              if (denied || generationChanged)
                 return yield* new EnvironmentAuthorizationError({
-                  message: "The provider credential no longer grants this operation.",
-                  requiredScope:
-                    required.find((scope) => !resolved?.grantedScopes?.includes(scope)) ??
-                    required[0] ??
-                    "memory:read",
+                  message:
+                    resolved !== undefined && !generationChanged && missingScope !== undefined
+                      ? `The calling thread's MCP credential is missing required scope: ${missingScope}.`
+                      : "The calling thread's MCP credential is no longer active or its authority changed.",
+                  requiredScope: missingScope ?? required[0] ?? "memory:read",
                 });
             }),
           requestNamespace: providerSessionId,
@@ -434,6 +464,10 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           credentialGeneration: record.generation,
           browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
+          ...(temporaryDirectory === undefined ? {} : { temporaryDirectory }),
+          ...(temporaryDirectory === undefined || options.systemTemporaryDirectory === undefined
+            ? {}
+            : { systemTemporaryDirectory: options.systemTemporaryDirectory }),
         },
       };
     },
@@ -522,6 +556,42 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       ? Effect.undefined
       : hashToken(rawToken).pipe(Effect.flatMap(resolveHash));
 
+  const inspect: McpSessionRegistryShape["inspect"] = Effect.fn("McpSessionRegistry.inspect")(
+    function* (rawToken) {
+      if (rawToken.length === 0) return undefined;
+      const tokenHash = yield* hashToken(rawToken);
+      for (;;) {
+        const timestamp = yield* currentTimeMillis;
+        // The same pruning resolve starts with; it judges records and renews none.
+        const current = yield* SynchronizedRef.modify(state, (before) => {
+          const pruned = pruneIdle(before, timestamp);
+          return [pruned, pruned] as const;
+        });
+        const live = current.records.get(tokenHash);
+        if (live !== undefined && !isIdle(live, timestamp))
+          return {
+            threadId: live.scope.thread.threadId,
+            recheckAt: live.lastAliveAt + livenessWindowMs + 1,
+          };
+        const tombstone = current.tombstones.get(tokenHash);
+        // Idle, or expired for idleness: still valid while its session is attached, as resolve
+        // would renew it then; ask again after another window.
+        const record = live ?? (tombstone?.reason === "expired" ? tombstone.record : undefined);
+        if (!record?.isAttached) return undefined;
+        const attached = yield* record.isAttached;
+        const after = yield* SynchronizedRef.get(state);
+        // Revoked, renewed or touched during the probe: judge the state that is current now.
+        if (after.records.get(tokenHash) !== live || after.tombstones.get(tokenHash) !== tombstone)
+          continue;
+        if (!attached) {
+          if (live !== undefined) yield* expire(live, timestamp);
+          return undefined;
+        }
+        return { threadId: record.scope.thread.threadId, recheckAt: timestamp + livenessWindowMs };
+      }
+    },
+  );
+
   const explainRefusal: NonNullable<McpSessionRegistryShape["explainRefusal"]> = Effect.fn(
     "McpSessionRegistry.explainRefusal",
   )(function* (rawToken) {
@@ -570,33 +640,36 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
-  const revokeWhere = (predicate: (record: CredentialRecord) => boolean) =>
-    Effect.flatMap(currentTimeMillis, (timestamp) =>
-      SynchronizedRef.update(state, (current) => {
-        const revoked = [
-          ...Array.from(current.records).filter(([, record]) => predicate(record)),
-          // An idle-expired record must not be renewable once its session ends.
-          ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
-            tombstone.record && predicate(tombstone.record)
-              ? [[tokenHash, tombstone.record] as const]
-              : [],
-          ),
-        ];
-        if (revoked.length === 0) return current;
-        const records = new Map(current.records);
-        for (const [tokenHash] of revoked) records.delete(tokenHash);
-        return registryState(
-          records,
-          withTombstones(
-            current.tombstones,
-            revoked.map(([tokenHash, record]) => [
-              tokenHash,
-              tombstoneOf(record, "revoked", timestamp),
-            ]),
-          ),
-        );
-      }),
-    );
+  const revokeWhere = Effect.fn("McpSessionRegistry.revokeWhere")(function* (
+    predicate: (record: CredentialRecord) => boolean,
+  ) {
+    const timestamp = yield* currentTimeMillis;
+    yield* SynchronizedRef.update(state, (current) => {
+      const revoked = [
+        ...Array.from(current.records).filter(([, record]) => predicate(record)),
+        // An idle-expired record must not be renewable once its session ends.
+        ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
+          tombstone.record && predicate(tombstone.record)
+            ? [[tokenHash, tombstone.record] as const]
+            : [],
+        ),
+      ];
+      if (revoked.length === 0) return current;
+      const records = new Map(current.records);
+      for (const [tokenHash] of revoked) records.delete(tokenHash);
+      return registryState(
+        records,
+        withTombstones(
+          current.tombstones,
+          revoked.map(([tokenHash, record]) => [
+            tokenHash,
+            tombstoneOf(record, "revoked", timestamp),
+          ]),
+        ),
+      );
+    });
+    yield* PubSub.publish(changes, undefined);
+  }, Effect.uninterruptible);
 
   return McpSessionRegistry.of({
     issue,
@@ -631,13 +704,38 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       );
     }),
     revokeAll: revokeWhere(() => true),
+    subscribeChanges: PubSub.subscribe(changes),
+    inspect,
   });
 });
 
 let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 
+/**
+ * Thread TMPDIRs live under one root per server run, removed at shutdown. The root is in the
+ * system temporary directory, which provider sandboxes already let agents write.
+ */
+const makeThreadTemporaryDirectories = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-threads-" });
+  const makeThreadTemporaryDirectory = (threadKey: string) => {
+    const directory = path.join(root, threadKey);
+    return fileSystem.makeDirectory(directory, { recursive: true }).pipe(
+      Effect.as(directory),
+      Effect.catch((cause) =>
+        Effect.logWarning("could not create a thread temporary directory", cause).pipe(
+          Effect.as(undefined),
+        ),
+      ),
+    );
+  };
+  return { makeThreadTemporaryDirectory, systemTemporaryDirectory: path.dirname(root) };
+});
+
 const make = Effect.acquireRelease(
-  makeWithOptions().pipe(
+  makeThreadTemporaryDirectories.pipe(
+    Effect.flatMap(makeWithOptions),
     Effect.tap((registry) =>
       Effect.sync(() => {
         activeMcpSessionRegistry = registry;
@@ -653,15 +751,6 @@ const make = Effect.acquireRelease(
 );
 
 export const layer = Layer.effect(McpSessionRegistry, make);
-
-export const issueActiveMcpCredential = (
-  request: McpCredentialRequest,
-): Effect.Effect<McpIssuedCredential | undefined> =>
-  activeMcpSessionRegistry
-    ? activeMcpSessionRegistry
-        .revokeThread(request.threadId)
-        .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
-    : Effect.undefined;
 
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;

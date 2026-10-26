@@ -5,6 +5,17 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
 import {
+  CLAUDE_MEMORY_READ_TOOLS,
+  CLAUDE_MEMORY_SOURCE_TOOL,
+  CLAUDE_MEMORY_WRITE_TOOLS,
+  CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
+  claudeAllowedToolName,
+  claudeGoatCallMemoryTool,
+  claudeGoatToolDecision,
+  claudeGoatToolName,
+  claudeGoatMemoryTool,
+} from "./goatMcpToolNames.ts";
+import {
   dynamicToolTitle,
   formatReadToolLabel,
   formatSearchToolLabel,
@@ -23,6 +34,7 @@ import {
 } from "./claudeWorkflowProgress.ts";
 
 import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
+import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
@@ -55,6 +67,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK takes a Node ChildProcess for the CLI.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeUtil from "node:util";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -92,6 +105,8 @@ import {
   type OrchestrationV2TurnItem,
   type OrchestrationV2WebSearchResult,
   type ProviderApprovalDecision,
+  type ProviderApprovalFullAccessOverride,
+  type ProviderApprovalOption,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderRequestKind,
@@ -99,6 +114,7 @@ import {
   type ProviderThreadId,
   type RunId,
   type ThreadId,
+  resolveIdleCompaction,
 } from "@goat/contracts";
 
 import * as Cause from "effect/Cause";
@@ -135,6 +151,7 @@ import {
   type CompiledClaudeModelSelection,
 } from "../../claudeModelOptions.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { spawnAndCollect } from "@goat/provider-core/server/snapshotProbe";
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
@@ -163,7 +180,9 @@ import {
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -313,26 +332,46 @@ const WORKFLOW_MEMBER_TRANSCRIPT_FLUSH_MS = 500;
 // subagents to move to the background before it is sent.
 const BACKGROUND_MOVE_TIMEOUT_MS = 5_000;
 
+const CLAUDE_GROUP_WATCH_SCRIPT = [
+  "{ trap '' TERM; read -r _ <&3; kill -TERM 0; sleep 5; kill -KILL 0; } </dev/null >/dev/null 2>&1 &",
+  'exec "$@" 3<&-',
+].join("\n");
+
 /**
  * When the CLI exits it stops the MCP servers it started, but not their children: a plugin's
  * `bun run start` wrapper dies and its `bun server.ts` keeps running, writing to a pipe nobody
  * reads (#3089). Those stay in the CLI's group, so the rest of the group gets SIGKILL once the
- * CLI exits for any reason.
+ * CLI exits for any reason. `onExit` then stops the CLI's agent scope, for daemons a tool
+ * detached from the group with setsid.
+ *
+ * That cleanup needs this server alive, and the CLI finishes its turn after its pipes close. A
+ * server that crashes or is killed would leave the CLI working next to the session it resumes
+ * (#23370), so a watcher in the group reads a pipe only this server holds and stops the group at
+ * its end-of-file.
  */
-function spawnClaudeProcessGroup(options: ClaudeSpawnOptions): ClaudeSpawnedProcess {
-  const child = NodeChildProcess.spawn(options.command, options.args, {
-    cwd: options.cwd,
-    env: options.env,
-    signal: options.signal,
-    stdio: ["pipe", "pipe", "ignore"],
-    detached: true,
-  });
+export function spawnClaudeProcessGroup(
+  options: ClaudeSpawnOptions,
+  onExit?: () => void,
+): ClaudeSpawnedProcess {
+  const child = NodeChildProcess.spawn(
+    "/bin/sh",
+    ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
+    {
+      cwd: options.cwd,
+      env: options.env,
+      signal: options.signal,
+      stdio: ["pipe", "pipe", "ignore", "pipe"],
+      detached: true,
+    },
+  );
   child.once("exit", () => {
     try {
       signalProcessGroup(child.pid ?? 0, "SIGKILL");
     } catch {}
+    onExit?.();
   });
-  return child;
+  // Node's typings make stdin and stdout nullable once stdio has a fourth entry; both are pipes.
+  return child as ClaudeSpawnedProcess;
 }
 
 export const ClaudeProviderCapabilitiesV2 = {
@@ -880,6 +919,7 @@ export const layerQueryRunner: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const platform = yield* HostProcess.Platform;
+    const runFork = Effect.runForkWith(yield* Effect.context<never>());
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto
@@ -930,10 +970,16 @@ export const layerQueryRunner: Layer.Layer<
                 pathToClaudeCodeExecutable: launch.command,
                 executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
               };
+        const unit = launch?.unit;
+        const stopScope =
+          unit === undefined ? undefined : () => void runFork(agentScope.stop(unit));
         // Windows has no process groups, so there the SDK spawns the CLI itself.
         const spawnClaudeCodeProcess =
           options.spawnClaudeCodeProcess ??
-          (platform === "win32" ? undefined : spawnClaudeProcessGroup);
+          (platform === "win32"
+            ? undefined
+            : (spawnOptions: ClaudeSpawnOptions) =>
+                spawnClaudeProcessGroup(spawnOptions, stopScope));
         const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
           Effect.try({
             try: () =>
@@ -1261,6 +1307,24 @@ function claudeLiveSelectionFlagSettings(
   };
 }
 
+// A delegated child is its own SDK session, so Claude Code gives it the main-conversation cache
+// TTL. When the user sets Claude's subagentPromptCacheTtl, the child follows it like a native
+// subagent would. An explicit CLAUDE_CODE_PROMPT_CACHE_TTL on the instance still wins.
+export function claudeQueryEnvironment(
+  environment: NodeJS.ProcessEnv,
+  appThread: Pick<OrchestrationV2AppThread, "lineage">,
+  subagentPromptCacheTtl: "5m" | "1h" | undefined,
+): NodeJS.ProcessEnv {
+  if (
+    appThread.lineage.relationshipToParent !== "subagent" ||
+    subagentPromptCacheTtl === undefined ||
+    environment.CLAUDE_CODE_PROMPT_CACHE_TTL !== undefined
+  ) {
+    return environment;
+  }
+  return { ...environment, CLAUDE_CODE_PROMPT_CACHE_TTL: subagentPromptCacheTtl };
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1272,6 +1336,7 @@ export function makeClaudeQueryOptions(input: {
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+  readonly computerUseSkill?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -1373,9 +1438,19 @@ export function makeClaudeQueryOptions(input: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append: [
-        buildRuntimeInstructions({ harness: "Claude Code" }) +
+        buildRuntimeInstructions({
+          harness: "Claude Code",
+          computerUse:
+            input.computerUseSkill !== false &&
+            input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
+            !McpProviderSession.isBlockedCuaServer(
+              input.mcpServers[McpProviderSession.CUA_MCP_SERVER_NAME],
+            ),
+        }) +
           "\n\n" +
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
+          "\n\n" +
+          GOAT_DEVELOPMENT_INSTRUCTIONS +
           (input.mcpServers === undefined ? "" : GOAT_ORCHESTRATION_INSTRUCTIONS),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
@@ -1429,56 +1504,21 @@ const readClaudeAppendSystemPromptFile = Effect.fnUntraced(function* (input: {
 });
 
 export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
+const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
+const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
 
-// Automatic approval policy is separate from Tool.Readonly metadata.
-// Preserve html_render preapproval; reading another thread still requires approval.
-export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
-  "mcp__goat__orchestrator_capabilities",
-  "mcp__goat__list_scheduled_tasks",
-  "mcp__goat__goat_thread_list",
-  "mcp__goat__goat_thread_wait",
-  "mcp__goat__goat_thread_status",
-  "mcp__goat__goat_thread_watch_list",
-  "mcp__goat__goat_pending_request_list",
-  "mcp__goat__goat_pending_request_read",
-  "mcp__goat__goat_thread_configuration",
-  "mcp__goat__goat_thread_transfers",
-  "mcp__goat__goat_worktree_status",
-  "mcp__goat__goat_worktree_list",
-  "mcp__goat__goat_worktree_inventory",
-  "mcp__goat__goat_project_list",
-  "mcp__goat__goat_project_read",
-  "mcp__goat__goat_thread_search",
-  "mcp__goat__goat_preview_list",
-  "mcp__goat__goat_environment_read",
-  "mcp__goat__goat_host_status",
-  "mcp__goat__goat_provider_diagnose",
-  "mcp__goat__goat_queue_list",
-  "mcp__goat__goat_queue_read",
-  "mcp__goat__goat_review_findings_export",
-  "mcp__goat__html_preview",
-  "mcp__goat__html_render",
-];
+export {
+  CLAUDE_MEMORY_READ_TOOLS,
+  CLAUDE_MEMORY_WRITE_TOOLS,
+  CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS,
+  claudeGoatToolName,
+};
 
 // Claude Code aborts an HTTP MCP call after 60 s ("The operation timed out.")
-// unless the server config sets `timeout`. T3's wait tools (goat_thread_wait,
+// unless the server config sets `timeout`. GOAT's wait tools (goat_thread_wait,
 // delegate_task mode=wait) legitimately block for up to an hour
 // (MAX_WAIT_TIMEOUT_MS in OrchestratorMcpService), so the budget sits just
 // above that and the server's own wait timeout is what ends a long call.
-export const CLAUDE_MEMORY_READ_TOOLS = [
-  "mcp__goat__memory_list",
-  "mcp__goat__memory_search",
-  "mcp__goat__memory_read",
-  "mcp__goat__memory_history",
-  "mcp__goat__memory_sync_status",
-  "mcp__goat__memory_read_source",
-] as const;
-export const CLAUDE_MEMORY_WRITE_TOOLS = [
-  "mcp__goat__memory_upsert",
-  "mcp__goat__memory_forget",
-  "mcp__goat__memory_revert_resolution",
-] as const;
-
 export const CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
@@ -1530,23 +1570,43 @@ export function claudeMcpQueryOverrides(input: {
   }
   const memory = McpProviderSession.memoryToolAvailability(session);
   const memoryReadTools = memory.read
-    ? CLAUDE_MEMORY_READ_TOOLS.filter(
-        (name) => name !== "mcp__goat__memory_read_source" || memory.source,
-      )
+    ? CLAUDE_MEMORY_READ_TOOLS.filter((name) => name !== CLAUDE_MEMORY_SOURCE_TOOL || memory.source)
     : [];
   const mcpAllowedTools = input.readOnlySandbox
     ? [...CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS, ...memoryReadTools]
     : [CLAUDE_GOAT_MCP_TOOL_WILDCARD];
+  // Computer use never reaches a read-only sandbox, even with a stale session.
+  const cuaServers = input.readOnlySandbox ? {} : McpProviderSession.cuaStdioMcpServers(session);
+  const cuaAllowedTools =
+    Object.keys(cuaServers).length === 0 ? [] : [CLAUDE_CUA_MCP_TOOL_WILDCARD];
+  // Claude merges its settings' MCP servers with these by name; an unattended turn without a
+  // lease takes the name so a user's own `cua-driver` cannot start, and nothing is preapproved.
+  const blockedServers =
+    session.cuaDriverBlocked === true && Object.keys(cuaServers).length === 0
+      ? {
+          [McpProviderSession.CUA_MCP_SERVER_NAME]: {
+            type: "stdio" as const,
+            command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+            args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
+            env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
+          },
+        }
+      : {};
   return {
     allowedTools: Array.from(
       new Set([
-        ...(input.allowedTools ?? []).filter(
-          (tool) =>
-            !input.readOnlySandbox ||
-            !tool.startsWith("mcp__goat__") ||
-            mcpAllowedTools.includes(tool),
-        ),
+        ...(input.allowedTools ?? [])
+          // A user's own entry may name a GOAT tool as it shipped; Claude calls the listed name.
+          .map(claudeAllowedToolName)
+          .filter(
+            (tool) =>
+              !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
+              (!input.readOnlySandbox ||
+                !tool.startsWith("mcp__goat__") ||
+                mcpAllowedTools.includes(tool)),
+          ),
         ...mcpAllowedTools,
+        ...cuaAllowedTools,
       ]),
     ),
     mcpServers: {
@@ -1558,9 +1618,24 @@ export function claudeMcpQueryOverrides(input: {
         },
         timeout: CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS,
       },
+      ...cuaServers,
+      ...blockedServers,
     },
-    // Only the proxy exemption travels in the environment; the credential stays in the header.
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
+  };
+}
+
+function appendClaudeUserText(message: SDKUserMessage, text: string): SDKUserMessage {
+  const content = message.message.content;
+  return {
+    ...message,
+    message: {
+      ...message.message,
+      content: [
+        ...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content),
+        { type: "text" as const, text },
+      ],
+    },
   };
 }
 
@@ -2214,6 +2289,17 @@ const decodeClaudeBypassSettings = Schema.decodeUnknownEffect(
   fromLenientJson(ClaudeBypassSettings),
 );
 
+const ClaudePromptCacheTtl = Schema.Literals(["5m", "1h"]);
+const decodeClaudePromptCacheTtl = Schema.decodeUnknownOption(ClaudePromptCacheTtl);
+const decodeClaudeSubagentCacheSettings = Schema.decodeUnknownEffect(
+  fromLenientJson(
+    Schema.StructWithRest(
+      Schema.Struct({ subagentPromptCacheTtl: Schema.optionalKey(ClaudePromptCacheTtl) }),
+      [Schema.Record(Schema.String, Schema.Unknown)],
+    ),
+  ),
+);
+
 function claudeBypassAvailability(
   settings: typeof ClaudeBypassSettings.Type,
 ): ClaudeBypassAvailability {
@@ -2242,7 +2328,8 @@ function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
 }
 
 // Runtime permissions and connection routing determine query identity. Credential
-// rotation uses setMcpServers on the live query; memory preapprovals are excluded by openQuery.
+// rotation and computer use changes use setMcpServers on the live query, so the
+// driver is excluded here; memory preapprovals are excluded by openQuery.
 export function claudeEffectiveQueryPolicyKey(
   queryPolicy: ClaudeRuntimeQueryPolicy,
   mcpOverrides: {
@@ -2256,13 +2343,19 @@ export function claudeEffectiveQueryPolicyKey(
       ...queryPolicy,
       ...(mcpOverrides.allowedTools === undefined
         ? {}
-        : { allowedTools: mcpOverrides.allowedTools }),
+        : {
+            allowedTools: mcpOverrides.allowedTools.filter(
+              (tool) => !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX),
+            ),
+          }),
     }),
     mcpServers: Object.fromEntries(
-      Object.entries(mcpOverrides.mcpServers ?? {}).map(([name, config]) => [
-        name,
-        { ...config, ...("headers" in config ? { headers: undefined } : {}) },
-      ]),
+      Object.entries(mcpOverrides.mcpServers ?? {})
+        .filter(([name]) => name !== McpProviderSession.CUA_MCP_SERVER_NAME)
+        .map(([name, config]) => [
+          name,
+          { ...config, ...("headers" in config ? { headers: undefined } : {}) },
+        ]),
     ),
     mcpEnvironment: mcpOverrides.mcpEnvironment,
   });
@@ -2899,12 +2992,52 @@ function parentToolUseIdFromSdkMessage(message: SDKMessage): string | null {
     : null;
 }
 
+const CLAUDE_NO_STANDING_GRANT_OPTIONS = [
+  { decision: "decline", label: "Decline" },
+  { decision: "accept", label: "Approve" },
+] satisfies ReadonlyArray<ProviderApprovalOption>;
+
+export function claudeApprovalPresentation(input: {
+  readonly permissionMode: PermissionMode;
+  readonly prompt: string;
+  readonly callbackOptions: Pick<
+    Parameters<CanUseTool>[2],
+    "decisionReason" | "matchedAskRule" | "suppressAlwaysAllowRule"
+  >;
+}): {
+  readonly reason?: string;
+  readonly fullAccessOverride?: ProviderApprovalFullAccessOverride;
+  readonly options?: ReadonlyArray<ProviderApprovalOption>;
+} {
+  // The reason can carry terminal escapes from the CLI's own prompt renderer.
+  const reason = NodeUtil.stripVTControlCharacters(
+    input.callbackOptions.decisionReason ?? "",
+  ).trim();
+  // Bypass auto-allows everything it can, so any ask that still reaches the
+  // callback is one bypass refused. The SDK drops the CLI's decision_reason_type,
+  // leaving the matched ask rule as the only way to tell the two causes apart.
+  const fullAccessOverride: ProviderApprovalFullAccessOverride | undefined =
+    input.permissionMode !== "bypassPermissions"
+      ? undefined
+      : input.callbackOptions.matchedAskRule === undefined
+        ? "provider_check"
+        : "ask_rule";
+  return {
+    ...(reason === "" || reason === input.prompt ? {} : { reason }),
+    ...(fullAccessOverride === undefined ? {} : { fullAccessOverride }),
+    ...(input.callbackOptions.suppressAlwaysAllowRule === true
+      ? { options: CLAUDE_NO_STANDING_GRANT_OPTIONS }
+      : {}),
+  };
+}
+
 export function permissionResultFromDecision(input: {
   readonly toolName: string;
   readonly decision: ProviderApprovalDecision;
   readonly toolInput: Record<string, unknown>;
   readonly toolUseID: string;
   readonly suggestions?: Parameters<CanUseTool>[2]["suggestions"];
+  readonly feedback?: string;
 }): PermissionResult {
   if (input.decision === "accept" || input.decision === "acceptForSession") {
     return {
@@ -2924,9 +3057,10 @@ export function permissionResultFromDecision(input: {
   return {
     behavior: "deny",
     message:
-      input.decision === "cancel"
+      input.feedback?.trim() ||
+      (input.decision === "cancel"
         ? "User cancelled tool execution."
-        : "User declined tool execution.",
+        : "User declined tool execution."),
     toolUseID: input.toolUseID,
     decisionClassification: "user_reject",
     ...(input.decision === "cancel" ? { interrupt: true } : {}),
@@ -2955,11 +3089,11 @@ function toSessionPermissionUpdates(
 }
 
 export const awaitClaudeApprovalDecision = Effect.fn("awaitClaudeApprovalDecision")(function* (
-  decision: Deferred.Deferred<ProviderApprovalDecision>,
+  decision: Deferred.Deferred<ClaudeApprovalResponse>,
   signal: AbortSignal,
 ) {
-  const cancellation = Effect.callback<ProviderApprovalDecision>((resume) => {
-    const abort = () => resume(Effect.succeed("cancel"));
+  const cancellation = Effect.callback<ClaudeApprovalResponse>((resume) => {
+    const abort = () => resume(Effect.succeed({ decision: "cancel" }));
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) {
       abort();
@@ -3510,6 +3644,10 @@ interface ClaudeLiveQueryContext {
   readonly query: ClaudeAgentSdkQuerySession;
   readonly queryPolicyKey: string;
   mcpCredentialId: string | undefined;
+  /** The Cua Driver attached to this process now (`cuaDriverKey`); empty when none. */
+  cuaDriverKey: string;
+  /** The process has seen the computer use instructions, in its system prompt or a prompt. */
+  computerUseInstructed: boolean;
   // The selection this process runs now. Live changes update it.
   selection: CompiledClaudeModelSelection;
   readonly closed: Deferred.Deferred<void, never>;
@@ -3648,12 +3786,17 @@ function rememberClaudeSubagentLaunch(
   }
 }
 
+type ClaudeApprovalResponse = {
+  readonly decision: ProviderApprovalDecision;
+  readonly feedback?: string;
+};
+
 type PendingClaudeRuntimeRequest =
   | {
       readonly type: "approval";
       readonly requestId: OrchestrationV2RuntimeRequest["id"];
       readonly requestKind: ProviderRequestKind;
-      readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
+      readonly decision: Deferred.Deferred<ClaudeApprovalResponse, never>;
     }
   | {
       readonly type: "user_input";
@@ -3945,6 +4088,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       return !policy || policy.grant === "none" ? { ...config, grantedScopes: [] } : config;
     });
 
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
   const subagentModelCatalog = scopeClaudeModelCatalog(
     BUNDLED_CLAUDE_MODEL_CATALOG,
@@ -3958,6 +4102,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     adapterOptions.environment,
   ).pipe(Effect.provideService(Path.Path, path));
   const hostEnvironment = yield* HostProcess.Environment;
+  const hostUserId = yield* HostProcess.UserId;
   const customHome =
     adapterOptions.settings.homePath.trim().length > 0 ||
     adapterOptions.environment.CLAUDE_CONFIG_DIR !== hostEnvironment.CLAUDE_CONFIG_DIR;
@@ -3989,6 +4134,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         bypassDisabled: cascade.bypassDisabled || user.bypassDisabled || cached.bypassDisabled,
         autoDisabled: cascade.autoDisabled || user.autoDisabled || cached.autoDisabled,
       };
+    },
+  );
+
+  // Claude Code's own subagent TTL setting, in its precedence order. Unset or unreadable means
+  // Anthropic's default applies.
+  const resolveSubagentPromptCacheTtl = Effect.fn("ClaudeAdapterV2.resolveSubagentPromptCacheTtl")(
+    function* (cwd: string | null) {
+      const fromEnvironment = decodeClaudePromptCacheTtl(
+        adapterOptions.environment.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL,
+      );
+      if (Option.isSome(fromEnvironment)) return fromEnvironment.value;
+      const resolved = yield* Effect.tryPromise(() =>
+        resolveClaudeSettings({
+          ...(cwd === null ? {} : { cwd }),
+          settingSources: customHome ? ["project", "local"] : ["user", "project", "local"],
+        }),
+      ).pipe(Effect.orElseSucceed(() => undefined));
+      const home = customHome
+        ? yield* fileSystem.readFileString(path.join(homePath, "settings.json")).pipe(
+            Effect.flatMap(decodeClaudeSubagentCacheSettings),
+            Effect.orElseSucceed(() => ({ subagentPromptCacheTtl: undefined })),
+          )
+        : undefined;
+      return resolved?.effective.subagentPromptCacheTtl ?? home?.subagentPromptCacheTtl;
     },
   );
 
@@ -4033,7 +4202,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           string,
           { readonly fiber: Fiber.Fiber<void>; readonly stop: Deferred.Deferred<void> }
         >();
-        const taskOutputRoot = claudeTaskOutputRoot(adapterOptions.environment, path);
+        const taskOutputRoot = claudeTaskOutputRoot(adapterOptions.environment, path, {
+          uid: hostUserId,
+        });
         // Waits for the tail's last read so its output lands before the call settles.
         const stopTaskOutputTail = (toolUseId: string) =>
           Effect.suspend(() => {
@@ -4097,7 +4268,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (existing?.lastTurn?.memoryRelease) yield* existing.lastTurn.memoryRelease;
                 if (!existing || existing.stopping) return;
                 const config = yield* readMcpSession(rotation.threadId);
-                if (existing.mcpCredentialId === config?.providerSessionId) return;
+                const cuaKey = McpProviderSession.cuaDriverKey(config?.cuaDriver);
+                if (
+                  existing.mcpCredentialId === config?.providerSessionId &&
+                  existing.cuaDriverKey === cuaKey
+                )
+                  return;
                 if (!existing.query.setMcpServers) {
                   yield* Effect.logWarning("Claude MCP credential refresh unavailable.");
                   return;
@@ -4110,6 +4286,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Effect.tap(() =>
                     Effect.sync(() => {
                       existing.mcpCredentialId = config?.providerSessionId;
+                      existing.cuaDriverKey = cuaKey;
                     }),
                   ),
                   Effect.catch(() =>
@@ -5007,7 +5184,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
           const webSearchResults = webSearchResultsFromClaudeOutput(input.output);
           const webFetchUrl = firstStringInputField(input.toolInput, ["url"])?.trim();
-          const outputValue = claudeNativeToolOutputValue(input.output);
+          const outputValue =
+            input.toolName.startsWith("mcp__") && input.output.type === "structured_tool_use_result"
+              ? mcpToolResultWithRawImages(input.output.value, input.output.fallbackValue)
+              : claudeNativeToolOutputValue(input.output);
           const outputText =
             itemType === "command_execution"
               ? claudeCommandOutputText(input.output)
@@ -6476,6 +6656,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly nativeRequestId: string;
           readonly requestKind: OrchestrationV2RuntimeRequest["kind"];
           readonly prompt?: string;
+          readonly presentation?: ReturnType<typeof claudeApprovalPresentation>;
           readonly questions?: ReadonlyArray<OrchestrationV2UserInputQuestion>;
         }) {
           const createdAt = yield* DateTime.now;
@@ -6535,6 +6716,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             responseCapability: {
               type: "live",
               providerSessionId,
+              ...(input.questions === undefined ? { supportsFeedback: true } : {}),
             },
             createdAt,
             resolvedAt: null,
@@ -6560,6 +6742,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   requestId,
                   requestKind: input.requestKind as ProviderRequestKind,
                   ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+                  ...input.presentation,
                 }
               : {
                   type: "user_input_request" as const,
@@ -8886,35 +9069,41 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
-          if (toolName.startsWith("mcp__goat__memory_")) {
-            const availability = McpProviderSession.memoryToolAvailability(
-              yield* readMcpSession(context.input.threadId),
-            );
-            const write = CLAUDE_MEMORY_WRITE_TOOLS.some((name) => name === toolName);
-            if (
-              !availability.read ||
-              (write &&
-                (!availability.write ||
-                  sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) ===
-                    "readOnly")) ||
-              (toolName === "mcp__goat__memory_read_source" && !availability.source)
-            ) {
-              return {
-                behavior: "deny",
-                message: "GOAT memory tool unavailable for this credential.",
-                toolUseID: callbackOptions.toolUseID,
-              } satisfies PermissionResult;
-            }
+          // A process opened before the driver was attached lacks its
+          // preapproval; the live session decides instead.
+          if (toolName.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX)) {
+            const attached =
+              (yield* readMcpSession(context.input.threadId))?.cuaDriver !== undefined &&
+              sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) !== "readOnly";
+            return attached
+              ? ({ behavior: "allow", updatedInput: toolInput } satisfies PermissionResult)
+              : ({
+                  behavior: "deny",
+                  message: "Computer use is not attached to this thread.",
+                  toolUseID: callbackOptions.toolUseID,
+                } satisfies PermissionResult);
           }
 
-          // allowedTools is fixed at query creation. Recover the same read-only
-          // preapproval here using live authority without replacing the query.
-          if (
-            CLAUDE_MEMORY_READ_TOOLS.some((name) => name === toolName) &&
-            sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly"
-          ) {
+          const goatDecision = claudeGoatToolDecision({
+            toolName,
+            toolInput,
+            readOnlySandbox:
+              sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) === "readOnly",
+            memory:
+              claudeGoatCallMemoryTool(toolName, toolInput) === undefined
+                ? undefined
+                : McpProviderSession.memoryToolAvailability(
+                    yield* readMcpSession(context.input.threadId),
+                  ),
+          });
+          if (goatDecision === "deny")
+            return {
+              behavior: "deny",
+              message: "GOAT memory tool unavailable for this credential.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          if (goatDecision === "allow")
             return { behavior: "allow", updatedInput: toolInput } satisfies PermissionResult;
-          }
 
           const nativeRequestId = callbackOptions.toolUseID;
           const nativeToolInput = claudeNativeToolInputFromRecord(toolInput);
@@ -9078,8 +9267,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeRequestId,
             requestKind,
             prompt,
+            presentation: claudeApprovalPresentation({
+              permissionMode: context.queryPolicy.permissionMode,
+              prompt,
+              callbackOptions,
+            }),
           });
-          const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
+          const decision = yield* Deferred.make<ClaudeApprovalResponse, never>();
           yield* Ref.update(pendingRuntimeRequests, (current) => {
             const updated = new Map(current);
             updated.set(String(artifacts.request.id), {
@@ -9126,7 +9320,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           return permissionResultFromDecision({
             toolName,
-            decision: resolvedDecision,
+            ...resolvedDecision,
             toolInput,
             toolUseID: callbackOptions.toolUseID,
             ...(callbackOptions.suggestions === undefined
@@ -9146,6 +9340,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             Effect.gen(function* () {
               if (request.dialogKind !== "resume_return") {
                 return { behavior: "cancelled" as const };
+              }
+              const idleCompaction = Option.isSome(serverSettings)
+                ? yield* serverSettings.value.getSettings.pipe(
+                    Effect.map((settings) =>
+                      resolveIdleCompaction(settings, adapterOptions.instanceId),
+                    ),
+                    Effect.orElseSucceed(() => adapterOptions.settings.idleCompaction),
+                  )
+                : adapterOptions.settings.idleCompaction;
+              if (idleCompaction === "off") {
+                return { behavior: "completed" as const, result: "continue" as const };
               }
               const ageMinutes =
                 typeof request.payload.sessionAgeMinutes === "number" &&
@@ -9265,9 +9470,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, {
             ...mcpOverrides,
             allowedTools: mcpOverrides.allowedTools?.filter(
-              (tool) => !tool.startsWith("mcp__goat__memory_"),
+              (tool) => claudeGoatMemoryTool(tool) === undefined,
             ),
           });
+          const cuaServer = mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME];
+          const cuaKey = McpProviderSession.isBlockedCuaServer(cuaServer)
+            ? "blocked"
+            : McpProviderSession.cuaDriverKey(
+                cuaServer === undefined ? undefined : mcpSession?.cuaDriver,
+              );
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -9309,7 +9520,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.queryPolicyKey === queryPolicyKey &&
             existing.selection.queryIdentity === compiledSelection.queryIdentity
           ) {
-            if (existing.mcpCredentialId !== mcpSession?.providerSessionId) {
+            // Enabling or disabling computer use reaches a live process here,
+            // without replacing it (background work would block that).
+            if (
+              existing.mcpCredentialId !== mcpSession?.providerSessionId ||
+              existing.cuaDriverKey !== cuaKey
+            ) {
               if (!existing.query.setMcpServers)
                 return yield* queryRunnerError(
                   "MCP credential refresh unavailable.",
@@ -9317,6 +9533,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 );
               yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
               existing.mcpCredentialId = mcpSession?.providerSessionId;
+              existing.cuaDriverKey = cuaKey;
             }
             // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
             // Auto/default may reflect a policy restriction that forbids restoring bypass.
@@ -9380,11 +9597,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
             resume: shouldResume,
+            computerUseSkill: McpProviderSession.carriesComputerUseSkill(mcpSession),
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
-            environment: { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+            environment: claudeQueryEnvironment(
+              McpProviderSession.withThreadMcpEnvironment(
+                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                mcpSession,
+              ),
+              turnInput.appThread,
+              turnInput.appThread.lineage.relationshipToParent === "subagent"
+                ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
+                : undefined,
+            ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...(mcpOverrides.allowedTools === undefined
               ? {}
@@ -9442,6 +9669,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             query: querySession,
             queryPolicyKey,
             mcpCredentialId: mcpSession?.providerSessionId,
+            cuaDriverKey: cuaKey,
+            computerUseInstructed: launchedWithComputerUseSkill(cuaKey, mcpSession),
             selection: compiledSelection,
             closed,
             lastTurn: null,
@@ -9522,20 +9751,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             : turnInput.memoryContext;
           if (snapshot === undefined) return message;
           const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          const content = message.message.content;
-          return {
-            ...message,
-            message: {
-              ...message.message,
-              content: [
-                ...(typeof content === "string"
-                  ? [{ type: "text" as const, text: content }]
-                  : content),
-                { type: "text" as const, text },
-              ],
-            },
-          } satisfies SDKUserMessage;
+          return appendClaudeUserText(message, text);
         });
+
+        const withCuaNotice = (
+          message: SDKUserMessage,
+          query: ClaudeLiveQueryContext,
+          threadId: ThreadId,
+        ) =>
+          readMcpSession(threadId).pipe(
+            Effect.map((config) => {
+              const notice = pendingComputerUseNotice(query, config);
+              return notice === undefined ? message : appendClaudeUserText(message, notice);
+            }),
+          );
 
         const startTurn = Effect.fn("ClaudeAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput, nativeControl = false) {
@@ -9665,7 +9894,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }
                 const nativeItemId = `bypass-policy-downgrade:${context.providerTurnId}`;
                 const notice =
-                  "T3 could not confirm Claude bypass permissions here, so Full access is running with approval checks.";
+                  "GOAT could not confirm Claude bypass permissions here, so Full access is running with approval checks.";
                 yield* emitProviderEvent({
                   type: "turn_item.updated",
                   driver: CLAUDE_PROVIDER,
@@ -9709,7 +9938,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (userMessage !== null) {
               const admittedMessage = nativeControl
                 ? userMessage
-                : yield* withFreshMemory(userMessage, turnInput);
+                : yield* withFreshMemory(userMessage, turnInput).pipe(
+                    Effect.flatMap((m) => withCuaNotice(m, querySession, turnInput.threadId)),
+                  );
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
@@ -10439,7 +10670,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   }),
                 });
               }
-              yield* Deferred.succeed(pending.decision, requestInput.decision);
+              yield* Deferred.succeed(pending.decision, {
+                decision: requestInput.decision,
+                ...(requestInput.feedback === undefined ? {} : { feedback: requestInput.feedback }),
+              });
             },
             (effect, requestInput) =>
               effect.pipe(

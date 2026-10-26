@@ -1,7 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off - runs the CLI in a child process and checks real modes.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -45,6 +51,13 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
         ["running-thread", "project-kept", "running", "{}", "2026-08-05"],
         ["settled-thread", "project-kept", "completed", '{"settledAt":"2026-08-01"}', "2026-08-05"],
         [
+          "archived-thread",
+          "project-kept",
+          "completed",
+          '{"archivedAt":"2026-08-01"}',
+          "2026-08-05",
+        ],
+        [
           "limit-thread",
           "project-kept",
           "completed",
@@ -74,7 +87,7 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
         VALUES ('session-shared', 'running-thread'), ('session-shared', 'stopped-thread')`;
       yield* sql`INSERT INTO orchestration_v2_projection_context_transfers
         (context_transfer_id, source_thread_id, target_thread_id, type, status, updated_at, payload_json)
-        VALUES ('transfer-1', 'settled-thread', 'stopped-thread', 'provider_handoff', 'completed', '2026-08-01', '{}')`;
+        VALUES ('transfer-1', 'archived-thread', 'stopped-thread', 'provider_handoff', 'completed', '2026-08-01', '{}')`;
       yield* sql`INSERT INTO scheduled_tasks
         (task_id, title, prompt, enabled, schedule_json, project_id, workspace_strategy_json,
           model_selection_json, runtime_mode, interaction_mode, created_by, creation_source,
@@ -108,7 +121,113 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
   return databasePath;
 });
 
+const isWindows = HostProcess.Platform.defaultValue() === "win32";
+const permissions = (file: string) => NodeFS.statSync(file).mode & 0o777;
+
+// The umask is set inside the child, so these runs never depend on the host's umask.
+const runCliUnderUmask002 = (home: string, args: ReadonlyArray<string>) =>
+  Effect.sync(() =>
+    NodeChildProcess.spawnSync(
+      process.execPath,
+      [
+        "--import=data:text/javascript,process.umask(0o002)",
+        NodePath.join(import.meta.dirname, "migrate-dev-db.ts"),
+        "--projects",
+        "1",
+        "--threads-per-project",
+        "1",
+        ...args,
+      ],
+      { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } },
+    ),
+  );
+
 it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
+  it.effect(
+    "refuses a base dir inside a live userdata tree, also through a symlink, and still accepts its dev home (#1648)",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-live-" });
+        const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-link-" });
+        const source = yield* createFixtureSource(home);
+        const liveState = path.dirname(source);
+        yield* fs.symlink(liveState, path.join(elsewhere, "link"));
+        yield* fs.makeDirectory(path.join(liveState, "existing"));
+        yield* fs.symlink(path.join(liveState, "existing"), path.join(elsewhere, "into-live"));
+        const liveBefore = yield* fs.readDirectory(liveState);
+
+        for (const baseDir of [
+          liveState,
+          path.join(liveState, "nested"),
+          path.join(elsewhere, "link", "nested"),
+          path.join(elsewhere, "into-live", "nested"),
+        ]) {
+          const error = yield* runMigrateDevDb(
+            { baseDir, source, projects: 1, threadsPerProject: 1 },
+            { sourceHomes: [home] },
+          ).pipe(Effect.flip);
+          assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
+        }
+        // A filesystem that reports no inode still sees through the link.
+        const withoutInodes = yield* runMigrateDevDb(
+          {
+            baseDir: path.join(elsewhere, "link", "nested"),
+            source,
+            projects: 1,
+            threadsPerProject: 1,
+          },
+          { sourceHomes: [home] },
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            stat: (target) =>
+              fs.stat(target).pipe(Effect.map((info) => ({ ...info, ino: Option.none() }))),
+          }),
+          Effect.flip,
+        );
+        assert.equal(withoutInodes._tag, "MigrateDevDbSharedHomeError");
+        assert.deepEqual(yield* fs.readDirectory(liveState), liveBefore);
+        assert.deepEqual(yield* fs.readDirectory(path.join(liveState, "existing")), []);
+
+        // A home or userdata that does not exist yet is still protected.
+        const absentHome = path.join(elsewhere, "absent-home");
+        for (const baseDir of [absentHome, path.join(absentHome, "userdata", "nested")]) {
+          const error = yield* runMigrateDevDb(
+            { baseDir, source, projects: 1, threadsPerProject: 1 },
+            { sourceHomes: [absentHome] },
+          ).pipe(Effect.flip);
+          assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
+        }
+        assert.isFalse(yield* fs.exists(absentHome));
+
+        // A live userdata that is itself a link, and a differently cased name
+        // where the filesystem ignores case, are the same directory.
+        const linkedHome = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-linked-" });
+        const realState = path.join(elsewhere, "real-userdata");
+        yield* fs.makeDirectory(realState);
+        yield* fs.symlink(realState, path.join(linkedHome, "userdata"));
+        const caseVariant = path.join(home, "USERDATA");
+        for (const baseDir of [
+          path.join(realState, "nested"),
+          ...((yield* fs.exists(caseVariant)) ? [path.join(caseVariant, "nested")] : []),
+        ]) {
+          const error = yield* runMigrateDevDb(
+            { baseDir, source, projects: 1, threadsPerProject: 1 },
+            { sourceHomes: [home, linkedHome] },
+          ).pipe(Effect.flip);
+          assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
+        }
+        assert.deepEqual(yield* fs.readDirectory(realState), []);
+
+        yield* runMigrateDevDb(
+          { baseDir: path.join(home, "dev"), source, projects: 1, threadsPerProject: 1 },
+          { sourceHomes: [home] },
+        );
+      }),
+  );
+
   it.effect.each(["running", "completed"] as const)(
     "seeds a family only after its remote task is finished (%s)",
     (status) =>
@@ -147,7 +266,9 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         );
         assert.deepEqual(
           threads.map((row) => row.thread_id),
-          status === "running" ? [] : ["fork-thread", "stopped-thread"],
+          status === "running"
+            ? ["settled-thread"]
+            : ["fork-thread", "settled-thread", "stopped-thread"],
         );
       }),
   );
@@ -187,7 +308,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         );
         assert.deepEqual(
           threads.map((row) => row.thread_id),
-          pending ? [] : ["fork-thread", "stopped-thread"],
+          pending ? ["settled-thread"] : ["fork-thread", "settled-thread", "stopped-thread"],
         );
       }),
   );
@@ -222,7 +343,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
           assert.deepEqual(
             threads.map((row) => row.thread_id),
-            ["fork-thread", "stopped-thread"],
+            ["fork-thread", "settled-thread", "stopped-thread"],
           );
           const items = yield* sql<{ turn_item_id: string }>`
           SELECT turn_item_id FROM orchestration_v2_projection_turn_items ORDER BY turn_item_id`;
@@ -234,7 +355,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           SELECT stream_id FROM orchestration_events ORDER BY stream_id`;
           assert.deepEqual(
             events.map((row) => row.stream_id),
-            ["fork-thread", "stopped-thread"],
+            ["fork-thread", "settled-thread", "stopped-thread"],
           );
           assert.deepEqual(
             yield* sql`SELECT runtime_request_id FROM orchestration_v2_projection_runtime_requests`,
@@ -245,7 +366,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
-  it.effect("keeps stopped thread families from live projects and clears pending work", () =>
+  it.effect("keeps stopped and settled thread families and clears pending work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -254,7 +375,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const source = yield* createFixtureSource(sourceDir);
 
       const result = yield* runMigrateDevDb(
-        { baseDir: destDir, source, projects: 5, threadsPerProject: 1 },
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 2 },
         { sharedHome: sourceDir },
       );
 
@@ -303,11 +424,11 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       );
       assert.deepStrictEqual(
         kept.threads.map((row) => row.thread_id),
-        ["fork-thread", "stopped-thread"],
+        ["fork-thread", "settled-thread", "stopped-thread"],
       );
       assert.deepStrictEqual(
         kept.events.map((row) => row.stream_id),
-        ["fork-thread", "stopped-thread"],
+        ["fork-thread", "settled-thread", "stopped-thread"],
       );
       assert.deepStrictEqual(
         kept.sessions.map((row) => row.provider_session_id),
@@ -315,7 +436,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       );
       assert.deepStrictEqual(
         kept.reports.map((row) => row.correlation_id),
-        ["corr-stopped-thread"],
+        ["corr-settled-thread", "corr-stopped-thread"],
       );
       assert.deepStrictEqual(kept.leftovers, { auth: 0, tasks: 0, transfers: 0 });
       assert.equal(kept.pending, 1);
@@ -323,7 +444,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 
-  it.effect("never copies a settled thread's rows, and new events append after the source's", () =>
+  it.effect("never copies an archived thread, and new events append after the source's", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-slice-" });
@@ -347,19 +468,45 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         result.databasePath,
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          const [settledRows] = yield* sql<{ count: number }>`
+          const [archivedRows] = yield* sql<{ count: number }>`
             SELECT
-              (SELECT COUNT(*) FROM orchestration_v2_projection_runs WHERE thread_id = 'settled-thread')
-              + (SELECT COUNT(*) FROM orchestration_events WHERE stream_id = 'settled-thread')
-              + (SELECT COUNT(*) FROM remote_reports WHERE correlation_id = 'corr-settled-thread')
+              (SELECT COUNT(*) FROM orchestration_v2_projection_runs WHERE thread_id = 'archived-thread')
+              + (SELECT COUNT(*) FROM orchestration_events WHERE stream_id = 'archived-thread')
               AS count`;
           const [sequence] = yield* sql<{ seq: number }>`
             SELECT seq FROM sqlite_sequence WHERE name = 'orchestration_events'`;
-          return { settledRows: settledRows?.count, sequence: sequence?.seq };
+          return { archivedRows: archivedRows?.count, sequence: sequence?.seq };
         }),
       );
-      assert.equal(copied.settledRows, 0);
+      assert.equal(copied.archivedRows, 0);
       assert.equal(copied.sequence, sourceSequence?.seq);
+    }),
+  );
+
+  it.effect("skips a thread family larger than the per-project limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-family-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-family-dest-" });
+      const source = yield* createFixtureSource(sourceDir);
+
+      // stopped-thread and its fork are 2 threads; settled-thread is 1.
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 1 },
+        { sharedHome: sourceDir },
+      );
+      const threads = yield* withDatabase(
+        result.databasePath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return yield* sql<{ thread_id: string }>`
+            SELECT thread_id FROM orchestration_v2_projection_threads`;
+        }),
+      );
+      assert.deepStrictEqual(
+        threads.map((row) => row.thread_id),
+        ["settled-thread"],
+      );
     }),
   );
 
@@ -529,11 +676,11 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           )`;
           yield* sql`INSERT INTO dev_snapshot_snippets (snippet_id, thread_id) VALUES
             ('kept-snip', 'stopped-thread'),
-            ('dropped-snip', 'settled-thread')`;
+            ('dropped-snip', 'archived-thread')`;
           yield* sql`INSERT INTO dev_snapshot_snippet_refs (ref_id, snippet_id) VALUES
             ('kept-ref', 'kept-snip'),
             ('dropped-ref', 'dropped-snip')`;
-          // Self-reference: a kept thread's step points at a settled thread's step,
+          // Self-reference: a kept thread's step points at an archived thread's step,
           // and the following step points at that. The insert predicate skips
           // self-references, so enforcement during the copy used to fail here.
           yield* sql`CREATE TABLE dev_snapshot_steps (
@@ -544,7 +691,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           yield* sql`INSERT INTO dev_snapshot_steps (step_id, prev_step_id, thread_id) VALUES
             ('kept-step', NULL, 'stopped-thread'),
             ('mid-step', 'kept-step', 'stopped-thread'),
-            ('dropped-step', NULL, 'settled-thread'),
+            ('dropped-step', NULL, 'archived-thread'),
             ('link-step', 'dropped-step', 'stopped-thread'),
             ('tail-step', 'link-step', 'stopped-thread')`;
         }),
@@ -723,3 +870,68 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 });
+
+// Child processes, so these run live, outside the shared layer.
+it.live.skipIf(isWindows)(
+  "creates a missing worktree home and userdata private under umask 002 and leaves the source alone (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-umask-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const sourceBefore = { bytes: NodeFS.readFileSync(source), mode: permissions(source) };
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(permissions(baseDir), 0o700);
+      assert.equal(permissions(NodePath.join(baseDir, "userdata")), 0o700);
+      assert.deepEqual(NodeFS.readFileSync(source), sourceBefore.bytes);
+      assert.equal(permissions(source), sourceBefore.mode);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(isWindows)(
+  "removes group and other write from an existing userdata and says so (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-writable-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+      const stateDir = NodePath.join(baseDir, "userdata");
+      NodeFS.mkdirSync(stateDir, { recursive: true });
+      NodeFS.chmodSync(baseDir, 0o775);
+      NodeFS.chmodSync(stateDir, 0o775);
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(permissions(stateDir), 0o755);
+      assert.include(child.stdout, `Removed group and other write permission from ${stateDir}`);
+      // Only the userdata it rebuilds: --base-dir may be any directory.
+      assert.equal(permissions(baseDir), 0o775);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(isWindows)(
+  "refuses a symlinked userdata before touching the database it points at (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-symlink-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const target = yield* createFixtureSource(NodePath.join(root, "elsewhere"));
+      const targetBefore = NodeFS.readFileSync(target);
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+      NodeFS.mkdirSync(baseDir, { recursive: true });
+      NodeFS.symlinkSync(NodePath.dirname(target), NodePath.join(baseDir, "userdata"));
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.notEqual(child.status, 0);
+      assert.include(child.stdout + child.stderr, "is a symlink");
+      assert.deepEqual(NodeFS.readFileSync(target), targetBefore);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);

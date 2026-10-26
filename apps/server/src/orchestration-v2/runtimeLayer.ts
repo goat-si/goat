@@ -1,4 +1,5 @@
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -142,6 +143,7 @@ const layerCommandOutputHubProvided = CommandOutputHub.layer.pipe(
 
 const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
   Layer.provide(AdapterInfrastructure.layerMemoryAdmission),
+  Layer.provide(PermissionProfiles.layer),
   Layer.provide(
     Layer.mergeAll(
       layerCommandOutputHubProvided,
@@ -367,6 +369,9 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
 export const layer = Layer.mergeAll(
   layerCommandOutputHubProvided,
   layerOrchestratorProvided,
+  // Exported (same memoized reference the event sink and thread management build from) so
+  // MCP services that resolve the receipt store per call find it in the server runtime.
+  layerCommandReceiptStoreProvided,
   layerMcpAppRequestsProvided,
   layerThreadManagementProvided,
   layerEffectWorkerProvided,

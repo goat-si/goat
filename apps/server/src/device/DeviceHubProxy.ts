@@ -61,8 +61,8 @@ const DROPPED_REQUEST_HEADERS = new Set([
   "dpop",
   "content-length",
   "accept-encoding",
-  // Describes the client's HTTPS hop to T3. The hub builds its own origin from it and then
-  // rejects the loopback Origin set below, so every mutation fails over T3 Connect.
+  // Describes the client's HTTPS hop to GOAT. The hub builds its own origin from it and then
+  // rejects the loopback Origin set below, so every mutation fails over GOAT Connect.
   "x-forwarded-proto",
 ]);
 
@@ -137,7 +137,7 @@ const proxyHttp = Effect.fn("DeviceHubProxy.proxyHttp")(function* (
   const response = yield* httpClient.execute(upstreamRequest);
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(response.headers)) {
-    // A cookie from an upstream such as an EAS session's preview host would land on T3's origin.
+    // A cookie from an upstream such as an EAS session's preview host would land on GOAT's origin.
     if (
       name === "content-encoding" ||
       name === "transfer-encoding" ||

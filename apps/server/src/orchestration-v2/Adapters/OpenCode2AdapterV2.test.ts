@@ -56,9 +56,10 @@ import {
   OPENCODE_2_STILL_STOPPING,
   OPENCODE_PROVIDER,
   goatMcpServerName,
+  openCode2DurableVersion,
 } from "@goat/provider-opencode/testing";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
+import { noMcpInstructions, openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import { makeProviderReplayGate, type ProviderReplayGate } from "@goat/provider-testing/replayGate";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
@@ -79,20 +80,25 @@ const event = (
   type: string,
   data: Record<string, unknown>,
   label?: string,
-): ProviderReplayEntry => ({
-  type: "emit_inbound",
-  frame: {
-    type: "sdk.event",
-    event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
-  },
-  ...(label === undefined ? {} : { label }),
-});
-const durable = { durable: { aggregateID: SESSION, seq: 1, version: 1 } };
+): ProviderReplayEntry => {
+  const version = openCode2DurableVersion(type);
+  const durable =
+    version === undefined ? {} : { durable: { aggregateID: SESSION, seq: 1, version } };
+  return {
+    type: "emit_inbound",
+    frame: {
+      type: "sdk.event",
+      event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
+    },
+    ...(label === undefined ? {} : { label }),
+  };
+};
 
 const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
   { action: "goat-*", resource: "*", effect: "deny" },
   { action: "goat-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
+  { action: "cua-driver-*", resource: "*", effect: "deny" },
 ];
 const goatRules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 const TITLE = "Prime check";
@@ -751,6 +757,71 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // OpenCode types an empty balance as provider.quota too, but answers it with
+  // HTTP 402 and it never resets. Usage windows and budgets arrive as 429.
+  it.effect.each([
+    {
+      name: "an out-of-funds provider.quota (402)",
+      failureClass: "provider_error",
+      error: {
+        type: "provider.quota",
+        message: "Upstream request failed: Insufficient account funds",
+        status: 402,
+      },
+    },
+    {
+      name: "a provider.quota usage window (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.quota",
+        message: "Subscription quota exceeded.",
+        status: 429,
+        response: {
+          body: JSON.stringify({
+            type: "error",
+            error: { type: "GoUsageLimitError", message: "Subscription quota exceeded." },
+          }),
+        },
+      },
+    },
+    {
+      name: "a provider.quota account budget (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.quota",
+        message: "Upstream request failed: Account budget exceeded",
+        status: 429,
+      },
+    },
+    {
+      name: "a provider.rate-limit failure (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.rate-limit",
+        message: "Rate limit exceeded: free-models-per-min.",
+        status: 429,
+      },
+    },
+  ] as const)("classifies $name as $failureClass", ({ error, failureClass }) =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        event("session.execution.failed", { sessionID: SESSION, error }),
+      ]);
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      yield* runtime.startTurn(turnInput(thread));
+      const ended = yield* Fiber.join(terminal);
+      assert.equal(ended?.status, "failed");
+      assert.deepEqual(ended?.failure, {
+        class: failureClass,
+        code: error.type,
+        message: error.message,
+        retryable: null,
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("ends the turn when its terminal event is one this build cannot decode", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -1050,26 +1121,15 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  const returnedRunning = (id: string): ProviderReplayEntry => ({
-    type: "emit_inbound",
-    frame: {
-      type: "sdk.event",
-      event: {
-        id: `evt_toolsuccess_${id}`,
-        created: 1,
-        type: "session.tool.success",
-        data: {
-          sessionID: SESSION,
-          assistantMessageID: "msg_assistant",
-          id,
-          content: [{ type: "text", text: "The subagent is working in the background." }],
-          metadata: { sessionID: CHILD, status: "running" },
-          executed: true,
-        },
-        durable: { aggregateID: SESSION, seq: 1, version: 2 },
-      },
-    },
-  });
+  const returnedRunning = (id: string) =>
+    event("session.tool.success", {
+      sessionID: SESSION,
+      assistantMessageID: "msg_assistant",
+      id,
+      content: [{ type: "text", text: "The subagent is working in the background." }],
+      metadata: { sessionID: CHILD, status: "running" },
+      executed: true,
+    });
   const callAgain = (input: Record<string, unknown>): ReadonlyArray<ProviderReplayEntry> => {
     const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-again" };
     return [
@@ -2407,7 +2467,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.instructions.entry.put", {
           sessionID: SESSION,
           key: "goat",
-          value: buildRuntimeInstructions({ harness: "OpenCode", model: bigPickle.model }),
+          value: noMcpInstructions(bigPickle.model),
         }),
         reply("session.instructions.entry.put", null),
         ...turn,
@@ -2450,6 +2510,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
               { action: "t3-code-*", resource: "*", effect: "deny" },
               { action: "goat-*", resource: "*", effect: "deny" },
               { action: `${server}_*`, resource: "*", effect: "allow" },
+              { action: "cua-driver-*", resource: "*", effect: "deny" },
             ],
           }),
         ),
@@ -2528,6 +2589,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           { action: "t3-code-*", resource: "*", effect: "deny" },
           { action: "goat-*", resource: "*", effect: "deny" },
           { action: `${ownerServer}_*`, resource: "*", effect: "allow" },
+          { action: "cua-driver-*", resource: "*", effect: "deny" },
         ];
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         yield* sessions.set({
@@ -2609,6 +2671,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
                     { action: "t3-code-*", resource: "*", effect: "deny" },
                     { action: "goat-*", resource: "*", effect: "deny" },
                     { action: `${server}_*`, resource: "*", effect: "allow" },
+                    { action: "cua-driver-*", resource: "*", effect: "deny" },
                   ],
                 }),
               ),
@@ -2743,9 +2806,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           text: [
             index === 0 ? "What is in this image?" : "And this one?",
             `[Attached image "${attachment.name}" is saved at: ${path}]`,
-            `[Attached image "missing.png" is saved at: ${attachmentsDir}/${missing.id}.png]`,
-            `[Attached image "diagram.svg" is saved at: ${attachmentsDir}/${unsupported.id}.svg]`,
-            `[Attached file "requirements.pdf" is saved at: ${attachmentsDir}/${document.id}.pdf]`,
+            `[Attached image "missing.png" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: missing })}]`,
+            `[Attached image "diagram.svg" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: unsupported })}]`,
+            `[Attached file "requirements.pdf" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: document })}]`,
           ].join("\n\n"),
         });
         if (external) {
@@ -3543,12 +3606,14 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         }),
       ]);
       const turns: Array<OrchestrationV2ProviderTurn> = [];
+      const firstEnded = yield* Deferred.make<void>();
       const bothEnded = yield* Deferred.make<void>();
       yield* runtime.events.pipe(
         Stream.tap((event) =>
           Effect.gen(function* () {
             if (event.type === "provider_turn.updated" && event.providerTurn.status !== "running") {
               turns.push(event.providerTurn);
+              if (turns.length === 1) yield* Deferred.succeed(firstEnded, undefined);
               if (turns.length === 2) yield* Deferred.succeed(bothEnded, undefined);
             }
           }),
@@ -3557,9 +3622,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         Effect.forkScoped,
       );
       yield* runtime.startTurn(turnInput(thread));
-      yield* Effect.gen(function* () {
-        while (turns.length === 0) yield* Effect.yieldNow;
-      });
+      yield* Deferred.await(firstEnded);
       yield* runtime.startTurn(secondTurn(thread));
       yield* Deferred.await(bothEnded);
       const [first, second] = turns;
@@ -3752,6 +3815,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             { action: "t3-code-*", resource: "*", effect: "deny" },
             { action: "goat-*", resource: "*", effect: "deny" },
             { action: "goat-7c81f4ba96860743_*", resource: "*", effect: "allow" },
+            { action: "cua-driver-*", resource: "*", effect: "deny" },
           ],
         }),
         reply("session.update", null),
@@ -4775,6 +4839,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const last = items.at(-1);
       assert.equal(last?.type === "dynamic_tool" ? last.toolName : null, name);
       assert.deepEqual(last?.type === "dynamic_tool" ? last.input : null, input);
+      assert.equal(last?.type === "dynamic_tool" ? last.output : null, "Reviewed");
     }).pipe(Effect.scoped),
   );
 

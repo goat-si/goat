@@ -48,9 +48,9 @@ Concretely:
 4. **Ranges, not versions.** A client speaks one orchestration protocol. A server
    serves a range and advertises it. The client connects when the range includes
    its protocol; otherwise exactly one side is named as the one to update.
-5. **Permissions are the existing scopes**, enforced at execution, with
-   disruption gated by idleness or an explicit human confirmation, and every
-   request journaled with its actor.
+5. **Permissions are checked at execution** through existing scopes or a thread’s
+   goatclaw profile for host preparation. Disruption is gated by idleness or an
+   explicit human confirmation, and every update request is journaled with its actor.
 
 ## Options considered
 
@@ -199,9 +199,11 @@ needs a person's confirmation bound to that environment and target.
   then a recorded newer install beats it.
 - **Cleanup** follows Zed after a successful SSH launch/attach under the replacement
   lock, outside installs, drains and rollback windows: delete only proven older,
-  unused versions, preserving live, retained, requested and the newest older rollback
-  build. Unknown ordering or incomplete process inspection preserves the directory;
-  unsupported hosts keep everything. Victims are renamed into sibling trash directories
+  unused versions, preserving live, retained, requested and one rollback build, the
+  proven-older build installed last. Keeping every build whose order against the others
+  was unknown let dev hosts collect dozens of versions, so only order against the live
+  build is required. Unknown ordering against the live build or incomplete process
+  inspection preserves the directory. Victims are renamed into sibling trash directories
   before deletion; cleanup errors only log and never fail the connection.
 
 ### Where hosts get the runtime
@@ -283,7 +285,7 @@ means pairing with explicit scopes. GOAT adds no administrator role.
 | Paired desktop, web, or mobile                            | R                       | M                                                          | M and a confirmation                     | W                           |
 | Owning SSH client (saved key)                             | R                       | Idle refresh of a runtime it owns; M for the manual update | M and a confirmation                     | Never changed by connecting |
 | MCP agent                                                 | R                       | M, `when_idle`                                             | Only after a person approves the handoff | Not through update tools    |
-| Linked host, T3 Connect route                             | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
+| Linked host, GOAT Connect route                           | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
 
 Rules that hold for every row:
 
@@ -294,15 +296,19 @@ Rules that hold for every row:
   holds for the launcher path as it already did for SSH drain. Pressing Update in
   a GOAT app is that confirmation (`confirmReplacement`); requests that omit it,
   from older clients or automation, are refused while the server is busy.
-- **No self-approval.** An agent can request an immediate update but cannot approve
-  it; the handoff names the host and target, and the approver's grant is
-  rechecked when it runs.
+- **No self-approval.** A live, writable goatclaw thread in full-access/default modes
+  may prepare a pinned SSH host when its enabled profile grants `hub.manage` for
+  that host. Its credential, modes and profile are checked at admission and again
+  before the job runs; preparation never confirms replacement. Other callers still
+  need `environment:maintain`. Idle runtime updates keep their existing authorization. An agent can
+  request an immediate update but cannot approve it; the handoff names the host
+  and target, and the approver's grant is rechecked when it runs.
 - **Never downgrade.** No caller can move a server to an older build through
   these paths. A newer or unowned runtime blocks replacement.
 - **Organization policy wins.** A managed setting that disables updates beats
   every row. An app that cannot write its bundle is not evidence of such a policy
   and does not stop server updates.
-- **Linking grants nothing new.** Linking a host or routing through T3 Connect
+- **Linking grants nothing new.** Linking a host or routing through GOAT Connect
   changes reachability, not authority. SSH runtime updates are not host-routable.
 
 ### Audit
@@ -353,11 +359,13 @@ update with its own migration check, never a stale client reconnecting.
 
 ## Server auto-update
 
-Launcher-managed servers enable `automaticServerUpdates` by default. The root parks
-at activation, checks after 10 minutes, then every six hours. Only publishable
-stable and nightly builds participate, always on their own channel. Desktop-managed
-and foreground servers and dev, PR and preview builds never do. The newest target must be strictly
-newer and differ from the launcher's last failed or rolled-back target.
+Launcher-managed servers and client-launched SSH runtimes enable
+`automaticServerUpdates` by default. The root parks at activation, checks after 10
+minutes, then every six hours. Only publishable stable and nightly builds participate,
+always on their own channel. Desktop-managed and foreground servers and dev, PR and
+preview builds never do. The newest target must be strictly newer and differ from the
+last failed or rolled-back target. Both paths share `autoUpdatePolicy.ts`; only
+activation and the failed-target record differ.
 
 A release without a valid publication time is ineligible. SHA-256 of
 `environmentId:targetVersion`, taking the first four bytes as an unsigned big-endian
@@ -367,12 +375,66 @@ the window determines eligibility, so retries and restarts never move a server
 into an earlier cohort.
 
 Preparation uses the same checksum verification and preflight as manual updates.
-Activation calls `ServerSelfUpdate.update` with actor `auto-update` and without
-`confirmReplacement`, retaining both idle checks and admission closure. Busy
+Under the launcher, activation calls `ServerSelfUpdate.update` with actor `auto-update`
+and without `confirmReplacement`, retaining both idle checks and admission closure, and
+the launcher's last update record is the failed-target memory. Busy
 activation retries every 10 minutes using the installed runtime; it does not
 redownload. Opt-out is checked again before activation. Discovery or preparation
 failure logs and waits for the next six-hour check. The scheduler shares the manual
 updater's in-flight guard and never creates a second replacement path.
+
+### Client-launched SSH runtimes
+
+A runtime started by `run-t3.sh` updates itself when its launch records
+(`~/.goat/ssh-launch/runtime/pid` and `managed`) name its own process and it runs in
+the default `~/.goat` home. Windows hosts take part when Git for Windows bash is
+found (the OpenSSH DefaultShell or a standard install path) and otherwise stay
+client-driven. Preparation runs the same host download a
+client would, verified against `SHA256SUMS`, checks the executable against its install
+record, and runs `__service-preflight`. Activation checks idle, then runs the owning
+launch script in its own session with the target release as the requested version.
+The script checks the candidate against the protocol the target binary reports. The
+runtime only moves to a target whose protocol it already serves, so the script takes
+its idle-only refresh path and the target's supervisor accepts this version again on
+rollback. A release that changes the protocol is left to clients: a client on that
+release finds the runtime incompatible and replaces it as before. The script holds the host replacement lock, checks idle again, drains (which
+closes admission) and starts the ADR-0013 supervisor. The drain stops this server, so
+nothing in it can interrupt the swap. A busy check, a cancelled drain, or a client
+holding the lock retries in 10 minutes.
+
+On Windows, PowerShell 5.1 compiles the command supervisor before Node detaches its
+executable: detaching PowerShell itself can exit successfully without running its
+script. The executable owns a kill-on-close Job Object before starting Git Bash.
+It stays alive while descendants hold command output, even if Bash exits
+first. Timeout and cancellation terminate that supervisor through its retained native
+process handle, so cleanup neither depends on a live parent PID nor selects a reused
+PID. The replacement supervisor and server use the existing WMI detached launch,
+outside the command job, and survive the updater's exit.
+
+Cleanup initially belongs to the supervisor's job without holding its handle, so timeout
+or interruption also stops cleanup before readiness. After cleanup acknowledges its retained
+supervisor handle, it receives a non-inheritable job handle. It can then remove the exact helper
+directory after supervisor exit, even when the original server drained first; its own exit
+closes the final job handle and stops any remaining descendants. Unlaunched preparation
+remains the original caller's responsibility.
+
+The supervisor writes `last-replacement.json` (status, target, previous version) in the
+launch state directory for every swap it runs. A `rolled-back` or `failed` record is the
+failed-target memory, so it covers swaps started by clients as well, and it survives the
+rollback because the restored server reads the file the supervisor wrote.
+
+Clients sharing a runtime hold no lock or lease. A new client marks its automatic idle
+refresh of an older runtime with `automatic: true` on the drain request. The runtime
+arbitrates it with `arbitrateAutomaticTargets` against its own prepared target and
+answers `cancelled` without draining unless the request is the newest same-channel,
+strictly newer, never-failed candidate, and while `automaticServerUpdates` is off it
+drops every marked request. Manual and confirmed updates, incompatible
+replacements, and requests from older clients carry no marker and behave as before,
+so a runtime on a dev build, or an older client moving a runtime to its release, is
+unchanged. Compatibility after an update is still `hostCompatibilityOf`: a runtime newer
+than a client keeps serving it while the client's protocol is in range, and names the
+client as the side to update once it is not. Runtimes without `drainRestart` stay
+attach-only because the launch script refuses to drain them.
 
 ## Migration plan
 
@@ -386,7 +448,8 @@ updater's in-flight guard and never creates a second replacement path.
    so it can update without the app, preserving its identity, data, and port
    (this also narrows issue #1, where the desktop and SSH servers on one host are
    separate environments); serve the previous protocol only when a protocol bump
-   needs it. The idle-only service scheduler is implemented as described above.
+   needs it. The idle-only scheduler is implemented as described above, for service
+   installs and client-launched SSH runtimes.
 
 ## Test plan
 

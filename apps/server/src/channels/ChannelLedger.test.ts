@@ -593,6 +593,7 @@ describe("ChannelLedger answer project choices", () => {
           readAt: NOW,
         });
         const created = newTask(accepted.inputId, accepted.conversationId, accepted.bindingId);
+        const taskId = created.task.taskId;
         yield* ledger.completeReception({
           owner: "a",
           inputId: accepted.inputId,
@@ -603,21 +604,20 @@ describe("ChannelLedger answer project choices", () => {
           deliveries: [],
           now: NOW,
         });
+        const commit = (spec: ChannelTaskEventSpec) =>
+          ledger.getTask(taskId).pipe(Effect.flatMap((s) => commitTransition(ledger, s!, spec)));
+        const ask = commit({
+          type: "task.question.opened",
+          payload: { question: { questionId: "q" as never, text: "Which project?", askedAt: NOW } },
+        });
         const answer = (text: string, choice?: ChannelAnswerProjectChoice) =>
           Effect.gen(function* () {
-            const stored = (yield* ledger.getTask(created.task.taskId))!;
-            yield* commitTransition(ledger, stored, {
-              type: "task.question.opened",
-              payload: {
-                question: { questionId: "q" as never, text: "Which project?", askedAt: NOW },
-              },
-            });
-            const waiting = (yield* ledger.getTask(created.task.taskId))!;
-            yield* commitTransition(ledger, waiting, {
+            yield* ask;
+            yield* commit({
               type: "task.question.answered",
               payload: { questionId: "q" as never, answer: text },
             });
-            const event = (yield* ledger.recentAnswers(created.task.taskId, 1))[0]!;
+            const event = (yield* ledger.recentAnswers(taskId, 1))[0]!;
             assert.isUndefined(event.payload.projectChoice);
             if (choice !== undefined)
               yield* ledger.recordAnswerProjectChoice({
@@ -630,7 +630,7 @@ describe("ChannelLedger answer project choices", () => {
         const remote = {
           type: "remote",
           host: "studio",
-          projectId: ProjectId.make("remote-p"),
+          projectId: ProjectId.make("remote"),
         } as const;
         const first = yield* answer("P", remote);
         yield* ledger.recordAnswerProjectChoice({
@@ -639,15 +639,15 @@ describe("ChannelLedger answer project choices", () => {
           choice: { type: "none" },
         });
         assert.deepStrictEqual(
-          (yield* ledger.recentAnswers(created.task.taskId, 1))[0]?.payload.projectChoice,
+          (yield* ledger.recentAnswers(taskId, 1))[0]?.payload.projectChoice,
           remote,
         );
         yield* answer("try again", { type: "none" });
         yield* answer("try again", { type: "none" });
-        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(created.task.taskId), remote);
+        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(taskId), remote);
         const unresolved = yield* answer("unknown while offline");
         yield* answer("try again", { type: "none" });
-        assert.isUndefined(yield* ledger.rememberedProjectChoice(created.task.taskId));
+        assert.isUndefined(yield* ledger.rememberedProjectChoice(taskId));
         const lost = yield* Effect.flip(
           ledger.recordAnswerProjectChoice({
             owner: "other",
@@ -661,21 +661,22 @@ describe("ChannelLedger answer project choices", () => {
           eventId: unresolved.eventId,
           choice: { type: "local", projectId: ProjectId.make("local-p") },
         });
-        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(created.task.taskId), {
+        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(taskId), {
           type: "local",
           projectId: ProjectId.make("local-p"),
         });
-        const stored = (yield* ledger.getTask(created.task.taskId))!;
-        yield* commitTransition(ledger, stored, {
-          type: "task.cancelled",
-          payload: { reason: "Restart" },
+        yield* ask;
+        yield* commit({
+          type: "task.moved",
+          payload: { generation: 2, host: "mini", fromHost: "studio", replicaCapturedAt: NOW },
         });
-        yield* commitTransition(ledger, (yield* ledger.getTask(created.task.taskId))!, {
-          type: "task.retry.requested",
-          payload: { generation: 2 },
-        });
-        assert.deepStrictEqual(yield* ledger.recentAnswers(created.task.taskId, 1), []);
-        assert.isUndefined(yield* ledger.rememberedProjectChoice(created.task.taskId));
+        assert.deepStrictEqual(yield* ledger.recentAnswers(taskId, 1), []);
+        assert.isUndefined(yield* ledger.rememberedProjectChoice(taskId));
+        yield* answer("P", remote);
+        yield* commit({ type: "task.cancelled", payload: { reason: "Restart" } });
+        yield* commit({ type: "task.retry.requested", payload: { generation: 3 } });
+        assert.deepStrictEqual(yield* ledger.recentAnswers(taskId, 1), []);
+        assert.isUndefined(yield* ledger.rememberedProjectChoice(taskId));
       }).pipe(Effect.provide(TestLayer)),
   );
 });
@@ -943,6 +944,57 @@ describe("ChannelLedger brief/outcome pairs", () => {
       const page = yield* ledger.exportTasks(range);
       assert.isNull(decodePair(page.jsonl).brief);
       assert.strictEqual(decodePair(page.jsonl).generation, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("scopes an export after a task move to the new generation (#987)", () =>
+    Effect.gen(function* () {
+      const taskId = yield* seed();
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const askAndAnswer = (questionId: string, answer: string) =>
+        Effect.gen(function* () {
+          yield* move(taskId, {
+            type: "task.question.opened",
+            payload: {
+              question: { questionId: questionId as never, text: "Which?", askedAt: NOW },
+            },
+          });
+          yield* move(taskId, {
+            type: "task.question.answered",
+            payload: { questionId: questionId as never, answer },
+          });
+        });
+      const bind = (generation: number) =>
+        move(taskId, {
+          type: "task.worker.bound",
+          payload: {
+            worker: {
+              environmentId: "env-1" as never,
+              threadId: ("worker-" + generation) as never,
+              runId: ("run-" + generation) as never,
+              generation,
+            },
+          },
+        });
+      yield* claim(taskId);
+      yield* bind(1);
+      yield* askAndAnswer("question-1", "dev");
+      yield* askAndAnswer("question-2", "main");
+      yield* move(taskId, {
+        type: "task.moved",
+        payload: { generation: 2, host: "mini", fromHost: "mac-studio", replicaCapturedAt: NOW },
+      });
+      yield* claim(taskId, 2);
+      yield* bind(2);
+      yield* askAndAnswer("question-3", "release");
+      // A cancellation carries no generation, so the export has to derive it across the move.
+      yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+      const line = decodePair((yield* ledger.exportTasks(range)).jsonl);
+      assert.strictEqual(line.generation, 2);
+      assert.strictEqual(line.reruns, 0);
+      assert.strictEqual(line.channelAnswers, 1);
+      assert.strictEqual(line.evidence?.threadId, "worker-2");
+      assert.lengthOf((yield* ledger.answerEventIdsThrough(taskId, line.sequence)).eventIds, 1);
     }).pipe(Effect.provide(TestLayer)),
   );
 });

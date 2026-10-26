@@ -5,6 +5,8 @@
 //   node ci-changes.cjs --paths <file> --full   run every Linux job, gate only the macOS lint
 //   node ci-changes.cjs                         changed paths unknown: run everything
 //
+// scripts/check-changed.ts requires the same decisions so local runs match CI.
+//
 // Every changed path maps to workspace packages, which then pull in their
 // dependents from package.json. A path this file does not recognize runs
 // everything, so a new root file or directory can only cost minutes.
@@ -32,7 +34,7 @@ const RUNS_EVERYTHING = [
 // through relative imports rather than a package.json dependency.
 const EXTRA_OWNERS = [
   // Vite configs and tsconfigs of these apps import scripts/lib directly.
-  [/^scripts\/lib\//, ["@goat/desktop", "@goat/mobile", "@goat/web", "t3"]],
+  [/^scripts\/lib\//, ["@goat/desktop", "@goat/mobile", "@goat/web", "goat"]],
   // scripts/build-desktop-artifact.ts reads the GNOME extension manifest.
   [/^apps\/desktop\/gnome-extension\//, ["@goat/scripts"]],
   [/^native\/browser-secret\//, ["@goat/desktop"]],
@@ -46,11 +48,11 @@ const RUST = /^native\/(resource-monitor|kde-snap-shot|hyprland-snap-shot)\//;
 // third-party-licenses, brand-assets, build-desktop-artifact).
 const TEST_ONLY_DEPS = {
   "@goat/provider-pi": ["@goat/client-runtime"],
-  "@goat/scripts": ["@goat/desktop", "@goat/mobile", "@goat/web", "t3", "@goat/provider-cursor"],
+  "@goat/scripts": ["@goat/desktop", "@goat/mobile", "@goat/web", "goat", "@goat/provider-cursor"],
 };
 // Declared dependencies that only feed a build step: the server bundles the
 // built web app (apps/server/vite.config.ts) but never imports it.
-const BUILD_ONLY_DEPS = { t3: ["@goat/web"] };
+const BUILD_ONLY_DEPS = { goat: ["@goat/web"] };
 
 // Sources scripts/mobile-native-static-check.ts lints, plus the tool and rule
 // configuration that decides how it lints them, plus the root package.json
@@ -59,7 +61,7 @@ const MOBILE_NATIVE =
   /^apps\/mobile\/.*\.(swift|kt|kts)$|^apps\/mobile\/(\.swiftlint\.yml|detekt\.yml|\.editorconfig|Brewfile)$|^scripts\/mobile-native-static-check\.ts$|^package\.json$|^\.github\/workflows\/ci\.yml$|^\.github\/scripts\/ci-changes\.cjs$|^\.github\/actions\/ci-changes\//;
 
 // Jobs that test every package except these, which have jobs of their own.
-const OWN_TEST_JOB = new Set(["t3", "@goat/web", "@goat/monorepo"]);
+const OWN_TEST_JOB = new Set(["goat", "@goat/web", "@goat/monorepo"]);
 
 function readWorkspace() {
   const patterns = [];
@@ -166,12 +168,12 @@ function decide(files, packages, full) {
     affected: [...affected].sort(),
     outputs: {
       typecheck: affected.size > 0,
-      build: has("@goat/desktop") || has("t3") || has("@goat/web"),
+      build: has("@goat/desktop") || has("goat") || has("@goat/web"),
       test: tested.length > 0,
       // Empty means every package the Test job covers.
       test_packages: everything ? "" : tested.map((pkg) => pkg.name).join(" "),
       test_web: has("@goat/web"),
-      test_server: has("t3"),
+      test_server: has("goat"),
       rust: everything || rust,
       release_smoke: scriptsChanged,
       mobile_native: files === null || files.some((file) => MOBILE_NATIVE.test(file)),
@@ -195,4 +197,6 @@ function main() {
   for (const [key, value] of Object.entries(outputs)) console.log(`${key}=${value}`);
 }
 
-main();
+module.exports = { readWorkspace, decide };
+
+if (require.main === module) main();

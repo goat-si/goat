@@ -14,12 +14,12 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
-// SSH launches (`goat_ssh_thread_launch`, the desktop's SSH connect) run a
-// headless `goat serve --base-dir ~/.goat` that outlives any client, while
-// this app runs its own server on ~/.goat/desktop. Both stay where they are:
-// the headless server keeps the SSH work alive when the app quits, and its
-// database is never moved or merged. This service attaches that server as a
+// SSH clients use this app's own server while it runs (structure/ssh.md#app-server).
+// SSH work that arrived while the app was closed started a headless
+// `goat serve --base-dir ~/.goat` instead, which keeps running and whose database
+// is never moved or merged. This service attaches that server as a
 // desktop-local environment, so the threads it holds show up here.
 //
 // Its session is issued by the headless server's own runtime binary, never by
@@ -61,7 +61,7 @@ export interface HeadlessServerRuntime {
  * one this app can attach: a non-loopback origin, or no exact version naming
  * the runtime binary that can issue its sessions.
  */
-export function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerRuntime> {
+function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerRuntime> {
   return Option.flatMap(decodeRuntimeRecord(text), (record) => {
     if (
       !Number.isSafeInteger(record.pid) ||
@@ -118,8 +118,14 @@ export class DesktopHeadlessServer extends Context.Service<
   }
 >()("@goat/desktop/backend/DesktopHeadlessServer") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
-export const make = Effect.gen(function* () {
+/**
+ * Builds the service. `attachEnabled` is read on every poll: a person can turn the headless
+ * server off on this Mac (Settings > Connections), which detaches it and stops issuing sessions
+ * until they turn it back on. It never stops the server, which SSH clients may still use.
+ */
+export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (options: {
+  readonly attachEnabled: Effect.Effect<boolean>;
+}) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -187,6 +193,10 @@ export const make = Effect.gen(function* () {
   const serialized = yield* Semaphore.make(1);
   const refresh = Effect.gen(function* () {
     if (!enabled) return;
+    if (!(yield* options.attachEnabled)) {
+      yield* Ref.set(attached, Option.none());
+      return;
+    }
     const runtime = yield* fs.readFileString(runtimeFile).pipe(
       Effect.map(parseHeadlessServerRuntime),
       Effect.orElseSucceed(() => Option.none<HeadlessServerRuntime>()),
@@ -249,6 +259,14 @@ export const make = Effect.gen(function* () {
         })),
       ),
     ),
+  });
+});
+
+/** @public Service construction is part of the canonical Effect module API. */
+export const make = Effect.gen(function* () {
+  const settings = yield* DesktopAppSettings.DesktopAppSettings;
+  return yield* makeWith({
+    attachEnabled: settings.get.pipe(Effect.map((value) => value.headlessServerAttachEnabled)),
   });
 });
 

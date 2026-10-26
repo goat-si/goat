@@ -2,7 +2,8 @@
 # `git worktree add` runs post-checkout inside the new checkout with an all-zero previous HEAD.
 # Set that checkout up like the goat.json Setup Worktree action, so a worktree made by any tool
 # (GOAT, Codex, an agent running git) has dependencies when the command returns.
-# GOAT_WORKTREE_SETUP=0 skips it. A failed setup never fails the checkout.
+# GOAT_WORKTREE_SETUP=0 skips it; GOAT sets it for thread worktrees, where it runs the same
+# setup as a visible launch step. A failed setup never fails the checkout.
 [ "$1" = 0000000000000000000000000000000000000000 ] || exit 0
 [ "${GOAT_WORKTREE_SETUP:-}" != 0 ] || exit 0
 [ -z "${CI:-}" ] || exit 0

@@ -14,6 +14,7 @@ import * as NodeEvents from "node:events";
 import * as NodeHttp from "node:http";
 
 import { buildNpmLauncher } from "./build-npm-launcher.ts";
+import { verifyNpmLauncherTarball } from "./lib/release-verify.ts";
 
 const VERSION = "1.2.3";
 const decodeManifest = Schema.decodeEffect(
@@ -46,11 +47,14 @@ const run = Effect.fn("test.run")(function* (
 }, Effect.scoped);
 
 /** A release archive for this host with a stub `goat` that echoes its args and launcher. */
-const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (root: string) {
+const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
+  root: string,
+  version = VERSION,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const key = `${yield* HostProcess.Platform}-${yield* HostProcess.Architecture}`;
-  const stem = `goat-${VERSION}-${key}`;
+  const stem = `goat-${version}-${key}`;
   const archiveName = `${stem}.tar.gz`;
   yield* fs.makeDirectory(path.join(root, "release", stem, "node_modules/native"), {
     recursive: true,
@@ -70,9 +74,9 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (root: str
   const requests: Array<string> = [];
   const server = NodeHttp.createServer((request, response) => {
     requests.push(request.url ?? "");
-    if (request.url === `/v${VERSION}/SHA256SUMS`) {
+    if (request.url === `/v${version}/SHA256SUMS`) {
       response.end(`${checksum}  ${archiveName}\n`);
-    } else if (request.url === `/v${VERSION}/${archiveName}`) {
+    } else if (request.url === `/v${version}/${archiveName}`) {
       response.writeHead(200, { "Content-Length": archive.length }).end(archive);
     } else {
       response.writeHead(404).end();
@@ -100,6 +104,119 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (root: str
 
 it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "npm installs and updates both GOAT commands in the original isolated prefix without a registry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-npm-install-" });
+        const prefix = path.join(root, "custom prefix");
+        const env = {
+          PATH: process.env.PATH,
+          HOME: path.join(root, "user"),
+          GOAT_HOME: path.join(root, "home"),
+          NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"),
+          NPM_CONFIG_GLOBALCONFIG: path.join(root, "global-npmrc"),
+          NPM_CONFIG_CACHE: path.join(root, "npm-cache"),
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:1",
+        };
+        for (const version of [VERSION, "1.2.4-nightly.20261024.1"]) {
+          const stage = path.join(root, version);
+          yield* fs.makeDirectory(stage);
+          const built = yield* buildNpmLauncher({ version, outputDir: path.join(stage, "out") });
+          const release = yield* serveFakeRelease(stage, version);
+          const installed = yield* run(
+            "npm",
+            [
+              "--prefix",
+              prefix,
+              "install",
+              "--global",
+              "--offline",
+              "--ignore-scripts",
+              "--no-audit",
+              "--no-fund",
+              built.tarball,
+            ],
+            { cwd: root, env },
+          );
+          assert.equal(installed.exitCode, 0, installed.stderr);
+          const launcherEnv = { ...env, GOAT_RELEASE_BASE_URL: release.baseUrl };
+          for (const command of ["goat", "t3"]) {
+            const result = yield* run(path.join(prefix, "bin", command), ["--version"], {
+              cwd: root,
+              env: launcherEnv,
+            });
+            assert.equal(result.exitCode, 7, result.stderr);
+            assert.include(result.stdout, "stub --version launcher=");
+          }
+          assert.include(release.requests.join("\n"), `/v${version}/SHA256SUMS`);
+          assert.equal(
+            (yield* fs.readFileString(
+              path.join(env.GOAT_HOME, "runtime/goat/versions", version, ".install-complete"),
+            )).trim(),
+            version,
+          );
+          const manifest = yield* decodeManifest(
+            yield* fs.readFileString(
+              path.join(prefix, "lib/node_modules/@goat-si/goat/package.json"),
+            ),
+          );
+          assert.equal(manifest.name, "@goat-si/goat");
+          assert.equal(manifest.version, version);
+        }
+      }),
+  );
+
+  it.effect(
+    "release verification rejects tarballs with a foreign name, version, publication flag, bin, or dependencies",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const output = yield* buildNpmLauncher({ version: VERSION, outputDir: root });
+        yield* verifyNpmLauncherTarball(output.tarball, VERSION);
+        const installed = path.join(root, "unpacked");
+        yield* fs.makeDirectory(installed);
+        assert.equal(
+          (yield* run("tar", ["-xzf", output.tarball, "-C", installed], {
+            cwd: root,
+            env: { PATH: process.env.PATH },
+          })).exitCode,
+          0,
+        );
+        const manifestPath = path.join(installed, "package/package.json");
+        const manifest = yield* decodeManifest(yield* fs.readFileString(manifestPath));
+        for (const patch of [
+          { name: "goat" },
+          { name: "t3" },
+          { version: "9.9.9" },
+          { private: false },
+          { bin: { goat: "./dist/foreign.mjs" } },
+          { dependencies: { goat: "*" } },
+          { optionalDependencies: { goat: "*" } },
+          { peerDependencies: { goat: "*" } },
+          { bundledDependencies: ["goat"] },
+          { bundleDependencies: ["goat"] },
+          { scripts: { postinstall: "npm install goat" } },
+        ]) {
+          yield* fs.writeFileString(manifestPath, JSON.stringify({ ...manifest, ...patch }));
+          assert.equal(
+            (yield* run("tar", ["-czf", output.tarball, "-C", installed, "package"], {
+              cwd: root,
+              env: { PATH: process.env.PATH },
+            })).exitCode,
+            0,
+          );
+          assert.equal(
+            (yield* Effect.result(verifyNpmLauncherTarball(output.tarball, VERSION)))._tag,
+            "Failure",
+          );
+        }
+      }),
+  );
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "publishes a launcher that downloads, verifies, caches, and runs the release executable",
     () =>
       Effect.gen(function* () {
@@ -114,10 +231,11 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const manifest = yield* decodeManifest(
           yield* fs.readFileString(path.join(output.packageDir, "package.json")),
         );
-        assert.equal(manifest.name, "goat");
+        assert.equal(manifest.name, "@goat-si/goat");
+        assert.equal(manifest.private, true);
         assert.equal(manifest.version, VERSION);
         assert.deepStrictEqual(manifest.bin, { goat: "./bin/goat.mjs", t3: "./bin/goat.mjs" });
-        assert.isTrue(output.tarball.endsWith("goat.tgz"));
+        assert.isTrue(output.tarball.endsWith("goat-npm.tgz"));
         // Nothing for npm to resolve, so nothing that can lag behind the launcher.
         assert.isUndefined(manifest.dependencies);
         assert.isUndefined(manifest.optionalDependencies);

@@ -871,6 +871,62 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
+  it.effect("drops cancelled OpenCode todos so a finished list completes", () =>
+    Effect.gen(function* () {
+      const nativeEvents = asyncEventStream();
+      const nativeSessionId = "native-opencode-todos";
+      const harness = yield* makeOpenCodeRuntimeHarness("todos", nativeSessionId, {
+        event: {
+          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
+            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
+            return { stream: nativeEvents.stream };
+          },
+        },
+        mcp: { status: async () => ({ data: {} }) },
+        session: {
+          create: async () => ({
+            data: { id: nativeSessionId, time: { created: 1, updated: 1 } },
+          }),
+          promptAsync: async () => ({ data: true }),
+        },
+      });
+      yield* harness.startTurn();
+      const received = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "plan.updated"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "todo.updated",
+          properties: {
+            sessionID: nativeSessionId,
+            todos: [
+              { content: "Write the fix", status: "completed", priority: "high" },
+              { content: "Try another approach", status: "cancelled", priority: "low" },
+              { content: "Add a test", status: "completed", priority: "medium" },
+            ],
+          },
+        }),
+      );
+      const plan = (yield* Fiber.join(received)).flatMap((event) =>
+        event.type === "plan.updated" ? [event.plan] : [],
+      )[0];
+      assert.ok(plan?.kind === "todo_list");
+      assert.deepEqual(
+        plan.steps.map((step) => ({ text: step.text, status: step.status })),
+        [
+          { text: "Write the fix", status: "completed" },
+          { text: "Add a test", status: "completed" },
+        ],
+      );
+      assert.equal(plan.status, "completed");
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("presents OpenCode MCP calls without treating remote tools as local edits", () =>
     Effect.gen(function* () {
       const output =
@@ -2419,6 +2475,109 @@ describe("OpenCodeAdapterV2", () => {
       ),
   );
 
+  it.effect("adds the Cua Driver for the turns that have it and disconnects it after", () =>
+    Effect.gen(function* () {
+      const suffix = "cua-driver";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const nativeEvents = asyncEventStream();
+      const payloads: Array<{ system?: string; messageID: string }> = [];
+      const config = {
+        environmentId: EnvironmentId.make("fixture"),
+        threadId: ThreadId.make(`thread-opencode-${suffix}`),
+        providerSessionId: `session-opencode-${suffix}`,
+        providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
+        endpoint: "http://fixture.invalid/mcp",
+        authorizationHeader: "Bearer cua-fixture",
+        browserToolsAvailable: false,
+      };
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      yield* sessions.set(config);
+      const registrations: Array<{ name: string; config?: unknown }> = [];
+      const disconnects: Array<{ name: string }> = [];
+      // An owned server: an external one cannot be given host stdio servers.
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        suffix,
+        "cua-root",
+        {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          mcp: {
+            add: async (input: { name: string }) => {
+              registrations.push(input);
+              return { data: true };
+            },
+            disconnect: async (input: { name: string }) => {
+              disconnects.push(input);
+              return { data: true };
+            },
+          },
+          session: {
+            create: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            get: async () => ({ data: { id: "cua-root", time: { created: 1, updated: 1 } } }),
+            promptAsync: async (input: { system?: string; messageID: string }) => {
+              payloads.push(input);
+              return { data: true };
+            },
+            abort: async () => ({ data: true }),
+          },
+        },
+        { external: false },
+      );
+      const turn = (text: string) =>
+        Effect.gen(function* () {
+          yield* harness.startTurn(text);
+          const terminal = yield* harness.runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          const messageID = payloads.at(-1)!.messageID;
+          for (const event of [
+            {
+              type: "message.updated",
+              properties: {
+                sessionID: "cua-root",
+                info: { id: messageID, role: "user", time: { created: 1 } },
+              },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "busy" } },
+            },
+            {
+              type: "session.status",
+              properties: { sessionID: "cua-root", status: { type: "idle" } },
+            },
+          ])
+            yield* Effect.promise(() => nativeEvents.push(event));
+          yield* Fiber.join(terminal);
+          return payloads.at(-1)?.system ?? "";
+        });
+      // Enabled after the session opened: the next turn adds the driver.
+      yield* sessions.set({ ...config, cuaDriver });
+      assert.include(yield* turn("first"), "<computer_use>");
+      assert.deepEqual(registrations.at(-1), {
+        name: "cua-driver",
+        config: {
+          type: "local",
+          command: ["/resources/cua-driver", "mcp"],
+          environment: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+        },
+      });
+      assert.include(yield* turn("still attached"), "<computer_use>");
+      assert.equal(registrations.filter((entry) => entry.name === "cua-driver").length, 1);
+      yield* sessions.set(config);
+      assert.notInclude(yield* turn("detached"), "<computer_use>");
+      assert.deepEqual(disconnects, [{ name: "cua-driver" }]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect.each([
     { external: false, withCredential: true },
     { external: true, withCredential: true },
@@ -2609,7 +2768,7 @@ describe("OpenCodeAdapterV2", () => {
         yield* harness.startTurn("ordinary after command");
         assert.equal(refreshes, 1);
         assert.include(prompts[0]?.system ?? "", memoryContextText(wp4Snapshot()));
-        assert.include(prompts[0]?.system ?? "", `read=${change === "replace"}`);
+        assert.equal(/tools: read=true/.test(prompts[0]?.system ?? ""), change === "replace");
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),

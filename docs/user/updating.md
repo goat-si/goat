@@ -8,40 +8,63 @@ notice.
 ## Update everything at once
 
 The update button sits above Settings in the icon bar on the left edge of the
-window; in narrow windows it is at the bottom of the sidebar. It updates every
-connected machine in one step: outdated providers, then servers that are behind, then
-the desktop app you are using. Servers move to the
-version your desktop app is installing, or to your web app's version. A
-background service stays on its current release channel. A remote desktop app
-installs the latest release from its own channel. Hover the button to see what
-it will update: the first line says whether it is a GOAT app update, provider or
-server updates, or everything.
+window; in narrow windows it is at the bottom of the sidebar. Hover it to see
+how many updates each tab holds. Click it to choose what to update in two tabs:
+
+- **App & servers** lists every connected GOAT server that is behind this app,
+  the GOAT runtimes this desktop started over SSH, and this app itself. Servers
+  move to the version your desktop app is installing, or to your web app's
+  version. A background service stays on its current release channel, and a
+  remote desktop app installs the latest release from its own channel.
+- **Runtimes** lists provider CLIs, such as Claude and Codex, on each machine,
+  and on a Hub the managed OpenCodex update.
+
+Each row has a checkbox, and **Update** runs the checked rows of the tab you are
+on. Machines GOAT cannot update are listed under **Skipped** with the reason,
+such as a machine that is offline or needs a manual update. Use the notice or
+**Settings → Connections** for those. Server updates appear only after that
+version's CLI archives and checksums are available in GOAT Releases; desktop apps
+use their own release feed.
+
+For an [npm tarball installation](./install.md#install-with-npm), update the
+launcher by reinstalling the target release's `goat-npm.tgz` from
+https://github.com/goat-si/goat-releases/releases. Use the same npm prefix as the
+original install: `npm --prefix <prefix> install --global <release-tarball-URL>`.
+The npm launcher remains pinned until that reinstall; `goat update` does not
+rewrite npm-owned files. For the latest stable tarball with your default prefix:
+
+```bash
+npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz
+```
+
+Updates never interrupt running threads. A machine with running threads shows
+**waits for idle** and starts once they finish. Remote machines go first, and
+this app restarts last, after its own threads finish and a short countdown. Choose
+**Later** to restart from the update button when you are ready, **Restart now**
+to restart without waiting, or **Stop waiting** to drop the machines still
+waiting from this run.
 
 While it runs, the button widens to show progress. It names a machine that is
 taking longer than usual, and offers **Retry** for a server that failed. Click
-it to see every machine. The desktop app restarts once each server has started
-its own restart, after a short countdown. Choose **Later** to keep working and
-restart from the update button when you are ready. A server still restarting
-finishes on its own, and the button keeps showing it after the desktop app
-restarts.
+it to see every machine. A server still restarting finishes on its own, and the
+button keeps showing it after the desktop app restarts.
 
-Server updates appear only after that version is published to npm. Remote
-desktop apps do not wait for npm. The confirmation lists each machine it skips
-and why, such as a machine that is offline or needs a manual update. Use the
-notice or **Settings → Connections** for those.
+Managed OpenCodex updates run on their own on a Hub, Home first and then each
+Child, while their machines are idle, and sync each machine's models into Codex
+right after it moves. **Update** on the Runtimes tab asks for that check now; a
+release that is still rolling out waits its turn. **Sync OpenCodex** below it
+syncs models without updating.
 
 If a desktop app restarts on its old version, GOAT tells you the update did
 not apply. It does not install that version again on its own, even when another
 device asks. Use the update button on that machine to retry.
 
-The confirmation counts the running threads that the restarts will interrupt,
-and how many can resume afterwards. See **Continue threads after restarts**
-below.
-
 ## Before you update
 
-Server updates restart the connection and can interrupt active agents and
-terminal commands. Saved threads, settings, and project files remain.
+Server updates restart the connection. An update started from **Settings →
+Connections** or an update notice does not wait for idle, so it can interrupt
+active agents and terminal commands. Saved threads, settings, and project files
+remain.
 
 **Settings → General → Continue threads after restarts** is on by default.
 It resumes supported active threads after an update, crash, or machine
@@ -91,18 +114,21 @@ stop an idle runtime GOAT owns, use **Forget host**; remote projects and files s
 
 GOAT (Nightly) downloads each new nightly by itself, and GOAT downloads each
 new stable release. Once an update is downloaded, the app restarts to install
-it when every local server reports that no agent work is running.
+it when every local server reports that no agent work is running, or installs it
+when you quit the app. If the app cannot check for updates, the update button next
+to Settings shows a warning with the reason; click it to check again.
 
 Choose the behaviour in **Settings → General → Update installation**:
 
-- **Restart when idle** (default) installs as soon as all local servers are idle.
+- **Restart when idle** (default) installs as soon as all local servers are idle,
+  or when you quit the app.
 - **Install on quit** waits until you quit the app.
 - **Paused** stops automatic downloads and installs; you can still update from
   the version row.
 
 A server running inside WSL cannot report whether it is idle yet, so while one
-is running, **Restart when idle** does not install. Choose **Install on quit**
-or install from the version row instead. Remote runtimes the app started over
+is running, **Restart when idle** installs only when you quit the app or install
+from the version row. Remote runtimes the app started over
 SSH move to the app's version the next time they are idle; until then the
 connection notice says the runtime will be replaced when its work finishes.
 
@@ -134,9 +160,9 @@ asks before restarting the background service; if you decline, run
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
 
-If you run the server with `npx` rather than an installed `goat`, there is
-nothing to update on the host: stop the server and relaunch it as
-`npx t3@<client-version>` with the same subcommand and options.
+If `goat` is not installed on the host, [install GOAT](./install.md) from its
+release archive first. Then run `goat update <client-version>` and restart
+with the same subcommand and options.
 
 ## If an update fails
 
@@ -158,10 +184,10 @@ directory and pair with the running server.
 at once. Hover it to see which providers it will update. Providers that only
 offer a manual update command are not included.
 
-After a successful provider CLI update, T3 Code refreshes model discovery for
+After a successful provider CLI update, GOAT refreshes model discovery for
 every enabled instance of that provider using its own configuration. Connected
 clients receive the refreshed catalogs automatically. Provider update checks
-must be enabled to download the latest T3 Code model catalog.
+must be enabled to download the latest GOAT model catalog.
 
 Provider updates do not restart running chats. An existing session can keep
 using the previous CLI until it ends. If discovery fails, check the provider
@@ -183,8 +209,9 @@ there before refreshing to find newer versions. The same setting controls whethe
 GOAT downloads model catalog updates, so with it off new models may not appear
 until you enable it and refresh provider status.
 
-Install App Store or Google Play releases as usual. The mobile app can also
-download updates in the background and apply them when you next leave the app.
+GOAT's mobile app has no App Store or Google Play release yet; TestFlight
+installs new TestFlight builds. The mobile app can also download updates in the
+background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the
 update queued for the next suitable moment.

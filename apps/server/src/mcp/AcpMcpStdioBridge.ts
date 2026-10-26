@@ -26,17 +26,21 @@ export class AcpMcpBridgeError extends Error {
   readonly _tag = "AcpMcpBridgeError";
   readonly kind: AcpMcpBridgeErrorKind;
   readonly status: number | undefined;
+  /** The JSON-RPC error code, for an rpc error that has one. */
+  readonly rpcCode: number | undefined;
   constructor(
     message: string,
     options?: {
       readonly cause?: unknown;
       readonly kind?: AcpMcpBridgeErrorKind;
       readonly status?: number;
+      readonly rpcCode?: number;
     },
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.kind = options?.kind ?? "transport";
     this.status = options?.status;
+    this.rpcCode = options?.rpcCode;
   }
 }
 
@@ -89,76 +93,142 @@ export interface AcpMcpToolCallOptions<E = never, R = never> {
   readonly beforeToolCall?: Effect.Effect<void, E, R>;
 }
 
+type FetchImplementation = (url: string, init?: RequestInit) => Promise<Response>;
+
+/** A sender bound to one HTTP MCP session, and the request that ends that session. */
+function makeAcpMcpSender(options: {
+  readonly endpoint: string;
+  readonly authorization: string;
+  readonly fetchImplementation?: FetchImplementation | undefined;
+}) {
+  const fetchImplementation = options.fetchImplementation ?? fetch;
+  let sessionId: string | null = null;
+  let protocolVersion: string | null = null;
+  const headers = () => ({
+    accept: "application/json, text/event-stream",
+    authorization: options.authorization,
+    ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
+    ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
+  });
+
+  const send = Effect.fn("AcpMcpStdioBridge.send")(function* (
+    message: unknown,
+  ): Effect.fn.Return<ReadonlyArray<unknown>, AcpMcpBridgeError> {
+    const response = yield* Effect.tryPromise({
+      // Interrupting the request (a caller's timeout) aborts the HTTP call.
+      try: (signal) =>
+        fetchImplementation(options.endpoint, {
+          method: "POST",
+          signal,
+          headers: { "content-type": "application/json", ...headers() },
+          body: JSON.stringify(message),
+        }),
+      catch: bridgeError,
+    });
+    sessionId = response.headers.get("mcp-session-id") ?? sessionId;
+    if (!response.ok) {
+      yield* discardResponseBody(response);
+      return yield* Effect.fail(
+        new AcpMcpBridgeError(`GOAT MCP endpoint responded with HTTP ${response.status}.`, {
+          kind: "http",
+          status: response.status,
+        }),
+      );
+    }
+    const payloads = yield* Stream.runCollect(responsePayloads(response, bridgeError));
+    for (const payload of payloads) {
+      protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
+    }
+    return payloads;
+  });
+
+  const terminate = Effect.suspend(() =>
+    sessionId === null
+      ? Effect.void
+      : Effect.tryPromise(() =>
+          fetchImplementation(options.endpoint, { method: "DELETE", headers: headers() }),
+        ).pipe(Effect.flatMap(discardResponseBody), Effect.ignore),
+  );
+
+  return { send, terminate };
+}
+
+const initializeAcpMcpSession = Effect.fn("AcpMcpStdioBridge.initialize")(function* (
+  send: ReturnType<typeof makeAcpMcpSender>["send"],
+  clientName: string,
+) {
+  const initializeId = "t3-acp-cli-initialize";
+  const initialized = yield* send({
+    jsonrpc: "2.0",
+    id: initializeId,
+    method: "initialize",
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: clientName, version: "0.0.0" },
+    },
+  });
+  const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
+  if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
+    return yield* Effect.fail(
+      new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", { kind: "protocol" }),
+    );
+  }
+  yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
+});
+
 /** Opens an authenticated HTTP MCP session and returns a sender bound to it. */
 function openAcpMcpSession(options: {
   readonly endpoint: string;
   readonly authorization: string;
-  readonly fetchImplementation?:
-    | ((url: string, init?: RequestInit) => Promise<Response>)
-    | undefined;
+  readonly fetchImplementation?: FetchImplementation | undefined;
 }) {
-  const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
-    let sessionId: string | null = null;
-    let protocolVersion: string | null = null;
-
-    const send = Effect.fn("AcpMcpStdioBridge.send")(function* (
-      message: unknown,
-    ): Effect.fn.Return<ReadonlyArray<unknown>, AcpMcpBridgeError> {
-      const response = yield* Effect.tryPromise({
-        // Interrupting the request (a caller's timeout) aborts the HTTP call.
-        try: (signal) =>
-          fetchImplementation(options.endpoint, {
-            method: "POST",
-            signal,
-            headers: {
-              "content-type": "application/json",
-              accept: "application/json, text/event-stream",
-              authorization: options.authorization,
-              ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
-              ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
-            },
-            body: JSON.stringify(message),
-          }),
-        catch: bridgeError,
-      });
-      sessionId = response.headers.get("mcp-session-id") ?? sessionId;
-      if (!response.ok) {
-        yield* discardResponseBody(response);
-        return yield* Effect.fail(
-          new AcpMcpBridgeError(`GOAT MCP endpoint responded with HTTP ${response.status}.`, {
-            kind: "http",
-            status: response.status,
-          }),
-        );
-      }
-      const payloads = yield* Stream.runCollect(responsePayloads(response, bridgeError));
-      for (const payload of payloads) {
-        protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
-      }
-      return payloads;
-    });
-    const initializeId = "t3-acp-cli-initialize";
-    const initialized = yield* send({
-      jsonrpc: "2.0",
-      id: initializeId,
-      method: "initialize",
-      params: {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: "t3-code-acp-cli", version: "0.0.0" },
-      },
-    });
-    const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
-    if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
-      return yield* Effect.fail(
-        new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", { kind: "protocol" }),
-      );
-    }
-    yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    const { send } = makeAcpMcpSender(options);
+    yield* initializeAcpMcpSession(send, "t3-code-acp-cli");
     return send;
   });
 }
+
+export interface McpToolSessionOptions {
+  readonly endpoint: string;
+  readonly authorization: string;
+  readonly clientName: string;
+  readonly fetchImplementation?: FetchImplementation;
+}
+
+export interface McpToolSession {
+  /** Resolves to the JSON-RPC `result` of `tools/call`, a `CallToolResult`. */
+  readonly call: (
+    tool: string,
+    args: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<unknown, AcpMcpBridgeError>;
+}
+
+/** One initialized MCP session over GOAT's HTTP endpoint, ended when the scope closes. */
+export const mcpToolSession = Effect.fn("AcpMcpStdioBridge.mcpToolSession")(function* (
+  options: McpToolSessionOptions,
+) {
+  const { send, terminate } = makeAcpMcpSender(options);
+  // Registered before the handshake so a session the server opened is ended
+  // even when the handshake fails.
+  yield* Effect.addFinalizer(() => terminate);
+  yield* initializeAcpMcpSession(send, options.clientName);
+  let nextId = 0;
+  return {
+    call: (tool, args) =>
+      Effect.gen(function* () {
+        const id = `goat-cli-${nextId++}`;
+        const responses = yield* send({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: tool, arguments: args },
+        });
+        return yield* requestResult(responses, id, "GOAT MCP tool call");
+      }),
+  } satisfies McpToolSession;
+});
 
 /** The single response to a request sent on an MCP session, or a protocol error. */
 function requestResult(
@@ -168,10 +238,14 @@ function requestResult(
 ): Effect.Effect<unknown, AcpMcpBridgeError> {
   const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
   if (envelope === null || envelope.error !== undefined) {
+    const code = (envelope?.error as { readonly code?: unknown } | undefined)?.code;
     return Effect.fail(
       new AcpMcpBridgeError(
         `${describe} failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
-        { kind: envelope === null ? "protocol" : "rpc" },
+        {
+          kind: envelope === null ? "protocol" : "rpc",
+          ...(typeof code === "number" ? { rpcCode: code } : {}),
+        },
       ),
     );
   }
@@ -317,7 +391,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
     )(
       function* (line: string, envelope: JsonRpcEnvelope) {
         const response = yield* Effect.tryPromise({
-          try: () =>
+          try: (signal) =>
             fetchImplementation(options.endpoint, {
               method: "POST",
               headers: {
@@ -328,6 +402,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
               body: line,
+              signal,
             }),
           catch: bridgeError,
         });
@@ -431,59 +506,25 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
 }
 
 /**
- * Kept free of heavy imports: these commands run on the ACP first-message
- * critical path.
+ * Kept free of heavy imports: it runs on the ACP first-message critical path. `acp-mcp-call`
+ * is `goat call` now (cli/agentSurfaceCli.ts).
  */
-export async function runAcpMcpCliFastPath(
-  command: "acp-mcp-bridge" | "acp-mcp-call",
-  args: ReadonlyArray<string>,
-): Promise<void> {
+export async function runAcpMcpBridgeFastPath(): Promise<void> {
   const endpoint = process.env.GOAT_ACP_MCP_ENDPOINT;
   const authorization = process.env.GOAT_ACP_MCP_AUTHORIZATION;
   if (endpoint === undefined || authorization === undefined) {
     process.stderr.write(
-      `${command} requires GOAT_ACP_MCP_ENDPOINT and GOAT_ACP_MCP_AUTHORIZATION.\n`,
+      "acp-mcp-bridge requires GOAT_ACP_MCP_ENDPOINT and GOAT_ACP_MCP_AUTHORIZATION.\n",
     );
     process.exitCode = 2;
     return;
   }
-  if (command === "acp-mcp-bridge") {
-    await Effect.runPromise(
-      runAcpMcpStdioBridge({
-        endpoint,
-        authorization,
-        input: process.stdin,
-        output: process.stdout,
-      }),
-    );
-    return;
-  }
-  const [tool, argumentsJson] = args;
-  if (tool === undefined || argumentsJson === undefined) {
-    process.stderr.write("acp-mcp-call requires <tool> and <arguments-json>.\n");
-    process.exitCode = 2;
-    return;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(argumentsJson);
-  } catch {
-    process.stderr.write("acp-mcp-call arguments must be valid JSON.\n");
-    process.exitCode = 2;
-    return;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    process.stderr.write("acp-mcp-call arguments must be a JSON object.\n");
-    process.exitCode = 2;
-    return;
-  }
-  const result = await Effect.runPromise(
-    callAcpMcpTool({
+  await Effect.runPromise(
+    runAcpMcpStdioBridge({
       endpoint,
       authorization,
-      tool,
-      arguments: parsed as Record<string, unknown>,
+      input: process.stdin,
+      output: process.stdout,
     }),
   );
-  process.stdout.write(`${JSON.stringify(result)}\n`);
 }

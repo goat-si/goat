@@ -9,7 +9,7 @@ import * as Path from "effect/Path";
  *
  * The Agent SDK sends no stdout until the tool result. Claude Code does write
  * each running command's combined output to
- * `<tmp>/claude-<uid>/<project>/<session_id>/tasks/<task_id>.output`, naming
+ * `<root>/<project>/<session_id>/tasks/<task_id>.output`, naming
  * the task in its `task_started` frame (`task_type: "local_bash"`). This path is
  * Claude Code's private layout, not SDK API, so every step degrades to "no live
  * output": the row still gets its full output from the tool result.
@@ -17,20 +17,26 @@ import * as Path from "effect/Path";
 
 /** How often the file is checked while its command runs. */
 const CLAUDE_TASK_OUTPUT_POLL_MS = 250;
-/** Give up looking for a file Claude Code never wrote (a newer layout, or Windows). */
+/** Give up looking for a file Claude Code never wrote (a newer layout). */
 const MAX_LOCATE_ATTEMPTS = 40;
 /** Bytes read per poll. A faster writer skips ahead: only the tail is shown anyway. */
 const MAX_READ_BYTES = 256 * 1024;
 
-/** Claude Code's per-user temp root, or none where it has no uid (Windows). */
+/**
+ * Claude Code's per-user temp root: `claude-<uid>` under `CLAUDE_CODE_TMPDIR` or `/tmp`
+ * where there is a uid. Windows has none, so Claude Code (2.1.276) uses `claude` under
+ * `CLAUDE_CODE_TMPDIR` or `os.tmpdir()` in its own process, which reads TEMP, then TMP,
+ * from the environment GOAT starts it with.
+ */
 export function claudeTaskOutputRoot(
   environment: Readonly<Record<string, string | undefined>> | undefined,
   path: Path.Path,
+  host: { readonly uid: number | undefined },
 ): string | undefined {
-  const uid = process.getuid?.();
-  if (uid === undefined) return undefined;
-  const base = environment?.CLAUDE_CODE_TMPDIR?.trim() || "/tmp";
-  return path.join(base, `claude-${uid}`);
+  const override = environment?.CLAUDE_CODE_TMPDIR?.trim();
+  if (host.uid !== undefined) return path.join(override || "/tmp", `claude-${host.uid}`);
+  const base = override || environment?.TEMP?.trim() || environment?.TMP?.trim();
+  return base ? path.join(base, "claude") : undefined;
 }
 
 const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {

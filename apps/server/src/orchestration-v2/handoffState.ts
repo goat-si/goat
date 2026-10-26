@@ -1,7 +1,8 @@
 import {
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
   HandoffError,
+  endsWithItsRun,
   isHandoffPending,
-  isProviderHandoffPath,
   type Handoff,
   type HandoffActor,
   type HandoffState,
@@ -22,6 +23,22 @@ export function transitionHandoff(
   runEnded: boolean,
 ) {
   if (!isHandoffPending(record.state)) {
+    // The one exception: a person ends an approved computer use admission before its expiry.
+    if (
+      record.state === "completed" &&
+      state === "cancelled" &&
+      record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+      actor.type === "client" &&
+      (record.expiresAt === null ||
+        DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now))
+    )
+      return Effect.succeed({
+        ...record,
+        state,
+        actor,
+        resolvedAt: now,
+        resolvedBy: actor.label,
+      });
     return record.state === state
       ? Effect.succeed(record)
       : Effect.fail(
@@ -31,10 +48,7 @@ export function transitionHandoff(
   const expired =
     (record.expiresAt !== null &&
       DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
-    (record.kind === "approval" &&
-      !record.target.path.startsWith("ssh.") &&
-      !isProviderHandoffPath(record.target.path) &&
-      runEnded);
+    (endsWithItsRun(record) && runEnded);
   const next = expired ? "expired" : state;
   if (next === "pending" || (next === "expired" && !expired))
     return Effect.fail(new HandoffError({ reason: "conflict" }));

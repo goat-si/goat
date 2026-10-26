@@ -5,6 +5,8 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  globalIdleCompaction,
+  type IdleCompactionMode,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
@@ -19,6 +21,7 @@ import {
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
+  withIdleCompaction,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -292,10 +295,13 @@ function mergeCompletionWebhook(
 
 /**
  * `projectSettingsOverrides` entries otherwise replace whole (see the field's
- * doc comment in contracts), but `providerInstances` was added after clients
- * already round-trip a project's entry on every edit. A client built before
- * that addition sends an entry that never mentions the key, and a whole replace
- * would silently wipe it.
+ * doc comment in contracts), but `providerInstances` and `builtInSkills` were
+ * added after clients already round-trip a project's entry on every edit. A
+ * client built before them sends an entry that never mentions the key, so an
+ * omitted map keeps the stored one. Such a client also sends `null` when it
+ * clears the last override it can see, so `null` keeps a stored
+ * `builtInSkills`; a deleted project's cleanup sends
+ * `PROJECT_SETTINGS_OVERRIDES_REMOVAL` instead.
  */
 function mergeProjectSettingsOverridesPatch(
   current: Readonly<Record<string, ProjectSettingsOverrides>>,
@@ -303,19 +309,29 @@ function mergeProjectSettingsOverridesPatch(
 ): Record<string, ProjectSettingsOverrides> {
   const next = new Map(Object.entries(current));
   for (const [projectId, entry] of Object.entries(patch)) {
-    if (entry === null) {
-      next.delete(projectId);
-      continue;
-    }
-    const storedProviderInstances = current[projectId]?.providerInstances;
-    next.set(projectId, {
-      ...entry,
-      ...(Object.hasOwn(entry, "providerInstances") || storedProviderInstances === undefined
+    const stored = current[projectId];
+    const kept = <K extends "providerInstances" | "builtInSkills">(key: K) =>
+      (entry !== null && Object.hasOwn(entry, key)) || stored?.[key] === undefined
         ? {}
-        : { providerInstances: storedProviderInstances }),
-    });
+        : { [key]: stored[key] };
+    const merged: ProjectSettingsOverrides =
+      entry === null
+        ? kept("builtInSkills")
+        : { ...entry, ...kept("providerInstances"), ...kept("builtInSkills") };
+    if (holdsNoOverride(merged)) next.delete(projectId);
+    else next.set(projectId, merged);
   }
   return Object.fromEntries(next);
+}
+
+/** Nothing set, or only empty per-instance or per-skill maps. */
+function holdsNoOverride(entry: ProjectSettingsOverrides): boolean {
+  return Object.entries(entry).every(
+    ([key, value]) =>
+      value === undefined ||
+      ((key === "providerInstances" || key === "builtInSkills") &&
+        Object.keys(value as object).length === 0),
+  );
 }
 
 export function deriveLegacyProjectOverrides(
@@ -406,6 +422,22 @@ export function assertNoMemoryHubSettingsPatch(patch: unknown): void {
   }
 }
 
+/**
+ * A client from before `idleCompaction` patches the old boolean switch. Turning
+ * it off keeps "Never" rather than reverting to the default.
+ */
+function patchedIdleCompaction(
+  current: ServerSettings,
+  patch: ServerSettingsPatch,
+): IdleCompactionMode {
+  if (patch.idleCompaction !== undefined) return patch.idleCompaction;
+  const legacy = patch.compactIdleThreads;
+  if (legacy === undefined) return globalIdleCompaction(current);
+  if (typeof legacy === "string") return legacy;
+  if (legacy) return "beforeCacheExpires";
+  return globalIdleCompaction(current) === "off" ? "off" : "onReturn";
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
@@ -440,6 +472,8 @@ export function applyServerSettingsPatch(
     completionWebhook: completionWebhookPatch,
     // Per top-level key: deepMerge would keep a fallback chain or host limit the patch removed.
     fleet: fleetPatch,
+    goatclaw: goatclawPatch,
+    hub: hubPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -607,6 +641,8 @@ export function applyServerSettingsPatch(
         }
       : {}),
     ...(fleetPatch !== undefined ? { fleet: { ...current.fleet, ...fleetPatch } } : {}),
+    ...(goatclawPatch !== undefined ? { goatclaw: { ...current.goatclaw, ...goatclawPatch } } : {}),
+    ...(hubPatch !== undefined ? { hub: { ...current.hub, ...hubPatch } } : {}),
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
@@ -671,7 +707,7 @@ export function applyServerSettingsPatch(
     normalizedBackgroundActivity,
   );
   const nextWithReplacements = {
-    ...nextWithReplacementsBase,
+    ...withIdleCompaction(nextWithReplacementsBase, patchedIdleCompaction(current, patch)),
     ...deriveLegacyProjectOverrides(nextWithReplacementsBase),
     backgroundActivity: normalizedBackgroundActivity,
     automaticGitFetchInterval: resolvedBackgroundActivity.automaticGitFetchInterval,

@@ -16,6 +16,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { CLOUD_DELIVERY_REJECTED_CODE } from "@goat/provider-core/server/cloudTask";
 import {
   makeProviderFailure,
@@ -23,6 +24,18 @@ import {
 } from "@goat/provider-core/server/failure";
 import * as Cli from "./cli.ts";
 import type { ClaudeCloudLogin } from "./cli.ts";
+import {
+  confirmedFailure,
+  FOLLOW_UP_ACCEPTED,
+  isShortenedReply,
+  OBSERVATION_WINDOW_MS,
+  observeCloudSession,
+  recoverCloudReply,
+  type Observation,
+  runAnchor,
+  UNKNOWN_RUN,
+  withoutFailureEvidence,
+} from "./observe.ts";
 import {
   ClaudeCloudError,
   isClaudeCloudError,
@@ -32,17 +45,6 @@ import {
 } from "./protocol.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
-const OBSERVATION_WINDOW_MS = 2 * 60 * 60 * 1000;
-const OBSERVATION_INTERVAL_MS = 60_000;
-const RESULT_SUMMARY_LIMIT = 4000;
-const RESULT_LABEL = "Result PR found";
-const RESULT_CAVEAT = "PR presence does not confirm that the session stopped or its checks passed.";
-const resultSummary = (summary: string) =>
-  [
-    RESULT_LABEL,
-    summary.slice(0, RESULT_SUMMARY_LIMIT - RESULT_LABEL.length - RESULT_CAVEAT.length - 2),
-    RESULT_CAVEAT,
-  ].join("\n");
 const CANCEL_REASON =
   "Claude Cloud has no supported CLI cancellation command. Open the cloud session to stop it.";
 export const CLAUDE_CLOUD_CAPABILITIES: OrchestrationV2ProviderCapabilities = {
@@ -148,7 +150,20 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   readonly instanceId: ProviderInstanceId;
   readonly resolveLogin: Effect.Effect<ClaudeCloudLogin, ClaudeCloudError>;
   readonly resolveControlCwd: Effect.Effect<string, ClaudeCloudError>;
+  /** Environment-owned folder under which each session read makes and removes its own folder. */
+  readonly resolveReadRoot: Effect.Effect<string, ClaudeCloudError>;
   readonly runStartedAt: (input: Turn | Attach) => Effect.Effect<DateTime.Utc, ClaudeCloudError>;
+  /**
+   * The run's own message, the messages earlier runs delivered to the same session, and whether
+   * this is the thread's first run on this instance, all from the saved thread.
+   */
+  readonly runHistory: (input: Turn | Attach) => Effect.Effect<
+    {
+      readonly prompt: string | undefined;
+      readonly first: boolean;
+    },
+    ClaudeCloudError
+  >;
   readonly observe: (input: {
     readonly projectId: ProjectId;
     readonly repository: string;
@@ -157,6 +172,23 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
     { readonly prUrl: string; readonly branch: string; readonly summary: string } | null,
     ClaudeCloudError
   >;
+  /**
+   * Folders whose Claude Code trust prompt GOAT answers on its own, and where each answer is
+   * recorded. Without it, a trust prompt rejects the launch.
+   */
+  readonly folderTrust?: {
+    readonly allowed: (cwd: string) => Effect.Effect<boolean>;
+    /**
+     * Answers the folder's trust prompt after Claude refused a launch, sharing one answer per
+     * folder with GOAT's own background trust. Without it, the launch answers in its own Claude.
+     */
+    readonly accept?: (cwd: string) => Effect.Effect<void, ClaudeCloudError>;
+    readonly record: (input: {
+      readonly cwd: string;
+      readonly threadId: Turn["threadId"];
+      readonly prompts: number;
+    }) => Effect.Effect<void>;
+  };
 }) {
   const cli = yield* Cli.ClaudeCloudCli;
   return Adapter.ProviderAdapterV2.of({
@@ -268,6 +300,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
       const settle = Effect.fn("ClaudeCloudAdapter.settle")(function* (
         i: Turn | Attach,
         error?: ClaudeCloudError,
+        resultText?: string,
       ) {
         const at = yield* DateTime.now;
         const turnId = ProviderTurnId.make(`claudeCloud:${options.instanceId}:${i.attemptId}`);
@@ -336,6 +369,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             status: "completed",
             failure: null,
             threadDisposition: "reusable",
+            ...(resultText === undefined ? {} : { resultText }),
           });
       });
       const failObservation = Effect.fn("ClaudeCloudAdapter.failObservation")(function* (
@@ -349,7 +383,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             status: "idle",
             updatedAt: yield* DateTime.now,
             cloudTask: {
-              ...thread.cloudTask,
+              ...withoutFailureEvidence(thread.cloudTask),
               status: error.outcome === "uncertain" ? "unknown" : "failed",
               tracking: "polled",
               error: error.detail,
@@ -363,57 +397,66 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
         if (error.outcome === "uncertain") yield* block(error.detail);
         yield* settle(i, error);
       });
-      const observe = Effect.fn("ClaudeCloudAdapter.observe")(function* (i: Turn | Attach) {
-        const thread = threads.get(i.providerThread.id) ?? i.providerThread;
-        const task = thread.cloudTask!;
-        const started = yield* options.runStartedAt(i);
-        const deadline = DateTime.toEpochMillis(started) + OBSERVATION_WINDOW_MS;
-        let lastReadError: string | undefined;
-        let lastReadCause: unknown;
-        while (true) {
-          const left = deadline - DateTime.toEpochMillis(yield* DateTime.now);
-          if (left <= 0)
-            return yield* new ClaudeCloudError({
-              outcome: "uncertain",
-              detail: `No session-linked PR was confirmed within two hours. The cloud session may still be running.${lastReadError ? ` ${lastReadError}` : ""}`,
-              ...(lastReadCause === undefined ? {} : { cause: lastReadCause }),
-            });
-          const result = yield* options
-            .observe({
-              projectId: i.appThread.projectId,
-              repository: task.source.repository,
-              sessionUrl: task.url!,
-            })
-            .pipe(Effect.timeout(left), Effect.result);
-          if (result._tag === "Success" && result.success !== null) {
-            const at = yield* DateTime.now;
-            const { error: _oldError, ...resultTask } = task;
-            const resultThread = {
-              ...thread,
-              status: "idle" as const,
-              updatedAt: at,
-              cloudTask: {
-                ...resultTask,
-                ...result.success,
-                status: "succeeded" as const,
-                tracking: "polled" as const,
-                progress: "Result PR found",
-                summary: resultSummary(result.success.summary),
-                updatedAt: DateTime.formatIso(at),
-              },
-            };
-            yield* commit(i, resultThread);
-            return;
-          }
-          if (result._tag === "Failure") {
-            lastReadError =
-              "GitHub observation was incomplete; check project source-control access.";
-            lastReadCause = result.failure;
-          }
-          const remaining = deadline - DateTime.toEpochMillis(yield* DateTime.now);
-          if (remaining > 0) yield* Effect.sleep(Math.min(OBSERVATION_INTERVAL_MS, remaining));
-        }
+      const current = (i: Turn | Attach) => threads.get(i.providerThread.id) ?? i.providerThread;
+      const readSession = Effect.fn("ClaudeCloudAdapter.readSession")(function* (i: Turn | Attach) {
+        const ref = current(i).nativeThreadRef;
+        const login = yield* options.resolveLogin;
+        if (!ref?.nativeId || ref.fingerprint !== login.binding)
+          return yield* new ClaudeCloudError({
+            detail: "The sibling Claude login changed, so GOAT will not read the session with it.",
+            outcome: "uncertain",
+          });
+        return yield* cli.readSession(login, yield* options.resolveReadRoot, ref.nativeId);
       });
+      const promptsSeen = new Map<string, number>();
+      const anchor = Effect.fn("ClaudeCloudAdapter.anchor")(function* (
+        i: Turn | Attach,
+        followUp: boolean | undefined,
+      ) {
+        const history = yield* options.runHistory(i).pipe(Effect.result);
+        const made = runAnchor({
+          startedAt: yield* options.runStartedAt(i),
+          history: history._tag === "Success" ? history.success : undefined,
+          followUp,
+          registered: current(i).cloudTask?.attach === "registered",
+          ...("message" in i ? { message: i.message.text } : {}),
+          seen: promptsSeen,
+          key: i.providerThread.id,
+        });
+        return made ?? (yield* new ClaudeCloudError({ detail: UNKNOWN_RUN, outcome: "uncertain" }));
+      });
+      const observe = Effect.fn("ClaudeCloudAdapter.follow")(function* (
+        i: Turn | Attach,
+        followUp: boolean,
+      ) {
+        return yield* observeCloudSession({
+          ...(yield* anchor(i, followUp)),
+          thread: () => current(i),
+          commit: (thread) => commit(i, thread),
+          findPullRequest: () => {
+            const task = current(i).cloudTask;
+            return task?.url
+              ? options.observe({
+                  projectId: i.appThread.projectId,
+                  repository: task.source.repository,
+                  sessionUrl: task.url,
+                })
+              : Effect.fail(
+                  new ClaudeCloudError({
+                    detail: "The saved cloud task has no session link.",
+                    outcome: "uncertain",
+                  }),
+                );
+          },
+          readSession: () => readSession(i),
+        });
+      });
+      const finish = (i: Turn | Attach, outcome: Observation) =>
+        outcome.kind === "replied"
+          ? settle(i, undefined, outcome.text)
+          : outcome.kind === "failed"
+            ? settle(i, outcome.error)
+            : settle(i);
       const run = Effect.fn("ClaudeCloudAdapter.run")(function* (i: Turn) {
         const previousTask = threads.get(i.providerThread.id)?.cloudTask;
         let thread = i.providerThread;
@@ -455,7 +498,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             task &&
             (task.status === "unknown" ||
               (thread.nativeThreadRef &&
-                (task.status === "failed" || task.status === "cancelled")) ||
+                ((task.status === "failed" && !confirmedFailure(task)) ||
+                  task.status === "cancelled")) ||
               (task.status === "submitting" &&
                 (task.progress === "Submitting follow-up" ||
                   (!thread.nativeThreadRef && task.taskId !== i.runId))));
@@ -553,7 +597,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             thread = {
               ...thread,
               cloudTask: {
-                ...prior,
+                ...withoutFailureEvidence(prior),
                 status: "submitting",
                 tracking: "polled",
                 progress: "Submitting follow-up",
@@ -571,7 +615,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 status: "idle",
                 updatedAt: yield* DateTime.now,
                 cloudTask: {
-                  ...prior,
+                  ...withoutFailureEvidence(prior),
                   status: "running",
                   tracking: "polled",
                   progress: "Follow-up rejected",
@@ -584,7 +628,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               yield* settle(i, reply.failure);
               return "settled" as const;
             }
-            const retained = { ...prior };
+            const retained = withoutFailureEvidence(prior);
             delete retained.prUrl;
             delete retained.branch;
             delete retained.summary;
@@ -598,13 +642,14 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 ...reply.success,
                 status: "running",
                 tracking: "polled",
-                progress: "Follow-up accepted",
+                progress: FOLLOW_UP_ACCEPTED,
                 summary:
                   "Follow-up accepted. This receipt confirms message admission, not completed work.",
                 updatedAt: DateTime.formatIso(yield* DateTime.now),
               },
             };
             yield* commit(i, thread);
+            return yield* observe(i, true);
           } else {
             if (thread.cloudTask?.status === "submitting" && thread.cloudTask.taskId !== i.runId)
               return yield* new ClaudeCloudError({
@@ -652,9 +697,67 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               },
             };
             yield* commit(i, thread);
+            const trustAllowed =
+              options.folderTrust === undefined
+                ? false
+                : yield* options.folderTrust.allowed(launchSource.cwd);
+            let trustPrompts = 0;
+            const recordTrust = Effect.suspend(() =>
+              trustPrompts === 0
+                ? Effect.void
+                : Effect.gen(function* () {
+                    const at = yield* DateTime.now;
+                    yield* publish({
+                      type: "turn_item.updated",
+                      driver: DRIVER,
+                      turnItem: {
+                        id: IdAllocator.derive.turnItemFromProviderItem({
+                          driver: DRIVER,
+                          nativeItemId: `folder-trust:${turnId}`,
+                        }),
+                        threadId: i.threadId,
+                        runId: i.runId,
+                        nodeId: i.rootNodeId,
+                        providerThreadId: i.providerThread.id,
+                        providerTurnId: turnId,
+                        nativeItemRef: null,
+                        parentItemId: null,
+                        ordinal: 0,
+                        status: "completed",
+                        title: "Folder trusted",
+                        startedAt: at,
+                        completedAt: at,
+                        updatedAt: at,
+                        type: "system_notice",
+                        message: `Claude Code asked to trust ${launchSource.cwd}. GOAT accepted it automatically.`,
+                      },
+                    });
+                    yield* options.folderTrust!.record({
+                      cwd: launchSource.cwd,
+                      threadId: i.threadId,
+                      prompts: trustPrompts,
+                    });
+                  }),
+            );
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const handle = yield* cli.start(current, launchSource.cwd, i.message.text);
+                const handle = yield* cli
+                  .start(
+                    current,
+                    launchSource.cwd,
+                    i.message.text,
+                    trustAllowed
+                      ? {
+                          ...(options.folderTrust?.accept === undefined
+                            ? {}
+                            : { accept: options.folderTrust.accept(launchSource.cwd) }),
+                          onAccepted: () => {
+                            trustPrompts += 1;
+                          },
+                        }
+                      : undefined,
+                  )
+                  .pipe(Effect.ensuring(recordTrust));
                 const now = yield* DateTime.now;
                 thread = {
                   ...thread,
@@ -679,12 +782,11 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 yield* handle.exited;
               }),
             );
-            yield* observe(i);
+            return yield* observe(i, false);
           }
-          return "deliver" as const;
         });
         yield* operation.pipe(
-          Effect.flatMap((result) => (result === "settled" ? Effect.void : settle(i))),
+          Effect.flatMap((result) => (result === "settled" ? Effect.void : finish(i, result))),
           Effect.catch((error) => {
             const observed = threads.get(thread.id);
             const saved =
@@ -698,7 +800,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 yield* commit(i, {
                   ...saved,
                   cloudTask: {
-                    ...saved.cloudTask!,
+                    ...withoutFailureEvidence(saved.cloudTask!),
                     status: "running",
                     progress: "Follow-up rejected",
                     summary: `Follow-up rejected: ${error.detail}`,
@@ -778,6 +880,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               const thread = { ...i.providerThread, cloudTask: i.cloudTask };
               threads.set(thread.id, thread);
               const task = i.cloudTask;
+              const failure = confirmedFailure(task);
               const identity = yield* Effect.try({
                 try: () => sessionUrl(task.url ?? ""),
                 catch: (cause) =>
@@ -795,7 +898,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 task.status === "unknown" ||
                 !SESSION_ID.test(task.taskId) ||
                 thread.nativeThreadRef?.nativeId !== task.taskId ||
-                task.status === "failed" ||
+                (task.status === "failed" && !failure) ||
                 task.status === "cancelled"
               ) {
                 yield* failObservation(
@@ -811,30 +914,29 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 );
                 return;
               }
+              // The run's own prompt failed for certain; settle it again, as the session left it.
+              if (failure) return yield* settle(i, failure);
               if (task.status === "succeeded") {
-                if (!task.prUrl || !task.branch || !task.summary)
+                // A session reply has a summary; a PR result also has its PR and branch.
+                if (!task.summary || !task.prUrl !== !task.branch)
                   return yield* failObservation(
                     i,
                     thread,
                     new ClaudeCloudError({
                       outcome: "uncertain",
-                      detail: "Saved PR result is incomplete; open the session.",
+                      detail: "Saved cloud result is incomplete; open the session.",
                     }),
                   );
-                yield* settle(i);
-                return;
-              }
-              if (task.progress === "Follow-up accepted") {
-                if (!task.summary)
-                  yield* commit(i, {
-                    ...thread,
-                    cloudTask: {
-                      ...task,
-                      summary:
-                        "Follow-up accepted. This receipt confirms message admission, not completed work.",
-                    },
-                  });
-                yield* settle(i);
+                // A crash between the result and its terminal kept only the cut summary.
+                const text = isShortenedReply(task)
+                  ? yield* anchor(i, undefined).pipe(
+                      Effect.flatMap((runAnchor) =>
+                        recoverCloudReply({ ...runAnchor, readSession: () => readSession(i) }),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
+                    )
+                  : undefined;
+                yield* settle(i, undefined, text);
                 return;
               }
               if (task.progress === "Follow-up rejected") {
@@ -855,8 +957,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 );
                 return;
               }
-              yield* observe(i).pipe(
-                Effect.andThen(settle(i)),
+              yield* observe(i, task.progress?.startsWith(FOLLOW_UP_ACCEPTED) === true).pipe(
+                Effect.flatMap((outcome) => finish(i, outcome)),
                 Effect.catch((error) =>
                   failObservation(i, threads.get(thread.id) ?? thread, error),
                 ),

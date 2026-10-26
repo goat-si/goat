@@ -5,6 +5,7 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
+  COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
   type AuthEnvironmentScope,
@@ -16,6 +17,8 @@ import {
   type OrchestrationV2ProviderThread,
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
+  type ProviderInteractionMode,
+  type TurnCapability,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -52,6 +55,14 @@ import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
+import { withTurnAgentAccess } from "./TurnCapabilities.ts";
+import { type PrepareReuse, selectPrepareInput } from "./McpPrepareInput.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
+import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -61,6 +72,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -159,7 +171,38 @@ export interface ProviderMemoryPrepareInput {
   /** Explicit null is ordinary; missing legacy task authority is none. */
   readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
   readonly readOnly?: boolean;
+  /** Plan turns never get computer use. */
+  readonly interactionMode?: ProviderInteractionMode;
   readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
+  /** What this turn's `@computer` / `@browser` chips asked for; the next turn starts over. */
+  readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
+}
+
+/** What opening a provider session for a turn admits; the same for a new or a shared session. */
+function openPrepareInput(
+  input: Parameters<ProviderSessionManagerV2Shape["open"]>[0],
+  providerInstanceId: ProviderInstanceId,
+): ProviderMemoryPrepareInput {
+  const sandbox = input.runtimePolicy.sandboxPolicy;
+  return {
+    threadId: input.threadId,
+    providerInstanceId,
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.delegatedTaskId === undefined ? {} : { delegatedTaskId: input.delegatedTaskId }),
+    ...(input.memoryGrantCeiling === undefined
+      ? {}
+      : { memoryGrantCeiling: input.memoryGrantCeiling }),
+    ...(input.dispatchScopes === undefined ? {} : { dispatchScopes: input.dispatchScopes }),
+    readOnly:
+      input.readOnly === true ||
+      sandbox === "read-only" ||
+      (typeof sandbox === "object" &&
+        sandbox !== null &&
+        "type" in sandbox &&
+        sandbox.type === "readOnly"),
+    interactionMode: input.runtimePolicy.interactionMode,
+    turnCapabilities: input.turnCapabilities ?? [],
+  };
 }
 
 export interface McpCredentialRotation {
@@ -196,6 +239,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
     readonly readOnly?: boolean;
     readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
+    readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
     readonly initialProviderItemIdentityVersion?: 2;
@@ -374,6 +418,40 @@ export const layerWithOptions = (
        * agent one toolset and is visible immediately (#7083).
        */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+      /**
+       * Optional like settings. Every prepare asks the computer use decision
+       * again, so enabling or disabling it reaches a live session on its next
+       * turn.
+       */
+      const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+      /** Absent only in test assemblies; without it every turn counts as unleased. */
+      const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+      /** Absent only in test assemblies, which then run without goatclaw limits. */
+      const permissionProfiles = yield* Effect.serviceOption(PermissionProfiles.PermissionProfiles);
+      // An enabled policy fails closed: a thread whose limit cannot be read gets no native subagents.
+      const withNativeSubagentLimit = (threadId: ThreadId, config: McpProviderSessionConfig) =>
+        Effect.gen(function* () {
+          const { nativeSubagentLimit: _previous, ...rest } = config;
+          if (Option.isNone(permissionProfiles)) return rest;
+          const limit = yield* permissionProfiles.value.nativeSubagentLimit(threadId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not read the goatclaw subagent limit; allowing none.", {
+                cause,
+              }).pipe(Effect.as(0)),
+            ),
+          );
+          return limit === undefined ? rest : { ...rest, nativeSubagentLimit: limit };
+        });
+      const originReads = ComputerUseOrigin.projectionOriginReads({
+        getThreadRecords: (id, fields, filter) =>
+          projectionStore.getThreadRecords(id, fields, filter),
+        channelOrigin: (id) =>
+          Option.isSome(computerUseLeases)
+            ? computerUseLeases.value.channelOrigin(id)
+            : Effect.succeed(undefined),
+      });
+      const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
+        ComputerUseOrigin.computerUseOrigin(originReads, { threadId, runId });
       const memoryPolicy = yield* Effect.serviceOption(
         ServerSettings.MemoryProviderCommittedPolicy,
       );
@@ -559,7 +637,7 @@ export const layerWithOptions = (
        */
       const prepareMcpSession = (
         input: ProviderMemoryPrepareInput,
-        reusePreparedInput: boolean | ProviderMemoryPrepareInput = false,
+        reusePreparedInput: PrepareReuse = false,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
           ? mcpSessions
@@ -569,26 +647,9 @@ export const layerWithOptions = (
               input.threadId,
               Effect.gen(function* () {
                 const previousInput = memoryPrepareInputs.get(input.threadId);
-                const admitted =
-                  typeof reusePreparedInput === "object" ? reusePreparedInput : previousInput;
-                const {
-                  runId: _previousRun,
-                  delegatedTaskId: _previousTask,
-                  ...admittedAuthority
-                } = admitted ?? input;
-                const preparedInput =
-                  reusePreparedInput && admitted?.providerInstanceId === input.providerInstanceId
-                    ? {
-                        // Internal reprepare retains this execution's provenance. An
-                        // explicit admission replaces IDs, including absent IDs.
-                        ...(reusePreparedInput === true ? admitted : admittedAuthority),
-                        ...(input.runId === undefined ? {} : { runId: input.runId }),
-                        ...(input.delegatedTaskId === undefined
-                          ? {}
-                          : { delegatedTaskId: input.delegatedTaskId }),
-                        readOnly: admitted.readOnly === true || input.readOnly === true,
-                      }
-                    : { ...input, readOnly: input.readOnly === true };
+                const preparedInput = selectPrepareInput(input, reusePreparedInput, previousInput);
+                if (preparedInput === undefined)
+                  return { mcpCredentialId: undefined, issued: false };
                 const { threadId, providerInstanceId } = preparedInput;
                 const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
                 const usableThread =
@@ -669,13 +730,39 @@ export const layerWithOptions = (
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
                 const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
-                  yield* agentAccessSettings(threadId);
+                  withTurnAgentAccess(
+                    yield* agentAccessSettings(threadId),
+                    preparedInput.turnCapabilities,
+                  );
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
                 >(["orchestration", "worktree", "pull-requests"]);
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
+                const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
+                const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
+                  threadId,
+                  driver: yield* registry.get(providerInstanceId).pipe(
+                    Effect.map((adapter) => adapter.driver),
+                    Effect.orElseSucceed(() => undefined),
+                  ),
+                  interactionMode: preparedInput.interactionMode,
+                  ...(usableThread
+                    ? { runtimeMode: thread.value.runtimeMode, projectId: thread.value.projectId }
+                    : {}),
+                  runId: preparedInput.runId,
+                  personStarted:
+                    preparedInput.runId !== undefined &&
+                    (yield* ComputerUseOrigin.personStarted(originReads, {
+                      threadId,
+                      runId: preparedInput.runId,
+                    })),
+                  readOnly,
+                  origin: computerUseOrigin,
+                  leases: computerUseLeases,
+                  requested: preparedInput.turnCapabilities,
+                });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -704,6 +791,16 @@ export const layerWithOptions = (
                     resolved.memoryPolicy?.grant === grant &&
                     resolved.memoryPolicy.policyEpoch === committed.epoch
                   ) {
+                    yield* mcpSessions.set(
+                      yield* withNativeSubagentLimit(
+                        threadId,
+                        ComputerUse.withComputerUse(
+                          existing,
+                          computerUse,
+                          COMPUTER_USE_LEASE_ROUTE,
+                        ),
+                      ),
+                    );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -738,7 +835,16 @@ export const layerWithOptions = (
                   yield* mcpSessionRegistry.revokeThread(threadId, {
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
-                yield* mcpSessions.set(credential.config);
+                yield* mcpSessions.set(
+                  yield* withNativeSubagentLimit(
+                    threadId,
+                    ComputerUse.withComputerUse(
+                      credential.config,
+                      computerUse,
+                      COMPUTER_USE_LEASE_ROUTE,
+                    ),
+                  ),
+                );
                 yield* Ref.update(
                   sessions,
                   (current) =>
@@ -1268,43 +1374,13 @@ export const layerWithOptions = (
         },
       );
 
-      // Scope close can wedge on a misbehaving adapter finalizer (e.g. a
-      // provider process that never yields its message stream).
-      const closeScopeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
-        scope: Scope.Closeable,
-        annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
-      ) {
-        const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
-          Effect.exit,
-          Effect.forkDetach({ startImmediately: true }),
-        );
-        const closeExit = yield* Fiber.join(closeFiber).pipe(
-          Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-        );
-        if (Option.isNone(closeExit)) {
-          yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
-            ...annotations,
-            timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-          });
-          yield* Fiber.join(closeFiber).pipe(
-            Effect.flatMap((exit) =>
-              Exit.isFailure(exit)
-                ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
-                    ...annotations,
-                    cause: exit.cause,
-                  })
-                : Effect.logInfo(
-                    "orchestration-v2.provider-session-scope-close-completed-late",
-                    annotations,
-                  ),
-            ),
-            Effect.forkDetach,
-          );
-        }
-        return closeExit;
-      });
+      const {
+        closeWithin: closeScopeWithin,
+        trackRelease,
+        awaitPendingReleases,
+      } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
-      const releaseEntry = (input: {
+      const releaseEntryNow = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
@@ -1424,6 +1500,8 @@ export const layerWithOptions = (
             ),
           ),
         );
+      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
+        trackRelease(releaseEntryNow(input));
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -2341,7 +2419,7 @@ export const layerWithOptions = (
                   }
                   // Some providers can block before a run subscriber exists
                   // (project trust, login, or session-switch hooks). Persist
-                  // their runless request artifacts directly so the normal T3
+                  // their runless request artifacts directly so the normal GOAT
                   // request UI can answer them and unblock session setup.
                   const threadId = sessionScopedRuntimeRequestThreadId(event);
                   if (threadId !== undefined) {
@@ -2442,6 +2520,7 @@ export const layerWithOptions = (
             ),
           { concurrency: "unbounded", discard: true },
         );
+        yield* awaitPendingReleases;
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(
@@ -2458,7 +2537,7 @@ export const layerWithOptions = (
                 Effect.gen(function* () {
                   const input = memoryPrepareInputs.get(threadId);
                   if (!input || (yield* mcpSessions.read(threadId)) === undefined) return;
-                  const prepared = yield* prepareMcpSession(input, true);
+                  const prepared = yield* prepareMcpSession(input, "stored");
                   if (prepared.mcpCredentialId)
                     dropMcpCredentialReservation(threadId, prepared.mcpCredentialId);
                 }),
@@ -2542,27 +2621,7 @@ export const layerWithOptions = (
                   // Joining a shared session is a new session for this thread.
                   if (!attached) yield* agentScope.clear(input.threadId);
                   const prepared = yield* prepareMcpSession(
-                    {
-                      threadId: input.threadId,
-                      providerInstanceId: existing.runtime.instanceId,
-                      ...(input.runId === undefined ? {} : { runId: input.runId }),
-                      ...(input.delegatedTaskId === undefined
-                        ? {}
-                        : { delegatedTaskId: input.delegatedTaskId }),
-                      ...(input.memoryGrantCeiling === undefined
-                        ? {}
-                        : { memoryGrantCeiling: input.memoryGrantCeiling }),
-                      ...(input.dispatchScopes === undefined
-                        ? {}
-                        : { dispatchScopes: input.dispatchScopes }),
-                      readOnly:
-                        input.readOnly === true ||
-                        input.runtimePolicy.sandboxPolicy === "read-only" ||
-                        (typeof input.runtimePolicy.sandboxPolicy === "object" &&
-                          input.runtimePolicy.sandboxPolicy !== null &&
-                          "type" in input.runtimePolicy.sandboxPolicy &&
-                          input.runtimePolicy.sandboxPolicy.type === "readOnly"),
-                    },
+                    openPrepareInput(input, existing.runtime.instanceId),
                     admission ?? false,
                   );
                   if (prepared.mcpCredentialId)
@@ -2609,27 +2668,7 @@ export const layerWithOptions = (
                     ),
                   );
                   const prepared = yield* prepareMcpSession(
-                    {
-                      threadId: input.threadId,
-                      providerInstanceId: input.modelSelection.instanceId,
-                      ...(input.runId === undefined ? {} : { runId: input.runId }),
-                      ...(input.delegatedTaskId === undefined
-                        ? {}
-                        : { delegatedTaskId: input.delegatedTaskId }),
-                      ...(input.memoryGrantCeiling === undefined
-                        ? {}
-                        : { memoryGrantCeiling: input.memoryGrantCeiling }),
-                      ...(input.dispatchScopes === undefined
-                        ? {}
-                        : { dispatchScopes: input.dispatchScopes }),
-                      readOnly:
-                        input.readOnly === true ||
-                        input.runtimePolicy.sandboxPolicy === "read-only" ||
-                        (typeof input.runtimePolicy.sandboxPolicy === "object" &&
-                          input.runtimePolicy.sandboxPolicy !== null &&
-                          "type" in input.runtimePolicy.sandboxPolicy &&
-                          input.runtimePolicy.sandboxPolicy.type === "readOnly"),
-                    },
+                    openPrepareInput(input, input.modelSelection.instanceId),
                     admission ?? false,
                   );
                   const mcpCredentialId = prepared.mcpCredentialId;

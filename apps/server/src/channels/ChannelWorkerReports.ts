@@ -44,7 +44,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
+import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
@@ -363,7 +363,14 @@ const make = Effect.gen(function* () {
           ),
         { concurrency: 1 },
       );
+      const resultRead = yield* readThreadResult(records.value.thread, current).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.option,
+      );
+      if (resultRead._tag === "None" && current.status === "completed") return latest !== stored;
+      const result = resultRead._tag === "Some" ? resultRead.value : undefined;
       const observed = observeWorker({
+        result,
         pullRequests: pullRequestsFromLinks(pullRequestLinks),
         needsYou: [
           ...needsYouFromRuntimeRequests(records.value.runtimeRequests, () => worker.threadId),
@@ -450,12 +457,13 @@ const make = Effect.gen(function* () {
         }
         // The worker's own report decides failed, cancelled and blocked; an unreadable report
         // waits for the next pass rather than settling as "no report".
-        const reportRead = yield* readStoredThreadResultReport(worker.threadId, current.id).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-          Effect.option,
-        );
-        if (reportRead._tag === "None") return latest !== stored;
-        const reported = reportRead.value?.report;
+        const reported =
+          result !== undefined && result.reportedAt !== null && result.outcome !== null
+            ? {
+                outcome: result.outcome,
+                ...(result.summary === undefined ? {} : { summary: result.summary }),
+              }
+            : undefined;
         const fallbackSummary =
           (yield* lastAssistantText(worker.threadId, current)) ??
           (latest.task.proposedCompletion?.runId === current.id
@@ -506,6 +514,38 @@ const make = Effect.gen(function* () {
       let changed = 0;
       for (const stored of active) {
         if (yield* reconcileTask(stored, owner)) changed += 1;
+      }
+      // Check rows commit after settlement. Read them through the same result service on every
+      // owner pass, including after restart; this never re-enters outcome settlement.
+      for (const stored of yield* ledger.listLocalCheckUpdates()) {
+        const worker = stored.task.worker!;
+        const records = yield* threads
+          .getThreadRecords(worker.threadId, ["runs"])
+          .pipe(Effect.option);
+        if (records._tag === "None") continue;
+        const run = records.value.runs.find((candidate) => candidate.id === worker.runId);
+        if (run === undefined) continue;
+        const result = yield* readThreadResult(records.value.thread, run).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.option,
+        );
+        if (result._tag === "None") continue;
+        const observed = observeWorker({
+          pullRequests: stored.task.observed?.pullRequests ?? [],
+          needsYou: [],
+          result: result.value,
+        });
+        if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
+        const wrote = yield* commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.worker.observed",
+            payload: { generation: stored.task.generation, observed },
+          },
+          { owner, narrate: true },
+        );
+        if (wrote !== undefined) changed += 1;
       }
       // A finished task's runs are read into history until all of them have ended, even when
       // the task ended first (stopped, or settled by the worker's own report) or its launch
@@ -611,9 +651,13 @@ const make = Effect.gen(function* () {
             stored,
             {
               type: "task.progress",
-              payload: { generation: task.generation, summary: input.summary },
+              payload: {
+                generation: task.generation,
+                summary: input.summary,
+                ...(input.milestone === undefined ? {} : { milestone: input.milestone }),
+              },
             },
-            { actor: "agent", eventId },
+            { actor: "agent", eventId, narrate: input.milestone === true },
           );
           return;
         case "waiting_input":

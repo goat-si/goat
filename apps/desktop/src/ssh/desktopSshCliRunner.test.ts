@@ -37,6 +37,7 @@ describe("resolveDesktopSshCliRunner", () => {
         ...archiveOptions,
         hostDownload: true,
         publishedFallback: true,
+        attachAppServer: true,
         refreshOwnedRuntimeOnFirstConnection: true,
       },
     );
@@ -56,6 +57,7 @@ describe("resolveDesktopSshCliRunner", () => {
           ...archiveOptions,
           hostDownload: true,
           publishedFallback: true,
+          attachAppServer: true,
         },
       );
     },

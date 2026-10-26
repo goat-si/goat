@@ -1,7 +1,7 @@
+import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
-  type OrchestrationV2ThreadProjection,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
   type ScopedThreadRef,
@@ -16,6 +16,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
 import { create } from "zustand";
 import {
   useLayoutEffect,
@@ -59,6 +60,7 @@ import { readEnvironmentScope } from "../../state/session";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -113,7 +115,7 @@ export function usePendingThreadRequests(input: {
   readonly environmentId: EnvironmentId;
   readonly activeThreadId: ThreadId | null;
   readonly activeThread: { readonly id: ThreadId } | undefined;
-  readonly serverProjection: OrchestrationV2ThreadProjection | null;
+  readonly serverProjection: ThreadStructure | null;
   readonly supportsQuestionAttachments: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly setComposerDraftPrompt: (target: ScopedThreadRef | DraftId, prompt: string) => void;
@@ -257,6 +259,22 @@ export function usePendingThreadRequests(input: {
       if (key.startsWith(prefix) && !retained.has(DraftId.make(key)))
         clearQuestionAttachmentDraft(DraftId.make(key));
     }
+    // Answers held until the projection resolved their question are released here. A leftover
+    // responding id is harmless: it is only compared with a question still pending.
+    const stillPending = new Set<string>(pendingRequestIds);
+    for (const key of userInputResponsesInFlight.current) {
+      const [keyEnvironmentId, keyThreadId, keyRequestId] = JSON.parse(key) as [
+        string,
+        string,
+        string,
+      ];
+      if (
+        keyEnvironmentId === environmentId &&
+        keyThreadId === questionThread.id &&
+        !stillPending.has(keyRequestId)
+      )
+        userInputResponsesInFlight.current.delete(key);
+    }
   }, [environmentId, activeThread, projectedThreadId, pendingUserInputs]);
   const activePendingDraftAnswers =
     !activePendingUserInput || !activeThreadId
@@ -303,6 +321,7 @@ export function usePendingThreadRequests(input: {
   const onRespondToApproval = async (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
+    feedback?: string,
   ) => {
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
@@ -321,6 +340,7 @@ export function usePendingThreadRequests(input: {
         threadId: activeThreadId,
         requestId,
         decision,
+        ...(feedback === undefined ? {} : { feedback }),
       },
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -347,6 +367,7 @@ export function usePendingThreadRequests(input: {
     if (userInputResponsesInFlight.current.has(responseKey)) return;
     const attachmentsByQuestionId = new Map<string, UserInputAttachments[string]>();
     const providerAnswers = { ...answers };
+    const entries = appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries;
     for (const question of pendingInput.questions) {
       const target = questionAttachmentDraftId(
         environmentId,
@@ -356,15 +377,34 @@ export function usePendingThreadRequests(input: {
       );
       if ((useQuestionAttachmentPreparation.getState().counts[target] ?? 0) > 0) return;
       const draft = useComposerDraftStore.getState().getComposerDraft(target);
-      providerAnswers[question.id] = projectPendingUserInputAnswer(
-        answers[question.id],
-        settleThreadContextsForAgent({
+      // An optional question left blank has no answer and must stay absent from the command.
+      const answer = answers[question.id];
+      if (typeof answer === "string") {
+        const threadContexts = settleThreadContextsForAgent({
           records: draft?.threadContexts ?? [],
           agentEnvironmentId: environmentId,
-          entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
+          entries,
           isDesktopRenderer: window.desktopBridge !== undefined,
-        }),
-      );
+        });
+        const strandedThread = threadContextsOutsideEnvironment({
+          text: answer,
+          records: threadContexts,
+          environmentId,
+          hostRoutingEnvironmentId: environmentId,
+        })[0];
+        if (strandedThread) {
+          const owner = entries.get(strandedThread.environmentId)?.target.label ?? "its machine";
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Attached thread is on another machine",
+              description: `This machine's agent can't read "${strandedThread.title}". Remove it, or switch back to ${owner} to send.`,
+            }),
+          );
+          return;
+        }
+        providerAnswers[question.id] = projectPendingUserInputAnswer(answer, threadContexts);
+      }
       const attachments = draft ? [...draft.images, ...draft.files] : [];
       if (attachments.length === 0) continue;
       const uploaded = getUploadedAttachments({ environmentId, images: attachments });
@@ -400,8 +440,12 @@ export function usePendingThreadRequests(input: {
         error instanceof Error ? error.message : "Failed to submit user input.",
       );
     }
-    userInputResponsesInFlight.current.delete(responseKey);
-    setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+    // An accepted answer keeps the question locked until the projection drops it. Unlocking on
+    // the receipt let a second option pick send another answer that failed as already answered.
+    if (result._tag === "Failure") {
+      userInputResponsesInFlight.current.delete(responseKey);
+      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+    }
     return result;
   };
 

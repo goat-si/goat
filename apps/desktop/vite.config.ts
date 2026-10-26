@@ -2,10 +2,12 @@ import "vite-plus/test/config";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
 import { defaultInclude, defineConfig } from "vite-plus";
+import type { PackUserConfig } from "vite-plus/pack";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
 import { resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { withDevElectronLaunch } from "./scripts/dev-electron-pack.ts";
 
 const repoEnv = loadRepoEnv();
 
@@ -15,6 +17,9 @@ const repoEnv = loadRepoEnv();
 const isMainProcessExternal = (id: string) =>
   id === "electron" || id.startsWith("electron/") || isDesktopRuntimeExternalDependency(id);
 const shouldLaunchElectronAfterPack = process.env.GOAT_DESKTOP_DEV === "1";
+// `vp run dev` launches Electron once the bundles build and relaunches it when their bytes change.
+const devElectronPack = (configs: PackUserConfig[]) =>
+  shouldLaunchElectronAfterPack ? withDevElectronLaunch(import.meta.dirname, configs) : configs;
 const publicConfigDefine = {
   __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
@@ -26,6 +31,16 @@ const mainProcessDefine = {
   ...publicConfigDefine,
   __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(resolveBuildCommitTime(import.meta.dirname)),
 };
+
+// Electron runs a sandboxed preload as the body of a function whose parameters include
+// require, process, Buffer, global, setImmediate, clearImmediate, exports and module. A
+// top-level declaration with one of those names (Effect declares setImmediate) is then a
+// SyntaxError and the preload never loads, so each preload bundle runs inside its own function.
+// scripts/build-desktop-artifact.ts checks the built files the same way Electron loads them.
+const sandboxedPreload = {
+  banner: { js: "(() => {" },
+  footer: { js: "})();" },
+} as const;
 
 export default defineConfig({
   run: {
@@ -52,9 +67,14 @@ export default defineConfig({
         dependsOn: ["goat#build"],
         cache: false,
       },
+      // tsc (tsc-rs) rewrites the tsbuildinfo it reads, which keeps a task out of the cache.
+      typecheck: {
+        command: "tsc --noEmit",
+        cache: { input: [{ auto: true }, "!*.tsbuildinfo"] },
+      },
     },
   },
-  pack: [
+  pack: devElectronPack([
     {
       format: "cjs",
       outDir: "dist-electron",
@@ -70,7 +90,6 @@ export default defineConfig({
         neverBundle: isMainProcessExternal,
         onlyBundle: false,
       },
-      ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },
     {
       format: "cjs",
@@ -113,6 +132,7 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
       entry: ["src/preload.ts"],
+      ...sandboxedPreload,
       deps: {
         // Sandboxed Electron preloads cannot reliably resolve package imports
         // from inside the packaged ASAR. Bundle Clerk's preload bridge into the
@@ -134,6 +154,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pick-preload.ts"],
+      ...sandboxedPreload,
       deps: {
         alwaysBundle: (id) => id === "react-grab" || id.startsWith("react-grab/"),
       },
@@ -145,6 +166,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pip-preload.ts"],
+      ...sandboxedPreload,
     },
     {
       // Sandboxed preloads must be self-contained, without shared runtime chunks.
@@ -154,13 +176,28 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/mac-permission-preload.ts"],
+      ...sandboxedPreload,
     },
-  ],
+  ]),
   test: {
     include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
+    alias: [
+      {
+        find: /^electron$/,
+        replacement: `${import.meta.dirname}/src/testing/electronStub.ts`,
+      },
+    ],
     // The Windows lane runs workspace suites concurrently; filesystem-heavy
     // desktop integration tests can exceed Vitest's 5 second default there.
     testTimeout: 15_000,
-    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
+    setupFiles: [
+      "../../packages/shared/src/testing/longTempDir.ts",
+      "../../packages/shared/src/testing/providerEnv.ts",
+      "../../packages/shared/src/testing/gitEnv.setup.ts",
+    ],
+    globalSetup: [
+      "../../scripts/lib/node-runtime.ts",
+      "../../packages/shared/src/testing/gitConfigGuard.ts",
+    ],
   },
 });

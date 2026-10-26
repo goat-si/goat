@@ -5,6 +5,7 @@ import type {
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { Link } from "@tanstack/react-router";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowUpRightIcon,
   ChevronRightIcon,
@@ -22,6 +23,7 @@ import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entiti
 import { useConnectedEnvironmentIds } from "~/state/environments";
 
 import { Button } from "../ui/button";
+import { GoatBotLinkedText } from "./GoatBotLinkedText";
 
 const TONE_ICON = {
   neutral: CircleIcon,
@@ -67,9 +69,8 @@ export function GoatBotTaskChip({
         <div className="space-y-1.5 px-3 pt-1.5 pb-2">
           <div className="goat-task-title font-semibold break-words">{card.title}</div>
           {card.summary ? (
-            <p className="goat-task-summary line-clamp-3 text-goat-bubble-in-foreground/80">
-              {card.summary}
-            </p>
+            // A new summary measures afresh and starts collapsed.
+            <GoatBotTaskSummary key={card.summary} summary={card.summary} />
           ) : null}
           {card.sourceLabel ? (
             <div className="truncate text-xs text-goat-bubble-in-foreground/65">
@@ -96,6 +97,15 @@ export function GoatBotTaskChip({
               ))}
             </div>
           ) : null}
+          {card.evidenceLabels && card.evidenceLabels.length > 0 ? (
+            <ul aria-label="Verification" className="space-y-0.5 text-xs break-words">
+              {card.evidenceLabels.map((label) => (
+                <li key={label} className="text-goat-bubble-in-foreground/75">
+                  {label}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-1 border-t border-black/10 px-3 py-1 text-xs text-muted-foreground dark:border-white/10">
           <time dateTime={card.updatedAt} className="shrink-0">
@@ -104,6 +114,40 @@ export function GoatBotTaskChip({
           <GoatBotTaskTarget target={card.target} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The card is the task's result, so a long summary opens in place instead of staying cut off. */
+function GoatBotTaskSummary({ summary }: { readonly summary: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element !== null && !expanded) setClamped(element.scrollHeight > element.clientHeight);
+  }, [expanded]);
+  return (
+    <div>
+      <p
+        ref={ref}
+        className={cn(
+          "goat-task-summary break-words whitespace-pre-wrap text-goat-bubble-in-foreground/80",
+          !expanded && "line-clamp-4",
+        )}
+      >
+        <GoatBotLinkedText text={summary} />
+      </p>
+      {clamped || expanded ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+          className="text-xs font-medium text-info-foreground hover:underline"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
     </div>
   );
 }

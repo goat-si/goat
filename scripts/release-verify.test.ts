@@ -24,6 +24,7 @@ import {
   ReleaseVerificationError,
   renderSha256Sums,
   requiredReleaseAssets,
+  scanBuildLinks,
   scanReleasePayload,
   writePayloadReport,
   writeReleaseReport,
@@ -39,6 +40,7 @@ import {
 import { finalizeMacosDmgs, rewriteDmgManifest } from "./finalize-macos-dmg.ts";
 import { verifyMacPayload, verifyReleaseDirectory } from "./verify-release-artifacts.ts";
 import { mergeUpdateManifestFiles } from "./merge-update-manifests.ts";
+import { buildNpmLauncher } from "./build-npm-launcher.ts";
 import {
   parseUpdateManifest,
   serializeUpdateManifest,
@@ -68,8 +70,8 @@ const asset = (name: string, sha256 = "a".repeat(64)): ReleaseAsset => ({
   sha512: "digest",
   size: 10,
 });
-const manifest = (assets: readonly ReleaseAsset[]): UpdateManifest => ({
-  version,
+const manifest = (assets: readonly ReleaseAsset[], forVersion = version): UpdateManifest => ({
+  version: forVersion,
   releaseDate: "2026-10-12T00:00:00Z",
   files: assets.map(({ name, sha512, size }) => ({ url: name, sha512, size })),
   extras: {},
@@ -78,10 +80,11 @@ const report = (
   key: string,
   assets: readonly ReleaseAsset[],
   mode: "payload" | "mac" = "payload",
+  forVersion = version,
 ): ReleaseReport => ({
   key,
   mode,
-  version,
+  version: forVersion,
   inputs: assets.map(({ name, sha256 }) => ({ name, sha256 })),
   ok: true,
   checks: mode === "mac" ? ["require-signing", "exposure-scan"] : ["exposure-scan"],
@@ -141,6 +144,11 @@ describe("release payload helpers", () => {
       expect(exposureProblems("main.js", content).length).toBeGreaterThan(0);
     // Clients and the CLI ship this link; a source-repository URL here blocks every nightly.
     expect(exposureProblems("main.js", GOAT_CONNECT_COMING_SOON.guideUrl)).toEqual([]);
+    // The web bundle's privacy link (apps/web/src/legalLinks.ts); a source-repository URL there
+    // failed nightly 271.
+    expect(
+      exposureProblems("main.js", "https://goat-si.github.io/goat/privacy-policy/#usage-data"),
+    ).toEqual([]);
     expect(exposureProblems("node_modules/pkg/types.d.ts")).toEqual([]);
     expect(
       exposureProblems(
@@ -190,6 +198,19 @@ describe("release payload helpers", () => {
     expect(exposureProblems("goat", "/home/runner/.cargo/registry/src/x.rs", hosted, true)).toEqual(
       ["goat: absolute build path"],
     );
+    // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
+    const cua = "win-unpacked/resources/cua-driver/cua-driver.exe";
+    const windowsRunner = ["C:\\Users\\runneradmin", "C:\\a\\goat\\goat"];
+    expect(
+      exposureProblems(
+        cua,
+        "D:\\a\\cua\\cua\\src C:\\Users\\runneradmin\\.cargo\\x",
+        windowsRunner,
+      ),
+    ).toEqual([]);
+    expect(exposureProblems(cua, "C:\\a\\goat\\goat\\apps\\x", windowsRunner)).toEqual([
+      `${cua}: absolute build path`,
+    ]);
     expect(exposureProblems("main.js", "'C:\\a\\b\\c'")).toEqual([]);
     // Electron's own executable and libraries carry Chromium's inline source maps.
     for (const name of [
@@ -214,8 +235,25 @@ describe("release payload helpers", () => {
       archiveMemberProblems("../escape\n/absolute\nD:\\a\\file\nroot/.git/config\nroot/a.map\n"),
     ).toHaveLength(5);
   });
+  it("requires each channel's own update manifests", () => {
+    const manifests = (v: string) =>
+      requiredReleaseAssets(v).filter((name) => name.endsWith(".yml"));
+    expect(manifests(version)).toEqual([
+      "nightly-linux-arm64.yml",
+      "nightly-linux.yml",
+      "nightly-mac.yml",
+      "nightly.yml",
+    ]);
+    expect(manifests("0.1.1")).toEqual([
+      "latest-linux-arm64.yml",
+      "latest-linux.yml",
+      "latest-mac.yml",
+      "latest.yml",
+    ]);
+  });
   it("checks required assets, explicit dry-run globs and unexpected files", () => {
     const names = requiredReleaseAssets(version);
+    expect(names).toContain("goat-npm.tgz");
     expect(checkReleaseAssetSet(names, version)).toEqual([]);
     expect(
       checkReleaseAssetSet(
@@ -368,11 +406,32 @@ describe("release payload filesystem verification", () => {
           const problems = yield* scanReleasePayload(root, runner);
           expect(problems.join("\n")).toContain("server.asar!/bad.js: inline source map");
           expect(problems.join("\n")).toContain("main.map: source map");
-          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: private repository URL");
+          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: source repository URL");
           expect(commands).toEqual(["tar -tf", "tar -xf"]);
           yield* Effect.sync(uncacheAll);
         }),
       ),
+  );
+  // CI runs this over its build output so a nightly never meets a link the verifier rejects.
+  it.effect("finds the source repository links the release verifier rejects in build output", () =>
+    run(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-s1-test-" });
+        const link = "https://github.com/goat-si/goat/blob/dev/docs/user/telemetry.md";
+        yield* fs.makeDirectory(path.join(root, "client/assets"), { recursive: true });
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js"), `"${link}"`);
+        // CI builds keep source maps, which carry comments a release never ships.
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js.map"), link);
+        const releases = "https://github.com/goat-si/goat-releases/releases";
+        yield* fs.writeFileString(path.join(root, "index.js"), `"${releases}"`);
+        const problems = yield* scanBuildLinks([root]);
+        expect(problems).toEqual([
+          `${path.join(root, "client/assets/legal.js")}: source repository URL`,
+        ]);
+      }),
+    ),
   );
   it.effect("hashes only distributables in builder reports and fails on exposure", () =>
     run(
@@ -556,9 +615,14 @@ describe("release payload filesystem verification", () => {
   );
 });
 
-it.effect(
-  "builder report -> DMG finalize -> manifest rename and merge -> assemble passes; substituted ZIP or DMG fails",
-  () =>
+// Stable has its own update manifests (latest*.yml); both channels go through the same pipeline.
+const releaseChannels = [
+  { channel: "nightly", prefix: "nightly", version },
+  { channel: "stable", prefix: "latest", version: "0.1.1" },
+] as const;
+it.effect.each(releaseChannels)(
+  "$channel: builder report -> DMG finalize -> manifest rename and merge -> assemble passes; substituted ZIP or DMG fails",
+  ({ prefix, version }) =>
     run(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -570,11 +634,13 @@ it.effect(
         yield* fs.makeDirectory(reportsDir);
         for (const name of requiredReleaseAssets(version).filter((name) => !name.endsWith(".yml")))
           yield* fs.writeFileString(path.join(dir, name), `payload ${name}`);
+        const npm = yield* buildNpmLauncher({ version, outputDir: path.join(root, "npm") });
+        yield* fs.copyFile(npm.tarball, path.join(dir, "goat-npm.tgz"));
         const all = yield* releaseInputs(dir);
         for (const key of new Set(all.map((entry) => releaseAssetKey(entry.name)))) {
           const payloads = all.filter((entry) => releaseAssetKey(entry.name) === key);
           const builderPath = path.join(reportsDir, `${key}.json`);
-          yield* writeReleaseReport(builderPath, report(key!, payloads));
+          yield* writeReleaseReport(builderPath, report(key!, payloads, "payload", version));
           if (key!.startsWith("desktop-mac-")) {
             const stage = path.join(root, key!);
             yield* fs.makeDirectory(stage);
@@ -583,8 +649,8 @@ it.effect(
             const dmg = payloads.find((entry) => entry.name.endsWith(".dmg"))!;
             yield* fs.writeFileString(path.join(stage, dmg.name + ".blockmap"), "stale");
             yield* fs.writeFileString(
-              path.join(stage, "nightly-mac.yml"),
-              serializeUpdateManifest(manifest(payloads), { platformLabel: "macOS" }),
+              path.join(stage, `${prefix}-mac.yml`),
+              serializeUpdateManifest(manifest(payloads, version), { platformLabel: "macOS" }),
             );
             const commands: Array<{ program: string; args: readonly string[] }> = [];
             const runner: ReleaseCommandRunner = (program, args) =>
@@ -617,39 +683,39 @@ it.effect(
             const current = yield* releaseInputs(stage);
             yield* writeReleaseReport(
               path.join(reportsDir, `${key}-mac.json`),
-              report(key!, current, "mac"),
+              report(key!, current, "mac", version),
             );
-            yield* fs.copyFile(path.join(stage, "nightly-mac.yml"), path.join(dir, `${key}.yml`));
+            yield* fs.copyFile(path.join(stage, `${prefix}-mac.yml`), path.join(dir, `${key}.yml`));
           }
         }
         // Collector renames each architecture's manifest; assembler merges then removes them.
         yield* fs.rename(
           path.join(dir, "desktop-mac-arm64.yml"),
-          path.join(dir, "nightly-mac.yml"),
+          path.join(dir, `${prefix}-mac.yml`),
         );
         yield* fs.rename(
           path.join(dir, "desktop-mac-x64.yml"),
-          path.join(dir, "nightly-mac-x64.yml"),
+          path.join(dir, `${prefix}-mac-x64.yml`),
         );
         yield* mergeUpdateManifestFiles(
           "mac",
-          path.join(dir, "nightly-mac.yml"),
-          path.join(dir, "nightly-mac-x64.yml"),
+          path.join(dir, `${prefix}-mac.yml`),
+          path.join(dir, `${prefix}-mac-x64.yml`),
           undefined,
         );
-        yield* fs.remove(path.join(dir, "nightly-mac-x64.yml"));
+        yield* fs.remove(path.join(dir, `${prefix}-mac-x64.yml`));
         const final = yield* releaseInputs(dir);
         for (const [name, selected] of [
-          ["nightly.yml", final.filter((entry) => entry.name.endsWith(".exe"))],
-          ["nightly-linux.yml", final.filter((entry) => entry.name.endsWith("-x86_64.AppImage"))],
+          [`${prefix}.yml`, final.filter((entry) => entry.name.endsWith(".exe"))],
+          [`${prefix}-linux.yml`, final.filter((entry) => entry.name.endsWith("-x86_64.AppImage"))],
           [
-            "nightly-linux-arm64.yml",
+            `${prefix}-linux-arm64.yml`,
             final.filter((entry) => entry.name.endsWith("-arm64.AppImage")),
           ],
         ] as const)
           yield* fs.writeFileString(
             path.join(dir, name),
-            serializeUpdateManifest(manifest(selected), { platformLabel: "release" }),
+            serializeUpdateManifest(manifest(selected, version), { platformLabel: "release" }),
           );
         const runtimeName = runtimeManifestAssetName(version);
         const runtime = releaseRuntimeManifest(
@@ -680,7 +746,7 @@ it.effect(
           const original = yield* fs.readFile(path.join(dir, name));
           yield* fs.writeFileString(path.join(dir, name), "substituted");
           // Even a newly matching manifest cannot legitimize replacement bytes.
-          const macPath = path.join(dir, "nightly-mac.yml");
+          const macPath = path.join(dir, `${prefix}-mac.yml`);
           const originalManifest = yield* fs.readFileString(macPath);
           const changed = yield* readReleaseAsset(dir, name);
           const parsed = parseUpdateManifest(originalManifest, macPath, "macOS");

@@ -9,6 +9,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
+import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 
@@ -37,11 +38,11 @@ const localResult = (threadId: ThreadId, runId?: RunId | null) =>
   );
 
 const handlers = {
-  orchestrator_capabilities: McpToolAccess.reads(() =>
+  orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.capabilities(scope);
+      return yield* service.capabilities(scope, input);
     }),
   ),
   delegate_task: McpToolAccess.destructive(
@@ -49,7 +50,8 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.delegateTask(scope, input);
+        const pressure = yield* admitLaunch(input.target?.host ?? null);
+        return withPressure(yield* service.delegateTask(scope, input), pressure);
       }),
     ),
   ),
@@ -125,12 +127,15 @@ const handlers = {
     }),
   ),
   update_scheduled_task: McpToolAccess.destructive(
-    McpToolAccess.writes((input) =>
-      Effect.gen(function* () {
-        const scope = yield* McpInvocationContext.McpInvocationContext;
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.updateScheduledTask(scope, input);
-      }),
+    McpToolAccess.writes(
+      (input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          // The service checks the task's modes and project before it may be changed.
+          return yield* service.updateScheduledTask(scope, input, McpToolAccess.admit(input));
+        }),
+      { admission: "handler" },
     ),
   ),
   delete_scheduled_task: McpToolAccess.destructive(
@@ -218,6 +223,50 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* HostThreadsMcpService.HostThreadsMcpService;
       return yield* service.threadStatus(scope, input);
+    }),
+  ),
+  goat_thread_retry: McpToolAccess.writesThreads(localTargets, (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.retryThread(scope, input);
+    }),
+  ),
+  goat_thread_replication_set: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.configureReplication(scope, input);
+    }),
+  ),
+  goat_thread_checkpoint_capture: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+        return yield* service.captureCheckpoint(scope, input);
+      }),
+  ),
+  goat_thread_checkpoint_reconcile: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.reconcileCheckpoint(scope, input);
+    }),
+  ),
+  goat_thread_checkpoint_restore: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.restoreCheckpoint(scope, input);
+    }),
+  ),
+  goat_thread_handoff_host: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.recoverCheckpoint(scope, input);
     }),
   ),
   goat_thread_watch: McpToolAccess.actsAsCaller((input) =>

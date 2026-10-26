@@ -41,6 +41,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
+import { reauthorizeSession } from "./McpClientAuthority.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -49,6 +50,7 @@ import { legacyScopedSessionCookieName } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
@@ -86,7 +88,6 @@ export interface IssuedBearerSession {
  * repositories, so it holds the scopes those need over RPC. Approving a grant
  * requires every scope it holds.
  */
-const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 
 export const mcpClientScopes = (
@@ -585,13 +586,17 @@ export class EnvironmentAuth extends Context.Service<
       readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
       readonly client: AuthClientMetadata;
     }) => Effect.Effect<
-      { readonly token: string; readonly expiresAt: DateTime.DateTime },
+      {
+        readonly sessionId: AuthSessionId;
+        readonly token: string;
+        readonly expiresAt: DateTime.DateTime;
+      },
       ServerAuthInternalError
     >;
     /**
      * Spends a one-time pairing code as approval for an MCP client with the
      * given access; the code must hold every scope that access grants.
-     * Proof-bound codes (T3 Connect) are refused without being spent, and
+     * Proof-bound codes (GOAT Connect) are refused without being spent, and
      * desktop bootstrap grants never qualify.
      */
     readonly consumeMcpApprovalCode: (
@@ -1309,27 +1314,7 @@ export const make = Effect.gen(function* () {
                   ? (session.runtimeModeCeiling ?? "approval-required")
                   : "read-only",
                 grantedScopes: session.scopes,
-                reauthorize: (required) =>
-                  sessions.readActiveScopes(session.sessionId).pipe(
-                    Effect.mapError(
-                      () =>
-                        new EnvironmentAuthorizationError({
-                          message: "The MCP session is no longer active.",
-                          requiredScope: required[0] ?? "memory:read",
-                        }),
-                    ),
-                    Effect.flatMap((scopes) =>
-                      required.every((scope) => scopes.includes(scope))
-                        ? Effect.void
-                        : Effect.fail(
-                            new EnvironmentAuthorizationError({
-                              message: "The MCP session does not grant the required scope.",
-                              requiredScope:
-                                required.find((scope) => !scopes.includes(scope)) ?? "memory:read",
-                            }),
-                          ),
-                    ),
-                  ),
+                reauthorize: reauthorizeSession(sessions, session.sessionId),
                 approvals:
                   session.scopes.includes(AuthOrchestrationOperateScope) &&
                   session.scopes.includes(AuthOrchestrationApproveScope),
@@ -1356,7 +1341,11 @@ export const make = Effect.gen(function* () {
         client: { ...input.client, label: input.label, deviceType: "bot" },
       })
       .pipe(
-        Effect.map((issued) => ({ token: issued.token, expiresAt: issued.expiresAt })),
+        Effect.map((issued) => ({
+          sessionId: issued.sessionId,
+          token: issued.token,
+          expiresAt: issued.expiresAt,
+        })),
         Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
         Effect.withSpan("EnvironmentAuth.issueMcpClientSession"),
       );

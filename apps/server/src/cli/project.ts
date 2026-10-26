@@ -41,7 +41,9 @@ import {
   readPersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { refuseInThread } from "./cliCredential.ts";
 import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { generatedVerbsNote } from "./agentSurfaceCommand.ts";
 
 type ProjectMutationTarget = {
   readonly id: ProjectId;
@@ -222,7 +224,7 @@ const withProjectCliSessionToken = <A, E, R>(
   Effect.acquireUseRelease(
     environmentAuth.issueSession({
       scopes: AuthStandardClientScopes,
-      label: "t3 project cli",
+      label: "goat project cli",
     }),
     (issued) => run(issued.token),
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
@@ -399,6 +401,8 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | WorkspacePaths.WorkspacePaths
   >,
 ) {
+  // It mints a client session from the state directory, or writes the database itself (#933).
+  yield* refuseInThread("goat project");
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
   const minimumLogLevel = config.logLevel;
@@ -582,6 +586,6 @@ const projectRenameCommand = Command.make("rename", {
 );
 
 export const projectCommand = Command.make("project").pipe(
-  Command.withDescription("Manage projects."),
+  Command.withDescription(`Manage projects. ${generatedVerbsNote("project")}`),
   Command.withSubcommands([projectAddCommand, projectRemoveCommand, projectRenameCommand]),
 );

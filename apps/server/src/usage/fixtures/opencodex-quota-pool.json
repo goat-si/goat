@@ -1,0 +1,104 @@
+{
+  "schema": "ocx.quota-pool/1",
+  "producer": { "version": "2.89.0", "role": "hub", "homeId": "fixture-home" },
+  "generatedAt": "2026-10-21T03:00:00.000Z",
+  "providers": [
+    {
+      "provider": "openai",
+      "accounts": [
+        {
+          "provider": "openai",
+          "driver": "codex",
+          "accountRef": "sha256:account-a",
+          "label": "a***",
+          "plan": "pro",
+          "state": "available",
+          "windows": [
+            {
+              "id": "5h",
+              "kind": "burst_5h",
+              "label": "5 hours",
+              "usedPercent": 95,
+              "windowSeconds": 18000,
+              "source": "header",
+              "observedAt": "2026-10-21T03:00:00.000Z"
+            },
+            {
+              "id": "weekly",
+              "kind": "weekly",
+              "label": "Weekly",
+              "usedPercent": 30,
+              "source": "measured",
+              "observedAt": "2026-10-21T03:00:00.000Z"
+            }
+          ]
+        },
+        {
+          "provider": "openai",
+          "accountRef": "sha256:account-b",
+          "state": "available",
+          "windows": []
+        }
+      ],
+      "pooled": {
+        "windows": [
+          {
+            "id": "5h",
+            "kind": "burst_5h",
+            "label": "5 hours",
+            "usedPercent": 61,
+            "resetsAt": "2026-10-21T08:00:00.000Z",
+            "windowSeconds": 18000,
+            "source": "header",
+            "observedAt": "2026-10-21T03:00:00.000Z"
+          },
+          {
+            "id": "weekly",
+            "kind": "weekly",
+            "label": "Weekly",
+            "usedPercent": 32,
+            "source": "measured",
+            "observedAt": "2026-10-21T03:00:00.000Z"
+          },
+          {
+            "id": "credits",
+            "kind": "credits",
+            "label": "Credits",
+            "used": 12,
+            "limit": 50,
+            "unit": "usd",
+            "source": "measured",
+            "observedAt": "2026-10-21T03:00:00.000Z"
+          }
+        ],
+        "headroom": 39
+      }
+    },
+    {
+      "provider": "anthropic",
+      "accounts": [],
+      "pooled": {
+        "windows": [
+          {
+            "id": "5h",
+            "kind": "burst_5h",
+            "label": "5 hours",
+            "usedPercent": 20,
+            "source": "measured",
+            "observedAt": "2026-10-21T03:00:00.000Z"
+          },
+          {
+            "id": "family:opus",
+            "kind": "weekly",
+            "label": "Opus weekly",
+            "usedPercent": 100,
+            "scopeModel": "family:opus",
+            "source": "measured",
+            "observedAt": "2026-10-21T03:00:00.000Z",
+            "exhausted": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import type {
+  HostCompatibility,
   HostStatusEntry,
   HostStatusProvider,
   HostStatusQuota,
@@ -7,8 +8,10 @@ import type {
   ServerProvider,
   ServerProviderUsageLimits,
 } from "@goat/contracts";
-import { GoatHostStatusResult } from "@goat/contracts";
-import { hostCompatibilityOf } from "@goat/shared/sshRuntimeProtocol";
+import { GoatHostStatusResult, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { hostCompatibilityOf, ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+
+import packageJson from "../../package.json" with { type: "json" };
 
 /** Active work this machine should show. Archived, deleted, and subagent threads are omitted. */
 export interface HostThreadCountSource {
@@ -21,6 +24,27 @@ export interface HostThreadCountSource {
 }
 
 const RUNNING = new Set(["preparing", "starting", "running"]);
+
+/** Subagent threads running a turn, which `countHostThreads` leaves out of its display counts. */
+export function runningSubagents(threads: ReadonlyArray<HostThreadCountSource>): number {
+  return threads.filter(
+    (thread) =>
+      thread.deletedAt == null &&
+      thread.archivedAt == null &&
+      thread.lineage.relationshipToParent === "subagent" &&
+      (RUNNING.has(thread.activityRunStatus ?? "") || RUNNING.has(thread.status)),
+  ).length;
+}
+
+/**
+ * Turns a runtime restart would interrupt on a host: top-level and subagent. Undefined when the
+ * host predates `subagentsRunning`, because it cannot show its children are idle.
+ */
+export function interruptibleTurns(threads: HostThreadCounts): number | undefined {
+  return threads.subagentsRunning === undefined
+    ? undefined
+    : threads.running + threads.subagentsRunning;
+}
 
 export function countHostThreads(threads: ReadonlyArray<HostThreadCountSource>): HostThreadCounts {
   const counts = { running: 0, waiting: 0, queued: 0 };
@@ -82,27 +106,39 @@ const formatRanges = (protocol: RuntimeProtocolRanges) => {
   return `orchestration ${range(protocol.orchestration)}, SSH ${range(protocol.ssh)}`;
 };
 
+export interface LocalHostCompatibility {
+  readonly version: string;
+  readonly speaks: RuntimeProtocolRanges;
+}
+
+/** This machine reads every host as a client, so it compares the protocols it speaks. */
+export const LOCAL_HOST_COMPATIBILITY: LocalHostCompatibility = {
+  version: packageJson.version,
+  speaks: ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
+};
+
 /**
- * Judges a reachable remote against this machine by the protocols it serves. `versionMismatch`
- * still marks a different build (or none reported) for older readers; only an incompatible or
- * unprovable host gets a warning message.
+ * The ADR-0019 verdict on a reachable remote, shared by host status and the provider host matrix
+ * so both warn alike. `versionMismatch` still marks a different build (or none reported) for older
+ * readers; only an incompatible or unprovable host gets a warning message.
  */
-export function markHostCompatibility(
-  entry: HostStatusEntry,
-  local: { readonly version: string; readonly speaks: RuntimeProtocolRanges },
-): HostStatusEntry {
-  if (entry.reachability !== "ok" || entry.host === null) return entry;
-  const { message: _remoteMessage, ...rest } = entry;
-  const verdict = hostCompatibilityOf(local.speaks, entry);
-  const marked: HostStatusEntry = {
-    ...rest,
-    ...(entry.serverVersion === local.version ? {} : { versionMismatch: true as const }),
+export function judgeRemoteHost(
+  remote: {
+    readonly host: string;
+    readonly serverVersion?: string | undefined;
+    readonly protocol?: RuntimeProtocolRanges | undefined;
+  },
+  local: LocalHostCompatibility,
+): { versionMismatch?: true; compatibility: HostCompatibility; message?: string } {
+  const verdict = hostCompatibilityOf(local.speaks, remote);
+  const marked = {
+    ...(remote.serverVersion === local.version ? {} : { versionMismatch: true as const }),
     compatibility: verdict.compatibility,
   };
-  const remote =
-    entry.serverVersion === undefined
+  const build =
+    remote.serverVersion === undefined
       ? "an older GOAT that does not report its version"
-      : `GOAT ${entry.serverVersion}`;
+      : `GOAT ${remote.serverVersion}`;
   const here = `this machine runs GOAT ${local.version} (${formatRanges(local.speaks)})`;
   switch (verdict.compatibility) {
     case "compatible":
@@ -110,14 +146,23 @@ export function markHostCompatibility(
     case "degraded":
       return {
         ...marked,
-        message: `${entry.host} runs ${remote}, which does not report the protocols it serves, so compatibility with this machine cannot be confirmed. Status works; update GOAT on ${entry.host} to confirm the rest.`,
+        message: `${remote.host} runs ${build}, which does not report the protocols it serves, so compatibility with this machine cannot be confirmed. It still answers; update GOAT on ${remote.host} to confirm the rest.`,
       };
     case "incompatible":
       return {
         ...marked,
-        message: `${entry.host} runs ${remote}, serving ${entry.protocol === undefined ? "unknown protocols" : formatRanges(entry.protocol)}; ${here}. They cannot work together. Update GOAT on ${verdict.update === "this-machine" ? "this machine" : entry.host}.`,
+        message: `${remote.host} runs ${build}, serving ${remote.protocol === undefined ? "unknown protocols" : formatRanges(remote.protocol)}; ${here}. They cannot work together. Update GOAT on ${verdict.update === "this-machine" ? "this machine" : remote.host}.`,
       };
   }
+}
+
+export function markHostCompatibility(
+  entry: HostStatusEntry,
+  local: LocalHostCompatibility,
+): HostStatusEntry {
+  if (entry.reachability !== "ok" || entry.host === null) return entry;
+  const { message: _remoteMessage, ...rest } = entry;
+  return { ...rest, ...judgeRemoteHost({ ...entry, host: entry.host }, local) };
 }
 
 export function unreachableHostStatus(

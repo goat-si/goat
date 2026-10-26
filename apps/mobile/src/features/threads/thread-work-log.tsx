@@ -59,7 +59,16 @@ import { environmentThreadDetails, threadEnvironment } from "../../state/threads
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toolActivityFaviconUrl } from "@goat/shared/favicon";
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
-import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import {
+  computerUseAppName,
+  computerUseAppToolIcon,
+  computerUseDisplayInput,
+  computerUseObservedApp,
+  computerUseRun,
+  computerUseRunStatus,
+} from "@goat/client-runtime/work-log/computer-use";
+import { ReplCodeText } from "./ReplCodeText";
+import { ThreadComputerUseCard } from "./ThreadComputerUseCard";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { GoatWordmark } from "../../components/GoatWordmark";
@@ -851,38 +860,6 @@ function WorkspacePreparationRetryButton(props: {
   );
 }
 
-function ReplCodeText({
-  code,
-  theme,
-}: {
-  readonly code: string;
-  readonly theme: "light" | "dark";
-}) {
-  const lines = useMarkdownCodeHighlight({ code, language: "typescript", theme, enabled: true });
-  let offset = 0;
-  const highlighted = lines?.flatMap((line, lineIndex) => {
-    const separator = lineIndex > 0 ? "\n" : "";
-    offset += separator.length;
-    return [
-      separator,
-      ...line.map((token) => {
-        const start = offset;
-        offset += token.content.length;
-        return (
-          <Text key={start} style={token.color ? { color: token.color } : undefined}>
-            {token.content}
-          </Text>
-        );
-      }),
-    ];
-  });
-  return (
-    <Text selectable className="font-mono text-2xs leading-normal text-foreground">
-      {highlighted ?? code}
-    </Text>
-  );
-}
-
 const ThreadWorkLogRow = function ThreadWorkLogRow(
   props: Omit<
     ThreadWorkLogProps,
@@ -972,6 +949,14 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               {failureItem.failure.message}
             </Text>
           ) : null}
+          {failureItem.failure.log ? (
+            <Text
+              selectable
+              className="ml-7 mt-1 font-mono text-xs leading-snug text-foreground-muted"
+            >
+              {failureItem.failure.log}
+            </Text>
+          ) : null}
           {failureItem.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE &&
           failureItem.runId !== null ? (
             <WorkspacePreparationRetryButton
@@ -997,7 +982,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     expanded && !isRead && shownItem.type === "command_execution"
       ? toolCallLines({ command: shownItem.input })
       : expanded && !isRead && shownItem.type === "dynamic_tool"
-        ? toolCallLines({ args: shownItem.input })
+        ? toolCallLines({ args: computerUseDisplayInput(shownItem.toolName, shownItem.input) })
         : expanded && shownItem.type === "file_search"
           ? toolCallLines({ args: { pattern: shownItem.pattern } })
           : expanded && shownItem.type === "web_search"
@@ -1042,8 +1027,11 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       </Text>
     );
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
+  const computerUse = computerUseRun(row.projectedItem.item);
   const previewText = relativizeWorkLabelPaths(
-    row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry, false, props.workspaceRoot),
+    row.groupStandIn?.label ??
+      computerUse?.summary ??
+      workEntryRowLabel(row.workEntry, false, props.workspaceRoot),
     row.workEntry.changedFiles,
     props.workspaceRoot,
   );
@@ -1064,7 +1052,16 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
   const iconIsDestructive =
     !isSystemNotice && !isUsageLimit && (row.icon === "alert" || row.icon === "warning");
   const failed = row.status === "failure";
-  const toolIcon = row.workEntry.toolIcon ?? row.workEntry.toolSource?.icon;
+  // A pid-only call names its app in its observation's output, which the wire item carries.
+  const observedApp =
+    computerUse && row.projectedItem.item.type === "dynamic_tool"
+      ? computerUseObservedApp(row.projectedItem.item.output)
+      : null;
+  const computerUseApp = computerUse ? computerUseAppName(computerUse.app, observedApp) : null;
+  const toolIcon =
+    row.workEntry.toolIcon ??
+    row.workEntry.toolSource?.icon ??
+    (computerUse ? computerUseAppToolIcon(computerUse.app, observedApp) : undefined);
   const icon = reasoning ? "brain" : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
   const lineCounts = fileChangeLineCounts(row.projectedItem.item);
 
@@ -1079,11 +1076,12 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
           notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
         }
         accessibilityLabel={
-          lineCounts
+          (computerUseApp === null ? "" : `${computerUseApp}: `) +
+          (lineCounts
             ? `${accessiblePreview}, ${lineCountsAccessibilityText(lineCounts)}${failed ? ", tool call failed" : ""}`
             : failed
               ? `${accessiblePreview}, tool call failed`
-              : accessiblePreview
+              : accessiblePreview)
         }
         accessibilityHint={
           notifiedSubagentThreadId !== undefined
@@ -1210,6 +1208,16 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         </View>
       </WorkLogPressable>
 
+      {computerUse && (expanded || computerUse.observes) ? (
+        <ThreadComputerUseCard
+          run={computerUse}
+          status={computerUseRunStatus(row.workEntry.toolLifecycleStatus)}
+          row={row.projectedItem}
+          environmentId={props.environmentId}
+          showScreenshots={!expanded}
+          onPressPreview={props.onPressPreview}
+        />
+      ) : null}
       {expanded &&
       (reasoning ||
         inlineDiff ||
@@ -1671,14 +1679,17 @@ function ToolActivityImage(props: {
         <View
           style={[
             StyleSheet.absoluteFill,
-            props.themeAppearance === "light" ? { filter: [{ brightness: 0.6 }] } : undefined,
+            props.themeAppearance === "light" ? { filter: [{ brightness: 0.7 }] } : undefined,
           ]}
         >
           <Image
             source={props.source}
             cachePolicy="memory-disk"
             contentFit="contain"
-            style={[StyleSheet.absoluteFill, { opacity: loaded ? 0.7 : 0 }]}
+            style={[
+              StyleSheet.absoluteFill,
+              { opacity: loaded ? (props.themeAppearance === "dark" ? 0.7 : 1) : 0 },
+            ]}
             onLoad={() => setLoaded(true)}
             onError={() => setFailed(true)}
           />

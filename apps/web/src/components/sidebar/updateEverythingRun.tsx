@@ -8,7 +8,9 @@ import { useEffect } from "react";
 import { APP_VERSION } from "~/branding";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useDesktopUpdateState } from "~/state/desktopUpdate";
+import { environmentIdsKey } from "~/state/environmentAtomList";
 import { serverEnvironment } from "~/state/server";
+import { environmentThreadShells } from "~/state/threads";
 import { resolveVersionMismatch } from "~/versionSkew";
 import type { ServerUpdateOutcome, ServerUpdateTarget } from "../ServerUpdateAction";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -16,6 +18,7 @@ import {
   closeFinishedUpdateRun,
   getUpdateEverythingToastView,
   isServerUpdateHandedOff,
+  type SshRuntimeUpdateTarget,
   type UpdateEverythingResult,
   type UpdateEverythingRun,
   type UpdateRunMachine,
@@ -36,6 +39,135 @@ export function setUpdateEverythingRun(
   appAtomRegistry.update(updateEverythingRunAtom, update);
 }
 
+const isRunningThread = (status: string) =>
+  status === "preparing" || status === "starting" || status === "running";
+
+/** Turns running on one machine; updates wait for this to reach zero instead of interrupting. */
+const runningThreadCountAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get) =>
+      get(environmentThreadShells.environmentThreadsAtom(environmentId)).filter((thread) =>
+        isRunningThread(thread.status),
+      ).length,
+  ).pipe(Atom.withLabel(`update-everything-running-threads:${environmentId}`)),
+);
+
+export function useRunningThreadCounts(
+  environmentIds: ReadonlyArray<EnvironmentId>,
+): ReadonlyMap<EnvironmentId, number> {
+  return useAtomValue(runningThreadCountsAtom(environmentIdsKey(environmentIds)));
+}
+
+const runningThreadCountsAtom = Atom.family((key: string) =>
+  Atom.make(
+    (get) =>
+      new Map(
+        key
+          .split("\n")
+          .filter((id) => id !== "")
+          .map((id) => {
+            const environmentId = EnvironmentId.make(id);
+            return [environmentId, get(runningThreadCountAtom(environmentId))] as const;
+          }),
+      ),
+  ).pipe(Atom.withLabel(`update-everything-running-thread-counts:${key}`)),
+);
+
+/** Pending waits a person can end from the capsule; each resolves false when stopped. */
+const stopWaits = new Set<() => void>();
+
+export function stopWaitingUpdateRunMachines(): void {
+  // Each stop removes itself; a Set visits the rest regardless.
+  for (const stop of stopWaits) stop();
+}
+
+function setWaitingForIdle(key: string, waitingForIdle: boolean): void {
+  setUpdateEverythingRun(
+    (run) =>
+      run && {
+        ...run,
+        machines: run.machines.map((machine) =>
+          machine.key === key && machine.waitingForIdle !== waitingForIdle
+            ? { ...machine, waitingForIdle }
+            : machine,
+        ),
+      },
+  );
+}
+
+function stoppableWait(key: string, start: (finish: (idle: boolean) => void) => () => void) {
+  return new Promise<boolean>((resolve) => {
+    let done = false;
+    let cleanup = () => {};
+    const finish = (idle: boolean) => {
+      if (done) return;
+      done = true;
+      stopWaits.delete(stop);
+      queueMicrotask(() => cleanup());
+      setWaitingForIdle(key, false);
+      resolve(idle);
+    };
+    const stop = () => finish(false);
+    stopWaits.add(stop);
+    cleanup = start(finish);
+  });
+}
+
+/** Resolves true once the machine has no running turns, false when a person stops waiting. */
+export function waitForIdleMachine(key: string, environmentId: EnvironmentId): Promise<boolean> {
+  return stoppableWait(key, (finish) =>
+    appAtomRegistry.subscribe(
+      runningThreadCountAtom(environmentId),
+      (count) => {
+        if (count === 0) finish(true);
+        else setWaitingForIdle(key, true);
+      },
+      { immediate: true },
+    ),
+  );
+}
+
+/** The server refused because it saw work; ask again after a while, or when stopped give up. */
+export function waitToRetryBusyMachine(key: string, delayMs: number): Promise<boolean> {
+  return stoppableWait(key, (finish) => {
+    setWaitingForIdle(key, true);
+    const timer = setTimeout(() => finish(true), delayMs);
+    return () => clearTimeout(timer);
+  });
+}
+
+let restartNow: (() => void) | null = null;
+
+/** This Mac restarts last and never under running turns, unless a person chooses Restart now. */
+export function waitForLocalIdle(environmentId: EnvironmentId | null): Promise<void> {
+  if (environmentId === null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      restartNow = null;
+      queueMicrotask(() => unsubscribe());
+      resolve();
+    };
+    restartNow = finish;
+    const unsubscribe = appAtomRegistry.subscribe(
+      runningThreadCountAtom(environmentId),
+      (count) => {
+        if (count === 0) return finish();
+        setUpdateEverythingRun(
+          (run) => run && { ...run, phase: "local-idle", localRunningThreads: count },
+        );
+      },
+      { immediate: true },
+    );
+  });
+}
+
+export function restartUpdateNow(): void {
+  restartNow?.();
+}
+
 function updateRunMachines(update: (machine: UpdateRunMachine) => UpdateRunMachine): void {
   setUpdateEverythingRun(
     (run) => run && closeFinishedUpdateRun({ ...run, machines: run.machines.map(update) }),
@@ -43,7 +175,7 @@ function updateRunMachines(update: (machine: UpdateRunMachine) => UpdateRunMachi
 }
 
 export function settleUpdateRunMachine(
-  environmentId: EnvironmentId,
+  key: string,
   failure: string | null,
   {
     serverUpdated = false,
@@ -51,12 +183,13 @@ export function settleUpdateRunMachine(
   }: { readonly serverUpdated?: boolean; readonly providerFailure?: string | null } = {},
 ): void {
   updateRunMachines((machine) =>
-    machine.environmentId === environmentId
+    machine.key === key
       ? {
           ...machine,
           result: failure === null ? "done" : "failed",
           failure,
-          ...(serverUpdated ? { server: null } : {}),
+          waitingForIdle: false,
+          ...(serverUpdated ? { server: null, sshRuntime: null } : {}),
           ...(providerFailure === undefined ? {} : { providerFailure }),
         }
       : machine,
@@ -66,29 +199,32 @@ export function settleUpdateRunMachine(
 export function retryFailedUpdateRunServers(
   update: (
     target: ServerUpdateTarget,
-    options: { readonly quiet: boolean },
+    options: { readonly quiet: boolean; readonly whenIdle: boolean },
   ) => Promise<ServerUpdateOutcome>,
+  updateSshRuntime: (target: SshRuntimeUpdateTarget) => Promise<ServerUpdateOutcome>,
 ): void {
   const failed = (appAtomRegistry.get(updateEverythingRunAtom)?.machines ?? []).flatMap(
     (machine) =>
-      machine.result === "failed" && machine.server !== null
-        ? [{ target: machine.server, providerFailure: machine.providerFailure }]
+      machine.result === "failed" && (machine.server !== null || machine.sshRuntime !== null)
+        ? [machine]
         : [],
   );
-  const targets = failed.map(({ target }) => target);
-  const retried = new Set(targets.map((target) => target.environmentId));
+  const retried = new Set(failed.map((machine) => machine.key));
   const startedAt = Date.now();
   updateRunMachines((machine) =>
-    retried.has(machine.environmentId)
-      ? { ...machine, result: null, failure: null, startedAt }
-      : machine,
+    retried.has(machine.key) ? { ...machine, result: null, failure: null, startedAt } : machine,
   );
-  for (const { target, providerFailure } of failed) {
-    void update(target, { quiet: true }).then((outcome) =>
+  for (const machine of failed) {
+    // Retry keeps the run's promise: a busy machine refuses again instead of losing its turns.
+    const attempt =
+      machine.server !== null
+        ? update(machine.server, { quiet: true, whenIdle: true })
+        : updateSshRuntime(machine.sshRuntime!);
+    void attempt.then((outcome) =>
       settleUpdateRunMachine(
-        target.environmentId,
+        machine.key,
         outcome.status === "updated"
-          ? providerFailure
+          ? machine.providerFailure
           : outcome.status === "failed"
             ? outcome.message
             : "Could not start the update",
@@ -254,10 +390,14 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
     phase: "servers",
     restartAt: null,
     machines: servers.map((server) => ({
+      key: server.environmentId,
       environmentId: server.environmentId,
       label: server.label,
       updatesProviders: false,
       server: null,
+      sshRuntime: null,
+      opencodex: false,
+      waitingForIdle: false,
       handedOffVersion: server.targetVersion,
       startedAt: server.startedAt,
       result: null,

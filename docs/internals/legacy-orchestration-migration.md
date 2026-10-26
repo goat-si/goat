@@ -60,3 +60,26 @@ There is no supported whole-thread export API. Recovery uses an untouched copy o
 `userdata` directory and opens that copy with SQLite's read-only mode. The user guide documents the
 queries against `projection_threads` and `projection_thread_messages`. Never start a server against
 the recovery copy because startup can run migrations and write new state.
+
+## GOAT migration ids
+
+GOAT's own migrations sit after upstream's in `migrationEntries` and are named in
+`GOAT_MIGRATION_NAMES`. When an upstream sync takes ids GOAT already used, GOAT's entries move up
+together and keep their names. A ledger written before the move records GOAT names under the old
+ids, so before the migrator runs,
+[`reconcileGoatMigrationIds`](../../apps/server/src/persistence/reconcileGoatMigrationIds.ts), in
+one transaction, runs each upstream migration those rows shadowed and records it, then rewrites
+the GOAT rows to their current ids. GOAT bodies never run again, and upstream's displaced
+migrations run exactly once because their ledger rows commit with them. A ledger that recorded
+only some GOAT migrations moves those rows and leaves the rest to the migrator at their new ids.
+It runs before `assertV2MigrationsCanRun`, which would otherwise read the old GOAT ids as skipped
+upstream migrations.
+
+Going back to an older build is refused rather than repaired. The older build sees GOAT rows
+above its own ids next to an upstream name it does not know; its reconcile stops with
+`BadState`, startup reports the database as newer than the build, and nothing is written. Only
+the newer build or a copy taken before the upgrade opens it. Each GOAT server migrates only its
+own database, so a remote host keeps its old ledger until its runtime updates, and an older
+runtime started later on that host is refused the same way. Cycle 261024 is an example: upstream
+`068_ShellStopRequestIndex` moved GOAT 068-101 to 069-102, and nightly 256 and earlier refuse a
+database a later build migrated. The cases are pinned in `reconcileGoatMigrationIds.test.ts`.

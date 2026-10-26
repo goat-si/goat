@@ -35,6 +35,7 @@ import {
 import { githubMediaFetchUrl, githubMediaFileName } from "@goat/shared/githubMedia";
 import { MCP_APP_MAX_HTML_BYTES } from "@goat/shared/mcpApp";
 import { isProjectFaviconPath, PROJECT_FAVICON_FALLBACK_MARKER } from "@goat/shared/projectFavicon";
+import { isNetworkPath } from "@goat/shared/path";
 import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@goat/shared/toolOutput";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -59,6 +60,7 @@ import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import { isWithinRoot } from "../workspace/KnownWorkspaces.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { extractIcnsPng } from "./icns.ts";
@@ -350,11 +352,27 @@ const readImageDimensionsFromHeader = (filePath: string) =>
 const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMediaFileAsset")(
   function* (input: {
     readonly requestedPath: string;
+    readonly workspaceRoot: string | undefined;
     readonly resource: AssetResource;
     readonly expiresAt: number;
   }) {
     const path = yield* Path.Path;
-    const canonicalFile = yield* resolveCanonicalFile(input.requestedPath).pipe(
+    // Resolving a network path makes Windows sign in to its host with the
+    // user's NTLM credentials, so only the thread's own project may be on a share.
+    // Windows reads a `\\?\` path as written, `..` included, so the lookup gets
+    // the resolved path this check approved.
+    const requestedPath = path.resolve(input.requestedPath);
+    if (
+      isNetworkPath(input.requestedPath) &&
+      (input.workspaceRoot === undefined ||
+        !isWithinRoot(path, requestedPath, path.resolve(input.workspaceRoot)))
+    ) {
+      return yield* new AssetWorkspaceAssetNotFoundError({
+        resource: input.resource,
+        checkedPath: input.requestedPath,
+      });
+    }
+    const canonicalFile = yield* resolveCanonicalFile(requestedPath).pipe(
       Effect.mapError(
         (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
       ),
@@ -379,6 +397,7 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
                 : Effect.succeed(null),
               (dimensions) => ({
                 identity: { device: file.info.dev.toString(), inode: file.info.ino.toString() },
+                fileRevision: `${file.info.dev}:${file.info.ino}:${file.info.size}:${file.info.mtimeNs}:${file.info.ctimeNs}`,
                 dimensions,
               }),
             ),
@@ -403,6 +422,7 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
         expiresAt: input.expiresAt,
       },
       fileName: path.basename(canonicalFile),
+      fileRevision: opened.fileRevision,
       imageDimensions: opened.dimensions,
     };
   },
@@ -505,6 +525,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let fileName: string;
   let sourcePath: string | undefined;
   let imageDimensions: ImageDimensions | null = null;
+  let fileRevision: string | undefined;
 
   switch (input.resource._tag) {
     case "media-file": {
@@ -525,12 +546,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       }
       const finalized = yield* finalizeAbsoluteMediaFileAsset({
         requestedPath,
+        workspaceRoot: input.workspaceRoot,
         resource: input.resource,
         expiresAt,
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
       imageDimensions = finalized.imageDimensions;
+      fileRevision = finalized.fileRevision;
       break;
     }
     case "workspace-file": {
@@ -567,12 +590,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       if (path.isAbsolute(hostPath)) {
         const finalized = yield* finalizeAbsoluteMediaFileAsset({
           requestedPath: hostPath,
+          workspaceRoot: draftWorkspaceRoot,
           resource: input.resource,
           expiresAt,
         });
         claims = finalized.claims;
         fileName = finalized.fileName;
         imageDimensions = finalized.imageDimensions;
+        fileRevision = finalized.fileRevision;
         break;
       }
       const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(draftWorkspaceRoot).pipe(
@@ -856,6 +881,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
     ...(imageDimensions !== null ? { imageDimensions } : {}),
+    ...(fileRevision !== undefined ? { fileRevision } : {}),
   };
 });
 

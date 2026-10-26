@@ -23,16 +23,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/076_Memory.ts";
-import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
-import readyMigration from "../persistence/Migrations/086_MemoryLastReadySpace.ts";
-import adminMigration from "../persistence/Migrations/087_MemoryHubAdministered.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
+import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
+import readyMigration from "../persistence/Migrations/087_MemoryLastReadySpace.ts";
+import adminMigration from "../persistence/Migrations/088_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
@@ -1894,30 +1894,6 @@ it.effect(
     }).pipe(Effect.provide(bootstrapDependencies)),
 );
 
-it.effect("settings CAS conflict after activation is typed and never marks the admin ready", () =>
-  Effect.gen(function* () {
-    yield* interruptedHub;
-    const transitions = yield* Settings.MemoryHubSettingsTransitions;
-    yield* transitions.applyMemoryHubTransition(
-      {
-        requestId: M.MemoryOperationId.make(id(9001)),
-        expectedVersion: 0,
-        settings: { mode: "disabled" },
-      },
-      Effect.void,
-    );
-    const admin = yield* Hub.makeAdministrator;
-    const failure = yield* admin.update(firstHub, Effect.void).pipe(Effect.flip);
-    assert.strictEqual(failure._tag, "MemoryHubError");
-    if (failure._tag === "MemoryHubError") assert.strictEqual(failure.code, "revision_changed");
-    const store = yield* Store.MemoryStore;
-    assert.strictEqual(
-      (yield* store.transact(store.readHubAdminTx(firstHub.requestId)))?.stage,
-      "activated",
-    );
-  }).pipe(Effect.provide(bootstrapDependencies)),
-);
-
 it.effect(
   "superseding CAS retires activation and disable configure restart reuse its publication",
   () =>
@@ -1943,6 +1919,7 @@ it.effect(
       const admin = yield* Hub.makeAdministrator;
       const conflict = yield* admin.update(firstHub, Effect.void).pipe(Effect.flip);
       assert.strictEqual(conflict._tag, "MemoryHubError");
+      if (conflict._tag === "MemoryHubError") assert.strictEqual(conflict.code, "revision_changed");
       const denied = yield* admin
         .update(
           {

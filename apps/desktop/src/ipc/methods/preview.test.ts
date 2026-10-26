@@ -6,6 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -42,17 +43,24 @@ describe("preview IPC methods", () => {
     Effect.scoped(
       Effect.gen(function* () {
         let listener: DesktopIpc.DesktopIpcHandleListener | undefined;
-        const ipc = DesktopIpc.make({
-          removeHandler: vi.fn(),
-          handle: (_channel, registered) => {
-            listener = registered;
+        const mainFrame = {};
+        const sender = { id: 7, mainFrame, isDestroyed: () => false };
+        const ipc = DesktopIpc.make(
+          {
+            removeHandler: vi.fn(),
+            handle: (_channel, registered) => {
+              listener = registered;
+            },
+            removeAllListeners: vi.fn(),
+            on: vi.fn(),
           },
-          removeAllListeners: vi.fn(),
-          on: vi.fn(),
-        });
+          Effect.succeed(Option.some({ webContents: sender })),
+        );
         yield* ipc.handle(method);
         return yield* Effect.promise(async () =>
-          structuredClone(await listener!({ sender: { id: 7 } }, { tabId: "capture-tab" })),
+          structuredClone(
+            await listener!({ sender, senderFrame: mainFrame }, { tabId: "capture-tab" }),
+          ),
         );
       }).pipe(
         Effect.provideService(
@@ -60,6 +68,7 @@ describe("preview IPC methods", () => {
           manager as PreviewManager.PreviewManager["Service"],
         ),
         Effect.provideService(DesktopClientSettings.DesktopClientSettings, {
+          onCommitted: () => Effect.void,
           get: Effect.succeedNone,
           set: () => Effect.void,
         }),

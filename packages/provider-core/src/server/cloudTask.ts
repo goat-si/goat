@@ -47,12 +47,15 @@ export function cloudFollowUpReason(
     : null;
 }
 
-export function cloudTaskResultText(task: OrchestrationV2CloudTask) {
+export function cloudTaskResultText(
+  task: OrchestrationV2CloudTask,
+  terminal?: { readonly status: string; readonly resultText?: string | undefined },
+) {
   const title =
     task.tracking === "link-only" && task.status === "running"
       ? "Running in the cloud"
       : `Cloud task ${task.status}`;
-  const summary = task.summary?.trim() || title;
+  const summary = terminal?.resultText?.trim() || task.summary?.trim() || title;
   // Rendered as markdown: one link per list item so URLs never run into the next label.
   // The canonical links are always listed, even when the provider's summary mentions them.
   const links = [

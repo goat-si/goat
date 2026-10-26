@@ -2,11 +2,16 @@ import { tokenizeCliArgs } from "@goat/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
-import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import {
+  withThreadMcpEnvironment,
+  type McpProviderSessionConfig,
+} from "@goat/provider-core/server/mcpSession";
 import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import {
   PI_GOAT_MCP_EXTENSION_FILENAME,
   PI_GOAT_MCP_EXTENSION_SOURCE,
+  GOAT_CUA_MCP_ENV,
+  GOAT_CUA_GATE_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
@@ -251,6 +256,8 @@ export function buildPiRpcLaunch(input: {
   readonly disableExtensions?: boolean;
   readonly disableTools?: boolean;
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  /** The per-turn computer use gate; only a process launched with the driver gets it. */
+  readonly cuaGatePath?: string | undefined;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -285,13 +292,20 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = { ...input.environment };
-  // These values belong to the current T3 session. Never let a Pi child reuse
+  const environment = withThreadMcpEnvironment(
+    input.environment,
+    hasGoatMcp ? input.mcpSession : undefined,
+  );
+  // These values belong to the current GOAT session. Never let a Pi child reuse
   // credentials inherited from the server or a parent provider process.
   for (const name of [GOAT_MCP_URL_ENV, GOAT_MCP_BEARER_ENV, GOAT_PI_MCP_EXTENSION_PATH_ENV]) {
     delete environment[name];
     delete environment[legacyEnvName(name) ?? name];
   }
+  delete environment[GOAT_CUA_MCP_ENV];
+  delete environment[GOAT_CUA_GATE_ENV];
+  // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
+  const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
 
   return {
     args,
@@ -317,6 +331,18 @@ export function buildPiRpcLaunch(input: {
             }
           : {}),
       }),
+      ...(cuaDriver === undefined
+        ? {}
+        : {
+            [GOAT_CUA_MCP_ENV]: JSON.stringify({
+              command: cuaDriver.command,
+              args: cuaDriver.args,
+              env: Object.fromEntries(
+                cuaDriver.environment.map(({ name, value }) => [name, value]),
+              ),
+            }),
+            ...(input.cuaGatePath === undefined ? {} : { [GOAT_CUA_GATE_ENV]: input.cuaGatePath }),
+          }),
     },
     hasGoatMcp,
   };

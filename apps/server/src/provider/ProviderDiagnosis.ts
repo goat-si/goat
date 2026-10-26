@@ -22,6 +22,7 @@ import {
   ProviderInstanceId,
   implicitDefaultInstance,
   isDevinAcpRegistryInstance,
+  providerSettingsFixPath,
   type ProviderDiagnoseInput,
   type ProviderDiagnoseResult,
   type ProviderDiagnosis,
@@ -51,6 +52,7 @@ import {
   forbiddenClaudeCloudVariables,
   resolveClaudeCloudSibling,
 } from "./Drivers/ClaudeCloudLogin.ts";
+import { detectCloudClis, planCloudAutoSetup } from "./CloudProviderAutoSetup.ts";
 import { resolveEntryEnabled } from "./ProviderInstanceRegistry.ts";
 
 const CLAUDE_CLOUD = ProviderDriverKind.make("claudeCloud");
@@ -100,9 +102,22 @@ const agent = (
   extra: Omit<ProviderDiagnosisFix, "actor" | "instruction"> = {},
 ): ProviderDiagnosisFix => ({ actor: "agent", instruction, ...extra });
 
-/** Changing provider settings needs `providers:manage`, which agents lack; a person approves it. */
-const settingsChange = (instruction: string) =>
-  human(instruction, { path: "provider.setup", handoff: "approval" });
+type FixCall = NonNullable<ProviderDiagnosisFix["call"]>;
+
+/**
+ * A settings change. Its call runs directly for a provider manager; others get an approval. With
+ * no call, no GOAT tool makes the change: a person follows the instruction in Settings.
+ */
+const settingsChange = (instruction: string, call?: FixCall) =>
+  human(
+    instruction,
+    call === undefined ? {} : { path: providerSettingsFixPath(call), handoff: "approval", call },
+  );
+
+const enableCall = (instanceId: string): FixCall => ({
+  tool: "goat_provider_update",
+  arguments: { instanceId, enabled: true },
+});
 
 const retry = (subject: string) =>
   agent(
@@ -136,7 +151,7 @@ const missingInstance = (target: Target) =>
     `No provider instance ${target.instanceId} is configured on this environment.`,
     "instance_missing",
     agent(
-      "List the configured providers with provider.list (orchestrator_capabilities) and use one of their instance ids.",
+      'List the configured providers with goat_call {path:"provider.list"} and use one of their instance ids.',
       { path: "provider.list" },
     ),
   );
@@ -149,10 +164,15 @@ const enabledCheck = (target: Target, enabled: boolean) =>
         "fail",
         `${nameOf(target)} is disabled.`,
         "disabled",
-        settingsChange(`Enable ${nameOf(target)} in ${SETTINGS}.`),
+        settingsChange(`Enable ${nameOf(target)} in ${SETTINGS}.`, enableCall(target.instanceId)),
       );
 
-const implicitCloudEnabledCheck = (target: Target, enabled: boolean, sibling: string) =>
+const implicitCloudEnabledCheck = (
+  target: Target,
+  enabled: boolean,
+  sibling: string,
+  call: FixCall,
+) =>
   enabled
     ? check("enabled", "pass", `${nameOf(target)} follows the enabled ${sibling} provider.`)
     : check(
@@ -160,7 +180,7 @@ const implicitCloudEnabledCheck = (target: Target, enabled: boolean, sibling: st
         "fail",
         `${nameOf(target)} is off because its ${sibling} provider is disabled or missing.`,
         "disabled",
-        settingsChange(`Enable the ${sibling} provider in ${SETTINGS}.`),
+        settingsChange(`Enable the ${sibling} provider in ${SETTINGS}.`, call),
       );
 
 // ── Generic drivers: judged from the registry's readiness snapshot ─────────
@@ -194,7 +214,7 @@ export const snapshotChecks = (
           "fail",
           `${name} is disabled.`,
           "disabled",
-          settingsChange(`Enable ${name} in ${SETTINGS}.`),
+          settingsChange(`Enable ${name} in ${SETTINGS}.`, enableCall(snapshot.instanceId)),
         ),
   );
   if (!snapshot.enabled) return checks;
@@ -219,7 +239,15 @@ export const snapshotChecks = (
         snapshot.message ?? `${name} is not installed on this machine.`,
         "executable_missing",
         snapshot.setup?.canInstall
-          ? settingsChange(`Install ${name} from ${SETTINGS}.`)
+          ? settingsChange(
+              `Install ${name} from ${SETTINGS}.`,
+              snapshot.driver === "acpRegistry"
+                ? {
+                    tool: "goat_provider_update",
+                    arguments: { instanceId: snapshot.instanceId, install: true },
+                  }
+                : undefined,
+            )
           : human(
               `Install ${name} on this machine, or set its binary path in ${SETTINGS}.${docs ? ` See ${docs}.` : ""}`,
               { handoff: "terminal" },
@@ -450,7 +478,16 @@ const forbiddenEnvironmentFix = (
         : `GOAT started with ${fromProcess.join(", ")} set, ${origin}. Add ${them} with an empty value to the environment of Claude instance ${sourceId} in ${SETTINGS}, or restart GOAT without ${them}.`,
     );
   }
-  return settingsChange(steps.join(" "));
+  return settingsChange(steps.join(" "), {
+    tool: "goat_provider_update",
+    arguments: {
+      instanceId: sourceId,
+      environment: [
+        ...fromInstance.map((name) => ({ name, value: null })),
+        ...fromProcess.map((name) => ({ name, value: "" })),
+      ],
+    },
+  });
 };
 
 /** `environment` without the routing variables Claude Cloud refuses, to probe what else blocks. */
@@ -483,6 +520,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
         target,
         implicitDefaultInstance(settings, CLAUDE_CLOUD).enabled,
         `Claude instance ${sourceId}`,
+        enableCall(sourceId),
       ),
     );
   } else if (!configured) {
@@ -663,12 +701,12 @@ const devinCandidates = (settings: ServerSettings) =>
   );
 
 const devinProbeChecks = (
-  result: Result.Result<string, DevinCloudCli.DevinCloudCliError>,
+  result: Result.Result<DevinCloudCli.DevinCliReadiness, DevinCloudCli.DevinCloudCliError>,
   where: string,
 ): ProviderDiagnosisCheck[] => {
   if (Result.isSuccess(result)) {
     return [
-      check("executable", "pass", `Devin CLI ${result.success} at ${where}.`),
+      check("executable", "pass", `Devin CLI ${result.success.version} at ${where}.`),
       check("cloud", "pass", "The Devin CLI supports cloud sessions."),
       check("auth", "pass", "Signed in to Devin."),
     ];
@@ -733,9 +771,17 @@ const devinSiblingFailure = (
     candidates.length > 0
       ? settingsChange(
           `Select ACP instance ${candidates[0]} as the Devin ACP instance of ${nameOf(target)} in ${SETTINGS}.`,
+          {
+            tool: "goat_provider_link",
+            arguments: { instanceId: target.instanceId, siblingInstanceId: candidates[0] },
+          },
         )
       : settingsChange(
-          `Add an ACP Registry provider for Devin in ${SETTINGS}, then select it as the Devin ACP instance of ${nameOf(target)}.`,
+          `Reset ${nameOf(target)} in ${SETTINGS} so GOAT sets it up again from the Devin CLI, or add an ACP Registry provider for Devin and select it as the Devin ACP instance of ${nameOf(target)}.`,
+          {
+            tool: "goat_provider_add",
+            arguments: { acpAgentId: "devin", linkTo: target.instanceId },
+          },
         );
   switch (error.reason) {
     case "ambiguous":
@@ -780,7 +826,10 @@ const devinSiblingFailure = (
         "fail",
         `ACP instance ${siblingId} is disabled.`,
         "sibling_invalid",
-        settingsChange(`Enable ACP instance ${siblingId} in ${SETTINGS}.`),
+        settingsChange(
+          `Enable ACP instance ${siblingId} in ${SETTINGS}.`,
+          siblingId ? enableCall(siblingId) : undefined,
+        ),
       );
     case "unprepared":
       return check(
@@ -788,7 +837,12 @@ const devinSiblingFailure = (
         "fail",
         `Devin from the ACP Registry is not installed for ${siblingId} yet.`,
         "sibling_not_ready",
-        settingsChange(`Install Devin from ${SETTINGS} → ${siblingId}.`),
+        settingsChange(
+          `Install Devin from ${SETTINGS} → ${siblingId}.`,
+          siblingId
+            ? { tool: "goat_provider_update", arguments: { instanceId: siblingId, install: true } }
+            : undefined,
+        ),
       );
     case "missing_runner":
       return check(
@@ -846,6 +900,38 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
     !configured &&
     target.instanceId === ProviderInstanceId.make("devinCloud") &&
     implicitDefaultInstance(settings, DEVIN_CLOUD).present;
+  // The same plan CloudProviderAutoSetup applies at startup and on a provider refresh.
+  const autoSetup = implicit
+    ? planCloudAutoSetup(settings, yield* detectCloudClis()).find(
+        (step) => step.provider === "devinCloud",
+      )
+    : undefined;
+  if (autoSetup) {
+    checks.push(check("instance", "pass", "Devin Cloud is available automatically."));
+    checks.push(
+      check(
+        "auto_setup",
+        "fail",
+        `GOAT sets up Devin Cloud from the Devin CLI at ${autoSetup.command}: it adds the Devin provider ${autoSetup.siblingId}, links it, and turns Devin Cloud on. This runs when GOAT starts and whenever providers refresh.`,
+        "sibling_missing",
+        human(
+          `Refresh providers in ${SETTINGS}, or restart GOAT. Setup needs no input; sign in to Devin afterwards if the next diagnosis asks.`,
+        ),
+      ),
+    );
+    const home = yield* HostProcess.HomeDirectory;
+    const probed = yield* Effect.result(
+      (yield* DevinCloudCli.DevinCloudCli).probe({
+        sourceInstanceId: target.instanceId,
+        command: autoSetup.command,
+        env: yield* HostProcess.Environment,
+        cwd: home,
+        binding: "",
+      }),
+    );
+    checks.push(...devinProbeChecks(probed, autoSetup.command));
+    return finish(target, true, checks);
+  }
   if (implicit) {
     checks.push(check("instance", "pass", "Devin Cloud is available automatically."));
     checks.push(
@@ -853,6 +939,7 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
         target,
         implicitDefaultInstance(settings, DEVIN_CLOUD).enabled,
         "Devin ACP",
+        { tool: "goat_provider_add", arguments: { acpAgentId: "devin" } },
       ),
     );
   } else if (!configured) {
@@ -1071,6 +1158,25 @@ export const diagnoseProviders = Effect.fn("ProviderDiagnosis.diagnose")(functio
             );
           return finish(target, true, checks);
         }
+        if (target.driver === ProviderDriverKind.make("cursorCloud") && !target.entry) {
+          const settings = yield* (yield* ProviderHost.ProviderHost).settings.get;
+          const step = planCloudAutoSetup(settings, yield* detectCloudClis()).find(
+            (candidate) => candidate.provider === "cursorCloud",
+          );
+          if (step)
+            return finish(target, true, [
+              check("instance", "pass", "Cursor Cloud is available automatically."),
+              check(
+                "auto_setup",
+                "fail",
+                `GOAT turns on the Cursor provider because the Cursor CLI is at ${step.command}, which turns Cursor Cloud on. This runs when GOAT starts and whenever providers refresh.`,
+                "disabled",
+                human(
+                  `Refresh providers in ${SETTINGS}, or restart GOAT. Then sign in to Cursor from the Cursor Cloud card if the next diagnosis asks.`,
+                ),
+              ),
+            ]);
+        }
         if (target.snapshot) {
           return finish(target, true, snapshotChecks(target.snapshot, options.checkedBy === "cli"));
         }
@@ -1081,7 +1187,7 @@ export const diagnoseProviders = Effect.fn("ProviderDiagnosis.diagnose")(functio
                 "readiness",
                 "unknown",
                 options.checkedBy === "cli"
-                  ? `No saved status for ${nameOf(target)}. Start GOAT once, or call goat_provider_diagnose from a thread.`
+                  ? `No saved status for ${nameOf(target)}. Start GOAT once, or call goat_call {path:"provider.diagnose"} from a thread.`
                   : `${nameOf(target)} has no readiness snapshot yet.`,
                 "not_checked",
               ),

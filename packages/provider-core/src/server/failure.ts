@@ -52,6 +52,9 @@ const PROVIDER_FAILURE_CATEGORIES: Partial<
   },
 };
 
+// Devin Cloud CLI stages whose messages are GOAT's fixed text; relay details carry vendor text.
+const DEVIN_CLI_STAGES = new Set(["sibling", "resolve", "probe", "version", "auth"]);
+
 const PROVIDER_FAILURE_REASONS: Record<ProviderAdapterFailureReason, string> = {
   previous_turn_active: "the previous turn is still running",
   attachment_unreadable: "an attachment could not be read",
@@ -59,7 +62,7 @@ const PROVIDER_FAILURE_REASONS: Record<ProviderAdapterFailureReason, string> = {
 
 /**
  * Walks a cause chain for curated text without reading arbitrary provider
- * defect text. `known` is the message of a domain error T3 raised itself;
+ * defect text. `known` is the message of a domain error GOAT raised itself;
  * `category` is the generic message of the innermost provider wrapper seen.
  */
 function curatedCauseMessages(cause: unknown): {
@@ -93,6 +96,11 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeAppendSystemPromptMissingValueError":
         case "CursorModelUnavailableError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
+        // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.
+        case "DevinCloudCliError":
+          if (DEVIN_CLI_STAGES.has(String((cause as Record<string, unknown>).stage)))
+            return { known: stringField(cause, "message"), category: categoryMessage() };
+          break;
         case "ContextHandoffDeliveryUncertainError":
           return {
             known:

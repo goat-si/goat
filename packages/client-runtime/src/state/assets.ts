@@ -88,6 +88,7 @@ export type AssetUrlState =
       readonly expiresAt: number;
       readonly sourcePath?: string;
       readonly imageDimensions?: AssetImageDimensions;
+      readonly fileRevision?: string;
     };
 
 export const MISSING_FILE_ACCESS_MESSAGE =
@@ -132,6 +133,7 @@ export function assetUrlStateFromResult(
     ...(result.value.imageDimensions !== undefined
       ? { imageDimensions: result.value.imageDimensions }
       : {}),
+    ...(result.value.fileRevision !== undefined ? { fileRevision: result.value.fileRevision } : {}),
   };
 }
 

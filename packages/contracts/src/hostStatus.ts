@@ -1,11 +1,30 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleOptional, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { HostComputerUse } from "./cua.ts";
 import { RuntimeProtocolRanges } from "./environment.ts";
 import { HostCondition } from "./fleetHealth.ts";
+import { ORCHESTRATION_HISTORY_BUDGET_BYTES } from "./memory.ts";
+import { HostPlacementRanking, HostPlacementRequirements, HostPressure } from "./hostPressure.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
+import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
+import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
+import {
+  OpenCodexChildBootstrapStatus,
+  OpenCodexInventorySnapshot,
+  OpenCodexUpdateStatus,
+} from "./opencodex.ts";
+import { HubParityResult } from "./hubParity.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
+import { GoatclawHostSync } from "./permissionProfiles.ts";
 
 /**
  * Wire shape for `goat_host_status`. A later GUI reads this schema; add fields
@@ -50,8 +69,104 @@ export const HostThreadCounts = Schema.Struct({
   queued: NonNegativeInt.annotate({
     description: "Threads with a queued turn that has not started.",
   }),
+  subagentsRunning: Schema.optional(
+    NonNegativeInt.annotate({
+      description: "Subagent threads running a turn. Older hosts omit it.",
+    }),
+  ),
+  activity: Schema.optional(
+    Schema.Literals(["idle", "busy"]).annotate({
+      description:
+        "Whether runtime updates on that machine wait for work, from the same check they use. Older hosts omit it.",
+    }),
+  ),
+  blockers: Schema.optional(
+    Schema.Array(ServerActivityBlocker).annotate({
+      description: "The oldest threads that keep activity busy, at most five. Older hosts omit it.",
+    }),
+  ),
 });
 export type HostThreadCounts = typeof HostThreadCounts.Type;
+
+/**
+ * Orchestration history's default budget, for hosts that do not report their configured one:
+ * everything in the state database that is neither the memory store nor free pages.
+ */
+export const HOST_HISTORY_BUDGET_BYTES = ORCHESTRATION_HISTORY_BUDGET_BYTES;
+
+/** The last on-demand or scheduled history compaction this server finished. */
+export const HostStorageCompactionResult = Schema.Struct({
+  finishedAt: IsoDateTime,
+  removedEvents: NonNegativeInt,
+  /** How much smaller the database file got. */
+  freedBytes: NonNegativeInt,
+  /**
+   * The database predates incremental auto_vacuum, so removed history stays allocated in the file
+   * until an offline `goat doctor` runs on that machine.
+   */
+  needsOfflineCompaction: Schema.Boolean,
+});
+export type HostStorageCompactionResult = typeof HostStorageCompactionResult.Type;
+
+/** The state database of the machine that answered, from its once-a-minute storage pass. */
+export const HostStorageHealth = Schema.Struct({
+  databaseBytes: NonNegativeInt,
+  /** The memory store's last sample (goat_memory_store_bytes); null before the first one. */
+  memoryBytes: Schema.NullOr(NonNegativeInt),
+  /** Database bytes that are neither memory nor free pages. */
+  historyBytes: NonNegativeInt,
+  /** That machine's `storageCleanup.historyBudgetBytes`. Older hosts omit it. */
+  historyBudgetBytes: Schema.optional(NonNegativeInt),
+  /** Idle threads whose tool history sits in compressed archive files, restored on open. */
+  archivedThreads: Schema.optional(NonNegativeInt),
+  /** Bytes of those archive files, outside the database. */
+  archiveBytes: Schema.optional(NonNegativeInt),
+  /** Free pages inside the file. */
+  reclaimableBytes: NonNegativeInt,
+  measuredAt: IsoDateTime,
+  /** Set while a history compaction runs. */
+  compactingSince: Schema.optional(IsoDateTime),
+  lastCompaction: Schema.optional(HostStorageCompactionResult),
+});
+export type HostStorageHealth = typeof HostStorageHealth.Type;
+
+/**
+ * A GOAT server this machine's user started that nothing can use any more: its launcher exited
+ * (it was reparented to PID 1), and its GOAT home was deleted or is a temporary home, as test
+ * runs leave behind. A server with a real home is never one, whatever version it runs.
+ */
+export const HostStrayProcess = Schema.Struct({
+  pid: PositiveInt,
+  startedAt: IsoDateTime,
+  kind: Schema.Literal("orphaned_server"),
+  reason: Schema.Literals(["home_deleted", "temporary_home"]),
+  baseDir: Schema.String,
+});
+export type HostStrayProcess = typeof HostStrayProcess.Type;
+
+export const HostStrayProcesses = Schema.Struct({
+  scannedAt: IsoDateTime,
+  processes: Schema.Array(HostStrayProcess),
+});
+export type HostStrayProcesses = typeof HostStrayProcesses.Type;
+
+/** `server.cleanUpStrayProcesses`: what was stopped, and what is left after a fresh scan. */
+export const HostStrayCleanupResult = Schema.Struct({
+  stopped: NonNegativeInt,
+  /** Of those stopped, how many ignored SIGTERM and needed SIGKILL. */
+  forced: NonNegativeInt,
+  failed: Schema.Array(Schema.Struct({ pid: PositiveInt, message: Schema.String })),
+  remaining: HostStrayProcesses,
+});
+export type HostStrayCleanupResult = typeof HostStrayCleanupResult.Type;
+
+export class HostMaintenanceError extends Schema.TaggedError<HostMaintenanceError>()(
+  "HostMaintenanceError",
+  {
+    operation: Schema.Literals(["compact_storage", "clean_up_strays"]),
+    message: Schema.String,
+  },
+) {}
 
 /**
  * One provider account's subscription quota. `fromCache` is true when this
@@ -85,6 +200,15 @@ export const HostStatusMetrics = Schema.Struct({
   quotas: Schema.Array(HostStatusQuota),
   /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
   providers: Schema.optional(Schema.Array(HostStatusProvider)),
+  quotaPool: Schema.optional(QuotaPool),
+  /** Computer use on that machine. Older hosts omit it, and a malformed value decodes away. */
+  computerUse: ForwardCompatibleOptional(HostComputerUse),
+  /** Read-only inventory of this host's OpenCodex. Older hosts omit it. */
+  opencodex: ForwardCompatibleOptional(OpenCodexInventorySnapshot),
+  /** Older hosts omit it; a host that sends it also serves `server.compactStorage`. */
+  storage: ForwardCompatibleOptional(HostStorageHealth),
+  /** Older hosts omit it; a host that sends it also serves `server.cleanUpStrayProcesses`. */
+  strays: ForwardCompatibleOptional(HostStrayProcesses),
 });
 export type HostStatusMetrics = typeof HostStatusMetrics.Type;
 
@@ -104,6 +228,7 @@ export type HostCompatibility = typeof HostCompatibility.Type;
  * `lastKnown: true` repeats the last successful metrics.
  */
 export const HostStatusEntry = Schema.Struct({
+  repositories: Schema.optional(RepositoryInventorySnapshot),
   host: Schema.NullOr(TrimmedNonEmptyString),
   reachability: HostStatusReachability,
   lastKnown: Schema.optional(Schema.Literal(true)),
@@ -125,11 +250,27 @@ export const HostStatusEntry = Schema.Struct({
   message: Schema.optional(Schema.String),
   /** Self-healing conditions this machine derived for the host. Older servers omit it. */
   conditions: Schema.optional(Schema.Array(HostCondition)),
+  parity: ForwardCompatibleOptional(HubParityResult),
+  /** Managed OpenCodex updates this machine coordinates. Only the answering machine sets it. */
+  opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
+  /** This Home's progress joining a cloud machine it created as its Child. Set by the Home. */
+  opencodexChild: ForwardCompatibleOptional(OpenCodexChildBootstrapStatus),
+  /**
+   * Whether this hub joins the SSH host as its OpenCodex Child after each successful setup. Set by
+   * the hub for SSH hosts GOAT manages while it is a hub; older hubs omit it.
+   */
+  opencodexChildOptIn: Schema.optional(Schema.Boolean),
+  /** Resource pressure that machine reports for itself. Older hosts omit it. */
+  pressure: Schema.optional(HostPressure),
+  /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */
+  goatclaw: ForwardCompatibleOptional(GoatclawHostSync),
 });
 export type HostStatusEntry = typeof HostStatusEntry.Type;
 
 export const GoatHostStatusResult = Schema.Struct({
   hosts: Schema.Array(HostStatusEntry),
+  /** Present when the call passed `placement`. */
+  placement: Schema.optional(HostPlacementRanking),
 });
 export type GoatHostStatusResult = typeof GoatHostStatusResult.Type;
 
@@ -140,11 +281,25 @@ const HostAlias = TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate(
 });
 
 export const GoatHostStatusInput = Schema.Struct({
+  repositories: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Include a bounded inventory of registered projects and their Git worktrees. Local tracking refs only; no fetch or install. Cached for up to 15 seconds.",
+  }),
+  parityEvidence: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "With local:true, collect fresh read-only hub parity evidence, including one GET /v1/models.",
+  }),
   host: Schema.optional(HostAlias),
   local: Schema.optional(Schema.Boolean).annotate({
     description:
       "When true, report only this machine. A fan-out calls each SSH host with local:true so that machine does not fan out again. Cannot be combined with host.",
   }),
+  placement: Schema.optional(
+    HostPlacementRequirements.annotate({
+      description:
+        "Rank the reported hosts for one new lane: pass {} or the provider instance, driver or platform it needs. The result's placement lists eligible hosts best first (lowest load and pressure, fewest running threads, most quota), then skipped hosts with why.",
+    }),
+  ),
 });
 export type GoatHostStatusInput = typeof GoatHostStatusInput.Type;
 

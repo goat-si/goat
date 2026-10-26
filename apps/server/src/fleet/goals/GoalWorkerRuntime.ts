@@ -1,10 +1,12 @@
 /**
- * How the goal controller touches threads: as the goal's owner thread, through the services
- * goat_thread_launch, goat_ssh_thread_launch, goat_thread_status and goat_thread_read use, or
- * through the same orchestration commands those tools dispatch. Nothing here grants anything the
- * owner lacks: each action is capped by the goal's runtime-mode ceiling and by the owner's current
- * mode, whichever is lower, needs the owner in default interaction mode, and checks the target
- * thread's modes again under the orchestrator's lock (DispatchModeLimit).
+ * How the goal controller touches threads: as the goal's owner (its GOAT thread, or the outside
+ * MCP client session that declared it), through the services goat_thread_launch,
+ * goat_ssh_thread_launch, goat_thread_status and goat_thread_read use, or through the same
+ * orchestration commands those tools dispatch. Nothing here grants anything the owner lacks: each
+ * action is capped by the goal's runtime-mode ceiling and by the owner's current mode, whichever is
+ * lower, needs the owner in default interaction mode, and checks the target thread's modes again
+ * under the orchestrator's lock (DispatchModeLimit). Each action also runs the caller's `confirm`
+ * as its last step before a command is handed to the orchestrator.
  */
 import {
   CommandId,
@@ -20,21 +22,51 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as McpClientAuthority from "../../auth/McpClientAuthority.ts";
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostThreadsMcpService from "../../mcp/HostThreadsMcpService.ts";
-import * as LaunchWatchService from "../../mcp/LaunchWatchService.ts";
 import type { McpInvocationScope } from "../../mcp/McpInvocationContext.ts";
 import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import { resolveRuntimeMode } from "../../mcp/OrchestratorMcpService.ts";
 import { assertTargetWithinLimits } from "../../mcp/threadAccess.ts";
 import * as ThreadLaunchMcpService from "../../mcp/ThreadLaunchMcpService.ts";
 import { DispatchModeLimit } from "../../orchestration-v2/DispatchModeLimit.ts";
+import { ProjectStoreV2 } from "../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
+import * as FleetSync from "../../goatclaw/FleetSync.ts";
+import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import { RescheduleNotAllowed } from "../health/Rescheduler.ts";
 import type { PullRequestObservation } from "./goalPlan.ts";
+import {
+  makeRemoteWorkers,
+  RemoteAuthorityLost,
+  RemoteLaunchUnconfirmed,
+  remoteMarker,
+  remoteTitle,
+} from "./GoalRemoteWorkers.ts";
 import type { WorkerRecord } from "./GoalStore.ts";
+
+/**
+ * The owner may no longer take this action: its authority, mode or the goal changed after the
+ * action was planned. Nothing was handed to the orchestrator for the step that was refused.
+ */
+export class GoalOwnerAuthorityLost extends Schema.TaggedError<GoalOwnerAuthorityLost>()(
+  "GoalOwnerAuthorityLost",
+  {
+    message: Schema.String,
+    /** The goal itself moved on (a new generation or a deletion): replan, nothing is blocked. */
+    goalChanged: Schema.Boolean,
+  },
+) {}
+
+/** The controller's last check before an action's command is handed to the orchestrator. */
+export type ActionConfirm = Effect.Effect<void, GoalOwnerAuthorityLost>;
 
 export interface OwnerAccess {
   readonly scope: McpInvocationScope;
@@ -53,12 +85,29 @@ export interface LaunchRequest {
   readonly message: string;
   readonly branch: string;
   readonly modelSelection: ModelSelection;
+  /** Where the worktree starts; the goal's own workspace when absent. */
+  readonly workspace?: { readonly baseRef: string; readonly startFromOrigin: boolean };
 }
 
 export interface Launched {
   readonly host: string | null;
   readonly threadId: ThreadId;
   readonly runId: RunId | null;
+}
+
+export { RemoteLaunchUnconfirmed } from "./GoalRemoteWorkers.ts";
+
+/** What a move to another host may do, as the Rescheduler's request carries it. */
+export interface MoveAuthority {
+  readonly runtimeMode: RuntimeMode;
+  readonly callerRuntimeMode: RuntimeMode;
+  readonly authorize: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  /** For writes to the moved attempt's own host: its interrupt. Never granted for this machine. */
+  readonly authorizeSource: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  readonly allowedHosts?: ReadonlyArray<string>;
+  readonly excludeHosts?: ReadonlyArray<string>;
+  readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
+  readonly prepareCeiling?: (host: string) => Effect.Effect<void>;
 }
 
 /** A worker thread as the runtime sees it; health comes from the Health service. */
@@ -74,6 +123,8 @@ export type WorkerReading =
       readonly result: { readonly reported: boolean; readonly pullRequest: number | null } | null;
       /** When a usage limit on the latest run resets; null when unknown or not limited. */
       readonly usageLimitResetAt?: string | null;
+      /** The thread's model on another host, read every pass; absent for a local worker. */
+      readonly modelSelection?: ModelSelection | null;
     };
 
 export class GoalWorkerRuntime extends Context.Service<
@@ -109,7 +160,11 @@ export class GoalWorkerRuntime extends Context.Service<
     readonly launch: (
       access: OwnerAccess,
       request: LaunchRequest,
-    ) => Effect.Effect<Launched, OrchestratorMcpFailure>;
+      confirm: ActionConfirm,
+    ) => Effect.Effect<
+      Launched,
+      OrchestratorMcpFailure | GoalOwnerAuthorityLost | RemoteLaunchUnconfirmed
+    >;
     /** Queues a message; with a model selection, the run continues on that model. */
     readonly followUp: (
       access: OwnerAccess,
@@ -117,13 +172,29 @@ export class GoalWorkerRuntime extends Context.Service<
       worker: WorkerRecord,
       message: string,
       actionId: string,
+      confirm: ActionConfirm,
       modelSelection?: ModelSelection,
-    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    ) => Effect.Effect<void, OrchestratorMcpFailure | GoalOwnerAuthorityLost>;
     readonly interrupt: (
       access: OwnerAccess,
       worker: WorkerRecord,
       actionId: string,
-    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+      confirm: ActionConfirm,
+    ) => Effect.Effect<void, OrchestratorMcpFailure | GoalOwnerAuthorityLost>;
+    /** The goal's project folder and repository, read where the project lives. */
+    readonly project: (
+      goal: FleetGoal,
+    ) => Effect.Effect<{ readonly cwd: string; readonly canonicalKey: string | null } | null>;
+    /**
+     * The authority a move of this goal's worker off sourceHost (null for this machine, which
+     * only drain moves) to another host carries.
+     */
+    readonly moveAuthority: (
+      access: OwnerAccess,
+      goal: FleetGoal,
+      confirm: ActionConfirm,
+      sourceHost: string | null,
+    ) => Effect.Effect<MoveAuthority, OrchestratorMcpFailure>;
   }
 >()("goat/fleet/goals/GoalWorkerRuntime") {}
 
@@ -144,6 +215,10 @@ const RANK: Record<RuntimeMode, number> = {
   auto: 2,
   "full-access": 3,
 };
+/** Whether `mode` allows at least what `planned` does. */
+export const runtimeModeCovers = (mode: RuntimeMode, planned: RuntimeMode) =>
+  RANK[mode] >= RANK[planned];
+
 /**
  * The mode a worker action may use: the lowest of the goal's worker mode, the goal's stored
  * ceiling and the owner's current mode (the last two are already folded into access).
@@ -156,7 +231,7 @@ export const effectiveRuntimeMode = (
     ? goal.spec.workers.runtimeMode
     : access.runtimeMode;
 
-export const pullRequestNumber = (
+const pullRequestNumber = (
   pullRequest: { readonly url: string; readonly number?: number | undefined },
   repository: string | null,
 ) => {
@@ -166,33 +241,80 @@ export const pullRequestNumber = (
   return pullRequest.number ?? (match === null ? null : Number(match[2]));
 };
 
-/** Why a goal will not act on another machine for now. */
-export const REMOTE_WORKERS_DISABLED =
-  "Goal workers run on this machine only for now; workers on other machines are not supported yet.";
+/** goat_ssh_thread_launch needs a full-access caller; a goal's remote work is held to the same. */
+export const REMOTE_WORKERS_NEED_FULL_ACCESS =
+  "Workers on another host need a goal whose owner holds full access now.";
 
-const remoteDisabled = () =>
-  Effect.fail(
-    new OrchestratorMcpFailure({ code: "capability_denied", message: REMOTE_WORKERS_DISABLED }),
-  );
+const isAuthorityLost = Schema.is(RemoteAuthorityLost);
+const lostOf = (error: RemoteAuthorityLost) =>
+  new GoalOwnerAuthorityLost({ message: error.message, goalChanged: false });
+const keepLost = <A, E>(effect: Effect.Effect<A, E | RemoteAuthorityLost>) =>
+  effect.pipe(Effect.mapError((error) => (isAuthorityLost(error) ? lostOf(error) : error)));
 
 const notSendable = (message: string) =>
   new OrchestratorMcpFailure({ code: "thread_not_sendable", message });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const hostThreads = yield* HostThreadsMcpService.HostThreadsMcpService;
   const launches = yield* ThreadLaunchMcpService.ThreadLaunchMcpService;
-  const watches = yield* LaunchWatchService.LaunchWatchService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const clients = yield* McpClientAuthority.McpClientAuthority;
+  const permissions = yield* Profiles.PermissionProfiles;
+  const remote = makeRemoteWorkers({
+    dispatch: yield* SshRemoteDispatch.SshRemoteDispatch,
+    permissions,
+    fleet: yield* FleetSync.GoatclawFleetSync,
+    projects: yield* ProjectStoreV2,
+  });
+
+  /**
+   * An outside client's goal acts as that client: its session id is all that is stored, and its
+   * live grant and current goatclaw profile are read again here every time.
+   */
+  const clientOwner = (goal: FleetGoal) =>
+    Effect.gen(function* () {
+      const mcpOwner = goal.owner.mcpOwner ?? "";
+      const grant = yield* clients.load(
+        mcpOwner.startsWith("client:") ? mcpOwner.slice("client:".length) : "",
+      );
+      if ("unavailable" in grant) return { unavailable: grant.unavailable };
+      const descriptor = yield* environment.getDescriptor;
+      const client = {
+        sessionId: grant.sessionId,
+        label: "Fleet goal " + goal.id,
+        access: goal.owner.runtimeModeCeiling,
+        approvals: false,
+      };
+      const unresolved: McpInvocationScope = {
+        environmentId: descriptor.environmentId,
+        capabilities: new Set(["orchestration"] as const),
+        issuedAt: yield* Clock.currentTimeMillis,
+        requestNamespace: mcpOwner,
+        grantedScopes: grant.grantedScopes,
+        reauthorize: grant.reauthorize,
+        thread: undefined,
+        client,
+      };
+      // goatclaw can lower an outside client's mode after the goal was applied.
+      const profiled = yield* permissions
+        .resolve(unresolved, goal.owner.runtimeModeCeiling)
+        .pipe(Effect.result);
+      if (profiled._tag === "Failure") return { unavailable: profiled.failure.message };
+      const runtimeMode = profiled.success.runtimeMode;
+      return {
+        scope: { ...unresolved, client: { ...client, access: runtimeMode } },
+        runtimeMode,
+        canReachHosts: runtimeMode === "full-access",
+      } satisfies OwnerAccess;
+    });
 
   const owner: GoalWorkerRuntime["Service"]["owner"] = (goal) =>
     Effect.gen(function* () {
-      if (goal.owner.kind !== "thread" || goal.owner.threadId === null)
-        return {
-          unavailable: "Goals owned by an outside MCP client are not supported yet (#493).",
-        };
+      if (goal.owner.kind === "mcp_client") return yield* clientOwner(goal);
+      if (goal.owner.threadId === null) return { unavailable: "The goal names no owner thread." };
       const shell = yield* threads
         .getThreadShell(goal.owner.threadId)
         .pipe(Effect.orElseSucceed(() => undefined));
@@ -226,6 +348,10 @@ export const make = Effect.gen(function* () {
       } satisfies OwnerAccess;
     });
 
+  /** A thread owner sends as itself; an outside client has no thread to send as. */
+  const senderOf = (access: OwnerAccess) =>
+    access.scope.thread === undefined ? {} : { senderThreadId: access.scope.thread.threadId };
+
   const asOwner = <A, E, R>(access: OwnerAccess, effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, access.scope));
 
@@ -246,7 +372,7 @@ export const make = Effect.gen(function* () {
       yield* threads
         .assertReviewTaskSendAllowed({
           threadId,
-          senderThreadId: access.scope.thread!.threadId,
+          ...senderOf(access),
           createdBy: "agent",
         })
         .pipe(Effect.mapError(() => notSendable("This review task does not take messages.")));
@@ -265,16 +391,73 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  /** What a terminal run reported: whether it reported, and its pull request in this repo. */
+  const resultOf = (
+    goal: FleetGoal,
+    reported: {
+      readonly reportedAt: unknown;
+      readonly pullRequests: ReadonlyArray<{
+        readonly url: string;
+        readonly number?: number | undefined;
+      }>;
+    },
+  ) => {
+    const numbers = reported.pullRequests.flatMap((pullRequest) => {
+      const number = pullRequestNumber(pullRequest, goal.spec.repo);
+      return number === null ? [] : [number];
+    });
+    return { reported: reported.reportedAt !== null, pullRequest: numbers[0] ?? null };
+  };
+
+  const observeRemote = (goal: FleetGoal, host: string, threadId: ThreadId) =>
+    remote.observe(host, threadId).pipe(
+      Effect.map((reading): WorkerReading => {
+        if (reading.kind !== "seen") return reading;
+        const { status } = reading;
+        return {
+          kind: "seen",
+          terminal: status.terminal,
+          runId: status.run?.runId ?? null,
+          runStatus: status.run?.status ?? null,
+          lastActivityAt: status.lastActivityAt,
+          result:
+            status.terminal && reading.result !== null ? resultOf(goal, reading.result) : null,
+          // The host does not say when a usage limit resets; GOAT there resumes its own threads.
+          usageLimitResetAt: null,
+          modelSelection: reading.modelSelection,
+        };
+      }),
+    );
+
+  /** Admits a write on another host; a launch or move also needs an owner in full access now. */
+  const admitRemote = (
+    access: OwnerAccess,
+    goal: FleetGoal,
+    host: string | null,
+    worktree: boolean,
+    confirm: ActionConfirm,
+  ) =>
+    remote.admit({ owner: access, ownerNow: owner(goal), goal, host, worktree, confirm }).pipe(
+      Effect.flatMap((authority) =>
+        !worktree || authority.sessionMode === "full-access"
+          ? Effect.succeed(authority)
+          : Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "capability_denied",
+                message: REMOTE_WORKERS_NEED_FULL_ACCESS,
+              }),
+            ),
+      ),
+    );
+
   return GoalWorkerRuntime.of({
     owner,
     observeWorker: (access, goal, worker) =>
       Effect.gen(function* () {
         if (worker.threadId === null)
           return { kind: "unknown", message: "No thread yet." } as const;
-        const target = {
-          threadId: worker.threadId,
-          ...(worker.host === null ? {} : { host: worker.host }),
-        };
+        if (worker.host !== null) return yield* observeRemote(goal, worker.host, worker.threadId);
+        const target = { threadId: worker.threadId };
         const status = yield* asOwner(access, hostThreads.threadStatus(access.scope, target)).pipe(
           Effect.result,
         );
@@ -295,17 +478,11 @@ export const make = Effect.gen(function* () {
             }),
           ).pipe(Effect.option);
           const reported = read._tag === "Some" ? read.value.result : undefined;
-          if (reported !== undefined && reported !== null) {
-            const numbers = reported.pullRequests.flatMap((pullRequest) => {
-              const number = pullRequestNumber(pullRequest, goal.spec.repo);
-              return number === null ? [] : [number];
-            });
-            result = { reported: reported.reportedAt !== null, pullRequest: numbers[0] ?? null };
-          }
+          if (reported !== undefined && reported !== null) result = resultOf(goal, reported);
         }
         // A usage-limited local run says when its limit resets; the goal resumes it then.
         const usageLimitResetAt =
-          worker.host === null && seen.run?.status === "failed"
+          seen.run?.status === "failed"
             ? ((yield* threads
                 .getThreadShell(worker.threadId)
                 .pipe(Effect.orElseSucceed(() => null)))?.usageLimitResetAt ?? null)
@@ -392,7 +569,7 @@ export const make = Effect.gen(function* () {
               }),
               Effect.orElseSucceed(() => "unknown" as const),
             ),
-    findLaunched: (access, _goal, actionId, host) => {
+    findLaunched: (_access, goal, actionId, host) => {
       if (host === null)
         return threads.getThreadShell(workerThreadId(actionId)).pipe(
           Effect.mapError(
@@ -408,29 +585,14 @@ export const make = Effect.gen(function* () {
               : { host: null, threadId: shell.id, runId: shell.latestRunId },
           ),
         );
-      // A remote launch has no id of ours on the remote, so the watch it registered is the record.
-      return watches.list(access.scope.thread!.threadId).pipe(
-        Effect.mapError(
-          () =>
-            new OrchestratorMcpFailure({
-              code: "orchestration_error",
-              message: "Could not read the launch watches.",
-            }),
-        ),
-        Effect.map((list) => {
-          const found = list.find(
-            (watch) =>
-              (watch.host ?? null) === host && watch.title?.endsWith("[" + actionId + "]") === true,
-          );
-          return found === undefined ? null : { host, threadId: found.threadId, runId: null };
-        }),
-      );
+      // The launch record named this host before anything was sent; only its marker finds it.
+      return remote.find(host, remoteMarker(goal.id, actionId));
     },
-    launch: (access, request) =>
+    launch: (access, request, confirm) =>
       Effect.gen(function* () {
         const { goal } = request;
         const runtimeMode = effectiveRuntimeMode(access, goal);
-        const workspace = goal.spec.workers.workspace;
+        const workspace = request.workspace ?? goal.spec.workers.workspace;
         if (request.host === null) {
           const projectId = goal.spec.project.projectId;
           if (projectId === null)
@@ -438,6 +600,13 @@ export const make = Effect.gen(function* () {
               code: "invalid_request",
               message: "Set spec.project.projectId to launch workers on this machine.",
             });
+          // ThreadLaunchService asks this right before it creates the thread and right before the
+          // first message; a refusal there is remembered so it reads as lost authority here.
+          const refused = yield* Ref.make<GoalOwnerAuthorityLost | undefined>(undefined);
+          const stillAllowed = confirm.pipe(
+            Effect.as(true),
+            Effect.catch((lost) => Ref.set(refused, lost).pipe(Effect.as(false))),
+          );
           const launched = yield* asOwner(
             access,
             launches.launch(
@@ -459,23 +628,63 @@ export const make = Effect.gen(function* () {
                 notifyOnCompletion: false,
               },
               { runtimeMode, interactionMode: "default" },
-              { threadId: workerThreadId(request.actionId) },
+              { threadId: workerThreadId(request.actionId), confirm: stillAllowed },
+            ),
+          ).pipe(
+            Effect.catch((failure) =>
+              Effect.flatMap(Ref.get(refused), (lost) =>
+                Effect.fail<OrchestratorMcpFailure | GoalOwnerAuthorityLost>(lost ?? failure),
+              ),
             ),
           );
           return { host: null, threadId: launched.threadId, runId: launched.runId };
         }
-        // Goal workers run on this machine only until remote authority is carried end to end:
-        // a remote session re-reads the owner's current mode instead of the goal's ceiling, and a
-        // remote launch has no durable action→thread record yet.
-        return yield* remoteDisabled();
+        const host = request.host;
+        const project = yield* remote.project(goal);
+        if (project === null)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              "Set spec.project.cwd, or a projectId on " + host + ", to launch workers there.",
+          });
+        // Admitted before anything reaches the host; the authorize reruns before each remote write.
+        const authority = yield* admitRemote(access, goal, host, true, confirm);
+        return yield* keepLost(
+          remote.launch(authority, {
+            host,
+            cwd: project.cwd,
+            title: remoteTitle(request.title, remoteMarker(goal.id, request.actionId)),
+            message: request.message,
+            branch: request.branch,
+            baseRef: workspace.baseRef,
+            startFromOrigin: workspace.startFromOrigin,
+            modelSelection: request.modelSelection,
+          }),
+        );
       }),
-    followUp: (access, goal, worker, message, actionId, modelSelection) => {
+    followUp: (access, goal, worker, message, actionId, confirm, modelSelection) => {
       if (worker.threadId === null) return Effect.void;
       const runtimeMode = effectiveRuntimeMode(access, goal);
-      if (worker.host !== null) return remoteDisabled();
+      if (worker.host !== null) {
+        const { host, threadId } = { host: worker.host, threadId: worker.threadId };
+        // goat_thread_send cannot change a remote thread's model; the controller relaunches instead.
+        if (modelSelection !== undefined)
+          return Effect.fail(
+            new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message: "A worker on another host cannot switch models in its thread.",
+            }),
+          );
+        return admitRemote(access, goal, host, false, confirm).pipe(
+          Effect.flatMap((authority) =>
+            keepLost(remote.send(authority, host, { threadId, message, actionId })),
+          ),
+        );
+      }
       // The goal acts after its owner's turn ends, when goat_thread_send would refuse an idle
       // caller. The action id is the command id, so a repeated pass delivers once.
       return localTarget(access, worker, runtimeMode).pipe(
+        Effect.andThen(confirm),
         Effect.andThen(
           underLimit(
             runtimeMode,
@@ -486,7 +695,7 @@ export const make = Effect.gen(function* () {
               messageId: MessageId.make(actionId),
               text: message,
               attachments: [],
-              senderThreadId: access.scope.thread!.threadId,
+              ...senderOf(access),
               dispatchMode: { type: "queue_after_active" },
               ...(modelSelection === undefined ? {} : { modelSelection }),
               createdBy: "agent",
@@ -497,7 +706,7 @@ export const make = Effect.gen(function* () {
         Effect.asVoid,
       );
     },
-    interrupt: (access, worker, actionId) =>
+    interrupt: (access, worker, actionId, confirm) =>
       worker.threadId === null
         ? Effect.void
         : worker.host === null
@@ -506,26 +715,86 @@ export const make = Effect.gen(function* () {
               Effect.flatMap((shell) =>
                 shell.activeRunId === null
                   ? Effect.void
-                  : underLimit(
-                      access.runtimeMode,
-                      threads.dispatch({
-                        type: "run.interrupt",
-                        commandId: CommandId.make(actionId),
-                        threadId: shell.id,
-                        runId: shell.activeRunId,
-                        reason: "The fleet goal no longer needs this worker.",
-                      }),
+                  : Effect.andThen(
+                      confirm,
+                      underLimit(
+                        access.runtimeMode,
+                        threads.dispatch({
+                          type: "run.interrupt",
+                          commandId: CommandId.make(actionId),
+                          threadId: shell.id,
+                          runId: shell.activeRunId,
+                          reason: "The fleet goal no longer needs this worker.",
+                        }),
+                      ),
                     ),
               ),
               Effect.asVoid,
             )
-          : asOwner(
-              access,
-              hostThreads.interruptThread(access.scope, {
-                threadId: worker.threadId,
-                host: worker.host,
-              }),
-            ).pipe(Effect.asVoid),
+          : keepLost(
+              remote.interrupt(
+                remote.stopAuthorize({
+                  scope: access.scope,
+                  mode: access.runtimeMode,
+                  host: worker.host,
+                  confirm,
+                }),
+                worker.host,
+                { threadId: worker.threadId, actionId },
+              ),
+            ),
+    project: (goal) => remote.project(goal),
+    moveAuthority: (access, goal, confirm, sourceHost) =>
+      admitRemote(access, goal, null, true, confirm).pipe(
+        Effect.map((authority): MoveAuthority => {
+          const selected = goal.spec.workers.hostSelector;
+          const named = selected.hosts?.flatMap((host) => (host === null ? [] : [host]));
+          const profiled = authority.ceiling?.hosts;
+          const allowed =
+            named === undefined
+              ? profiled
+              : profiled === undefined
+                ? named
+                : named.filter((host) => profiled.includes(host));
+          const excluded = selected.exclude?.flatMap((host) => (host === null ? [] : [host]));
+          return {
+            runtimeMode: authority.workerMode,
+            callerRuntimeMode: authority.sessionMode,
+            authorize: authority.authorize.pipe(
+              Effect.mapError((error) => new RescheduleNotAllowed({ message: error.message })),
+            ),
+            // Interrupting the old attempt: under the session ceiling, if the profile still reaches it.
+            // A move off this machine only takes an attempt that already stopped.
+            authorizeSource:
+              sourceHost === null
+                ? Effect.fail(
+                    new RescheduleNotAllowed({
+                      message: "A move never stops an attempt on this machine.",
+                    }),
+                  )
+                : remote
+                    .stopAuthorize({
+                      scope: access.scope,
+                      mode: authority.sessionMode,
+                      host: sourceHost,
+                      confirm: authority.authorize,
+                    })
+                    .pipe(
+                      Effect.mapError(
+                        (error) => new RescheduleNotAllowed({ message: error.message }),
+                      ),
+                    ),
+            ...(allowed === undefined ? {} : { allowedHosts: allowed }),
+            ...(excluded === undefined || excluded.length === 0 ? {} : { excludeHosts: excluded }),
+            ...(authority.ceiling === undefined
+              ? {}
+              : {
+                  permissionProfileCeiling: authority.ceiling,
+                  prepareCeiling: (host: string) => remote.prepare(authority, host),
+                }),
+          };
+        }),
+      ),
   });
 });
 

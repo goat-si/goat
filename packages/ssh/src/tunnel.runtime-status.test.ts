@@ -13,7 +13,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -21,8 +20,6 @@ import * as SshAuth from "./auth.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   ARCHIVE,
-  makeSuccessfulProcess,
-  makeRunningProcess,
   testHttpClient,
   testNetService,
   uploadTarget,
@@ -33,147 +30,100 @@ import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 const decodeProviders = Schema.decodeEffect(SshHostProviders);
 const decodeSshHostResult = Schema.decodeEffect(SshHostResult);
 
-const signals = (version: string) => ({
-  serverVersion: version,
-  sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
-  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-});
-const stopped = { platform: "linux", arch: "x64", ready: false, liveStatus: "none" };
-const retained = {
-  ...stopped,
-  retained: "ready",
-  retainedVersion: "1.2.2",
-  retainedSignals: signals("1.2.2"),
-  retainedRunnerSha256: "a".repeat(64),
-};
-const successfulStatus = (result: SshHostResult) => {
-  assert.equal(result.kind, "ok");
-  if (result.kind !== "ok") throw new Error("Expected an SSH status");
-  return result.status;
-};
-
-const fixture = (
-  initial: unknown,
-  runnerOptions: SshTunnel.RemoteGoatRunnerOptions = {},
-  afterUpload: Effect.Effect<void> = Effect.void,
-) => {
-  let probe = initial;
-  let probeFailure: string | undefined;
-  let toolFixProbe = "1000\nLinux\nID=debian\n";
-  let launchVersion = ARCHIVE.archiveVersion as string;
-  let drainPending = false;
-  let drainReplacement: "older" | "capability" = "older";
-  const calls = { probes: 0, uploads: 0, launches: 0, forwards: 0, prompts: 0, strict: false };
-  const spawner = ChildProcessSpawner.make((command) =>
-    Effect.gen(function* () {
-      if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-      if (command.args.includes("-G"))
-        return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
-      if (command.args.includes("-N")) {
-        calls.forwards++;
-        return makeRunningProcess(() => undefined);
-      }
-      const input = command.options.stdin;
-      if (command.args.includes("-c")) {
-        calls.uploads++;
-        if (
-          input !== undefined &&
-          typeof input === "object" &&
-          "stream" in input &&
-          Stream.isStream(input.stream)
-        )
-          yield* Stream.runDrain(input.stream);
-        yield* afterUpload;
-        return makeSuccessfulProcess("goat uploaded");
-      }
-      const script =
-        input !== undefined &&
-        typeof input === "object" &&
-        "stream" in input &&
-        Stream.isStream(input.stream)
-          ? yield* input.stream.pipe(Stream.decodeText(), Stream.mkString)
-          : "";
-      if (script.includes("GOAT_TOOL_FIX_PROBE")) return makeSuccessfulProcess(toolFixProbe);
-      if (command.args.includes("goat-runtime-cleanup")) return makeSuccessfulProcess("");
-      if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
-        calls.probes++;
-        calls.strict = ["StrictHostKeyChecking=yes", "UpdateHostKeys=no", "BatchMode=yes"].every(
-          (arg) => command.args.includes(arg),
-        );
-        if (probeFailure !== undefined)
-          return {
-            ...makeSuccessfulProcess(""),
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
-            stderr: Stream.make(new TextEncoder().encode(probeFailure)),
-          };
-        return makeSuccessfulProcess(typeof probe === "string" ? probe : JSON.stringify(probe));
-      }
-      calls.launches++;
-      return makeSuccessfulProcess(
-        JSON.stringify({
-          status: "ready",
-          selectedVersion: launchVersion,
-          remotePort: 3773,
-          serverKind: "managed",
-          ...(drainPending
-            ? {
-                pending: {
-                  reason: "unknown",
-                  refreshCause: "drain_unavailable",
-                  replacement: drainReplacement,
-                  requestedVersion: ARCHIVE.archiveVersion,
-                  liveVersion: launchVersion,
-                },
-              }
-            : {}),
-        }),
-      );
-    }),
-  );
-  return {
-    calls,
-    setToolFixProbe: (value: string) => {
-      toolFixProbe = value;
-    },
-    setProbe: (value: unknown) => {
-      probe = value;
-    },
-    failProbe: (value: string) => {
-      probeFailure = value;
-    },
-    setDrainPending: (replacement: "older" | "capability" = "older") => {
-      drainPending = true;
-      drainReplacement = replacement;
-    },
-    setLaunchVersion: (value: string) => {
-      launchVersion = value;
-    },
-    layer: Layer.mergeAll(
-      NodeServices.layer,
-      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Layer.succeed(NetService.NetService, testNetService),
-      Layer.succeed(HttpClient.HttpClient, testHttpClient),
-      Layer.succeed(SshAuth.SshPasswordPrompt, {
-        isAvailable: true,
-        request: () =>
-          Effect.sync(() => {
-            calls.prompts++;
-            return "unused";
-          }),
-      }),
-      SshTunnel.SshEnvironmentManager.layer({
-        resolveCliRunner: Effect.succeed({
-          ...ARCHIVE,
-          refreshOwnedRuntimeOnFirstConnection: true,
-          ...runnerOptions,
-        }),
-        leaveRemoteServerRunning: true,
-      }),
-    ),
-  };
-};
+import {
+  fixture,
+  retained,
+  signals,
+  stopped,
+  successfulStatus,
+} from "./tunnel.runtime-status.fixture.ts";
 
 describe("SSH runtime status", () => {
+  const live = (version: string) => ({
+    ...stopped,
+    ready: true,
+    liveStatus: "live",
+    liveVersion: version,
+    livePort: 3773,
+    liveOwned: true,
+    liveDrain: true,
+    liveSignals: signals(version),
+    liveBinarySignals: signals(version),
+  });
+
+  it.effect("an agent call reusing a healthy forward never reports the host as preparing", () => {
+    const f = fixture(live(ARCHIVE.archiveVersion));
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      const gate = {
+        entered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      f.gateReadiness(gate);
+      const reuse = yield* manager
+        .ensureEnvironment(uploadTarget, { keyOnly: true, reuseWhileRefreshPending: true })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(gate.entered);
+      const during = successfulStatus(yield* manager.status(uploadTarget));
+      assert.equal(during.state, "ready");
+      assert.equal(during.runtimeVersion, ARCHIVE.archiveVersion);
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(reuse);
+      assert.equal(f.calls.launches, 1);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect(
+    "an app connects to a newer runtime that speaks its protocols and reports it ready",
+    () => {
+      const f = fixture(live("99.0.0"));
+      f.setLaunchVersion("99.0.0");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        const status = successfulStatus(yield* manager.status(uploadTarget));
+        assert.equal(status.state, "ready");
+        assert.equal(status.runtimeVersion, "99.0.0");
+        assert.isUndefined(status.detail);
+        yield* manager.readyEnvironment(uploadTarget);
+        assert.equal(f.calls.uploads, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
+  it.effect(
+    "a forward whose server was replaced on the same port reconnects to the live build without updating again",
+    () => {
+      const f = fixture(live("1.2.2"), { refreshOwnedRuntimeOnFirstConnection: false });
+      f.setLaunchVersion("1.2.2");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        assert.equal(f.calls.launches, 1);
+        // Another client (or a person) replaced 1.2.2 with this app's build on the same port.
+        f.setProbe(live(ARCHIVE.archiveVersion));
+        f.setLaunchVersion(ARCHIVE.archiveVersion);
+        f.setDescriptorVersion(ARCHIVE.archiveVersion);
+        yield* manager.ensureEnvironment(uploadTarget, {
+          keyOnly: true,
+          reuseWhileRefreshPending: true,
+        });
+        assert.equal(f.calls.launches, 2);
+        assert.equal(f.calls.uploads, 0);
+        const after = successfulStatus(yield* manager.status(uploadTarget));
+        assert.equal(after.state, "ready");
+        assert.equal(after.runtimeVersion, ARCHIVE.archiveVersion);
+        // Matching the live build again, the next call reuses the forward.
+        yield* manager.ensureEnvironment(uploadTarget, {
+          keyOnly: true,
+          reuseWhileRefreshPending: true,
+        });
+        assert.equal(f.calls.launches, 2);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
   it.effect("publishes current-operation diagnosis and preserves it on status reads", () => {
     const f = fixture({
       ...stopped,
@@ -476,7 +426,9 @@ describe("SSH runtime status", () => {
   it.effect.each([
     { version: ARCHIVE.archiveVersion, owned: true, expected: "ready" },
     { version: "1.2.2", owned: true, expected: "ready" },
-    { version: "99.0.0", owned: true, expected: "update_blocked" },
+    // A newer runtime that speaks this app's protocols serves it; nothing waits on an update.
+    { version: "99.0.0", owned: true, expected: "ready" },
+    { version: "99.0.0", owned: false, expected: "ready" },
     { version: "1.2.2", owned: false, expected: "update_blocked" },
     { version: "1.2.3-dev.deadbeef", owned: true, expected: "update_blocked" },
   ])("classifies live $version owned=$owned as $expected", ({ version, owned, expected }) => {
@@ -495,6 +447,26 @@ describe("SSH runtime status", () => {
       assert.equal(successfulStatus(result).state, expected);
       assert.equal(successfulStatus(result).runtimeVersion, version);
       assert.equal(f.calls.launches, 0);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect("blocks a newer runtime only when it no longer speaks this app's protocol", () => {
+    const f = fixture({
+      ...stopped,
+      liveStatus: "live",
+      liveVersion: "99.0.0",
+      liveOwned: true,
+      liveDrain: true,
+      liveSignals: {
+        ...signals("99.0.0"),
+        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
+      },
+    });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const status = successfulStatus(yield* manager.status(uploadTarget));
+      assert.equal(status.state, "update_blocked");
+      assert.include(status.detail ?? "", "runs a newer GOAT (99.0.0)");
     }).pipe(Effect.provide(f.layer), Effect.scoped);
   });
 

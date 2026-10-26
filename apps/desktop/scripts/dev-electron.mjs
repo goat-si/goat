@@ -6,6 +6,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  createRestartController,
+  devElectronBuildMessageType,
+  devElectronOutputs,
+  readOutputFingerprint,
+} from "./dev-electron-restart.ts";
+import {
   desktopDir,
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
@@ -32,28 +38,52 @@ const requiredFiles = [
   "dist-electron/snapShot/SnapShotAccessibilityWorker.cjs",
   "../server/dist/bin.mjs",
 ];
+// Started by `vp pack --watch` (scripts/dev-electron-pack.ts), the launcher hears when every
+// bundle has finished building and keeps running across rebuilds. Run on its own, it watches the
+// output directories instead.
+const startedByPack = typeof process.send === "function";
 const watchedDirectories = [
-  { directory: "dist-electron", files: new Set(["main.cjs", "preload.cjs"]) },
-  {
-    directory: "dist-electron/electron",
-    files: new Set(["WindowsForegroundFocusWorker.cjs"]),
-  },
-  {
-    directory: "dist-electron/snapShot",
-    files: new Set([
-      "GlobalShiftShortcutWorker.cjs",
-      "RegionSnapShotWorker.cjs",
-      "SnapShotAccessibilityWorker.cjs",
-    ]),
-  },
-  { directory: "../server/dist", files: new Set(["bin.mjs"]) },
+  ...(startedByPack ? [] : ["dist-electron", "dist-electron/electron", "dist-electron/snapShot"]),
+  "../server/dist",
 ];
+const watchedFiles = new Set(devElectronOutputs.map((file) => NodePath.basename(file)));
 const forcedShutdownTimeoutMs = 1_500;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
 const remoteDebuggingPort = process.env.GOAT_DESKTOP_REMOTE_DEBUGGING_PORT?.trim();
 // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
+
+let shuttingDown = false;
+let currentApp = null;
+const expectedExits = new WeakSet();
+const watchers = [];
+const restarts = createRestartController({
+  readOutputs: () => readOutputFingerprint(desktopDir, devElectronOutputs),
+  stopApp,
+  startApp,
+  debounceMs: restartDebounceMs,
+});
+
+// Registered before the startup wait, so a pack process that exits meanwhile never leaves an app.
+process.once("SIGINT", () => {
+  void shutdown(130);
+});
+process.once("SIGTERM", () => {
+  void shutdown(143);
+});
+process.once("SIGHUP", () => {
+  void shutdown(129);
+});
+if (startedByPack) {
+  process.once("disconnect", () => {
+    void shutdown(0);
+  });
+}
+// A launcher that crashes takes its app with it instead of leaving it running unowned.
+process.once("exit", () => {
+  currentApp?.kill("SIGTERM");
+});
 
 NodeChildProcess.execFileSync(
   process.execPath,
@@ -76,34 +106,12 @@ if (devProtocolClient) {
   childEnv.GOAT_DESKTOP_PROTOCOL_REGISTRATION_MANAGED = "1";
 }
 
-let shuttingDown = false;
-let restartTimer = null;
-let currentApp = null;
-let restartQueue = Promise.resolve();
-const expectedExits = new WeakSet();
-const watchers = [];
-
 function killChildTreeByPid(pid, signal) {
   if (hostPlatform === "win32" || typeof pid !== "number") {
     return;
   }
 
   NodeChildProcess.spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
-}
-
-function cleanupStaleDevApps() {
-  if (hostPlatform === "win32") {
-    return;
-  }
-
-  const escapedDesktopDir = desktopDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  NodeChildProcess.spawnSync(
-    "pkill",
-    ["-f", "--", `(^| )--t3code-dev-root=${escapedDesktopDir}( |$)`],
-    {
-      stdio: "ignore",
-    },
-  );
 }
 
 function startApp() {
@@ -132,7 +140,7 @@ function startApp() {
     }
 
     if (!shuttingDown) {
-      scheduleRestart();
+      restarts.request(true);
     }
   });
 
@@ -143,7 +151,7 @@ function startApp() {
 
     const exitedAbnormally = signal !== null || code !== 0;
     if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      scheduleRestart();
+      restarts.request(true);
     }
   });
 }
@@ -172,7 +180,6 @@ async function stopApp() {
     app.once("exit", finish);
     app.kill("SIGTERM");
     killChildTreeByPid(app.pid, "TERM");
-    cleanupStaleDevApps();
 
     setTimeout(() => {
       if (settled) {
@@ -181,45 +188,23 @@ async function stopApp() {
 
       app.kill("SIGKILL");
       killChildTreeByPid(app.pid, "KILL");
-      cleanupStaleDevApps();
       finish();
     }, forcedShutdownTimeoutMs).unref();
   });
 }
 
-function scheduleRestart() {
-  if (shuttingDown) {
-    return;
-  }
-
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-  }
-
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    restartQueue = restartQueue
-      .catch(() => undefined)
-      .then(async () => {
-        await stopApp();
-        if (!shuttingDown) {
-          startApp();
-        }
-      });
-  }, restartDebounceMs);
-}
-
 function startWatchers() {
-  for (const { directory, files } of watchedDirectories) {
+  for (const directory of watchedDirectories) {
     const watcher = NodeFS.watch(
       NodePath.join(desktopDir, directory),
       { persistent: true },
       (_eventType, filename) => {
-        if (typeof filename !== "string" || !files.has(filename)) {
+        // Some platforms omit the name; the byte comparison decides either way.
+        if (typeof filename === "string" && !watchedFiles.has(filename)) {
           return;
         }
 
-        scheduleRestart();
+        restarts.request();
       },
     );
 
@@ -241,15 +226,11 @@ async function shutdown(exitCode) {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-
   for (const watcher of watchers) {
     watcher.close();
   }
 
+  await restarts.close();
   await stopApp();
   killChildTree("TERM");
   await new Promise((resolve) => {
@@ -260,16 +241,15 @@ async function shutdown(exitCode) {
   process.exit(exitCode);
 }
 
-startWatchers();
-cleanupStaleDevApps();
-startApp();
-
-process.once("SIGINT", () => {
-  void shutdown(130);
-});
-process.once("SIGTERM", () => {
-  void shutdown(143);
-});
-process.once("SIGHUP", () => {
-  void shutdown(129);
-});
+if (!shuttingDown) {
+  startWatchers();
+  restarts.launch();
+  // Build reports from before the first launch are moot: it reads the outputs as they are now.
+  if (startedByPack) {
+    process.on("message", (message) => {
+      if (message?.type !== devElectronBuildMessageType) return;
+      if (message.state === "building") restarts.buildStarted();
+      else restarts.buildFinished();
+    });
+  }
+}

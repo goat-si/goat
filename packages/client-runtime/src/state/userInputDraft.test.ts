@@ -42,6 +42,20 @@ describe("shared user input drafts", () => {
     expect(buildPendingUserInputAnswers([], {})).toEqual({});
   });
 
+  it("submits a picked option without the optional questions left blank", () => {
+    const optional = { ...question, id: "notes", options: [], required: false };
+    expect(
+      buildPendingUserInputAnswers([question, optional], { q: { selectedOptionValues: ["two"] } }),
+    ).toEqual({ q: "two" });
+    expect(
+      buildPendingUserInputAnswers([question, optional], {
+        q: { selectedOptionValues: ["two"] },
+        notes: { customAnswer: "Later" },
+      }),
+    ).toEqual({ q: "two", notes: "Later" });
+    expect(buildPendingUserInputAnswers([question, optional], {})).toBeNull();
+  });
+
   it("seeds once and preserves clearing, edits, and selections on later snapshots", () => {
     const initial = { ...question, initialAnswer: "  message\n\n" };
     const seeded = seedUserInputDraftAnswers([initial], {});

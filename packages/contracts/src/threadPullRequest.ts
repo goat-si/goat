@@ -89,6 +89,8 @@ export const ThreadPullRequestWatch = Schema.Struct({
   passedChecks: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Checks still pending when required ones passed early, owed one wake once all settle. */
+  owedChecks: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   remarksThrough: IsoDateTime,
   /** Remarks created exactly at `remarksThrough` that were reported, so a late one still counts. */
   remarkIds: Schema.Array(TrimmedNonEmptyString),
@@ -101,8 +103,16 @@ export const ThreadPullRequestWatch = Schema.Struct({
    * clears it.
    */
   automatic: Schema.optionalKey(Schema.Boolean),
-  /** Updates recorded without a wake, told to the agent with the next wake. */
+  /**
+   * Updates kept as context and not told yet, one fragment per kind at its latest state. The next
+   * notice turn to start tells them as one line for this pull request and clears them.
+   */
   heldContext: Schema.optionalKey(Schema.Array(Schema.String)),
+  /**
+   * When the head was first read without any check, until a check shows up or the agent is told
+   * none did. Null once either happened; absent on watches saved before it existed.
+   */
+  checksAwaitedSince: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 

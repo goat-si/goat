@@ -1,6 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- tests replace link/copyFile inside the service.
-import * as NodeFS from "node:fs";
-import * as NodeModule from "node:module";
 import { assert, it } from "@effect/vitest";
 import {
   NOTE_TITLE_MAX_LENGTH,
@@ -23,7 +20,7 @@ import { parseNote, serializeNote } from "./frontmatter.ts";
 
 const isSummary = Schema.is(NoteSummary);
 const linked = { threadId: ThreadId.make("thread-1"), host: null, lastResult: null };
-import { notesLayer as layer } from "./NotesTestkit.ts";
+import { notesLayer as layer, racing } from "./NotesTestkit.ts";
 
 it("round trips unknown frontmatter keys, comments, remote links, and body", () => {
   const source =
@@ -758,25 +755,6 @@ it.effect.each([
 );
 
 // An external writer acting while a note write prepares its temp file, after the revision check.
-const racing = () => {
-  let race: Effect.Effect<void> | undefined;
-  return {
-    arm: (effect: Effect.Effect<void>) => {
-      race = effect;
-    },
-    layer: layer(undefined, undefined, (fs) => ({
-      ...fs,
-      makeTempDirectoryScoped: (options) =>
-        Effect.gen(function* () {
-          const pending = options?.prefix === ".note-" ? race : undefined;
-          race = undefined;
-          if (pending) yield* pending;
-          return yield* fs.makeTempDirectoryScoped(options);
-        }),
-    })),
-  };
-};
-
 it.effect("an external edit after the revision check is refused, not overwritten", () => {
   const external = racing();
   return Effect.gen(function* () {
@@ -861,87 +839,3 @@ it.effect("summary titles are capped without splitting a surrogate pair", () =>
     assert.isTrue(isSummary((yield* notes.list({})).notes[0]));
   }).pipe(Effect.provide(layer())),
 );
-
-type Promises = typeof NodeFS.promises;
-/** Replaces a node:fs/promises function the service imports, for the scope's lifetime. */
-const replaceFs = <K extends "link" | "copyFile">(
-  key: K,
-  replacement: (original: Promises[K]) => Promises[K],
-) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const original = NodeFS.promises[key];
-      NodeFS.promises[key] = replacement(original);
-      NodeModule.syncBuiltinESMExports();
-      return original;
-    }),
-    (original) =>
-      Effect.sync(() => {
-        NodeFS.promises[key] = original;
-        NodeModule.syncBuiltinESMExports();
-      }),
-  );
-
-it.effect("a failed move keeps a destination edited after it was placed", () =>
-  Effect.gen(function* () {
-    const notes = yield* Notes.NotesService;
-    const { notesDir } = yield* Config.ServerConfig;
-    const initial = yield* notes.write({ path: "a.md", body: "# A\n", baseRevision: null }, "user");
-    yield* replaceFs("link", (original) => async (source, destination) => {
-      await original(source, destination);
-      await NodeFS.promises.writeFile(destination, "# Edited destination\n");
-      await NodeFS.promises.writeFile(`${notesDir}/a.md`, "# Edited source\n");
-    });
-    const conflict = yield* notes
-      .move({ from: "a.md", to: "b.md", baseRevision: initial.revision }, "user")
-      .pipe(Effect.flip);
-    assert.strictEqual(conflict._tag, "NoteConflictError");
-    assert.strictEqual(
-      yield* Effect.promise(() => NodeFS.promises.readFile(`${notesDir}/b.md`, "utf8")),
-      "# Edited destination\n",
-    );
-  }).pipe(Effect.scoped, Effect.provide(layer())),
-);
-
-it.effect("volumes without hard links still never replace a file at creation", () => {
-  let armed = false;
-  const createFirst = (destination: unknown) =>
-    armed
-      ? NodeFS.promises.writeFile(String(destination), "terminal\n").then(() => {
-          armed = false;
-        })
-      : Promise.resolve();
-  return Effect.gen(function* () {
-    const notes = yield* Notes.NotesService;
-    const fs = yield* FileSystem.FileSystem;
-    const { notesDir } = yield* Config.ServerConfig;
-    yield* replaceFs(
-      "link",
-      () => () => Promise.reject(Object.assign(new Error("no hard links"), { code: "ENOTSUP" })),
-    );
-    yield* replaceFs("copyFile", (original) => async (source, destination, mode) => {
-      await createFirst(destination);
-      return original(source, destination, mode);
-    });
-    const created = yield* notes.write(
-      { path: "a.md", body: "mine\n", baseRevision: null },
-      "user",
-    );
-    assert.strictEqual(created.body, "mine\n");
-    armed = true;
-    const exists = yield* notes
-      .write({ path: "new.md", body: "mine\n", baseRevision: null }, "agent")
-      .pipe(Effect.flip);
-    assert.strictEqual(exists._tag === "NoteError" && exists.reason, "exists");
-    assert.strictEqual(yield* fs.readFileString(`${notesDir}/new.md`), "terminal\n");
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(
-      layer(undefined, undefined, (fs) => ({
-        ...fs,
-        rename: (from, to) =>
-          Effect.promise(() => createFirst(to)).pipe(Effect.andThen(fs.rename(from, to))),
-      })),
-    ),
-  );
-});

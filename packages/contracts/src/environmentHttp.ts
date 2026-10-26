@@ -41,6 +41,7 @@ import {
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
   AuthEnvironmentScope,
+  AuthGrantScope,
   AuthTokenExchangeRequest,
   AuthSessionState,
   AuthWebSocketTicketResult,
@@ -57,6 +58,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
 import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadBoundedSnapshot,
@@ -65,6 +67,7 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -456,7 +459,7 @@ export const EnvironmentConnectReachabilityCause = Schema.Literals([
 ]);
 export type EnvironmentConnectReachabilityCause = typeof EnvironmentConnectReachabilityCause.Type;
 
-/** Whether other devices can reach this environment through its T3 Connect tunnel. */
+/** Whether other devices can reach this environment through its GOAT Connect tunnel. */
 export const EnvironmentConnectReachability = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("reachable"),
@@ -503,11 +506,11 @@ export const GOAT_CONNECT_TROUBLESHOOTING_SECTIONS = [
   "the-host-runs-an-older-t3-code",
   "t3-connect-returned-an-error",
 ] as const;
-export type T3ConnectTroubleshootingSection =
+export type GoatConnectTroubleshootingSection =
   (typeof GOAT_CONNECT_TROUBLESHOOTING_SECTIONS)[number];
 
 /** Clients, the CLI, and server logs link here as "More info". */
-export function t3ConnectTroubleshootingUrl(section: T3ConnectTroubleshootingSection): string {
+export function goatConnectTroubleshootingUrl(section: GoatConnectTroubleshootingSection): string {
   return `https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#${section}`;
 }
 
@@ -521,10 +524,10 @@ const REACHABILITY_SECTION = {
   unexpected_response: "the-tunnel-works-but-t3-code-does-not-answer",
   dns_failed: "the-t3-connect-address-does-not-resolve-or-answer",
   timeout: "the-t3-connect-address-does-not-resolve-or-answer",
-} satisfies Record<EnvironmentConnectReachabilityCause, T3ConnectTroubleshootingSection>;
+} satisfies Record<EnvironmentConnectReachabilityCause, GoatConnectTroubleshootingSection>;
 
 export function connectReachabilityHelpUrl(cause: EnvironmentConnectReachabilityCause): string {
-  return t3ConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
+  return goatConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
 }
 
 export const EnvironmentCloudLinkStateResult = Schema.Struct({
@@ -566,6 +569,8 @@ export const SshServerActivity = Schema.Struct({
   activity: Schema.Literals(["idle", "busy"]),
   serverVersion: Schema.String,
   pid: Schema.Int,
+  /** Older servers omit it. */
+  blockers: Schema.optionalKey(Schema.Array(ServerActivityBlocker)),
 });
 
 export const GOAT_RUNTIME_DRAIN_PATH = "/.well-known/goat/runtime/drain";
@@ -587,6 +592,12 @@ export const RuntimeDrainRequest = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: RUNTIME_DRAIN_MAX_GRACE_SECONDS })),
   ),
   force: Schema.optionalKey(Schema.Boolean),
+  /**
+   * A client's automatic idle refresh. The runtime arbitrates it against its own update policy
+   * and answers `cancelled` without draining when another target wins. Servers that predate it
+   * ignore the key.
+   */
+  automatic: Schema.optionalKey(Schema.Boolean),
 });
 export type RuntimeDrainRequest = typeof RuntimeDrainRequest.Type;
 
@@ -602,6 +613,35 @@ export const RuntimeDrainResult = Schema.Struct({
   forced: Schema.Boolean,
 });
 export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
+
+/**
+ * Issues a credential from the running server itself, for an SSH client attaching to a server it
+ * did not start (the GOAT app's own). It takes the same loopback peer and runtime control token as
+ * a drain. Running `goat auth` against that server's base directory instead would open its live
+ * database with whatever CLI version the host has installed.
+ */
+export const GOAT_RUNTIME_SESSION_PATH = "/.well-known/goat/runtime/session";
+
+const RuntimeCredentialTtl = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
+const RuntimeCredentialLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+
+/** `session` answers like `goat auth session issue --json`, `pairing` like `goat auth pairing create --json`. */
+export const RuntimeSessionRequest = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("session"),
+    subject: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+    scopes: Schema.NonEmptyArray(AuthGrantScope),
+    ttl: RuntimeCredentialTtl,
+    label: Schema.optionalKey(RuntimeCredentialLabel),
+    runtimeModeCeiling: Schema.optionalKey(RuntimeMode),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("pairing"),
+    ttl: Schema.optionalKey(RuntimeCredentialTtl),
+    label: Schema.optionalKey(RuntimeCredentialLabel),
+  }),
+]);
+export type RuntimeSessionRequest = typeof RuntimeSessionRequest.Type;
 
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
   .add(

@@ -12,6 +12,8 @@ import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as PullRequests from "../../pullRequest/PullRequestService.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -120,6 +122,8 @@ const harness = Effect.fnUntraced(function* (currentSettings = settings) {
         NodeServices.layer,
         Layer.mock(PullRequests.PullRequestService)({}),
         Layer.mock(Projection.ProjectionStoreV2)({}),
+        Layer.mock(ProjectStore.ProjectStoreV2)({}),
+        SqlitePersistence.layerMemory,
       ),
     ),
   );

@@ -3,11 +3,10 @@ import {
   ServerSettings as ClientServerSettings,
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  goatclawPolicyContent,
   isProviderDriverKind,
   matchesMemorySourceReadRevokeAck,
   MEMORY_HUB_MAX_MEMBERS,
-  type MemoryHubDisableInput,
-  type MemoryHubDisableResult,
   MemoryHubError,
   type MemoryHubForbiddenError,
   MemoryHubSettings,
@@ -32,6 +31,8 @@ import {
   ResponseStreamingMode,
   ServerSettingsError,
   type ServerSettingsPatch,
+  globalIdleCompaction,
+  withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
@@ -48,10 +49,12 @@ import { normalizeThemePreference } from "@goat/shared/themePalettes";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -76,6 +79,7 @@ import {
 } from "./sourceControl/sourceControlHostSecrets.ts";
 
 import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
+import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -119,7 +123,6 @@ const decodeMemoryHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 /**
  * Old settings files can hold both flags with conflicting values; an explicit false on either
@@ -175,6 +178,7 @@ const normalizeServerSettings = (
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => ({ ...next, defaultTheme: normalizeThemePreference(next.defaultTheme) })),
+    Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
     Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
     Effect.mapError(
       (cause) =>
@@ -383,17 +387,6 @@ const makeMemoryProviderPolicy = Effect.gen(function* () {
   } satisfies MemoryProviderCommittedPolicy["Service"];
   return { publish, service };
 });
-
-/** Disable-only administration seam. Credential installation remains in Sync's existing service. */
-export class MemoryHubAdministration extends Context.Service<
-  MemoryHubAdministration,
-  {
-    readonly disableHub: (
-      input: MemoryHubDisableInput,
-      permit: import("./memory/MemoryAccess.ts").MemoryPermit,
-    ) => Effect.Effect<MemoryHubDisableResult, MemoryRpcError>;
-  }
->()("goat/serverSettings/MemoryHubAdministration") {}
 
 export interface MemoryOwnerSourceReadCommitted {
   readonly policy: MemoryOwnerSourceReadPolicy;
@@ -798,6 +791,8 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
+    readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
 
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -834,6 +829,16 @@ export class ServerSettingsService extends Context.Service<
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
 
+    readonly checkpointReplicationPermit: (host: string) => Effect.Effect<
+      {
+        readonly choice: "on" | "off" | undefined;
+        readonly publish: <A, E, R>(
+          effect: Effect.Effect<A, E, R>,
+        ) => Effect.Effect<Option.Option<A>, E, R>;
+      },
+      ServerSettingsError
+    >;
+
     readonly streamChanges: Stream.Stream<ServerSettings>;
 
     /**
@@ -853,6 +858,104 @@ export class ServerSettingsService extends Context.Service<
 >()("goat/serverSettings/ServerSettingsService") {
   static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
 }
+
+// Publication holds only its host gate. A settings writer never waits for that gate
+// while holding the global write semaphore, so staged payload I/O cannot stall settings.
+const makeCheckpointReplicationAdmission = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; revision: number }>();
+  const forHost = (host: string) => {
+    let entry = gates.get(host);
+    if (entry === undefined) {
+      entry = { gate: Semaphore.makeUnsafe(1), revision: 0 };
+      gates.set(host, entry);
+    }
+    return entry;
+  };
+  const permit = Effect.fn("ServerSettings.checkpointReplicationPermit")(function* (
+    host: string,
+    read: Effect.Effect<ServerSettings, ServerSettingsError>,
+  ) {
+    const entry = forHost(host);
+    return yield* entry.gate.withPermits(1)(
+      Effect.gen(function* () {
+        const settings = yield* read;
+        const revision = entry.revision;
+        return {
+          choice: settings.fleet.hosts?.[host]?.checkpointReplication,
+          publish: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            entry.gate.withPermits(1)(
+              Effect.suspend(() =>
+                entry.revision === revision
+                  ? effect.pipe(Effect.map(Option.some))
+                  : Effect.succeed(Option.none<A>()),
+              ),
+            ),
+        };
+      }),
+    );
+  });
+  const tryCommit = <A, E, R>(
+    current: ServerSettings,
+    next: ServerSettings,
+    commit: Effect.Effect<A, E, R>,
+  ) => {
+    const changed = [
+      ...new Set([
+        ...Object.keys(current.fleet.hosts ?? {}),
+        ...Object.keys(next.fleet.hosts ?? {}),
+      ]),
+    ]
+      .filter(
+        (host) =>
+          current.fleet.hosts?.[host]?.checkpointReplication !==
+          next.fleet.hosts?.[host]?.checkpointReplication,
+      )
+      .sort()
+      .map(forHost);
+    let guarded = commit.pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          for (const entry of changed) entry.revision++;
+        }),
+      ),
+      Effect.map(Option.some),
+      Effect.uninterruptible,
+    );
+    for (const entry of changed.toReversed())
+      guarded = entry.gate.withPermitsIfAvailable(1)(guarded).pipe(Effect.map(Option.flatten));
+    return guarded.pipe(
+      Effect.map((result) =>
+        Option.isSome(result)
+          ? { done: true as const, value: result.value }
+          : {
+              done: false as const,
+              wait: Effect.forEach(changed, ({ gate }) => gate.withPermits(1)(Effect.void), {
+                discard: true,
+              }),
+            },
+      ),
+    );
+  };
+  const retry = Effect.fn("ServerSettings.retryCheckpointPublication")(function* <A, E, R>(
+    attempt: Effect.Effect<
+      { done: true; value: A } | { done: false; wait: Effect.Effect<void> },
+      E,
+      R
+    >,
+  ) {
+    for (let attemptNumber = 0; attemptNumber < 16; attemptNumber++) {
+      const result = yield* attempt;
+      if (result.done) return result.value;
+      yield* result.wait;
+    }
+    return yield* new ServerSettingsError({
+      settingsPath: "checkpointReplication",
+      operation: "normalize",
+      cause: "Checkpoint publication remained busy; retry this settings change.",
+    });
+  });
+  return { permit, tryCommit, retry };
+};
 
 const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   overrides: DeepPartial<ServerSettings> = {},
@@ -876,6 +979,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   const ownerIdentity = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
   yield* providerPolicy.publish(initialSettings.enableAgentMemoryAccess);
   const writeSemaphore = yield* Semaphore.make(1);
+  const checkpointAdmission = makeCheckpointReplicationAdmission();
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
   const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
 
@@ -897,7 +1001,20 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     );
   const updateTestSettings = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
-  ) => writeSemaphore.withPermits(1)(updateTestSettingsLocked(update));
+  ) =>
+    checkpointAdmission.retry(
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(currentSettingsRef);
+          const next = yield* update(current);
+          return yield* checkpointAdmission.tryCommit(
+            current,
+            next,
+            updateTestSettingsLocked(() => Effect.succeed(next)),
+          );
+        }),
+      ),
+    );
   const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
     input,
     permit,
@@ -944,11 +1061,14 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         (authorizeAtCommit ?? Effect.void).pipe(
           Effect.andThen(rejectMemoryHubSettingsPatch(patch, "test settings")),
-          Effect.map(() => applyServerSettingsPatch(currentSettings, patch)),
+          Effect.flatMap(() =>
+            stampGoatclaw(currentSettings, applyServerSettingsPatch(currentSettings, patch)),
+          ),
         ),
       ),
     updateSettingsWith: (patchFor, authorizeAtCommit) =>
@@ -957,12 +1077,16 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           if (authorizeAtCommit) yield* authorizeAtCommit;
           const patch = yield* patchFor(currentSettings);
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
-          return applyServerSettingsPatch(currentSettings, patch);
+          return yield* stampGoatclaw(
+            currentSettings,
+            applyServerSettingsPatch(currentSettings, patch),
+          );
         }),
       ),
-    updateProviderInstance: (mutation, patch = {}) =>
+    updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
+          if (authorizeAtCommit) yield* authorizeAtCommit;
           yield* rejectMemoryHubSettingsPatch(patch, "test settings");
           yield* ensureProviderInstanceMutationAllowed(currentSettings, mutation, "test settings");
           const patched = applyServerSettingsPatch(currentSettings, patch);
@@ -978,6 +1102,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       applyHubLocked,
       Effect.succeed({ state: "current" as const }),
     ),
+    checkpointReplicationPermit: (host) => checkpointAdmission.permit(host, getSettings),
     withSettingsSnapshot: (use) =>
       writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
     committedProviderPolicy: providerPolicy.service,
@@ -1220,7 +1345,24 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "goatBotModelSelection",
   "textGenerationModelSelection",
   "pullRequestMergeMethod",
+  // goatclaw's permission profiles: a partial record would lose the profile defaultProfile names.
+  "profiles",
 ]);
+
+/**
+ * goatclaw applies fleet-wide and the newest change wins on every host (goatclaw/FleetSync), so a
+ * change made here carries its time. A synced policy brings its own stamp and keeps it.
+ */
+const stampGoatclaw = (current: ServerSettings, next: ServerSettings) =>
+  next.goatclaw.updatedAt !== current.goatclaw.updatedAt ||
+  goatclawPolicyContent(next.goatclaw) === goatclawPolicyContent(current.goatclaw)
+    ? Effect.succeed(next)
+    : DateTime.now.pipe(
+        Effect.map((now): ServerSettings => ({
+          ...next,
+          goatclaw: { ...next.goatclaw, updatedAt: DateTime.formatIso(now) },
+        })),
+      );
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -1345,6 +1487,7 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
+  const checkpointAdmission = makeCheckpointReplicationAdmission();
   const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
   const providerPolicy = yield* makeMemoryProviderPolicy;
@@ -1604,6 +1747,10 @@ const make = Effect.gen(function* () {
         };
       }
     }
+    // Settings saved by a server that kept the mode in `compactIdleThreads` move
+    // it to `idleCompaction`, so that switch goes to clients as a boolean. The
+    // defaults gain the field too, which tells clients this server reads modes.
+    settings = withIdleCompaction(settings, globalIdleCompaction(settings));
 
     if (!settingsExists) {
       const current = yield* Ref.get(committedHubRef);
@@ -1656,6 +1803,7 @@ const make = Effect.gen(function* () {
       FROM provider_session_runtime
       WHERE provider_name IN ('cursor', 'grok', 'opencode')
     `.pipe(
+      NodeSqliteClient.readOnly,
       Effect.mapError(
         (cause) =>
           new ServerSettingsError({
@@ -1679,6 +1827,7 @@ const make = Effect.gen(function* () {
           FROM projection_projects
           WHERE deleted_at IS NULL
         `.pipe(
+            NodeSqliteClient.readOnly,
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({
@@ -1751,41 +1900,7 @@ const make = Effect.gen(function* () {
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
   );
 
-  const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
-    function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
-      const storedSecrets = new Map<string, string>();
-      const pending = new Map<string, SettingsSecret>();
-      mapSettingsSecrets(settings, (secret) => {
-        if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
-        return secret;
-      });
-      for (const secret of pending.values()) {
-        const value = yield* secretStore.get(secret.secretName).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "read-secret",
-                providerInstanceId: secret.providerInstanceId,
-                environmentVariable: secret.environmentVariable,
-                cause,
-              }),
-          ),
-        );
-        storedSecrets.set(
-          secret.secretName,
-          Option.isSome(value) ? textDecoder.decode(value.value) : "",
-        );
-      }
-      return mapSettingsSecrets(settings, (secret) => ({
-        value:
-          secret.sensitive && secret.redacted
-            ? (storedSecrets.get(secret.secretName) ?? "")
-            : secret.value,
-        redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
-      }));
-    },
-  );
+  const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
@@ -1998,31 +2113,47 @@ const make = Effect.gen(function* () {
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
     targetIds: ReadonlyArray<ProviderInstanceId> = [],
   ) => {
-    if (Option.isNone(routeState))
-      return writeSemaphore.withPermits(1)(updateSettingsWhileLocked(update));
-
-    const routes = routeState.value;
-    const commit = writeSemaphore.withPermits(1)(
+    const attempt = writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        const { settings: current } = yield* reloadSettings;
-        const settings = yield* updateSettingsWhileLocked(update);
-        const changed = [
-          ...new Set([
-            ...Object.keys(current.providerInstances),
-            ...Object.keys(settings.providerInstances),
-          ]),
-        ]
-          .map((id) => id as ProviderInstanceId)
-          .filter(
-            (id) =>
-              CodexRoute.instanceFingerprint(current.providerInstances[id]) !==
-              CodexRoute.instanceFingerprint(settings.providerInstances[id]),
-          );
-        return { settings, applied: routes.awaitApplied([...new Set([...changed, ...targetIds])]) };
+        const { settings: current, parseFailure } = yield* reloadSettings;
+        if (Option.isSome(parseFailure))
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "read-file",
+            cause: parseFailure.value,
+          });
+        const next = yield* update(current);
+        return yield* checkpointAdmission.tryCommit(
+          current,
+          next,
+          Effect.gen(function* () {
+            const settings = yield* updateSettingsWhileLocked(() => Effect.succeed(next));
+            const changed = [
+              ...new Set([
+                ...Object.keys(current.providerInstances),
+                ...Object.keys(settings.providerInstances),
+              ]),
+            ]
+              .map((id) => id as ProviderInstanceId)
+              .filter(
+                (id) =>
+                  CodexRoute.instanceFingerprint(current.providerInstances[id]) !==
+                  CodexRoute.instanceFingerprint(settings.providerInstances[id]),
+              );
+            return {
+              settings,
+              applied: Option.isSome(routeState)
+                ? routeState.value.awaitApplied([...new Set([...changed, ...targetIds])])
+                : Effect.void,
+            };
+          }),
+        );
       }),
     );
-    return routes.admission
-      .withPermits(1)(commit)
+    return checkpointAdmission
+      .retry(
+        Option.isSome(routeState) ? routeState.value.admission.withPermits(1)(attempt) : attempt,
+      )
       .pipe(Effect.flatMap(({ settings, applied }) => applied.pipe(Effect.as(settings))));
   };
   const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
@@ -2186,12 +2317,13 @@ const make = Effect.gen(function* () {
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
+    committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateAndPersistSettings(
         (current) =>
           (authorizeAtCommit ?? Effect.void).pipe(
             Effect.andThen(rejectMemoryHubSettingsPatch(patch, settingsPath)),
-            Effect.map(() => applyServerSettingsPatch(current, patch)),
+            Effect.flatMap(() => stampGoatclaw(current, applyServerSettingsPatch(current, patch))),
           ),
         Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
       ),
@@ -2201,7 +2333,7 @@ const make = Effect.gen(function* () {
           if (authorizeAtCommit) yield* authorizeAtCommit;
           const patch = yield* patchFor(current);
           yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-          return applyServerSettingsPatch(current, patch);
+          return yield* stampGoatclaw(current, applyServerSettingsPatch(current, patch));
         }),
       ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
@@ -2252,6 +2384,7 @@ const make = Effect.gen(function* () {
       ),
       readPublication: Ref.get(committedHubRef).pipe(Effect.map((s) => s.publication)),
     },
+    checkpointReplicationPermit: (host) => checkpointAdmission.permit(host, getSettingsFromCache),
     withSettingsSnapshot,
     withStoredSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,

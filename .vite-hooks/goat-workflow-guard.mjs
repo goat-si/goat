@@ -11,6 +11,7 @@ const [sha, ref] = NodeProcess.argv.slice(2);
 const workflowPath = ".github/workflows/goat-ci.yml";
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const closeOutsidePrsPath = ".github/workflows/close-outside-prs.yml";
+const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
 const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
 // goat-ci jobs run on a pinned GitHub-hosted image or on EPYC, never on a moving label.
@@ -19,8 +20,13 @@ const goatCiHostedRunner = "ubuntu-24.04";
 // hosted image (#426). The trust test is the expression itself, so it is pinned whole.
 const goatCiTrustedRunner =
   '(github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\'';
-// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates.
-const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result"]);
+// The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
+// the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
+const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
+const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result", "republish"]);
+// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, and republish repeats the
+// real goat-ci-result for an ignored event.
+const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result", "republish"]);
 // No Actions artifacts anywhere: goat-si is on the free plan and a full artifact
 // quota fails every upload. goat-nightly hands off through a staging draft release.
 const actions = new Set(["actions/checkout@v6", "voidzero-dev/setup-vp@v1"]);
@@ -42,7 +48,7 @@ const selfHostedRunners = [
   ["self-hosted", "macos", "arm64", "goat", "mac-studio"],
 ];
 const prepareGate =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title == 'goat-ci all on dev' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))";
 const downstreamGate = "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const verifiedRef = "${{ needs.prepare.outputs.sha }}";
 const prepareRef = "${{ steps.resolve.outputs.sha }}";
@@ -128,7 +134,7 @@ function validateWorkflow(source, yaml) {
     !Object.hasOwn(workflow.jobs, "ci") ||
     Object.keys(workflow.jobs).some((name) => !goatCiJobs.has(name))
   ) {
-    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result");
+    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result, republish");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (!isMapping(job)) return refuse(`jobs.${name} must be a mapping`);
@@ -152,13 +158,19 @@ function validateWorkflow(source, yaml) {
       return refuse(`jobs.${name}.container and jobs.${name}.services are forbidden`);
     }
     const runners = job["runs-on"];
-    const trusted =
+    const isExpression = (expected) =>
       typeof runners === "string" &&
       runners.trim().startsWith("${{") &&
-      normalizeExpression(runners) === goatCiTrustedRunner;
-    if (
+      normalizeExpression(runners) === expected;
+    if (goatCiGateJobs.has(name)) {
+      if (runners !== goatCiHostedRunner && !isExpression(goatCiLightRunner)) {
+        return refuse(
+          `jobs.${name}.runs-on must be ${goatCiHostedRunner} or the trusted-run epyc-light expression`,
+        );
+      }
+    } else if (
       runners !== goatCiHostedRunner &&
-      !trusted &&
+      !isExpression(goatCiTrustedRunner) &&
       (!Array.isArray(runners) ||
         runners.length !== 5 ||
         new Set(runners).size !== 5 ||
@@ -260,23 +272,22 @@ function validateNightlyWorkflow(source, yaml) {
   if (workflow === undefined) return fail("invalid YAML");
   if (!isMapping(workflow)) return fail("root must be a mapping");
 
+  // Nightly runs on its schedule or by hand; prepare picks and verifies the commit.
   const on = workflow.on;
-  const run = isMapping(on) ? on.workflow_run : undefined;
-  const sameList = (value, expected) =>
-    Array.isArray(value) &&
-    value.length === expected.length &&
-    value.every((v, i) => v === expected[i]);
+  const schedule = isMapping(on) ? on.schedule : undefined;
   if (
     !isMapping(on) ||
-    Object.keys(on).some((event) => !["workflow_run", "workflow_dispatch"].includes(event)) ||
-    !isMapping(run) ||
-    !sameList(run.workflows, ["goat-ci"]) ||
-    !sameList(run.types, ["completed"]) ||
-    !sameList(run.branches, ["dev"])
+    Object.keys(on).some((event) => !["schedule", "workflow_dispatch"].includes(event)) ||
+    !Object.hasOwn(on, "workflow_dispatch") ||
+    (schedule !== undefined &&
+      (!Array.isArray(schedule) ||
+        schedule.length === 0 ||
+        schedule.some(
+          (entry) =>
+            !isMapping(entry) || Object.keys(entry).length !== 1 || typeof entry.cron !== "string",
+        )))
   ) {
-    return fail(
-      "on must be workflow_run of goat-ci (completed, branches [dev]) plus optional workflow_dispatch",
-    );
+    return fail("on must be workflow_dispatch plus an optional schedule of cron entries");
   }
   if (
     !isMapping(workflow.permissions) ||
@@ -317,25 +328,32 @@ function validateNightlyWorkflow(source, yaml) {
     // prepare verifies the commit and never needs it.
     if (Object.hasOwn(job, "permissions")) {
       const permissions = job.permissions;
+      // publish may also read issues: its stable recheck counts release-blocker issues
+      // inside the publish lock (.github/scripts/release-train.cjs).
+      const extraKeys = name === "publish" ? ["issues"] : [];
       const contentsWrite =
         isMapping(permissions) &&
-        Object.keys(permissions).length === 1 &&
-        permissions.contents === "write";
+        permissions.contents === "write" &&
+        Object.keys(permissions).every(
+          (key) => key === "contents" || (extraKeys.includes(key) && permissions[key] === "read"),
+        );
       const readOnly = !JSON.stringify(permissions ?? {}).includes("write");
       if (name === "prepare" ? !readOnly : !(contentsWrite || readOnly)) {
         fail(
           name === "prepare"
             ? "jobs.prepare must not request write permissions"
-            : `jobs.${name} may only request contents: write`,
+            : name === "publish"
+              ? "jobs.publish may only request contents: write and issues: read"
+              : `jobs.${name} may only request contents: write`,
         );
       }
     }
     if (name === "prepare") {
       if (normalizeExpression(job.if) !== prepareGate)
-        fail("jobs.prepare.if must be the manual dev run gate");
+        fail("jobs.prepare.if must be the manual or scheduled run gate");
       if (Object.hasOwn(job, "needs")) fail("jobs.prepare must not need other jobs");
       // Downstream checkouts trust needs.prepare.outputs.sha, so it must come from
-      // the resolve step that checks the commit against dev.
+      // the resolve step that checks the commit against its branch.
       const outputs = isMapping(job.outputs) ? job.outputs : {};
       if (
         outputs.sha !== "${{ steps.resolve.outputs.sha }}" ||
@@ -433,10 +451,13 @@ function mentionsSecrets(value, key = "") {
   return false;
 }
 
-// prepare's resolve step is what checks the commit against dev; every checkout
-// trusts its sha output. Changing that step means updating this pin on purpose.
+// prepare's resolve step is what picks and checks the commit on dev: a green commit newer than
+// the newest published nightly's for a nightly, a published nightly's commit for stable
+// (release-train.cjs from the workflow's own commit decides both); every checkout trusts its sha
+// output. Changing that step means
+// updating this pin on purpose.
 // The whole step is pinned (any added key such as if or continue-on-error changes it).
-const pinnedResolveSha256 = "7e2fda2ab95f3ce5626b6e0fcc95eb39f3d9c99e19590a610a6e0e9996543fd0";
+const pinnedResolveSha256 = "8183fe738381a5de4ab34953951fb24bb6eee129b09b95126eac647a178b8db0";
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {
@@ -454,7 +475,7 @@ function isPinnedResolve(step) {
 }
 
 // close-outside-prs.yml stays active on goat-si/goat on purpose (#426, #430). It runs on
-// pull_request_target with a write token from the default branch (main), so it must never check out or
+// pull_request_target with a write token from the default branch (dev), so it must never check out or
 // run pull request code. A blocklist of commands cannot promise that, so the reviewed job is
 // pinned whole: any change to it, including step names, scripts and env, means reviewing it
 // again and updating this hash on purpose.
@@ -505,6 +526,26 @@ function validateCloseOutsidePrsWorkflow(source, yaml) {
   }
 }
 
+// marketing-pages.yml publishes the marketing preview to the gh-pages branch from dev. Its deploy job
+// holds contents: write and pages: write, so the whole file is pinned like
+// close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
+// this hash on purpose.
+const pinnedMarketingPagesSha256 =
+  "bb57ba4cbcb8a7c78eda250ec51456828cc6c5d837c1f59c3fed049c0bb38613";
+
+function validateMarketingPagesWorkflow(source, yaml) {
+  const fail = (reason) => refuse(reason, marketingPagesPath);
+  const workflow = parseWorkflow(source, yaml);
+  if (workflow === undefined) return fail("invalid YAML");
+  if (!isMapping(workflow)) return fail("root must be a mapping");
+  const digest = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(canonical(workflow)))
+    .digest("hex");
+  if (digest !== pinnedMarketingPagesSha256) {
+    return fail("must match the reviewed workflow; review it and update the pinned hash");
+  }
+}
+
 let paths;
 try {
   paths = NodeChildProcess.execFileSync(
@@ -525,6 +566,7 @@ for (const path of paths) {
     path !== workflowPath &&
     path !== nightlyPath &&
     path !== closeOutsidePrsPath &&
+    path !== marketingPagesPath &&
     /\.ya?ml$/.test(path) &&
     !disabled.has(path)
   ) {
@@ -532,7 +574,7 @@ for (const path of paths) {
     status = 1;
   }
 }
-for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath]) {
+for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath, marketingPagesPath]) {
   if (!paths.includes(path)) continue;
   let source;
   try {
@@ -560,6 +602,7 @@ for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath]) {
   }
   if (path === workflowPath) validateWorkflow(source, yaml);
   else if (path === nightlyPath) validateNightlyWorkflow(source, yaml);
+  else if (path === marketingPagesPath) validateMarketingPagesWorkflow(source, yaml);
   else validateCloseOutsidePrsWorkflow(source, yaml);
 }
 if (status !== 0) NodeProcess.exit(status);

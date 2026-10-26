@@ -1,15 +1,12 @@
-import { deriveGoatBotModelSettings } from "@goat/client-runtime/goatBot";
-import { AuthSettingsWriteScope, type EnvironmentId, type ModelSelection } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 import { Text } from "react-native";
 
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
-import { useEnvironmentServerConfig } from "../../state/entities";
-import { serverEnvironment } from "../../state/server";
-import { readEnvironmentScope } from "../../state/session";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
+import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -101,41 +98,22 @@ function GoatBotModelSection({
   readonly environmentId: EnvironmentId;
   readonly canWrite: boolean;
 }) {
-  const config = useEnvironmentServerConfig(environmentId);
-  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "environment settings update",
-    reportFailure: false,
-  });
+  const model = useMobileGoatBotModel(environmentId, canWrite);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (!config) return null;
-
-  const modelState = deriveGoatBotModelSettings({
-    settings: config.settings,
-    providers: config.providers,
-  });
-  const allowed = canWrite && !saving;
-
-  function save(goatBotModelSelection: ModelSelection | null) {
-    if (saving || !readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;
-    setSaving(true);
-    setError(null);
-    void updateSettings({
-      environmentId,
-      input: { patch: { goatBotModelSelection } },
-    })
-      .then((result) => {
-        setError(result._tag === "Success" ? null : "Could not update GOAT Bot's model.");
-      })
-      .catch(() => {
-        setError("Could not update GOAT Bot's model.");
-      })
-      .finally(() => setSaving(false));
-  }
+  if (!model) return null;
+  const { state: modelState, settings, saving, error, allowed, save } = model;
 
   return (
     <>
+      <SettingsSection title="Workers">
+        <SettingsSwitchRow
+          label="Automatically choose a worker computer"
+          subtitle="Use connected SSH computers with the same repository and model, based on quota and active work. Instructions, notes and named skills go to the selected computer."
+          value={settings.channelAutoPlacement}
+          disabled={!allowed}
+          onValueChange={(value) => save({ channelAutoPlacement: value })}
+        />
+      </SettingsSection>
       <SettingsSection title="Model">
         <SettingsRow
           icon="sparkles"
@@ -154,7 +132,7 @@ function GoatBotModelSection({
               disabled={!allowed}
               onPress={() => {
                 setPickerOpen(false);
-                if (modelState.separate) save(null);
+                if (modelState.separate) save({ goatBotModelSelection: null });
               }}
             />
             {modelState.choices.map((choice) => (
@@ -176,7 +154,7 @@ function GoatBotModelSection({
                     modelState.selection.instanceId !== choice.instanceId ||
                     modelState.selection.model !== choice.model
                   ) {
-                    save(choice.selection);
+                    save({ goatBotModelSelection: choice.selection });
                   }
                 }}
               />

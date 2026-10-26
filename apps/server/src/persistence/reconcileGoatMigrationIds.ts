@@ -34,6 +34,18 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteDispatchObservation",
   "MemoryRevisionCheckpointSize",
   "HubNodes",
+  "MemorySummaryWorkThreadIndex",
+  "ThreadHistoryArchives",
+  "PermissionProfiles",
+  "DecisionInbox",
+  "HumanStepRecords",
+  "McpRequestReservations",
+  "RemoteReportInboxRunId",
+  "RemoteReportReceipts",
+  "PendingAttachmentUploads",
+  "ScheduledTaskWebhookSecretRef",
+  "RemoteReportFences",
+  "HubProvisionedLinks",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -1,3 +1,6 @@
+import { layerNoFleetSync } from "../../../goatclaw/FleetSync.testkit.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
+import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -7,7 +10,9 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type ModelSelection,
   type OrchestrationV2ThreadShell,
+  type RuntimeMode,
   type Project as ProjectRecord,
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -58,6 +63,7 @@ const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
 /** Launch handlers resolve their service from the tool invocation context. */
 const withLaunchService = <A, E, R>(dependencies: Layer.Layer<A, E, R>) =>
   ThreadLaunchMcpService.layer.pipe(
+    Layer.provideMerge(Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({})),
     Layer.provide(
       Layer.mock(ProviderAdapters.ProviderAdapterRegistryV2)({
         get: () => Effect.succeed(localAdapter),
@@ -83,6 +89,7 @@ const launchWatches = (
   registerInterrupted = false,
 ) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
+    find: () => Effect.succeed(null),
     register: (input) =>
       registerInterrupted
         ? Effect.interrupt
@@ -107,7 +114,7 @@ const launchWatches = (
             webhookTarget: { type: "named" as const, name: input.notifyTarget?.name ?? "" },
           }),
     releaseRoute: (route) => Effect.sync(() => void released.push(route)),
-  });
+  }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})));
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
 const launchFromThread = (params: {
@@ -210,7 +217,7 @@ const launchFromThread = (params: {
           } as unknown as ThreadLaunch.ThreadLaunchResult);
         },
       }),
-      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(Project.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
@@ -696,7 +703,10 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
 );
 
 const clientLaunchHarness = (input: {
-  readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly runtimeModeCeiling: RuntimeMode;
+  readonly defaultRuntimeMode?: RuntimeMode;
+  /** Where Settings saves a project's model; the legacy project field stays null. */
+  readonly overrideModel?: ModelSelection;
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
@@ -707,7 +717,19 @@ const clientLaunchHarness = (input: {
     model: "claude-opus",
   };
   const layerDependencies = Layer.mergeAll(
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest({
+      ...(input.defaultRuntimeMode === undefined
+        ? {}
+        : { defaultRuntimeMode: input.defaultRuntimeMode }),
+      ...(input.overrideModel === undefined
+        ? {}
+        : {
+            projectSettingsFolded: true,
+            projectSettingsOverrides: {
+              [projectId]: { defaultModelSelection: input.overrideModel },
+            },
+          }),
+    }),
     NodeCrypto.layer,
     launchWatches(),
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -748,7 +770,7 @@ const clientLaunchHarness = (input: {
             ? Option.some({
                 id,
                 workspaceRoot: input.workspaceRoot ?? "/projects/client-target",
-                defaultModelSelection: modelSelection,
+                defaultModelSelection: input.overrideModel === undefined ? modelSelection : null,
               } as unknown as ProjectRecord)
             : Option.none(),
         ),
@@ -812,6 +834,70 @@ it.effect("a client launches at its ceiling with the project's default model", (
     const untargeted = yield* handle({ title: "Fix" });
     expect(untargeted.at(-1)?.result).toMatchObject({ code: "target_required" });
     expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("a client starts at the project's default model and mode, capped at its ceiling", () =>
+  Effect.gen(function* () {
+    const launchWith = Effect.fn("test.launchWith")(function* (
+      runtimeModeCeiling: RuntimeMode,
+      defaultRuntimeMode: RuntimeMode,
+      params: {
+        readonly title: string;
+        readonly message?: string;
+        readonly runtimeMode?: RuntimeMode;
+        readonly overrideModel?: ModelSelection;
+      },
+    ) {
+      const { overrideModel, ...input } = params;
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, modelSelection, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling,
+        defaultRuntimeMode,
+        launched,
+        ...(overrideModel === undefined ? {} : { overrideModel }),
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(withLaunchService(dependencies)),
+          ),
+        ),
+      );
+      const result = yield* toolkit
+        .handle("goat_thread_launch", { ...input, projectId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(withLaunchService(dependencies)));
+      return { result: result.at(-1)?.result, launched, projectId, modelSelection };
+    });
+
+    const belowCeiling = yield* launchWith("full-access", "approval-required", {
+      title: "Fix",
+      message: "Fix the bug",
+    });
+    expect(belowCeiling.result).toMatchObject({
+      projectId: belowCeiling.projectId,
+      modelSelection: belowCeiling.modelSelection,
+    });
+    expect(belowCeiling.launched[0]?.runtimeMode).toBe("approval-required");
+
+    const aboveCeiling = yield* launchWith("auto-accept-edits", "full-access", { title: "Fix" });
+    expect(aboveCeiling.launched[0]?.runtimeMode).toBe("auto-accept-edits");
+
+    const requested = yield* launchWith("full-access", "approval-required", {
+      title: "Fix",
+      runtimeMode: "auto",
+    });
+    expect(requested.launched[0]?.runtimeMode).toBe("auto");
+
+    const overrideModel = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-settings",
+    };
+    const fromSettings = yield* launchWith("full-access", "full-access", {
+      title: "Fix",
+      overrideModel,
+    });
+    expect(fromSettings.launched[0]?.modelSelection).toEqual(overrideModel);
   }),
 );
 
@@ -1019,6 +1105,7 @@ it.effect("lists and reads another machine's projects through that machine's own
       ),
     );
     const dependencies = HostThreadsMcpService.layer.pipe(
+      Layer.provide(layerNoFleetSync),
       Layer.provide(Layer.mock(ThreadResults.ThreadResultService)({})),
       Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
       Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
@@ -1397,7 +1484,7 @@ it.effect("tells the agent how to restore a missing project folder, and watches 
     expect(launch.result).toMatchObject({
       code: "invalid_request",
       message:
-        'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_project_clone {remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}, or point the project at an existing checkout with goat_project_update {projectId:"project", workspaceRoot}, then launch again.',
+        'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_call {path:"project.clone", args:{remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}}, or point the project at an existing checkout with goat_call {path:"project.update", args:{projectId:"project", workspaceRoot}}, then launch again.',
     });
     expect(launch.registrations).toEqual([]);
   }),

@@ -12,6 +12,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
 import {
   type SshHostResult,
   SshHostStatus,
@@ -19,9 +20,11 @@ import {
   SshRuntimeUpdateMode,
 } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import type { DesktopCuaGrants, DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
+import type { DesktopPreviewCaptureEvent, DesktopPreviewPointerEvent } from "./desktopBrowser.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -482,7 +485,7 @@ export interface DesktopSshEnvironmentBootstrap {
   pairingToken: string | null;
   attachmentId?: string;
   remotePort?: number;
-  remoteServerKind?: "external" | "managed";
+  remoteServerKind?: "app" | "external" | "managed";
   /** GOAT version of the remote server, when the runtime reported one. Source runs omit it. */
   remoteServerVersion?: string;
   /**
@@ -510,7 +513,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
   pairingToken: Schema.NullOr(Schema.String),
   attachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   remotePort: Schema.optionalKey(Schema.Number),
-  remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
+  remoteServerKind: Schema.optionalKey(Schema.Literals(["app", "external", "managed"])),
   remoteServerVersion: Schema.optionalKey(Schema.String),
   pendingReplacement: Schema.optionalKey(SshRuntimePendingReplacementSchema),
 });
@@ -768,15 +771,6 @@ export interface DesktopPreviewTabState {
 export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed()).check(
   Schema.isNonEmpty(),
 );
-
-export interface DesktopPreviewPointerEvent {
-  tabId: string;
-  phase: "move" | "click";
-  x: number;
-  y: number;
-  sequence: number;
-  createdAt: string;
-}
 
 export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
@@ -1182,7 +1176,11 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
-export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
+export const SystemSettingsPaneSchema = Schema.Literals([
+  "full-disk-access",
+  "accessibility",
+  "screen-recording",
+]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 /**
@@ -1195,7 +1193,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge {
+export interface DesktopBridge extends DesktopBridgeParts {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
@@ -1308,6 +1306,15 @@ export interface DesktopBridge {
   openExternal: (url: string) => Promise<boolean>;
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
+  restartCuaDriver?: () => Promise<void>;
+  /** Restarts the local driver and proves its macOS grants from inside the driver. */
+  verifyCuaDriver?: () => Promise<DesktopCuaVerification>;
+  /** The grants of the app computer use runs as (the helper when shipped), without prompting. */
+  checkCuaGrants?: () => Promise<DesktopCuaGrants>;
+  /** Opens the pane plus a panel to drag that app into its list; false if it did not open. */
+  openCuaPermissionGuide?: (pane: "accessibility" | "screen-recording") => Promise<boolean>;
+  revealCuaGrantTarget?: () => Promise<void>;
+  relaunchForCuaGrants?: () => Promise<void>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
    */
@@ -1415,6 +1422,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }
 

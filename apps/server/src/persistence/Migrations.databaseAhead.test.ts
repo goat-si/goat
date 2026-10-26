@@ -30,7 +30,7 @@ describe("runMigrations database ahead of this build", () => {
         `;
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (68, 'FutureUpstreamMigration')
+          VALUES (69, 'FutureUpstreamMigration')
         `;
 
         const exit = yield* Effect.exit(runMigrations());

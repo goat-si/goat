@@ -1,11 +1,25 @@
 import {
+  BUILTIN_SKILL_PROVIDER_DRIVERS,
+  BUILTIN_SKILL_SCOPE,
+  BUILTIN_SKILLS,
+  COMPUTER_USE_PROVIDER_DRIVERS,
+  type ProjectId,
+  resolveProjectBuiltInSkillEnabled,
   isProviderWorkspaceSnapshotCurrent,
   type ServerProvider,
+  type ServerSettings,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@goat/contracts";
 
-export type ProviderSkillSourceKind = "app" | "repo" | "project" | "personal" | "system" | "other";
+export type ProviderSkillSourceKind =
+  | "builtin"
+  | "app"
+  | "repo"
+  | "project"
+  | "personal"
+  | "system"
+  | "other";
 
 function normalizePathSeparators(pathValue: string): string {
   return pathValue.replaceAll("\\", "/");
@@ -65,6 +79,8 @@ export function resolveProviderSkillSourceKind(
 
   const normalizedScope = skill.scope?.trim().toLowerCase();
   switch (normalizedScope) {
+    case BUILTIN_SKILL_SCOPE:
+      return "builtin";
     case "repo":
     case "repository":
       return "repo";
@@ -114,35 +130,85 @@ export function hasCurrentProviderWorkspaceSnapshot(
   );
 }
 
-export function resolveProviderForCwd(
-  provider: ServerProvider,
-  cwd: string | null | undefined,
-): ServerProvider {
-  const descriptors = resolveProviderWorkspaceSnapshot(provider, cwd)?.optionDescriptors;
-  if (descriptors === undefined) return provider;
-  const overriddenIds = new Set(descriptors.map((descriptor) => descriptor.id));
-  return {
-    ...provider,
-    models: provider.models.map((model) => ({
-      ...model,
-      capabilities: {
-        ...model.capabilities,
-        optionDescriptors: [
-          ...(model.capabilities?.optionDescriptors ?? []).filter(
-            (descriptor) => !overriddenIds.has(descriptor.id),
-          ),
-          ...descriptors,
-        ],
-      },
-    })),
-  };
-}
-
 export function resolveProviderSkillsForCwd(
   provider: ServerProvider,
   cwd: string | null | undefined,
 ): ServerProvider["skills"] {
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.skills ?? provider.skills;
+}
+
+type BuiltInSkillSettings = Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> &
+  Partial<Pick<ServerSettings, "projectSettingsOverrides">>;
+
+/** Where the skills are offered: the destination server's support and the thread's project. */
+export interface BuiltInSkillTarget {
+  /** The destination environment advertises `devDisciplineSkill`. */
+  readonly devDisciplineSkill?: boolean | undefined;
+  readonly projectId?: ProjectId | null | undefined;
+}
+
+/**
+ * Adds GOAT's built-in skills that this provider's turns can carry. They come last, so a skill
+ * of the same name the person wrote wins when the menu dedupes by name. A skill switched off in
+ * Settings, for the environment or the thread's project, is listed as disabled, which keeps it
+ * out of the menu. Computer Use needs computer use on; goat-discipline needs a server that
+ * delivers it.
+ */
+export function withBuiltInProviderSkills(
+  skills: ReadonlyArray<ServerProviderSkill>,
+  provider: Pick<ServerProvider, "driver"> | null | undefined,
+  settings: BuiltInSkillSettings | null | undefined,
+  target?: BuiltInSkillTarget,
+): ReadonlyArray<ServerProviderSkill> {
+  if (!provider || !settings) return skills;
+  const offered = BUILTIN_SKILLS.filter((skill) =>
+    skill.capability === "computer-use"
+      ? settings.enableCua && COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
+      : target?.devDisciplineSkill === true && BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver),
+  );
+  if (offered.length === 0) return skills;
+  const resolved = { projectSettingsOverrides: {}, ...settings };
+  return [
+    ...skills,
+    ...offered.map((skill) => ({
+      name: skill.name,
+      displayName: skill.displayName,
+      description: skill.description,
+      path: `goat:builtin/${skill.name}`,
+      scope: BUILTIN_SKILL_SCOPE,
+      enabled: resolveProjectBuiltInSkillEnabled(resolved, target?.projectId ?? null, skill.name),
+    })),
+  ];
+}
+
+/** The skills a thread's provider offers in its workspace, GOAT's built-in ones included. */
+export function resolveThreadProviderSkills(
+  config:
+    | {
+        readonly providers: ReadonlyArray<ServerProvider>;
+        readonly settings?: BuiltInSkillSettings;
+        readonly environment?: {
+          readonly capabilities: { readonly devDisciplineSkill?: boolean | undefined };
+        };
+      }
+    | null
+    | undefined,
+  instanceId: ServerProvider["instanceId"],
+  cwd: string | null | undefined,
+  projectId?: ProjectId | null,
+): ReadonlyArray<ServerProviderSkill> {
+  const provider = config?.providers.find((candidate) => candidate.instanceId === instanceId);
+  return provider
+    ? withBuiltInProviderSkills(
+        resolveProviderSkillsForCwd(provider, cwd),
+        provider,
+        config?.settings,
+        {
+          devDisciplineSkill: config?.environment?.capabilities.devDisciplineSkill,
+          projectId,
+        },
+      )
+    : [];
 }
 
 export function resolveProviderSlashCommandsForCwd(

@@ -1,3 +1,4 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   EnvironmentId,
@@ -31,6 +32,7 @@ import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
@@ -549,3 +551,74 @@ it("readThread and sendToThread reach threads in other projects", async () => {
     expect(stopped.code).toBe("parent_not_active");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
+
+it.each([
+  { lastVisitedAt: "2026-08-04T11:00:00.000Z", unread: true },
+  { lastVisitedAt: "2026-08-04T13:00:00.000Z", unread: false },
+  { lastVisitedAt: null, unread: false },
+])(
+  "readThread reports pin, unread ($unread) and the stored snooze so goat_thread_organize can be reconciled",
+  async ({ lastVisitedAt, unread }) => {
+    const thread = {
+      ...baseThread({
+        threadId: parentThreadId,
+        title: "Parent",
+        instanceId: parentInstanceId,
+        model: "gpt-5.4",
+      }),
+      pinnedAt: now,
+      // Snoozed, then woken early: the deadline passed, the stored snooze stays.
+      snoozedAt: DateTime.makeUnsafe("2026-08-04T10:00:00.000Z"),
+      snoozedUntil: DateTime.makeUnsafe("2026-08-04T10:30:00.000Z"),
+      lastVisitedAt: lastVisitedAt === null ? null : DateTime.makeUnsafe(lastVisitedAt),
+    };
+    const projection = {
+      thread,
+      runs: [makeRun({ id: activeRunId, ordinal: 1, status: "completed" })],
+      visibleTurnItems: [],
+      turnItems: [],
+      runtimeRequests: [],
+      messages: [],
+      contextTransfers: [],
+      subagents: [],
+      updatedAt: now,
+    } as unknown as OrchestrationV2ThreadProjection;
+    const layer = layerOrchestratorService.pipe(
+      Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+      Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
+            getThreadRecords: () => Effect.succeed(projection),
+            getThreadShell: () =>
+              Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
+            getProjectThreadRecords: () => Effect.succeed(projection),
+          } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+          ServerSettings.layerTest(),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+            list: () => Effect.succeed({ tasks: [] }),
+          }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            list: () => Effect.succeed([]),
+          }),
+          NodeCrypto.layer,
+        ),
+      ),
+    );
+
+    await Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.readThread(makeScope(), { threadId: parentThreadId });
+      expect(result.thread).toMatchObject({
+        pinned: true,
+        unread,
+        snoozed: false,
+        snoozedAt: "2026-08-04T10:00:00.000Z",
+      });
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+  },
+);

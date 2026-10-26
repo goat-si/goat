@@ -53,7 +53,7 @@ it.each([false, true])(
       runlessWorkActive: runless,
       activeTurnInProgress: true,
       isCompacting: false,
-      awaitingUser: false,
+      awaitingUser: null,
       activeTurnStartedAt: startedAt,
       latestRun: runId ? { runId, status: "running", startedAt, completedAt: null } : null,
       runningRunId: runId,

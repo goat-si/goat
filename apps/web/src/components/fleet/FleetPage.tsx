@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { isElectron } from "../../env";
+import { useNowWhile } from "../../hooks/useNowWhile";
 import { cn } from "../../lib/utils";
 import { useFleetCloudAgents, useFleetSnapshot } from "../../state/fleet";
 import { useFleetHostMetrics } from "../../state/fleetHostMetrics";
@@ -15,14 +16,22 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsIcon } from "~/components/solar";
 import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
 import { ConnectionEnvironmentsSection } from "../settings/ConnectionEnvironmentsSection";
+import { BoatIcon } from "../Icons";
 import { FleetCloudAgents } from "./FleetCloudAgents";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
-import { describeMachine } from "./describeMachine";
-import { fleetConnectionLegend, UNKNOWN_FLEET_CONNECTION } from "./fleetConnection";
+import { fleetMachineSubtitle } from "./describeMachine";
+import {
+  fleetConnectionLegend,
+  isFleetConnectionWait,
+  UNKNOWN_FLEET_CONNECTION,
+} from "./fleetConnection";
 import { FleetConnectionIcon } from "./FleetConnectionGlyph";
+import { fleetUncountedMachines } from "./fleetCount";
 import { fleetHeatDemo } from "./fleetHeatDemo";
+import { slowConnectionWaits } from "./fleetTelemetry";
 import { FleetThreadList, STATE_DOT, STATE_LABEL } from "./FleetThreadList";
+import { FleetUncountedHosts } from "./FleetUncountedHosts";
 
 const plural = (count: number, one: string, many = one + "s") =>
   count + " " + (count === 1 ? one : many);
@@ -51,11 +60,6 @@ function machineWork(machine: FleetMachine): string {
 const isBusy = (machine: FleetMachine) =>
   machine.running + machine.attention + machine.reported > 0;
 
-const machineSubtitle = (machine: FleetMachine) =>
-  [describeMachine(machine.os, machine.machineKind), machine.subtitle]
-    .filter((part) => part !== null)
-    .join(" · ");
-
 function groupThreadsByMachine(threads: ReadonlyArray<FleetThread>) {
   const grouped = new Map<string, FleetThread[]>();
   for (const thread of threads) {
@@ -75,6 +79,14 @@ export function FleetPage() {
   const { snapshot, connections, currentMachineId, loading } =
     demo === null ? live : { ...demo, loading: false };
   const heat = demo?.heat ?? liveHeat;
+  // A coarse check while an attempt has not yet turned slow; nothing ticks once it has.
+  const waiting = [...connections.values()].some((connection) =>
+    isFleetConnectionWait(connection.state),
+  );
+  const now = useNowWhile(waiting, 5_000);
+  const slowIds = [...slowConnectionWaits(connections, now)].join("\n");
+  // Derived from the joined ids, so the compiler keeps one Set until the slow set changes.
+  const slowMachineIds = new Set(slowIds === "" ? [] : slowIds.split("\n"));
   const [selected, setSelected] = useState<string | null>(null);
   const selectedMachine = snapshot.machines.find((machine) => machine.id === selected) ?? null;
   const toggleMachine = (machineId: string) =>
@@ -94,6 +106,7 @@ export function FleetPage() {
     tier !== "normal" && [...heat.values()].some((entry) => entry.tier === tier) ? [tier] : [],
   );
   const { totals } = snapshot;
+  const uncounted = fleetUncountedMachines(snapshot.machines, connections);
 
   return (
     <SidebarInset>
@@ -106,13 +119,14 @@ export function FleetPage() {
             <FleetConsoleSlot snapshot={snapshot} connections={connections} heat={heat} />
             <p className="text-sm text-muted-foreground" role="status">
               {totals.running + totals.attention === 0
-                ? "Nothing running on " + plural(totals.machines, "machine") + "."
+                ? "Nothing running on " + plural(totals.machines, "machine")
                 : plural(totals.running, "thread") +
                   " running, " +
                   totals.attention +
                   " need you, on " +
-                  plural(totals.machines, "machine") +
-                  "."}
+                  plural(totals.machines, "machine")}
+              {uncounted.length > 0 ? " " : null}
+              <FleetUncountedHosts hosts={uncounted} />.
               {totals.reported > 0
                 ? " " +
                   plural(totals.reported, "launch", "launches") +
@@ -128,6 +142,7 @@ export function FleetPage() {
                 selectedMachineId={selected}
                 onSelectMachine={toggleMachine}
                 heat={heat}
+                slowMachineIds={slowMachineIds}
               />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-2 text-xs text-muted-foreground">
                 {(["running", "attention", "reported"] as const).map((state) => (
@@ -160,8 +175,11 @@ export function FleetPage() {
 
             {selectedMachine ? (
               <div className="flex items-center gap-2 text-sm">
-                <span>
+                <span className="inline-flex items-center gap-1.5">
                   Showing <span className="font-medium">{selectedMachine.label}</span>
+                  {selectedMachine.boat !== null ? (
+                    <BoatIcon role="img" aria-label="Boat" className="size-3.5" />
+                  ) : null}
                 </span>
                 <Button size="compact" variant="ghost" onClick={() => setSelected(null)}>
                   Show all
@@ -169,27 +187,35 @@ export function FleetPage() {
               </div>
             ) : null}
 
-            {listed.map((machine) => (
-              <section key={machine.id} aria-label={machine.label} className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  aria-pressed={selected === machine.id}
-                  onClick={() => toggleMachine(machine.id)}
-                  className="flex items-baseline gap-2 rounded-md text-left outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            {listed.map((machine) => {
+              const subtitle = fleetMachineSubtitle(machine);
+              return (
+                <section
+                  key={machine.id}
+                  aria-label={machine.label}
+                  className="flex flex-col gap-1"
                 >
-                  <span className="text-sm font-medium">{machine.label}</span>
-                  {machineSubtitle(machine) ? (
-                    <span className="text-xs text-muted-foreground">
-                      {machineSubtitle(machine)}
+                  <button
+                    type="button"
+                    aria-pressed={selected === machine.id}
+                    onClick={() => toggleMachine(machine.id)}
+                    className="flex items-baseline gap-2 rounded-md text-left outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    {machine.boat !== null ? (
+                      <BoatIcon aria-hidden className="size-3.5 shrink-0 self-center" />
+                    ) : null}
+                    <span className="text-sm font-medium">{machine.label}</span>
+                    {subtitle !== null ? (
+                      <span className="text-xs text-muted-foreground">{subtitle}</span>
+                    ) : null}
+                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                      {machineWork(machine)}
                     </span>
-                  ) : null}
-                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                    {machineWork(machine)}
-                  </span>
-                </button>
-                <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />
-              </section>
-            ))}
+                  </button>
+                  <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />
+                </section>
+              );
+            })}
 
             {idle.length > 0 ? (
               <p className="text-xs text-muted-foreground">

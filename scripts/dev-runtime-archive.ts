@@ -25,6 +25,7 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import rootPackageJson from "../package.json" with { type: "json" };
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 const repoRoot = NodeURL.fileURLToPath(new URL("..", import.meta.url));
@@ -205,7 +206,7 @@ export async function buildDevRuntimeArchive(input: {
   const selection =
     input.nodeVersion?.trim() ||
     env.VP_NODE_VERSION?.trim() ||
-    (supportsSea(process.version) ? process.version.slice(1) : "26.8.2");
+    (supportsSea(process.version) ? process.version.slice(1) : rootPackageJson.engines.node);
   if (!supportsSea(selection))
     throw new Error(`SEA requires Node >=25.7.0; requested ${selection}`);
   env.VP_NODE_VERSION = selection.replace(/^v/, "");

@@ -112,8 +112,7 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
           isDefault: slug === "default",
           capabilities: modelCapabilities,
         })),
-        message:
-          "Uses the selected Devin ACP instance's CLI login and cloud account permissions. Repository access is checked by the cloud task.",
+        message: "Uses your Devin sign-in. Repository access is checked by the cloud task.",
       } satisfies ServerProvider;
     });
     const check = Effect.gen(function* () {
@@ -124,8 +123,8 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
         Effect.gen(function* () {
           const launch = yield* cli.resolve(input.config.siblingInstanceId, host.paths.cwd);
           sourceInstanceId = launch.sourceInstanceId;
-          const version = yield* cli.probe(launch);
-          return { version, sourceInstanceId: launch.sourceInstanceId };
+          const readiness = yield* cli.probe(launch);
+          return { ...readiness, sourceInstanceId: launch.sourceInstanceId };
         }),
       );
       if (Result.isFailure(result)) {
@@ -141,6 +140,9 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
           ...snapshot,
           ...(sourceInstanceId ? { authSourceInstanceId: sourceInstanceId } : {}),
           status: "error" as const,
+          ...(result.failure.stage === "auth"
+            ? { installed: true, auth: { status: "unauthenticated" as const } }
+            : {}),
           message: result.failure.message,
         };
       }
@@ -150,8 +152,11 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
         version: result.success.version,
         authSourceInstanceId: result.success.sourceInstanceId,
         status: "ready" as const,
-        auth: { status: "authenticated" as const },
-        message: "CLI signed in; cloud repository access and quota may still block a task.",
+        auth: {
+          status: "authenticated" as const,
+          ...(result.success.email ? { email: result.success.email } : {}),
+        },
+        message: "Repository access and quota are checked per task.",
       };
     });
     const snapshot = yield* makeManagedServerProvider({

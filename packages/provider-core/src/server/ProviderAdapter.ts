@@ -154,6 +154,8 @@ export const ProviderAdapterV2Event = Schema.Union([
     status: Schema.Literals(["completed", "interrupted", "cancelled"]),
     failure: Schema.Null,
     threadDisposition: Schema.Literals(["reusable", "broken"]),
+    /** The full result a cloud task reported, when its saved summary is shortened. */
+    resultText: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("turn.terminal"),
@@ -355,6 +357,7 @@ export class ProviderAdapterEventStreamError extends Schema.TaggedError<Provider
   {
     driver: ProviderDriverKind,
     providerSessionId: ProviderSessionId,
+    source: Schema.optional(Schema.Literal("provider_process_exit")),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -487,6 +490,7 @@ export interface ProviderAdapterV2InterruptInput {
 export interface ProviderAdapterV2RuntimeRequestResponseInput {
   readonly requestId: RuntimeRequestId;
   readonly decision?: ProviderApprovalDecision;
+  readonly feedback?: string;
   readonly answers?: ProviderUserInputAnswers;
   readonly response?: unknown;
 }

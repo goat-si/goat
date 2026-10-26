@@ -1,16 +1,20 @@
 import { parseScopedThreadKey } from "@goat/client-runtime/environment";
+import { isActiveThreadWork } from "@goat/client-runtime/state/thread-inbox";
 import {
   AuthPreviewOperateScope,
   type DesktopPreviewOpenLinkEvent,
+  type DesktopPreviewPointerEvent,
   FILL_PREVIEW_VIEWPORT,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { type ComponentProps, useEffect, useEffectEvent, useState } from "react";
+import { type ComponentProps, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
+import { useThreadShell } from "~/state/entities";
 import { useDesktopHostedPreviewSessions } from "~/components/preview/usePreviewSession";
 import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
@@ -20,6 +24,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
+import { acquireBrowserSurfaceActivity, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
 import { rendersServerTabNatively } from "./previewRuntime";
@@ -87,12 +92,107 @@ export function ElectronBrowserHost() {
     };
   }, []);
 
+  const reportedStackTabs = useRef(new Set<string>());
+  const avoidStackPointer = useEffectEvent((event: DesktopPreviewPointerEvent) => {
+    const bridge = window.desktopBridge?.previewSessionStack;
+    if (!bridge) return;
+    const session = sessions.find((candidate) => candidate.runtimeTabId === event.tabId);
+    const presentation = useBrowserSurfaceStore.getState().byTabId[event.tabId];
+    const webview = document.querySelector<HTMLElement>(
+      `webview[data-preview-tab="${CSS.escape(event.tabId)}"]`,
+    );
+    let point: { x: number; y: number } | null = null;
+    // Desktop helpers publish no action coordinates, and remote/server-only browsers have no
+    // local screen position. Map only a visible hosted guest, never the thumbnail or hidden guest.
+    if (
+      session &&
+      presentation?.visible &&
+      webview &&
+      webview.getAttribute("aria-hidden") !== "true"
+    ) {
+      const rect = webview.getBoundingClientRect();
+      const cssWidth = Number(webview.dataset.previewCssWidth);
+      const cssHeight = Number(webview.dataset.previewCssHeight);
+      // The guest's CSS viewport and measured rectangle include device fitting and app/guest zoom.
+      if (
+        cssWidth > 0 &&
+        cssHeight > 0 &&
+        event.x >= 0 &&
+        event.x < cssWidth &&
+        event.y >= 0 &&
+        event.y < cssHeight
+      ) {
+        point = {
+          x: rect.left + (event.x * rect.width) / cssWidth,
+          y: rect.top + (event.y * rect.height) / cssHeight,
+        };
+      }
+    }
+    if (point) reportedStackTabs.current.add(event.tabId);
+    else reportedStackTabs.current.delete(event.tabId);
+    void bridge.request({ type: "pointer", tabId: event.tabId, point }).catch((error: unknown) => {
+      console.error("Could not avoid agent pointer with the floating stack", error);
+    });
+  });
+
+  const hostedTabIds = sessions.map((session) => session.runtimeTabId).join("\n");
+  useEffect(() => {
+    const active = new Set(hostedTabIds.split("\n"));
+    for (const tabId of reportedStackTabs.current) {
+      if (active.has(tabId)) continue;
+      reportedStackTabs.current.delete(tabId);
+      void window.desktopBridge?.previewSessionStack
+        ?.request({ type: "pointer", tabId, point: null })
+        .catch((error: unknown) => console.error("Could not release stack pointer", error));
+    }
+  }, [hostedTabIds]);
+
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview) return;
     return preview.onPointerEvent((event) => {
       useBrowserPointerStore.getState().apply(event);
+      avoidStackPointer(event);
     });
+  }, []);
+
+  // An agent's screenshot of a server tab waits for a frame that a guest parked outside the window
+  // never composites. Keep the guest painting, behind the app, while any capture is in flight.
+  const runtimeTabIdOf = useEffectEvent((threadId: string, tabId: string) => {
+    const session = sessions.find(
+      ({ threadRef, snapshot }) =>
+        snapshot.runtime === "server" &&
+        threadRef.threadId === threadId &&
+        snapshot.tabId === tabId,
+    );
+    return session?.runtimeTabId;
+  });
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    const holds = new Map<string, { count: number; release: () => void }>();
+    const unsubscribe = preview.onServerTabCapture(({ threadId, tabId, capturing }) => {
+      const key = `${threadId}\u0000${tabId}`;
+      const hold = holds.get(key);
+      if (!capturing) {
+        if (hold && --hold.count === 0) {
+          holds.delete(key);
+          hold.release();
+        }
+        return;
+      }
+      if (hold) {
+        hold.count += 1;
+        return;
+      }
+      const runtimeTabId = runtimeTabIdOf(threadId, tabId);
+      if (runtimeTabId === undefined) return;
+      holds.set(key, { count: 1, release: acquireBrowserSurfaceActivity(runtimeTabId) });
+    });
+    return () => {
+      unsubscribe();
+      for (const hold of holds.values()) hold.release();
+    };
   }, []);
 
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: true });
@@ -116,6 +216,13 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
+      {sessions
+        .filter(
+          ({ snapshot }) => snapshot.runtime === "server" && snapshot.automationOwner !== undefined,
+        )
+        .map(({ threadRef, runtimeTabId }) => (
+          <AgentTabPainting key={runtimeTabId} threadRef={threadRef} runtimeTabId={runtimeTabId} />
+        ))}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
@@ -143,6 +250,27 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
+}
+
+/**
+ * An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
+ * parked outside the window composites no frames: the agent's clicks would wait for a frame and
+ * time out. While the tab's thread has work going (a turn, or background subagents that keep
+ * its credential after the turn ends), it keeps painting behind the app; a thread with nothing
+ * left running lets it park, so a page left open costs nothing.
+ */
+function AgentTabPainting(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly runtimeTabId: string;
+}) {
+  const shell = useThreadShell(props.threadRef);
+  const working = shell !== null && isActiveThreadWork(shell);
+  const { runtimeTabId } = props;
+  useEffect(() => {
+    if (!working) return;
+    return acquireBrowserSurfaceActivity(runtimeTabId);
+  }, [runtimeTabId, working]);
+  return null;
 }
 
 function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {

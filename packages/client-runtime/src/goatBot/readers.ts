@@ -4,6 +4,11 @@ import type {
   ChannelTaskChip,
   ChannelTaskStatus,
 } from "@goat/contracts";
+import {
+  channelEvidenceIsMeaningful,
+  channelPersonEvidenceLabels,
+  splitChannelResultText,
+} from "@goat/shared/channelEvidence";
 
 import type {
   GoatBotBotTone,
@@ -89,13 +94,37 @@ function pullRequestLinks(chip: ChannelTaskChip): ReadonlyArray<GoatBotPullReque
   });
 }
 
+/**
+ * Verification a person reads on the card. Questions answered without code show none; code work
+ * shows its checks and, from the agent's report, what it did not run.
+ */
+function verificationLabels(chip: ChannelTaskChip, notRun: string | null): ReadonlyArray<string> {
+  const result = chip.observed?.result;
+  const codeWork =
+    channelEvidenceIsMeaningful(result) || (chip.observed?.pullRequests ?? []).length > 0;
+  if (!codeWork) return [];
+  const skipped = notRun === null || /^none\.?$/iu.test(notRun) ? [] : [`Not run: ${notRun}`];
+  return [...channelPersonEvidenceLabels(result), ...skipped];
+}
+
 export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   const status = TASK_STATUS[chip.status];
   const prefix = SOURCE_PREFIX[chip.originKind];
-  const summary = chip.summary?.trim() ?? "";
+  const report = splitChannelResultText(chip.summary ?? "");
+  const summary = report.text;
   const host = chip.worker?.host;
   const placement = chip.placementReason?.trim() ?? "";
-  const requester = prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`;
+  const placementLabel =
+    host !== undefined && placement.startsWith(host + " · ")
+      ? placement.slice(host.length + 3)
+      : placement;
+  // In GOAT itself the requester is the person reading the card, so naming them says nothing.
+  const requester = prefix === null ? null : `${prefix} · ${chip.requesterLabel}`;
+  const sourceLabel = [
+    ...(requester === null ? [] : [requester]),
+    ...(host === undefined ? [] : [`on ${host}`]),
+    ...(placementLabel === "" ? [] : [placementLabel]),
+  ].join(" · ");
   return {
     key: chip.taskId,
     revision: chip.taskVersion,
@@ -103,15 +132,12 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     title: chip.title,
     statusLabel: status.label,
     tone: status.tone,
-    sourceLabel: [
-      requester,
-      ...(host === undefined ? [] : [`on ${host}`]),
-      ...(placement === "" ? [] : [placement]),
-    ].join(" · "),
+    sourceLabel: sourceLabel === "" ? null : sourceLabel,
     continuationLabel:
       chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
+    evidenceLabels: verificationLabels(chip, report.notRun),
     pullRequests: pullRequestLinks(chip),
     target:
       chip.worker === undefined

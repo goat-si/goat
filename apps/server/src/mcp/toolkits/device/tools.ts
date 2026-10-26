@@ -19,12 +19,17 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
   DeviceService.DeviceService,
+  // Each call reads the thread's project to authorize Agent device access.
+  ProjectService.ProjectService,
+  ServerSettings.ServerSettingsService,
 ];
 
 const DeviceToolFailure = Schema.Union([DeviceToolError, OrchestratorMcpFailure]);
@@ -45,17 +50,10 @@ const DeviceListTool = Tool.make(agentSurfaceRegistry["device.list"].name, {
 
 const DeviceOpenTool = Tool.make(agentSurfaceRegistry["device.open"].name, {
   description: agentSurfaceRegistry["device.open"].description,
-  parameters: DeviceToolOpenInput,
+  parameters: withClientRequestId(DeviceToolOpenInput),
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
-  dependencies: [
-    ...dependencies,
-    FileSystem.FileSystem,
-    Path.Path,
-    ServerConfig.ServerConfig,
-    // The thread's project can name the EAS project a cloud device runs under.
-    ProjectService.ProjectService,
-  ],
+  dependencies: [...dependencies, FileSystem.FileSystem, Path.Path, ServerConfig.ServerConfig],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["device.open"]));
 
 export const DeviceScreenshotTool = Tool.make(agentSurfaceRegistry["device.screenshot"].name, {

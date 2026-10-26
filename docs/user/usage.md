@@ -5,9 +5,11 @@ command palette, or press `mod+u` on web and desktop when the terminal is not fo
 Customize `usage.open` in
 **Settings → Keybindings**.
 
+On mobile, choose **Usage** in the workspace navigation.
+
 ## Understand your usage
 
-**Usage** combines Codex, Claude Code, Grok Build, OpenCode, Antigravity, Pi, and Cursor history
+**Usage** combines Codex, Claude Code, Grok Build, OpenCode, Antigravity, Pi, Muse Code, and Cursor history
 from your connected environments. It shows token use, cache savings, model breakdowns, and estimated API-equivalent
 cost, split by token type and by speed. These estimates are not your subscription bill.
 **Premium** is what Fast and Ultrafast requests cost above standard rates. Cost that cannot be
@@ -35,6 +37,9 @@ variable. Pi reads `~/.pi/agent/sessions`, or the `sessions` directory under
 `PI_CODING_AGENT_DIR`. Set `PI_CODING_AGENT_SESSION_DIR` to read a different session directory.
 To include sessions saved through `--session-dir` or Pi's `sessionDir` setting, set this environment
 variable to the same directory. Pi includes recorded tool and summary costs under `Tools/summaries`.
+Muse Code reads native session history, including child sessions, from the home reported by the
+configured Muse CLI. Its environment settings, including `XDG_DATA_HOME`, apply. Models without
+known prices still contribute tokens and appear as unpriced; set custom prices to estimate their cost.
 Use absolute paths or `~/` paths in the account's environment settings; relative environment paths
 depend on each project's working directory and cannot be reliably discovered by Usage. Accounts
 sharing a history directory count once.
@@ -80,7 +85,7 @@ the dialog.
 ## Track subscription limits
 
 **Usage → Limits** pools every subscription account it can see per provider, so with several Codex
-or Claude accounts across your environments and hubs you read one number per window rather than a
+or Claude accounts across your enabled environments and hubs you read one number per window rather than a
 list. Each window card shows how much of the pool is left and a bar with one segment per account,
 kept in the same column across windows. Accounts are ordered by their next 5-hour refill, soonest
 first. For an account with no weekly quota left, this is when its session becomes usable again.
@@ -140,7 +145,7 @@ is left, the thread waits for its reset as before, with **Resume at reset** and 
 turned them on.
 
 Chains are off until you create one. Ask an agent with full access to call
-`goat_fallback_chain_set`, or add them under `fleet` in the environment's `settings.json`.
+`goat_call {path:"fallback_chain.set"}`, or add them under `fleet` in the environment's `settings.json`.
 This chain tries two Claude accounts routed through Codex, then GPT, then the Claude Code CLI:
 
 ```json
@@ -167,7 +172,8 @@ This chain tries two Claude accounts routed through Codex, then GPT, then the Cl
 - `scope` decides what the chain moves. `"goals"`, the default, applies it to fleet goals only.
   `"goals_and_threads"` also moves your ordinary threads whose model is one of the steps.
 - `on` lists what triggers a move: `usage_limit` (the default), `provider_error`,
-  `transport_error`, or `unavailable`. Ordinary threads move only on usage limits.
+  `transport_error`, or `unavailable`. `unavailable` includes a provider refusing the model for
+  your account, such as a plan that does not include it. Ordinary threads move only on usage limits.
 - A step that just failed is skipped for `cooldownMs` (15 minutes by default), and so is a step on
   another provider whose account reports an exhausted window. `maxHops` caps how many moves one
   piece of work makes; by default it can try every step once.
@@ -195,13 +201,50 @@ aliases, with `local` for this machine:
 }
 ```
 
-`goat_scheduler_status` shows each machine's threads against these limits, its quota per
+The `scheduler.status` path shows each machine's threads against these limits, its quota per
 provider, why it would refuse goal work now, the models cooling down after a failure, and recent
 placement decisions.
 
+## Machines under heavy load
+
+Each machine watches its own load, CPU, memory, disk space, and whether GOAT itself stalls. A
+machine that stays busy for three minutes is under heavy load, and it counts as normal again only
+after five quiet minutes. A single GOAT stall while a build or test runs is recorded but changes
+nothing; three stalls of 2.5 seconds within ten minutes mean heavy load, and two of five seconds,
+or one of fifteen, mean overloaded. Fleet telemetry shows an alert for it. Agents that started work
+there see one status line per machine in their thread, updated in place as the level changes, and
+an overloaded machine wakes them so they stop adding work to it. An agent launching onto a busy
+machine is told where else to go, and goals do not place work on an overloaded one.
+
+Thresholds and behavior live under `fleet.pressure`; these are the defaults:
+
+```json
+{
+  "fleet": {
+    "pressure": {
+      "elevatedLoadPerCore": 1.5,
+      "criticalLoadPerCore": 3,
+      "elevatedCpuPercent": 90,
+      "criticalEventLoopDelayMs": 5000,
+      "sustainMs": 180000,
+      "recoverMs": 300000,
+      "notifyCooldownMs": 2700000,
+      "elevatedDelivery": "notice",
+      "criticalDelivery": "wake",
+      "admission": "warn"
+    }
+  }
+}
+```
+
+Memory and disk thresholds are `elevatedMemoryFreePercent` (10), `criticalMemoryFreePercent` (5),
+`elevatedDiskFreeGiB` (10), and `criticalDiskFreeGiB` (2). Set `admission` to `"block"` to refuse
+agent launches onto an overloaded machine, a delivery to `"off"` to silence that level, or
+`enabled` to `false` to turn this off.
+
 ## Connect a CLIProxyAPI hub
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
+To see pooled accounts, open **Settings → Providers → Usage providers → Add CLIProxyAPI hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an

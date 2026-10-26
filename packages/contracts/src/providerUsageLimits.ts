@@ -7,6 +7,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { QuotaSource, QuotaWindowKind, type QuotaWindow } from "./quotaPool.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
 /**
@@ -20,8 +21,34 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  quotaKind: Schema.optional(QuotaWindowKind),
+  source: Schema.optional(QuotaSource),
+  scopeModel: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
+
+export const quotaWindowToUsageWindow = (window: QuotaWindow) => {
+  // Legacy surfaces require a percentage; a missing reading must never appear as 0%.
+  if (window.usedPercent === undefined) return undefined;
+  return {
+    id: window.id,
+    kind:
+      window.kind === "burst_5h"
+        ? "session"
+        : window.kind === "weekly" || window.kind === "monthly"
+          ? window.kind
+          : "other",
+    label: window.label,
+    usedPercent: window.usedPercent,
+    ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+    ...(window.windowSeconds === undefined
+      ? {}
+      : { windowDurationMins: Math.ceil(window.windowSeconds / 60) }),
+    quotaKind: window.kind,
+    source: window.source,
+    ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
+  } satisfies ServerProviderUsageWindow;
+};
 
 export const ServerProviderResetCredits = Schema.Struct({
   availableCount: NonNegativeInt,
@@ -39,6 +66,13 @@ export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  // Routed windows belong to this pool, not the instance's local sign-in.
+  quotaPool: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      homeId: TrimmedNonEmptyString,
+    }),
+  ),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
@@ -78,7 +112,7 @@ export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 
 export const UsageLimitSourceSnapshot = Schema.Struct({
   id: UsageLimitSourceId,
-  kind: Schema.Literal("cliproxy"),
+  kind: Schema.Literals(["cliproxy", "opencodex"]),
   label: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   accounts: ForwardCompatibleArray(UsageLimitSourceAccount),

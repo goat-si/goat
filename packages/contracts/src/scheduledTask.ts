@@ -110,7 +110,7 @@ const WebhookFilterPath = TrimmedNonEmptyString.check(
   Schema.isPattern(/^(body|headers|query)(\.|$)/),
 ).annotate({
   description:
-    "Request value to test, in placeholder syntax without braces: headers.x-github-event, body.action, query.source.",
+    "Request value to test, in placeholder syntax without braces: headers.x-github-event, body.action, query.source. A segment ending in [] fans out over an array, so body.issue.labels[].name tests every label's name.",
 });
 
 /**
@@ -135,7 +135,7 @@ export const ScheduledTaskWebhookFilter = Schema.Union([
   Schema.Struct({ path: WebhookFilterPath, op: Schema.Literal("exists") }),
 ]).annotate({
   description:
-    "Scalars compare as strings; objects and arrays only satisfy 'exists'. Every op but 'exists' fails when the path is missing.",
+    "Scalars compare as strings; objects and arrays only satisfy 'exists'. Every op but 'exists' fails when the path is missing. A [] wildcard path yields a list: equals, in and startsWith match when any element does, notEquals when no element equals the value, exists when the list is not empty.",
 });
 export type ScheduledTaskWebhookFilter = typeof ScheduledTaskWebhookFilter.Type;
 export type ScheduledTaskWebhookFilterOp = ScheduledTaskWebhookFilter["op"];
@@ -173,7 +173,7 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
         }),
         secretRef: Schema.optional(SecretRef).annotate({
           description:
-            "A secret the user entered through request_secret, used instead of secret. It is consumed by this save.",
+            "A secret the user entered through goat_handoff_create, used instead of secret. It is consumed by this save.",
         }),
       }),
     ),
@@ -227,7 +227,7 @@ export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
 /**
  * Why a webhook task has no public URL. relay_not_linked: the environment is
- * not linked to T3 Connect. managed_tunnel_not_configured: it is linked, but
+ * not linked to GOAT Connect. managed_tunnel_not_configured: it is linked, but
  * remote access has not created its managed tunnel. managed_tunnel_unrecognized:
  * the tunnel's name does not carry the key the relay routes by.
  */
@@ -245,6 +245,8 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
   /** Set when url is null and the cause is known. */
   urlUnavailableReason: Schema.optional(ScheduledTaskWebhookUrlUnavailableReason),
   hasSecret: Schema.Boolean,
+  /** The secretRef the stored signing secret came from; absent for an inline secret. */
+  secretRef: Schema.optional(SecretRef),
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 

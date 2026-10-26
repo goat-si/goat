@@ -1,17 +1,34 @@
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import * as Dialog from "../../components/ui/Dialog";
 import { MemoryEnvironmentEntry } from "./SettingsMemoryRouteScreen";
-import { Toolbar } from "../../components/ui/Toolbar";
-import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import {
+  navigationCustomizationAvailable,
+  overflowNavigationTabs,
+} from "../workspace/navigation-tab-order";
+import {
+  NAVIGATION_TAB_ICONS,
+  WORKSPACE_TAB_LABELS,
+  useNavigationTabOrder,
+  useHiddenNavigationTabs,
+} from "../workspace/navigation-tabs";
+import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
+import {
+  ScreenScrollView as ScrollView,
+  ScreenScrollViewBottomInset,
+} from "../../components/ui/ScreenScrollView";
 import { useAuth, useUser } from "@clerk/expo";
 import { useNavigation } from "@react-navigation/native";
 import { Linking, Platform, View } from "react-native";
+import type { ReactNode } from "react";
+import { useWorkspaceSurface } from "../workspace/useWorkspaceSurface";
+import { useDeviceType } from "../../native/native-layout-metrics";
+import { useCompactWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { deriveProjectGroupLabel } from "@goat/client-runtime/state/project-grouping";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { SettingsRow } from "./components/SettingsRow";
@@ -24,8 +41,9 @@ import {
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsRouteScreen() {
-  const navigation = useNavigation();
-  const { layout } = useAdaptiveWorkspaceLayout();
+  const surface = useWorkspaceSurface();
+  const deviceType = useDeviceType();
+  const compactTabs = useCompactWorkspaceTabs();
   const content = hasCloudPublicConfig() ? (
     <ConfiguredSettingsRouteScreen />
   ) : (
@@ -33,30 +51,27 @@ export function SettingsRouteScreen() {
   );
 
   return (
-    <>
+    <View className={`flex-1 ${surface.className}`}>
       {Platform.OS === "ios" ? (
-        <NativeStackScreenOptions options={{ headerBackVisible: !layout.usesSplitView }} />
+        <NativeStackScreenOptions
+          options={{
+            headerTransparent: false,
+            headerStyle: { backgroundColor: surface.backgroundColor },
+            contentStyle: { backgroundColor: surface.backgroundColor },
+          }}
+        />
       ) : null}
-      {Platform.OS === "ios" && layout.usesSplitView ? (
-        <>
-          <Toolbar placement="left">
-            <Toolbar.Button
-              accessibilityLabel="Go back"
-              icon="chevron.left"
-              onPress={() => navigation.goBack()}
-            />
-          </Toolbar>
-        </>
-      ) : null}
-      <SettingsEnvironmentFilterHeader closeSettings />
-      {Platform.OS === "android" ? (
-        <SettingsScreen title="Settings" trailing={<AndroidSettingsEnvironmentFilter />}>
-          {content}
-        </SettingsScreen>
-      ) : (
-        content
-      )}
-    </>
+      <SettingsEnvironmentFilterHeader />
+      <ScreenScrollViewBottomInset value={deviceType === "pad" || compactTabs ? 80 : 0}>
+        {Platform.OS === "android" ? (
+          <SettingsScreen title="Settings" trailing={<AndroidSettingsEnvironmentFilter />}>
+            {content}
+          </SettingsScreen>
+        ) : (
+          content
+        )}
+      </ScreenScrollViewBottomInset>
+    </View>
   );
 }
 
@@ -65,7 +80,6 @@ function ConfiguredSettingsRouteScreen() {
   const navigation = useNavigation();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
-  const { savedConnectionsById } = useSavedRemoteConnections();
   const accountLabel = !isLoaded
     ? "Checking"
     : !isSignedIn
@@ -73,7 +87,7 @@ function ConfiguredSettingsRouteScreen() {
       : (user?.primaryEmailAddress?.emailAddress ?? "Signed in");
 
   return (
-    <View collapsable={false} className="flex-1 bg-sheet">
+    <View collapsable={false} className="flex-1">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -81,28 +95,17 @@ function ConfiguredSettingsRouteScreen() {
         contentContainerClassName="gap-4 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
-        <SettingsSection title="Connections">
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Devices on this hub"
-            target="SettingsHubNodes"
-          />
+        <OverflowSection />
+        <ConnectionsSection>
           <SettingsRow
             icon="person.crop.circle"
-            label="T3 Account"
+            label="GOAT Account"
             value={accountLabel}
             disabled={!isLoaded}
             onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}
           />
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Environments"
-            value={`${Object.keys(savedConnectionsById).length}`}
-            valuePosition="trailing"
-            target="SettingsEnvironments"
-          />
           <SettingsRow icon="bell.badge" label="Notifications" target="SettingsNotifications" />
-        </SettingsSection>
+        </ConnectionsSection>
 
         <SettingsIndexSections />
       </ScrollView>
@@ -112,11 +115,9 @@ function ConfiguredSettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
-  const { savedConnectionsById } = useSavedRemoteConnections();
-  const environmentCount = Object.keys(savedConnectionsById).length;
 
   return (
-    <View collapsable={false} className="flex-1 bg-sheet">
+    <View collapsable={false} className="flex-1">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -126,7 +127,8 @@ function LocalSettingsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
-        <SettingsSection title="Connections">
+        <OverflowSection />
+        <ConnectionsSection>
           {!isGoatConnectEnabled() ? (
             <SettingsRow
               icon="globe"
@@ -140,19 +142,7 @@ function LocalSettingsRouteScreen() {
               }}
             />
           ) : null}
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Devices on this hub"
-            target="SettingsHubNodes"
-          />
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Environments"
-            value={`${environmentCount}`}
-            valuePosition="trailing"
-            target="SettingsEnvironments"
-          />
-        </SettingsSection>
+        </ConnectionsSection>
 
         <SettingsIndexSections />
       </ScrollView>
@@ -160,7 +150,26 @@ function LocalSettingsRouteScreen() {
   );
 }
 
+/** Both sign-in states list the hub's devices and saved environments the same way. */
+function ConnectionsSection({ children }: { readonly children?: ReactNode }) {
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  return (
+    <SettingsSection title="Connections">
+      <SettingsRow icon="desktopcomputer" label="Hub devices" target="SettingsHubNodes" />
+      <SettingsRow
+        icon="desktopcomputer"
+        label="Environments"
+        value={`${Object.keys(savedConnectionsById).length}`}
+        valuePosition="trailing"
+        target="SettingsEnvironments"
+      />
+      {children}
+    </SettingsSection>
+  );
+}
+
 function SettingsIndexSections() {
+  const navigation = useNavigation();
   const { supported: goatBotHomeSupported } = useMobileGoatBotHomeSettings();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
@@ -182,6 +191,13 @@ function SettingsIndexSections() {
     <>
       <SettingsSection title="Interface">
         <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
+        {navigationCustomizationAvailable() ? (
+          <SettingsRow
+            icon="line.3.horizontal"
+            label="Navigation tabs"
+            target="SettingsNavigation"
+          />
+        ) : null}
         {Platform.OS === "ios" ? (
           <>
             <SettingsRow icon="keyboard" label="Keyboard" target="SettingsKeyboard" />
@@ -194,6 +210,16 @@ function SettingsIndexSections() {
         {goatBotHomeSupported ? (
           <SettingsRow icon="text.bubble" label="GOAT Bot" target="SettingsGoatBot" />
         ) : null}
+        <SettingsRow
+          icon="questionmark.bubble"
+          label="Decision inbox"
+          onPress={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsDecisionInbox" },
+            })
+          }
+        />
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
       </SettingsSection>
 
@@ -209,7 +235,7 @@ function SettingsIndexSections() {
         <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
         <SettingsRow icon="text.bubble" label="Thread behavior" target="SettingsThreads" />
         <SettingsRow icon="arrow.turn.left.up" label="Follow-ups" target="SettingsFollowUp" />
-        <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
+        <SettingsRow icon="archivebox" label="Archived threads" target="SettingsArchive" />
       </SettingsSection>
 
       <SettingsSection title="Server settings">
@@ -249,9 +275,29 @@ function SettingsIndexSections() {
       </SettingsSection>
 
       <SettingsSection title="App">
-        <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
         <SettingsRow icon="info.circle" label="About GOAT" target="SettingsAbout" />
       </SettingsSection>
     </>
   );
+}
+
+function OverflowSection() {
+  const order = useNavigationTabOrder();
+  const hidden = useHiddenNavigationTabs();
+  const { layout } = useAdaptiveWorkspaceLayout();
+  const tabs =
+    Platform.OS === "android" && layout.usesSplitView ? [] : overflowNavigationTabs(order, hidden);
+  const selectTab = useSelectWorkspaceTab();
+  return tabs.length ? (
+    <SettingsSection>
+      {tabs.map((tab) => (
+        <SettingsRow
+          key={tab}
+          icon={NAVIGATION_TAB_ICONS[tab]}
+          label={WORKSPACE_TAB_LABELS[tab]}
+          onPress={() => selectTab(tab)}
+        />
+      ))}
+    </SettingsSection>
+  ) : null;
 }

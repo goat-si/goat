@@ -45,6 +45,7 @@ vi.mock(import("./fleetConsoleTelemetry"), async () => {
         lastSeen: new Map(),
         loading: false,
         failed: [],
+        pendingSince: new Map(),
         sampledAt: SAMPLED_AT,
         observedAt: SAMPLED_AT,
       };
@@ -53,6 +54,7 @@ vi.mock(import("./fleetConsoleTelemetry"), async () => {
 });
 
 import { FleetConsoleSlot, loadFleetConsole } from "./FleetConsoleSlot";
+import { fleetHeatDemo } from "./fleetHeatDemo";
 
 const snapshot = {
   machines: [
@@ -65,7 +67,9 @@ const snapshot = {
       machineKind: null,
       environmentId,
       sshHost: null,
-      cloudState: null,
+      reportedAliases: [],
+      boat: null,
+      answering: true,
       running: 9,
       attention: 2,
       reported: 3,
@@ -208,12 +212,44 @@ describe("FleetConsoleSlot", () => {
       item.textContent?.includes(version),
     )!;
     const detail = alert.querySelector<HTMLElement>("[tabindex]")!;
-    expect(detail.textContent).toBe("Runs GOAT " + version);
+    expect(detail.textContent).toBe("box Runs GOAT " + version);
     const line = Number.parseFloat(getComputedStyle(detail).lineHeight);
     const height = detail.getBoundingClientRect().height;
     expect(height).toBeGreaterThan(line * 1.5);
     expect(height).toBeLessThanOrEqual(line * 2 + 1);
     expect(detail.scrollWidth).toBeLessThanOrEqual(detail.clientWidth);
     expect(console_()!.getBoundingClientRect().height).toBe(reserved);
+  });
+
+  it("counts answering servers in the Hosts header and puts the rest behind +N, adding no rows", async () => {
+    // Two routes to one server, an unreachable server, a stopped Boat machine and an SSH host.
+    const demo = fleetHeatDemo();
+    await act(async () => {
+      root.render(
+        <FleetConsoleSlot
+          snapshot={demo.snapshot}
+          connections={demo.connections}
+          heat={demo.heat}
+        />,
+      );
+    });
+    await mounted();
+    const hosts = container.querySelector<HTMLElement>('section[aria-label="Hosts"]')!;
+    const header = hosts.firstElementChild as HTMLElement;
+    const chip = header.querySelector("button")!;
+    const rows = hosts.querySelectorAll("li");
+
+    expect(demo.snapshot.totals.machines).toBe(6);
+    expect(header.textContent).toMatch(/^Hosts \d+\/6\+\d+/);
+    // One row per graph machine, plus the host the mocked status read names; none for the count.
+    expect(rows).toHaveLength(demo.snapshot.machines.length + 1);
+    expect(rows).toHaveLength(demo.snapshot.totals.machines + Number(chip.textContent!.slice(1)));
+    expect(chip.getAttribute("aria-label")).toContain("clisu-oracle, Unreachable");
+    expect(chip.getAttribute("aria-label")).toContain("nightly-ci, Boat · Stopped");
+    expect(chip.getAttribute("aria-label")).toContain("gpu-box, SSH host · via mac-studio");
+
+    const withChip = header.getBoundingClientRect().height;
+    chip.style.display = "none";
+    expect(header.getBoundingClientRect().height).toBe(withChip);
   });
 });

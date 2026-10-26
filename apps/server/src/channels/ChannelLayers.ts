@@ -19,6 +19,7 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -36,9 +37,11 @@ import * as SlackChannelRuntime from "./slack/SlackChannelRuntime.ts";
 import * as SlackChannelSettingsLive from "./slack/SlackChannelSettings.live.ts";
 import * as SlackSdk from "./slack/SlackSdk.ts";
 import * as ImessageChannelRuntime from "./imessage/ImessageChannelRuntime.ts";
+import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 
 const layerFoundation = Layer.mergeAll(
   ChannelLedger.layer,
+  ChannelChildWorkStore.layer,
   MemoryStore.layer,
   ChannelBotHome.layer,
   ChannelBotDirectory.layer,
@@ -77,7 +80,9 @@ export const makeLayerServices = <E, R>(
 ) => {
   const layerWorkers = Layer.mergeAll(
     ChannelReceptionService.layer,
-    ChannelDispatcher.layer,
+    ChannelChildWork.layer,
+    // The stop traversal reads and settles child-work records; one shared instance.
+    ChannelDispatcher.layer.pipe(Layer.provide(ChannelChildWork.layer)),
     ChannelWorkerReports.layer,
     ChannelDeliveryWorker.layer,
   ).pipe(
@@ -108,7 +113,7 @@ export const layerServices = makeLayerServices(SlackChannelSettings.layerUnavail
 export const makeLayerServicesWithSlack = (imessageLayer = ImessageChannelRuntime.layerLive) =>
   makeLayerServices(layerSlackLive, imessageLayer);
 
-export const layerServicesWithSlack = makeLayerServicesWithSlack();
+const layerServicesWithSlack = makeLayerServicesWithSlack();
 
 /** Every channel service, the live Slack connection, and the background owner loop. */
 export const layer = ChannelRuntime.layerBackground.pipe(

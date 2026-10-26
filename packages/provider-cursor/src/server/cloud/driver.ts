@@ -1,6 +1,7 @@
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSetupError,
   TextGenerationError,
   type ServerProvider,
   type ServerProviderModel,
@@ -74,7 +75,7 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
       });
       const snapshotValue = (state: {
         status: "ready" | "warning" | "error";
-        auth: "authenticated" | "unknown";
+        auth: "authenticated" | "unauthenticated" | "unknown";
         message?: string;
         models?: ReadonlyArray<ServerProviderModel>;
       }): Effect.Effect<ServerProvider> =>
@@ -124,13 +125,20 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
             });
           }).pipe(
             Effect.timeout("15 seconds"),
-            Effect.catch(() =>
-              snapshotValue({
-                status: "error",
-                auth: "unknown",
-                message:
-                  "Cursor Cloud access is unavailable. Check the selected Cursor sign-in and cloud account access.",
-              }),
+            Effect.catch((cause) =>
+              // No key at all means the Cursor sign-in is missing, not that access failed.
+              Schema.is(ProviderSetupError)(cause) && cause.operation === "credentials"
+                ? snapshotValue({
+                    status: "error",
+                    auth: "unauthenticated",
+                    message: "Sign in to Cursor to use Cursor Cloud.",
+                  })
+                : snapshotValue({
+                    status: "error",
+                    auth: "unknown",
+                    message:
+                      "Cursor Cloud access is unavailable. Check the selected Cursor sign-in and cloud account access.",
+                  }),
             ),
           )
         : snapshotValue({

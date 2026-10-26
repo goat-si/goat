@@ -5,6 +5,8 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import * as NodeEvents from "node:events";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -14,6 +16,8 @@ import { vi } from "vite-plus/test";
 import {
   isLinuxZombie,
   readSshRuntimeCompatibility,
+  readSshReplacementRecord,
+  SSH_REPLACEMENT_RECORD_FILE,
   superviseSshRuntimeReplacement,
 } from "./sshHelper.ts";
 
@@ -35,6 +39,21 @@ const deadPid = () => {
   ]);
   return Number(child.stdout.toString());
 };
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  // These fixtures exercise replacement/rollback with real Node processes. Windows cannot
+  // execute their POSIX shebang; WMI detachment is verified separately with native executables.
+  return {
+    ...actual,
+    spawn: (...input: Parameters<typeof actual.spawn>) => {
+      const [command, args, options] = input;
+      return HostProcess.Platform.defaultValue() === "win32" && command.endsWith(".mjs")
+        ? actual.spawn(process.execPath, [command, ...(args ?? [])], options)
+        : actual.spawn(...input);
+    },
+  };
+});
 
 /**
  * The target runner never becomes ready. As the failed replacement it writes "trial"; as another
@@ -95,14 +114,23 @@ const superviseFailedReplacement = async (
     result,
     ran: NodeFS.existsSync(`${dbPath}.replacement-ran`),
     database: NodeFS.readFileSync(dbPath, "utf8"),
+    record: readSshReplacementRecord(
+      NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
+    ),
   };
 };
 
 it("restores the backup over a failed replacement's own writes", async () => {
-  const { result, database, ran } = await superviseFailedReplacement("trial");
+  const { result, database, ran, record } = await superviseFailedReplacement("trial");
   assert.isTrue(ran, "the replacement ran");
   assert.equal(result.status, "failed");
   assert.equal(database, "original");
+  // The runtime's scheduler reads this record and never retries the target automatically.
+  assert.deepInclude(record, {
+    status: "failed",
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+  });
 });
 
 it("keeps writes from another server that owned the data since the backup", async () => {
@@ -209,7 +237,9 @@ const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
 it("restores the previous runner when the drained server stays alive", async () => {
-  const sleep = NodeChildProcess.spawn("sleep", ["600"], { stdio: "ignore" });
+  const sleep = NodeChildProcess.spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
   try {
     const sleepPid = sleep.pid ?? 0;
     assert.isAbove(sleepPid, 0);
@@ -260,12 +290,10 @@ it("restores the previous runner when the drained server stays alive", async () 
     assert.equal(record(stateDir, "identity"), `${previousIdentity}\n`);
     assert.equal(record(stateDir, "managed"), "managed\n");
   } finally {
-    if (sleep.pid !== undefined) {
-      try {
-        process.kill(sleep.pid, "SIGKILL");
-      } catch {
-        // The sleep already exited.
-      }
+    if (sleep.exitCode === null) {
+      const stopped = NodeEvents.EventEmitter.once(sleep, "exit");
+      sleep.kill("SIGKILL");
+      await stopped;
     }
   }
 });
@@ -373,4 +401,37 @@ it("rolls back to a previous version whose protocol does not overlap this build"
       }
     }
   }
+});
+
+it("records a supervisor that throws as a failed replacement", async () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));
+  roots.push(root);
+  const stateDir = NodePath.join(root, "state");
+  NodeFS.mkdirSync(stateDir);
+  // A base directory that is a file makes creating userdata throw.
+  const baseDir = NodePath.join(root, "not-a-directory");
+  NodeFS.writeFileSync(baseDir, "");
+  const result = await superviseSshRuntimeReplacement({
+    oldPid: deadPid(),
+    oldInstanceId: "old",
+    port: 1,
+    baseDir,
+    stateDir,
+    runnerFile: NodePath.join(stateDir, "run-t3.sh"),
+    previousRunnerFile: NodePath.join(stateDir, "run-t3.previous"),
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+    identity: "new",
+    previousIdentity: "old",
+    exitTimeoutMs: 1_000,
+    readyTimeoutMs: 1_000,
+    logFile: NodePath.join(stateDir, "server.log"),
+  });
+  assert.equal(result.status, "failed");
+  assert.deepInclude(
+    readSshReplacementRecord(
+      NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
+    ),
+    { status: "failed", targetVersion: "2.0.0" },
+  );
 });

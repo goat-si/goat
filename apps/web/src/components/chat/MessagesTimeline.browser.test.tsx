@@ -1,21 +1,27 @@
-import { EnvironmentId, MessageId } from "@goat/contracts";
+import { EnvironmentId, MessageId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
 import type { LegendListRef } from "@legendapp/list/react";
-import { createRef, type ComponentProps, type ReactElement } from "react";
+import { createRef, Profiler, type ComponentProps, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
 import { act, render } from "../../../test/render";
-import { MessagesTimeline, remarkThoughtPreview } from "./MessagesTimeline";
+import { MessagesTimeline } from "./MessagesTimeline";
+import { remarkThoughtPreview } from "./TimelineWorkEntryRow.logic";
 import { parseMarkdownWithMath } from "@goat/shared/markdownMath";
+import { collectThreadFindRanges } from "./threadFindHighlights";
 
-const pullRequestQuery = vi.hoisted(() => ({ error: "Pull request not found" }));
+const environmentQuery = vi.hoisted(() => ({
+  error: "Pull request not found",
+  data: null as unknown,
+}));
 vi.mock(import("~/state/query"), async (original) => ({
   ...(await original()),
   useEnvironmentQuery: (() => ({
-    data: null,
+    data: environmentQuery.data,
     dataUpdatedAt: 0,
-    error: pullRequestQuery.error,
+    error: environmentQuery.error,
     failure: null,
     isPending: false,
     isSuccess: false,
@@ -116,7 +122,59 @@ async function click(element: HTMLElement) {
   await act(async () => element.click());
 }
 
+function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
+  environmentQuery.data = { tasks: scheduledTasks };
+}
+
+const TASK_ID = ScheduledTaskId.make("task-1");
+const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
+
 describe("MessagesTimeline messages", () => {
+  it("settles when equally long messages have very different rendered heights", async () => {
+    const props = baseProps();
+    const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
+    const earlier = Array.from({ length: 80 }, (_, index) =>
+      message(
+        `<details><summary>Reply ${index}</summary>${"compact ".repeat(2250)}</details>`,
+        { role: "assistant" },
+        `earlier-${index}`,
+      ),
+    );
+    let nestedCommits = 0;
+    let maxNestedCommits = 0;
+    const onRender = (_id: string, phase: string) => {
+      nestedCommits = phase === "nested-update" ? nestedCommits + 1 : 0;
+      maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
+    };
+    const timeline = (entries: Entry[]) => (
+      <Profiler id="timeline" onRender={onRender}>
+        <MessagesTimeline {...props} timelineEntries={entries} />
+      </Profiler>
+    );
+    await using screen = await renderElement(timeline([tall]));
+    await vi.waitFor(() =>
+      expect(props.listRef.current?.getState().sizeAtIndex(0)).toBeGreaterThan(100_000),
+    );
+    const viewport = props.listRef.current!.getScrollableNode()!;
+    await act(() => {
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    await screen.rerender(timeline([...earlier, tall]));
+    await act(() => {
+      void props.listRef.current!.scrollToIndex({ index: 0, animated: false });
+    });
+    await vi.waitFor(async () => {
+      await act(() => {
+        viewport.scrollTop = 0;
+        viewport.dispatchEvent(new Event("scroll"));
+      });
+      expect(screen.text().includes("Reply 0")).toBe(true);
+      expect(props.listRef.current!.getState().sizeAtIndex(0)).toBeGreaterThan(0);
+    });
+    expect(maxNestedCommits).toBeLessThan(20);
+  });
+
   it("preserves XML-like tags and comparisons in user messages as text", async () => {
     const source = [
       'Without reading a file, do you have <global-agent-instructions scope="workspace">',
@@ -160,6 +218,154 @@ describe("MessagesTimeline messages", () => {
     expect(screen.container.innerHTML).not.toContain("javascript:");
     await click(screen.button("Safe details"));
     expect((globalThis as { __t3Xss?: number }).__t3Xss).toBeUndefined();
+  });
+});
+
+describe("MessagesTimeline automation prompts", () => {
+  it("folds an automation prompt into a bubble titled by its task", async () => {
+    setup({ scheduledTasks: [{ id: TASK_ID, title: "Nightly triage" }] });
+    await using screen = await renderTimeline([
+      message(AUTOMATION_PROMPT, { scheduledTaskId: TASK_ID }),
+    ]);
+    const row = screen.button(/^Automation/);
+    expect(row.textContent).toContain("Nightly triage");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.text()).not.toContain("close duplicates");
+
+    await click(row);
+    expect(screen.text()).toContain("Label every new issue and close duplicates.");
+    const link = [...screen.container.querySelectorAll("a")].find(
+      (anchor) => anchor.textContent === "Open automation",
+    );
+    expect(link?.getAttribute("href")).toContain(`taskId=${TASK_ID}`);
+    expect(screen.buttons(/copy/i)).not.toHaveLength(0);
+  });
+
+  it("falls back to the prompt's first line without a task title", async () => {
+    setup();
+    await using screen = await renderTimeline([
+      message(AUTOMATION_PROMPT, { scheduledTaskId: TASK_ID }),
+    ]);
+    expect(screen.button(/^Automation/).textContent).toContain("Triage the inbox");
+  });
+
+  it("leaves ordinary user messages as full bubbles", async () => {
+    setup();
+    await using screen = await renderTimeline([message(AUTOMATION_PROMPT)]);
+    expect(screen.buttons(/^Automation/)).toHaveLength(0);
+    expect(screen.text()).toContain("Label every new issue and close duplicates.");
+  });
+
+  it("reveals a find match beyond the folded automation prompt's initial viewport", async () => {
+    setup();
+    const prompt = `${"Inspect the next item.\n\n".repeat(16)}Close duplicates.`;
+    await using screen = await renderTimeline([message(prompt, { scheduledTaskId: TASK_ID })], {
+      findExpanded: true,
+      findQuery: "duplicates",
+      activeFindMatch: { entryId: "entry-message-1", runId: null, occurrence: 0 },
+    });
+    await vi.waitFor(() =>
+      expect(screen.button(/^Automation/).getAttribute("aria-expanded")).toBe("true"),
+    );
+    const { range } = collectThreadFindRanges(screen.container, "duplicates")[0]!;
+    const details = screen.container.querySelector("[data-thread-find-text]")!;
+    expect(range.getBoundingClientRect().top - details.getBoundingClientRect().top).toBeGreaterThan(
+      384,
+    );
+    expect(range.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      details.getBoundingClientRect().bottom,
+    );
+  });
+
+  it("shows edit-from-here once an automation prompt is expanded", async () => {
+    setup();
+    const runId = RunId.make("run-1");
+    await using screen = await renderTimeline(
+      [
+        message(
+          AUTOMATION_PROMPT,
+          { scheduledTaskId: TASK_ID, runId, inputIntent: "turn_start" },
+          "user-1",
+        ),
+        message("Done", { role: "assistant", runId }, "assistant-1"),
+      ],
+      {
+        supportsConversationRollback: true,
+        threadStartCheckpointReady: true,
+        turnDiffSummaries: [
+          {
+            runId,
+            checkpointTurnCount: 1,
+            checkpointRef: "checkpoint-1" as never,
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("assistant-1"),
+            completedAt: CREATED_AT,
+          },
+        ],
+      },
+    );
+    expect(screen.buttons("Edit from here")).toHaveLength(0);
+    await click(screen.button(/^Automation/));
+    expect(screen.buttons("Edit from here")).toHaveLength(1);
+  });
+});
+
+const SENDER_THREAD_ID = ThreadId.make("thread-sender");
+const AGENT_MESSAGE = "Review finished\n\nThe migration drops the index before backfilling it.";
+
+describe("MessagesTimeline agent messages", () => {
+  it("folds a message from another agent into a one-line preview", async () => {
+    setup();
+    const onOpenThread = vi.fn();
+    await using screen = await renderTimeline(
+      [message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID })],
+      { onOpenThread },
+    );
+    const row = screen.button(/^Agent/);
+    expect(row.textContent).toContain("Review finished");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.text()).not.toContain("drops the index");
+    expect(screen.buttons("Open thread")).toHaveLength(0);
+
+    await click(row);
+    expect(screen.text()).toContain("The migration drops the index before backfilling it.");
+    await click(screen.button("Open thread"));
+    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID);
+
+    await click(screen.button(/^Agent/));
+    expect(screen.text()).not.toContain("drops the index");
+  });
+
+  it("leaves messages sent by T3 Code as full bubbles", async () => {
+    setup();
+    await using screen = await renderTimeline([
+      message(AGENT_MESSAGE, { createdBy: "agent", creationSource: "server" }),
+    ]);
+    expect(screen.buttons(/^Agent/)).toHaveLength(0);
+    expect(screen.text()).toContain("drops the index");
+  });
+
+  it("reveals a find match inside a folded agent message", async () => {
+    setup();
+    const text = `${"Checked the next file.\n\n".repeat(16)}The migration drops the index.`;
+    await using screen = await renderTimeline(
+      [message(text, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID })],
+      {
+        findExpanded: true,
+        findQuery: "drops the index",
+        activeFindMatch: { entryId: "entry-message-1", runId: null, occurrence: 0 },
+      },
+    );
+    await vi.waitFor(() =>
+      expect(screen.button(/^Agent/).getAttribute("aria-expanded")).toBe("true"),
+    );
+    const { range } = collectThreadFindRanges(screen.container, "drops the index")[0]!;
+    const body = screen.container.querySelector("[data-user-message-body]")!;
+    expect(range.getBoundingClientRect().height).toBeGreaterThan(0);
+    expect(range.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      body.getBoundingClientRect().bottom,
+    );
   });
 });
 
@@ -247,5 +453,76 @@ describe("GOAT MCP timeline tools", () => {
     expect(screen.text()).not.toContain("mcp__t3-code__goat_thread_read");
     // The goat mark replaces the generic tool icon for GOAT MCP calls.
     expect(document.querySelector('svg[viewBox="2 2 20 20"]')).not.toBeNull();
+  });
+});
+
+describe("MessagesTimeline scroll position", () => {
+  it("keeps a newly opened thread at its newest message while its rows settle", async () => {
+    const props = baseProps();
+    const entries = Array.from({ length: 12 }, (_, index) =>
+      message(
+        Array.from({ length: 30 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
+        { role: "assistant" },
+        `message-${index}`,
+      ),
+    );
+    await using screen = await renderTimeline(entries, props);
+    await vi.waitFor(() => expect(props.listRef.current?.getScrollableNode()).toBeTruthy());
+    const viewport: HTMLElement = props.listRef.current!.getScrollableNode();
+    // Late content (decoded images, highlighted code, sized iframes) keeps
+    // growing rows above the end and the last row for a few frames after
+    // opening. Each pass lands as soon as the list has measured the previous one.
+    let passes = 0;
+    const grow = new ResizeObserver(() => {
+      if (passes === 6) return;
+      passes += 1;
+      for (const row of screen.container.querySelectorAll("[data-timeline-root]")) {
+        const late = document.createElement("div");
+        late.style.height = "120px";
+        row.append(late);
+      }
+    });
+    grow.observe(viewport.firstElementChild!);
+    using _grow = { [Symbol.dispose]: () => grow.disconnect() };
+    await vi.waitFor(() => expect(passes).toBe(6));
+    await vi.waitFor(() =>
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBeLessThanOrEqual(1),
+    );
+    expect(screen.text()).toContain("Paragraph 11.29");
+  });
+  it("leaves a reader who scrolled up in place while rows keep settling", async () => {
+    const props = baseProps();
+    const entries = Array.from({ length: 12 }, (_, index) =>
+      message(
+        Array.from({ length: 30 }, (_, line) => `Paragraph ${index}.${line}`).join("\n\n"),
+        { role: "assistant" },
+        `message-${index}`,
+      ),
+    );
+    await using screen = await renderTimeline(entries, props);
+    await vi.waitFor(() => expect(props.listRef.current?.getScrollableNode()).toBeTruthy());
+    const viewport: HTMLElement = props.listRef.current!.getScrollableNode();
+    const distanceFromEnd = () =>
+      viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeLessThanOrEqual(1));
+    // Follow is still on here, as in the moment before ChatView commits the
+    // cancellation the gesture triggers.
+    await userEvent.wheel(viewport, { delta: { y: -2000 } });
+    await vi.waitFor(() => expect(distanceFromEnd()).toBeGreaterThan(viewport.clientHeight));
+    let passes = 0;
+    const grow = new ResizeObserver(() => {
+      if (passes === 6) return;
+      passes += 1;
+      const rows = screen.container.querySelectorAll("[data-timeline-root]");
+      const late = document.createElement("div");
+      late.style.height = "120px";
+      rows[rows.length - 1]?.append(late);
+    });
+    grow.observe(viewport.firstElementChild!);
+    using _grow = { [Symbol.dispose]: () => grow.disconnect() };
+    await vi.waitFor(() => expect(passes).toBe(6));
+    expect(distanceFromEnd()).toBeGreaterThan(viewport.clientHeight);
   });
 });

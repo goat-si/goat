@@ -1,227 +1,34 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
-  AuthSessionId,
-  EnvironmentAuthorizationError,
   type AuthEnvironmentScope,
-  type AuthClientSession,
-  EnvironmentId,
+  EnvironmentAuthorizationError,
   ProviderDriverKind,
   ProviderHostMatrixResult,
   ProviderInstanceId,
-  type ProviderDiagnosisReason,
-  ThreadId,
-  TurnItemId,
+  type ProviderAuthState,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import { resolveSpawnCommand } from "@goat/shared/shell";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
-import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
 
-import * as SessionStore from "../auth/SessionStore.ts";
-import * as Environment from "../environment/ServerEnvironment.ts";
-import * as Handoffs from "../handoffs/Handoffs.ts";
+import packageJson from "../../package.json" with { type: "json" };
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import * as ProviderAuth from "./ProviderAuthService.ts";
-import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import * as HostSync from "./ProviderHostSync.ts";
-import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
-import * as ProviderRegistry from "./ProviderRegistry.ts";
-
-const person = AuthSessionId.make("person");
-const viewer = AuthSessionId.make("viewer");
-const environmentId = EnvironmentId.make("origin");
-const encoder = new TextEncoder();
-
-const session = (
-  sessionId: AuthSessionId,
-  permissions: ReadonlyArray<AuthEnvironmentScope>,
-  now: DateTime.Utc,
-): AuthClientSession => ({
-  sessionId,
-  subject: "test",
-  method: "browser-session-cookie",
-  scopes: permissions,
-  permissions,
-  client: { label: "Test", deviceType: "unknown" },
-  issuedAt: now,
-  expiresAt: DateTime.add(now, { days: 1 }),
-  lastConnectedAt: now,
-  connected: true,
-  current: true,
-});
-
-type Call = Parameters<Dispatch.SshRemoteDispatch["Service"]["callHostTool"]>[0];
-interface Harness {
-  readonly calls: Array<{ readonly call: Call; readonly ceiling: string }>;
-  readonly spawned: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>;
-  readonly handoffs: Array<unknown>;
-  readonly diagnoses: Array<string>;
-}
-
-const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
-  checkedBy: "server" as const,
-  diagnoses: [
-    {
-      instanceId: ProviderInstanceId.make(driver),
-      driver: ProviderDriverKind.make(driver),
-      configured: true,
-      ready,
-      checks: ready
-        ? [{ id: "auth", status: "pass" as const, summary: "Ready." }]
-        : [
-            {
-              id: "auth",
-              status: "fail" as const,
-              summary: "Not ready.",
-              ...(reason === undefined ? {} : { reason }),
-            },
-          ],
-    },
-  ],
-});
-
-const harness = (options: {
-  readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
-  readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
-  readonly providers?: ReadonlyArray<unknown>;
-  readonly cloud?: Partial<
-    Record<
-      "claudeCloud" | "cursorCloud" | "devinCloud",
-      { readonly ready: boolean; readonly reason?: ProviderDiagnosisReason }
-    >
-  >;
-}) => {
-  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
-  const spawner = Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) => {
-      const child = command as unknown as { command: string; args: ReadonlyArray<string> };
-      state.spawned.push({ command: child.command, args: child.args });
-      const result = options.installer ?? { stdout: "", stderr: "", code: 0 };
-      return Effect.succeed(
-        ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          unref: Effect.succeed(Effect.void),
-          stdin: Sink.drain,
-          stdout: Stream.make(encoder.encode(result.stdout)),
-          stderr: Stream.make(encoder.encode(result.stderr)),
-          all: Stream.empty,
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-        }),
-      );
-    }),
-  );
-  const layer = HostSync.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(SessionStore.SessionStore)({
-          cookieName: "goat-session",
-          legacyCookieName: undefined,
-          listActive: () =>
-            DateTime.now.pipe(
-              Effect.map((now) => [
-                session(
-                  person,
-                  ["orchestration:read", "orchestration:operate", "providers:manage"],
-                  now,
-                ),
-                session(viewer, ["orchestration:read", "orchestration:operate"], now),
-              ]),
-            ),
-        }),
-        Layer.mock(Dispatch.SshRemoteDispatch)({
-          connectedHosts: Effect.succeed(["old", "stopped", "box"]),
-          listHosts: () =>
-            Effect.succeed([
-              { alias: "box", source: "ssh-config" as const },
-              { alias: "github.com", source: "known-hosts" as const },
-            ]),
-          callHostTool: <E, R>(call: Call, authorize: Effect.Effect<string, E, R>) =>
-            authorize.pipe(
-              Effect.flatMap((ceiling) => {
-                state.calls.push({ call, ceiling });
-                return options.answer?.(call) ?? Effect.die("unexpected remote call");
-              }),
-            ) as never,
-        }),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed((options.providers ?? []) as never),
-          refreshInstance: () => Effect.succeed([]) as never,
-        }),
-        Layer.mock(Diagnosis.ProviderDiagnosisService)({
-          diagnose: (input) => {
-            const driver = String(input.driver ?? "");
-            state.diagnoses.push(driver);
-            const cloud = options.cloud?.[driver as "claudeCloud"];
-            return Effect.succeed(
-              cloudDriver(driver, cloud?.ready === true, cloud?.reason ?? "not_signed_in"),
-            );
-          },
-        }),
-        Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-          listInstances: Effect.succeed([]),
-        }),
-        Layer.mock(ProviderAuth.ProviderAuthService)({}),
-        Layer.mock(ServerSettings.ServerSettingsService)({}),
-        Layer.mock(Handoffs.Handoffs)({
-          create: (input) =>
-            Effect.sync(() => {
-              state.handoffs.push(input);
-              return {
-                handoffId: TurnItemId.make("handoff:sync"),
-                kind: "approval" as const,
-                title: input.title,
-                state: "pending" as const,
-                targetPath: input.target.path,
-                expiresAt: input.expiresAt ?? null,
-              };
-            }),
-          respond: (input) =>
-            Effect.succeed({ handoffId: input.handoffId, state: input.action } as never),
-        }),
-        Layer.mock(Threads.ThreadManagementService)({
-          getThreadSnapshot: () =>
-            Effect.succeed({
-              projection: { runs: [{ id: "run-1", rootNodeId: "node-1" }] },
-            } as never),
-        }),
-        Layer.mock(Environment.ServerEnvironmentIdentity)({
-          getEnvironmentId: Effect.succeed(environmentId),
-        }),
-        spawner,
-      ),
-    ),
-    Layer.provide(NodeServices.layer),
-  );
-  return { state, layer };
-};
-
-const threadScope: McpInvocationScope = {
+import {
+  type Call,
   environmentId,
-  requestNamespace: "test",
-  capabilities: new Set(["orchestration"]),
-  issuedAt: 0,
-  thread: {
-    threadId: ThreadId.make("agent-thread"),
-    providerSessionId: "provider-session",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  },
-  client: undefined,
-  grantedScopes: ["orchestration:read"],
-  reauthorize: () => Effect.void,
-};
+  harness,
+  person,
+  threadScope,
+  viewer,
+} from "./ProviderHostSync.testkit.ts";
 
 it.effect("reports old, stopped, and mismatched hosts instead of failing the matrix", () => {
   const { layer, state } = harness({
@@ -261,8 +68,64 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     expect(byHost.local?.providers.map((provider) => provider.driver)).toContain("codex");
     expect(byHost.old?.status).toBe("update_runtime");
     expect(byHost.stopped?.status).toBe("not_ready");
+    expect(byHost.stopped?.message).toContain("no ready connection to GOAT on stopped");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("regression #1002: judges hosts by the protocols they serve, not by GOAT version", () => {
+  const served = servedRuntimeProtocolRanges();
+  const protocols: Record<string, unknown> = {
+    nightly: served,
+    behind: { ssh: { min: 1, max: served.ssh.min - 1 }, orchestration: served.orchestration },
+    ahead: {
+      ssh: served.ssh,
+      orchestration: { min: served.orchestration.max + 1, max: served.orchestration.max + 1 },
+    },
+    same: served,
+    malformed: { ssh: { min: 5, max: 1 }, orchestration: served.orchestration },
+  };
+  const { layer } = harness({
+    answer: (call) =>
+      Effect.succeed({
+        rows: [
+          {
+            host: null,
+            status: "ok",
+            goatVersion: call.host === "same" ? packageJson.version : "0.0.1-nightly.20261023.246",
+            ...(protocols[call.host] === undefined ? {} : { protocol: protocols[call.host] }),
+            // What a remote says about itself never decides the verdict this machine shows.
+            versionMismatch: true,
+            compatibility: "incompatible",
+            message: "Remote's own warning.",
+            providers: [],
+          },
+        ],
+      }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { hosts: ["nightly", "behind", "ahead", "legacy", "same", "malformed"] },
+      { kind: "client", sessionId: viewer },
+    );
+    const byHost = Object.fromEntries(result.rows.map((row) => [row.host ?? "local", row]));
+    // A different build serving the same protocols is informational only: no warning.
+    expect(byHost.nightly).not.toHaveProperty("message");
+    expect(byHost.nightly).toMatchObject({ compatibility: "compatible", versionMismatch: true });
+    expect(byHost.local?.protocol).toEqual(served);
+    expect(byHost.behind?.compatibility).toBe("incompatible");
+    expect(byHost.behind?.message).toMatch(/Update GOAT on behind\.$/);
+    expect(byHost.ahead?.compatibility).toBe("incompatible");
+    expect(byHost.ahead?.message).toMatch(/Update GOAT on this machine\.$/);
+    expect(byHost.legacy?.compatibility).toBe("degraded");
+    expect(byHost.legacy?.message).toContain("does not report the protocols it serves");
+    expect(byHost.same).toMatchObject({ compatibility: "compatible" });
+    expect(byHost.same).not.toHaveProperty("versionMismatch");
+    expect(byHost.same).not.toHaveProperty("message");
+    expect(byHost.malformed?.compatibility).toBe("degraded");
+    expect(byHost.malformed?.message).toContain("does not report the protocols it serves");
   }).pipe(Effect.provide(layer));
 });
 
@@ -325,114 +188,24 @@ it.effect("reports cloud readiness from diagnosis, not from the CLI signed-in fl
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("asks a person before an agent's sync touches any host, then runs it as them", () => {
-  const { layer, state } = harness({
-    answer: (call) =>
-      Effect.succeed(
-        call.tool === "goat_provider_sync"
-          ? {
-              kind: "started",
-              sync: {
-                syncId: "remote-sync",
-                driver: "opencode",
-                version: "1.2.3",
-                login: true,
-                startedAt: "2026-10-20T00:00:00.000Z",
-                done: true,
-                hosts: [
-                  {
-                    host: null,
-                    phase: "installed",
-                    version: "1.2.3",
-                    login: { type: "terminal", command: "opencode auth login" },
-                  },
-                ],
-              },
-            }
-          : null,
-      ),
+it.effect("marks every cloud cell on a hub that holds cloud launches, signed in or not", () => {
+  const { layer } = harness({
+    hub: true,
+    cloud: { cursorCloud: { ready: true } },
+    answer: () => Effect.succeed({ rows: [] }),
   });
   return Effect.gen(function* () {
     const sync = yield* HostSync.ProviderHostSync;
-    const requested = yield* sync.sync(
-      { driver: "opencode", hosts: ["box"], version: "1.2.3" },
-      { kind: "mcp", scope: threadScope },
-    );
-    expect(requested.kind).toBe("needs_human");
-    expect(state.calls).toEqual([]);
-    expect(state.handoffs).toHaveLength(1);
-
-    const declinedByViewer = yield* Effect.exit(
-      sync.respondHandoff(
-        {
-          threadId: ThreadId.make("agent-thread"),
-          handoffId: TurnItemId.make("handoff:sync"),
-          action: "completed",
-        },
-        viewer,
-      ),
-    );
-    expect(Exit.isFailure(declinedByViewer)).toBe(true);
-    expect(state.calls).toEqual([]);
-
-    const approve = sync.respondHandoff(
-      {
-        threadId: ThreadId.make("agent-thread"),
-        handoffId: TurnItemId.make("handoff:sync"),
-        action: "completed",
-      },
-      person,
-    );
-    // Two clicks racing: exactly one starts the sync.
-    const raced = yield* Effect.all([Effect.exit(approve), Effect.exit(approve)], {
-      concurrency: "unbounded",
-    });
-    expect(raced.filter(Exit.isSuccess)).toHaveLength(1);
-    const followed = yield* sync.status(
-      { handoffId: "handoff:sync" },
-      { kind: "mcp", scope: threadScope },
-    );
-    const finished = yield* sync.awaitDone(followed.syncId);
-    expect(finished.hosts).toEqual([
-      {
-        host: "box",
-        phase: "installed",
-        version: "1.2.3",
-        login: { type: "terminal", command: "opencode auth login" },
-      },
-    ]);
-    const bystander = yield* sync.status(
-      { syncId: followed.syncId },
+    const result = yield* sync.matrix(
+      { localOnly: true, cloud: true },
       { kind: "client", sessionId: viewer },
     );
-    expect(bystander.hosts[0]).not.toHaveProperty("login");
-    const stopByBystander = yield* Effect.exit(
-      sync.cancel({ syncId: followed.syncId }, { kind: "client", sessionId: viewer }),
-    );
-    expect(Exit.isFailure(stopByBystander)).toBe(true);
-    expect(state.calls).toHaveLength(1);
-    expect(state.calls[0]).toMatchObject({
-      ceiling: "full-access",
-      call: {
-        host: "box",
-        tool: "goat_provider_sync",
-        writes: true,
-        providersManage: true,
-        arguments: { driver: "opencode", version: "1.2.3", login: true },
-      },
-    });
-
-    const replay = yield* Effect.exit(
-      sync.respondHandoff(
-        {
-          threadId: ThreadId.make("agent-thread"),
-          handoffId: TurnItemId.make("handoff:sync"),
-          action: "completed",
-        },
-        person,
-      ),
-    );
-    expect(Exit.isFailure(replay)).toBe(true);
+    const cloud = result.rows[0]?.cloud;
+    expect([cloud?.claudeCloud.hub, cloud?.cursorCloud.hub, cloud?.devinCloud.hub]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   }).pipe(Effect.provide(layer));
 });
 
@@ -602,7 +375,13 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(started.kind).toBe("started");
     if (started.kind !== "started") return;
     const done = yield* sync.awaitDone(started.sync.syncId);
-    expect(state.spawned.at(-1)?.args).toEqual(["install", "-g", "@xai-official/grok@1.2.3"]);
+    // Windows launches npm.cmd through cmd.exe, which folds the argv into one quoted command line.
+    const official = yield* resolveSpawnCommand("npm", [
+      "install",
+      "-g",
+      "@xai-official/grok@1.2.3",
+    ]).pipe(Effect.provide(NodeServices.layer));
+    expect(state.spawned.at(-1)).toEqual({ command: official.command, args: official.args });
     expect(done.done).toBe(true);
     expect(done.hosts[0]).toMatchObject({ host: null, phase: "failed" });
     const wire = JSON.stringify(done);
@@ -610,3 +389,114 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "regression #983: a cancel that lands while a host accepts the sync still reaches it",
+  () =>
+    Effect.gen(function* () {
+      const calling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const running = (done: boolean) => ({
+        syncId: "remote-sync",
+        driver: "opencode",
+        version: "1.2.3",
+        login: true,
+        startedAt: "2026-10-20T00:00:00.000Z",
+        done,
+        hosts: [{ host: null, phase: done ? "cancelled" : "installing", version: null }],
+      });
+      const { layer, state } = harness({
+        answer: (call) =>
+          call.tool === "goat_provider_sync"
+            ? Deferred.succeed(calling, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ kind: "started", sync: running(false) }),
+              )
+            : Effect.succeed(running(true)),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], version: "1.2.3" },
+          { kind: "client", sessionId: person },
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(calling);
+        // The cancel starts while the remote is still answering, before its sync id is known here.
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "client", sessionId: person })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        const cancelled = yield* Fiber.join(stopping);
+        expect(state.calls.at(-1)?.call).toMatchObject({
+          host: "box",
+          tool: "goat_provider_sync_cancel",
+          arguments: { syncId: "remote-sync" },
+        });
+        expect(cancelled).toMatchObject({
+          done: true,
+          hosts: [{ host: "box", phase: "cancelled" }],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("regression #983: cancelling a sync during a managed sign-in cancels the flow", () =>
+  Effect.gen(function* () {
+    const signingIn = yield* Deferred.make<void>();
+    const cancels: Array<{ readonly input: unknown; readonly owner: string }> = [];
+    const instanceId = ProviderInstanceId.make("opencode");
+    const flow = {
+      instanceId,
+      phase: "waiting" as const,
+      flowId: "flow-1",
+      authorizationUrl: null,
+      expiresAt: null,
+      message: null,
+      interaction: { type: "deviceCode", url: "https://example.test/device", userCode: "ABCD" },
+    } as unknown as ProviderAuthState;
+    const { layer } = harness({
+      providers: [
+        {
+          instanceId,
+          driver: ProviderDriverKind.make("opencode"),
+          displayName: "OpenCode",
+          installed: true,
+          version: "1.2.3",
+          auth: { status: "unauthenticated" },
+          setup: { canAuthenticate: true },
+        },
+      ],
+      instances: [{ instanceId: "opencode", driverKind: "opencode" }],
+      auth: {
+        start: () => Effect.succeed(flow),
+        subscribe: () =>
+          Stream.fromEffect(Deferred.succeed(signingIn, undefined)).pipe(
+            Stream.drain,
+            Stream.concat(Stream.never),
+          ),
+        cancel: (input, owner) =>
+          Effect.sync(() => {
+            cancels.push({ input, owner });
+            return { ...flow, phase: "cancelled" as const };
+          }),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", version: "1.2.3" },
+        { kind: "client", sessionId: person },
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      yield* Deferred.await(signingIn);
+      const cancelled = yield* sync.cancel(
+        { syncId: started.sync.syncId },
+        { kind: "client", sessionId: person },
+      );
+      expect(cancels).toEqual([{ input: { instanceId, flowId: "flow-1" }, owner: person }]);
+      expect(cancelled.hosts[0]).toMatchObject({ host: null, phase: "cancelled" });
+      expect(cancelled.hosts[0]).not.toHaveProperty("login");
+    }).pipe(Effect.provide(layer));
+  }),
+);

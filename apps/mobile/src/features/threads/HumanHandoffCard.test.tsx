@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
@@ -340,9 +339,9 @@ it.each([
       expiresAt,
       target: { ...handoff.target, path },
     });
-    expect(container.textContent).toContain(
-      `Expires ${DateTime.toDate(expiresAt).toLocaleTimeString()}`,
-    );
+    // The reader's local time to the minute, in any locale's notation, never with seconds.
+    expect(container.textContent).toContain("Expires ");
+    expect(container.textContent).not.toMatch(/\p{Nd}[:.]\p{Nd}{2}[:.]\p{Nd}{2}/u);
     expect(container.textContent).not.toContain(`${kind.replaceAll("_", " ")} · pending`);
     expect(container.textContent).not.toContain("Cancel request");
     expect(harness.refresh).not.toHaveBeenCalled();

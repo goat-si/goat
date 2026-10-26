@@ -4,7 +4,9 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import { HttpServer } from "effect/http";
+import * as Layer from "effect/Layer";
 import * as NetAddress from "effect/net/NetAddress";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -160,6 +162,45 @@ it.effect("does not keep credentials of other threads alive", () =>
     timestamp += 2;
 
     expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("names the missing scope on a live provider credential", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-read-grant"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      grantedScopes: ["orchestration:read"],
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const invocation = yield* registry.resolve(token);
+    expect(invocation).toBeDefined();
+    yield* invocation!.reauthorize!(["orchestration:read"]);
+    const refusal = yield* invocation!.reauthorize!(["orchestration:operate"]).pipe(Effect.flip);
+    expect(refusal.requiredScope).toBe("orchestration:operate");
+    expect(refusal.message).toContain("orchestration:operate");
+    expect(refusal.message).not.toContain(token);
+  }),
+);
+
+it.effect("reports a revoked provider credential without claiming a missing scope", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const threadId = ThreadId.make("thread-revoked-read");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      grantedScopes: ["orchestration:read"],
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const invocation = yield* registry.resolve(token);
+    expect(invocation).toBeDefined();
+    yield* registry.revokeThread(threadId);
+    const refusal = yield* invocation!.reauthorize!(["orchestration:read"]).pipe(Effect.flip);
+    expect(refusal.message).toContain("no longer active");
+    expect(refusal.message).not.toContain("missing required scope");
+    expect(refusal.message).not.toContain(token);
   }),
 );
 
@@ -454,6 +495,183 @@ it.effect("renews an idle credential while its session is attached and expires i
   }),
 );
 
+it.effect("inspect judges a credential as resolve would, without renewing it", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let attached = true;
+    const registry = yield* makeRegistry(() => timestamp);
+    const tokenOf = (issued: { readonly config: { readonly authorizationHeader: string } }) =>
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const plainThread = ThreadId.make("thread-inspect-plain");
+    const plain = tokenOf(
+      yield* registry.issue({
+        threadId: plainThread,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      }),
+    );
+    const attachedThread = ThreadId.make("thread-inspect-attached");
+    const held = tokenOf(
+      yield* registry.issue({
+        threadId: attachedThread,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        isAttached: Effect.sync(() => attached),
+      }),
+    );
+    timestamp += 50;
+    expect(yield* registry.inspect(plain)).toEqual({ threadId: plainThread, recheckAt: 1_101 });
+    // Inspecting is not use: the plain credential still expires a window after its issue.
+    timestamp += 60;
+    expect(yield* registry.inspect(plain)).toBeUndefined();
+    expect(yield* registry.resolve(plain)).toBeUndefined();
+    // An idle credential whose session is attached stays valid, rechecked a window later.
+    expect(yield* registry.inspect(held)).toEqual({
+      threadId: attachedThread,
+      recheckAt: 1_210,
+    });
+    attached = false;
+    expect(yield* registry.inspect(held)).toBeUndefined();
+    expect(yield* registry.resolve(held)).toBeUndefined();
+  }),
+);
+
+it.effect("inspect judges the state after an attachment probe, not the state before it", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const probing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const threadId = ThreadId.make("thread-inspect-probe");
+    const request = {
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Deferred.succeed(probing, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.as(true),
+      ),
+    };
+    const issued = yield* registry.issue(request);
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    // A revocation during a probe that answers attached: the token is refused.
+    const revoked = yield* registry
+      .inspect(token)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(probing);
+    yield* registry.revokeThread(threadId);
+    yield* Deferred.succeed(release, undefined);
+    expect(yield* Fiber.join(revoked)).toBeUndefined();
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("inspect sees a renewal made while its probe answered detached", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let probes = 0;
+    const registry = yield* makeRegistry(() => timestamp);
+    const probing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const threadId = ThreadId.make("thread-inspect-renewed");
+    const first = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      // Only inspect's probe waits; the renewal's own detached sweep must not block on it.
+      isAttached: Effect.suspend(() =>
+        probes++ === 0
+          ? Deferred.succeed(probing, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(false),
+            )
+          : Effect.succeed(false),
+      ),
+    });
+    const token = first.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    const judged = yield* registry
+      .inspect(token)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(probing);
+    yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Effect.succeed(true),
+      renew: {
+        authorizationHeader: first.config.authorizationHeader,
+        providerSessionId: first.config.providerSessionId,
+      },
+    });
+    yield* Deferred.succeed(release, undefined);
+    expect((yield* Fiber.join(judged))?.threadId).toBe(threadId);
+    expect((yield* registry.resolve(token))?.thread.threadId).toBe(threadId);
+  }),
+);
+
+it.effect("inspect prunes as resolve does before judging an expired attached credential", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let attached = false;
+    const registry = yield* makeRegistry(() => timestamp);
+    const held = yield* registry.issue({
+      threadId: ThreadId.make("thread-inspect-pruned"),
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Effect.sync(() => attached),
+    });
+    const token = held.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+    attached = true;
+    // A full tombstone list of idle records, pruned on the next judgment, evicts the expired one.
+    for (let index = 0; index < 512; index += 1)
+      yield* registry.issue({
+        threadId: ThreadId.make("thread-idle-" + index),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+    timestamp += 1_000;
+    expect(yield* registry.inspect(token)).toBeUndefined();
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect(
+  "gives concurrently started threads different TMPDIRs that end with the server (#1206)",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const issueBoth = Effect.gen(function* () {
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const issue = (name: string) =>
+          registry.issue({
+            threadId: ThreadId.make(`thread-tmp-${name}`),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          });
+        const [first, second] = yield* Effect.all([issue("first"), issue("second")], {
+          concurrency: "unbounded",
+        });
+        const again = yield* issue("first");
+        const directories = [first.config.temporaryDirectory, second.config.temporaryDirectory];
+        expect(new Set(directories).size).toBe(2);
+        expect(again.config.temporaryDirectory).toBe(first.config.temporaryDirectory);
+        // The system directory a thread shell's `goat app` still looks in holds the thread ones.
+        const system = first.config.systemTemporaryDirectory ?? "\0";
+        expect(first.config.temporaryDirectory?.startsWith(system)).toBe(true);
+        for (const directory of directories) {
+          expect((yield* fileSystem.stat(directory!)).type).toBe("Directory");
+        }
+        return directories;
+      }).pipe(
+        Effect.provide(
+          McpSessionRegistry.layer.pipe(
+            Layer.provide(Layer.succeed(HttpServer.HttpServer, fakeHttpServer)),
+            Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
+          ),
+        ),
+      );
+
+      const directories = yield* issueBoth;
+      for (const directory of directories) expect(yield* fileSystem.exists(directory!)).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("tells a token from an earlier server run apart from an unknown one", () =>
   Effect.gen(function* () {
     const current = yield* makeRegistry(() => 1_000);
@@ -614,4 +832,56 @@ it.effect("a revocation during a positive attachment probe still refuses the cal
     expect(yield* Fiber.join(call)).toBeUndefined();
     expect((yield* registry.explainRefusal!(token)).reason).toBe("revoked");
   }),
+);
+
+it.effect(
+  "refuses the header a held Codex thread keeps until its deferred reload, from the moment authority changes (#1569)",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry(() => 1_000);
+      const threadId = ThreadId.make("thread-deferred-reload");
+      const policy = { grant: "read" as const, policyEpoch: 1 };
+      const request = {
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["memory"] as const),
+        grantedScopes: ["memory:read"] as const,
+        memoryPolicy: policy,
+        readCurrentPolicy: () => Effect.succeed(policy),
+        isLiveCaller: Effect.succeed(true),
+      };
+      const list = (scope: McpInvocationContext.McpInvocationScope) =>
+        MemoryFixture.call(
+          "memory_list",
+          { memorySpaceId: MemoryFixture.space, includeQuarantined: false },
+          scope,
+        );
+      const first = yield* registry.issue(request);
+      const header = first.config.authorizationHeader.replace(/^Bearer\s+/, "");
+      const held = yield* registry.resolve(header);
+      expect((yield* list(held!)).result.isError).toBe(false);
+
+      // Memory withdrawn: GOAT renews under the same token, and the old header that Codex keeps
+      // sending, with memory tools still offered, can no longer run memory operations.
+      yield* registry.issue({
+        ...request,
+        grantedScopes: [],
+        readCurrentPolicy: () => Effect.succeed(undefined),
+        renew: {
+          authorizationHeader: first.config.authorizationHeader,
+          providerSessionId: first.config.providerSessionId,
+        },
+      });
+      for (const scope of [held!, (yield* registry.resolve(header))!])
+        expect((yield* list(scope)).body).toMatchObject({ code: "unavailable" });
+
+      // A new credential revokes the thread's old one first, so the old header stops resolving.
+      yield* registry.revokeThread(threadId);
+      const rotated = yield* registry.issue(request);
+      expect(yield* registry.resolve(header)).toBeUndefined();
+      expect((yield* registry.explainRefusal!(header)).reason).toBe("revoked");
+      expect(
+        yield* registry.resolve(rotated.config.authorizationHeader.replace(/^Bearer\s+/, "")),
+      ).toBeDefined();
+    }).pipe(Effect.provide(MemoryFixture.layer)),
 );

@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../lib/uuid";
 import { ThreadUndoNotice } from "./ThreadUndoNotice";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { use } from "react";
@@ -30,13 +31,15 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
-import { useHomeThreadSelection } from "./home-thread-navigation";
+import { useHomeThreadRouteSelection, useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { GoatBotScreen } from "../goat-bot/GoatBotScreen";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
+import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 
 export function HomeRouteScreen() {
@@ -45,9 +48,10 @@ export function HomeRouteScreen() {
   const columnMetrics = useNativeColumnLayoutMetrics();
   const deviceType = useDeviceType();
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
-  const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery } =
+  const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const botHome = useMobileGoatBotModeButton();
+  const botModel = useMobileGoatBotModelMenu();
   const compactBot = !layout.usesSplitView && botHome.mode === "bot";
   const projects = useProjects();
   // Streaming turns rewrite thread shells many times a second. While a Thread
@@ -77,11 +81,12 @@ export function HomeRouteScreen() {
     else setLocalSearchQuery(query);
   };
   const handleSelectThread = useHomeThreadSelection();
+  const selectThreadRoute = useHomeThreadRouteSelection();
   const handleNewThreadOnBranch = useCallback(
     (thread: EnvironmentThreadShell) => {
-      navigation.navigate("NewTaskSheet", {
-        screen: "NewTaskDraft",
-        params: {
+      selectThreadRoute({
+        draft: {
+          requestId: uuidv4(),
           environmentId: String(thread.environmentId),
           projectId: String(thread.projectId),
           branch: thread.branch,
@@ -89,7 +94,7 @@ export function HomeRouteScreen() {
         },
       });
     },
-    [navigation],
+    [selectThreadRoute],
   );
 
   useEffect(() => {
@@ -198,10 +203,28 @@ export function HomeRouteScreen() {
                 onPress={botHome.toggle}
               />
             ) : null}
+            {botHome.mode === "bot" && botModel ? (
+              <Toolbar.Menu
+                title={botModel.label}
+                accessibilityLabel={botModel.accessibilityLabel}
+                disabled={botModel.disabled}
+              >
+                {botModel.items.map((item) => (
+                  <Toolbar.MenuAction
+                    key={item.id}
+                    isOn={item.selected}
+                    subtitle={item.subtitle}
+                    onPress={() => botModel.select(item.id)}
+                  >
+                    <Toolbar.Label>{item.title}</Toolbar.Label>
+                  </Toolbar.MenuAction>
+                ))}
+              </Toolbar.Menu>
+            ) : null}
             <Toolbar.Button
               accessibilityLabel="New task"
               icon="square.and.pencil"
-              onPress={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+              onPress={startNewTask}
             />
           </Toolbar>
         ) : null}
@@ -219,6 +242,11 @@ export function HomeRouteScreen() {
                   ]
                 : []
             }
+            trailing={
+              botHome.mode === "bot" && botModel ? (
+                <GoatBotModelAndroidMenu menu={botModel} />
+              ) : null
+            }
           />
         ) : null}
         {botHome.mode === "bot" ? (
@@ -235,9 +263,7 @@ export function HomeRouteScreen() {
                 : undefined
             }
             onStartNewTask={
-              Platform.OS === "android" && panes.primarySidebarVisible
-                ? undefined
-                : () => navigation.navigate("NewTaskSheet", { screen: "NewTask" })
+              Platform.OS === "android" && panes.primarySidebarVisible ? undefined : startNewTask
             }
           />
         )}
@@ -271,7 +297,7 @@ export function HomeRouteScreen() {
         })
       }
       onSearchQueryChange={setSearchQuery}
-      onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+      onStartNewTask={startNewTask}
     />
   );
   if (compactBot)
@@ -292,7 +318,7 @@ export function HomeRouteScreen() {
   return (
     <AndroidHomeFabLayout
       disabled={workspace !== null && Platform.OS !== "android"}
-      onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+      onStartNewTask={startNewTask}
     >
       <>
         {/* Restore the header after leaving split view; screen options are
@@ -353,16 +379,16 @@ export function HomeRouteScreen() {
           onDeletePendingTask={confirmDeletePendingTask}
           onNewThreadOnBranch={handleNewThreadOnBranch}
           onNewThreadInProject={(project) => {
-            navigation.navigate("NewTaskSheet", {
-              screen: "NewTaskDraft",
-              params: {
+            selectThreadRoute({
+              draft: {
+                requestId: uuidv4(),
                 environmentId: String(project.environmentId),
                 projectId: String(project.id),
                 title: project.title,
               },
             });
           }}
-          onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+          onStartNewTask={startNewTask}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}

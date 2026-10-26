@@ -265,7 +265,23 @@ describe("CursorAdapterV2", () => {
           "Cursor Agent SDK run.wait failed: Too many requests (resource_exhausted, HTTP 429)",
       },
     },
-  ])("fails the turn with $reason", ({ wait, failure }) =>
+    {
+      reason: "a transport dump sent after earlier commentary",
+      updates: [
+        { type: "text-delta", text: "Checking the build first." },
+        { type: "step-completed", stepId: 1, stepDurationMs: 1 },
+        { type: "text-delta", text: "Error: RetriableError: WritableIterable is closed" },
+      ] satisfies ReadonlyArray<InteractionUpdate>,
+      wait: Effect.succeed({
+        id: "native-cursor-run",
+        requestId: "native-request",
+        status: "finished" as const,
+        model: { id: "claude-fable-5" },
+        durationMs: 1,
+      }),
+      failure: { class: "transport_error", message: "Provider turn failed." },
+    },
+  ])("fails the turn with $reason", ({ updates = [], wait, failure }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-failure-" });
@@ -289,12 +305,17 @@ describe("CursorAdapterV2", () => {
               agentId: "native-cursor-failure",
               listMessages: Effect.succeed([]),
               close: Effect.void,
-              send: () =>
-                Effect.succeed({
-                  agentId: "native-cursor-failure",
-                  runId: "native-cursor-run",
-                  wait,
-                  cancel: Effect.void,
+              send: (input) =>
+                Effect.gen(function* () {
+                  for (const update of updates) {
+                    yield* input.onDelta!(update).pipe(Effect.orDie);
+                  }
+                  return {
+                    agentId: "native-cursor-failure",
+                    runId: "native-cursor-run",
+                    wait,
+                    cancel: Effect.void,
+                  };
                 }),
             }),
         }),
@@ -835,12 +856,49 @@ describe("CursorAdapterV2", () => {
       assert.equal(opens[5]!.agentId, "native-cursor-error");
       assert.equal(opens[5]!.options.local?.cwd, movedPolicy.cwd);
       assert.include(sentMessages[11]!, "read=true, write=true, source=true");
+      // Servers are fixed when the agent opens: enabling computer use reopens the
+      // same agent with the driver, and only then does the prompt describe it.
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      for (const [offset, attachment] of [
+        { ...authorizationConfig, cuaDriver },
+        authorizationConfig,
+      ].entries()) {
+        yield* sessions.set(attachment);
+        yield* runtime.startTurn({
+          ...ordinaryInput,
+          runtimePolicy: movedPolicy,
+          runOrdinal: 13 + offset,
+          providerTurnOrdinal: 13 + offset,
+        });
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        assert.equal(opens.length, 7 + offset);
+        assert.equal(opens[6 + offset]!.operation, "resume");
+        assert.deepEqual(
+          opens[6 + offset]!.options.mcpServers?.["cua-driver"],
+          offset === 0
+            ? {
+                type: "stdio",
+                command: "/resources/cua-driver",
+                args: ["mcp"],
+                env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+              }
+            : undefined,
+        );
+        assert.equal(sentMessages[12 + offset]!.includes("<computer_use>"), offset === 0);
+      }
       memory = { ...snapshot, renderedText: snapshot.renderedText.replace("data", "tampered") };
       const failed = yield* runtime
         .startTurn({ ...ordinaryInput, runOrdinal: 4, providerTurnOrdinal: 4 })
         .pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(failed));
-      assert.equal(sentMessages.length, 12);
+      assert.equal(sentMessages.length, 14);
     }).pipe(
       Effect.scoped,
       Effect.provide(

@@ -59,7 +59,7 @@ On web and desktop, unpinning, settling, snoozing, and archiving a thread each s
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position, and reopens an archived thread you were
 viewing. Discarding an unsent draft from the sidebar works the same way: Undo brings
-back its text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
+back its text and attachments. `mod+z` triggers the most recent Undo, even from the composer; see
 [Keybindings](./keybindings.md#commands-with-special-behavior).
 
 On web and desktop, you can also drag files from your computer onto any thread row:
@@ -116,6 +116,10 @@ To generate a fresh title from the conversation, open a thread's menu and choose
 **Regenerate title**. The action is unavailable while title generation is in progress
 or when the connected environment needs a server update.
 
+To change how titles are written, add **Thread title instructions** in **Settings → General →
+Text generation**, such as a length limit or an identifier to put first. They apply to new and
+regenerated titles. Select a project to give it its own instructions.
+
 Agents connected through GOAT can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
@@ -123,7 +127,9 @@ open.
 
 ### Follow Priority in Activity
 
-On web and desktop, switch to **Activity** to see **Priority** at the top. It holds threads
+On web and desktop, the sidebar opens in **Activity**, with **Priority** at the top. Choose
+the bell to switch between Activity and **Projects**; the sidebar remembers your choice on that
+device. Priority holds threads
 with work in progress, pending approvals or answers, unread completions, or an unacknowledged
 return from snooze. A delegated task needing approval or an answer brings its parent here too,
 and the parent row shows **Approval** or **Input**.
@@ -155,9 +161,20 @@ Use **Go to thread** for more context or to
 [attach files to an answer](./question-attachments.md). A request whose provider session cannot
 resume stays listed with answering turned off.
 
+For durable requests with a recommendation and an expiry, open **Settings → Decision Inbox**.
+It includes pending thread requests from the selected environments and decisions from threads
+those environments launched on connected or linked hosts. Remote rows show their host; unavailable
+hosts and incomplete lists are reported so a partial list is not mistaken for an empty inbox. Choose an option and explain your
+answer; the asking host delivers the result to its thread. Person-only questions must be answered
+from a client connected to the asking host; linked hosts cannot forward approvals. Expired requests never choose an option automatically.
+Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
+questions can still be answered in their asking thread.
+
 ### See everything running
 
-On web and desktop, **Fleet** in the rail beside the thread sidebar shows how many threads are
+On web and desktop, GOAT opens on **Fleet** each time it starts, including after an update; a
+link to a thread still opens that thread, and **Home** at the top of the rail opens the global
+agent. **Fleet** in the rail beside the thread sidebar shows how many threads are
 running or need you across every connected machine; hover it for a count per machine. Open it,
 or search for it in the command palette, for a graph of your machines and the agents working on
 each, and a list of those threads grouped by machine; select a machine to show only its threads.
@@ -166,6 +183,11 @@ leaves once it finishes and stays while it needs an approval or answer; open fin
 from the sidebar. Only top-level threads count: subagents are part of their parent's work, and
 archived threads do not count. Work an environment started on an SSH host you are not connected
 to appears as last reported by that environment.
+Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
+**+N** beside their thread while they work; hover it to see each one and what it is doing.
+The machine count includes only GOAT servers that answer. Machines the page shows without
+counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
+reported, are listed behind the **+N** beside the count.
 
 A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
 limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU
@@ -174,14 +196,36 @@ one is high. A machine that stopped answering shows no heat until it reports aga
 
 At the top, **Fleet telemetry** shows CPU, memory, and load for each machine over the last ten
 minutes, provider quota, runs started and finished in the last hour, and alerts for machines that
-are reconnecting, unreachable, or on a different GOAT version. It uses the same reading as the
+are reconnecting, unreachable, under heavy load, or on a different GOAT version. It uses the same reading as the
 graph's heat, refreshed every 15 seconds while the page is open. A machine shows "No metrics"
 when no connected machine reports on it. Collapse the panel to a one-line summary; it stays
 collapsed until you open it again.
 
+Alerts say how long a problem has lasted and offer one next step. A connection that takes more
+than 30 seconds offers **Retry**. A connected machine that stops answering for 10 seconds says
+so, with the likely cause: CPU load, or a state database whose thread history is over that
+machine's history budget. History over budget offers **Compact**, which runs that machine's
+history cleanup now; on databases created before online space reclamation, the file shrinks
+after `goat doctor` runs there. Hover a machine to see its history and memory against their
+budgets and how many idle threads are archived; an archived thread comes back when you open it.
+A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
+behind by test runs, whose launcher exited and whose home is deleted or temporary, appear as one
+item with **Clean up**; it stops only those processes, never a server with a real home. When
+there are more than three alerts, **+N more** opens the rest with their actions.
+
 Below the list, **Connections** shows your saved machines with the same controls as
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
 another with **Add device**.
+
+### Choose what the rail shows
+
+On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
+them up or down. Home and Settings always stay. Until you choose, the rail adjusts to your setup:
+Hub appears on a machine that is a hub, and **Add provider** while your main machine has no
+working provider. An
+item you turn on stays on whatever changes later, and **Reset to defaults** returns to the
+automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
+stay reachable from the command palette or Settings.
 
 ### Fold working threads on mobile
 

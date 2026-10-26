@@ -97,6 +97,14 @@ export type ChannelWorkspaceStrategy = typeof ChannelWorkspaceStrategy.Type;
 export const ChannelRemoteTarget = Schema.Struct({
   host: TrimmedNonEmptyString,
   cwd: TrimmedNonEmptyString,
+  /** Automatic choices may only reuse existing connections; retries return to this project. */
+  automatic: Schema.optional(
+    Schema.Struct({
+      sourceProjectId: ProjectId,
+      canonicalKey: TrimmedNonEmptyString,
+      runtimeModeCeiling: Schema.optional(RuntimeMode),
+    }),
+  ),
 });
 export type ChannelRemoteTarget = typeof ChannelRemoteTarget.Type;
 
@@ -234,7 +242,7 @@ export const ChannelTask = Schema.Struct({
   generation: PositiveInt,
   briefVersion: Schema.optional(PositiveInt),
   projectId: Schema.optional(ProjectId),
-  /** The machine the requester asked for, as an SSH alias; the dispatcher checks it. */
+  /** The requested or claimed machine. Automatic provenance is retained on target.remote. */
   host: Schema.optional(TrimmedNonEmptyString),
   target: Schema.optional(ChannelDispatchTarget),
   worker: Schema.optional(ChannelWorkerAssignment),
@@ -327,7 +335,11 @@ export const ChannelTaskEvent = Schema.Union([
   }),
   taskEvent("task.brief.frozen", { brief: ChannelTaskBrief }),
   taskEvent("task.worker.bound", { worker: ChannelWorkerAssignment }),
-  taskEvent("task.progress", { generation: PositiveInt, summary: TrimmedNonEmptyString }),
+  taskEvent("task.progress", {
+    generation: PositiveInt,
+    summary: TrimmedNonEmptyString,
+    milestone: Schema.optional(Schema.Boolean),
+  }),
   taskEvent("task.question.opened", { question: ChannelOpenQuestion }),
   taskEvent("task.question.answered", {
     questionId: ChannelQuestionId,

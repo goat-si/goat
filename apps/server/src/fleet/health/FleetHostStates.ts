@@ -54,7 +54,7 @@ const fromRow = (row: Row): FleetHostState => ({
   changedAt: row.changed_at,
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   // A store that cannot be read must not look like "nothing cordoned" to placement.
@@ -135,7 +135,7 @@ interface ClaimRow {
   readonly claimed_at: string;
 }
 
-export const makeClaims = Effect.gen(function* () {
+const makeClaims = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return FleetRescheduleClaims.of({
     get: (id) =>

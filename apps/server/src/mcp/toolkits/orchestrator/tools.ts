@@ -1,5 +1,14 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import {
+  OrchestratorMcpCapabilitiesInput,
   OrchestrationV2StopWorkflowInput,
+  ThreadReplicaCaptureInput,
+  ThreadReplicaCaptureResult,
+  ThreadReplicaRestoreInput,
+  ThreadReplicaRestoreResult,
+  ThreadReplicaRecoveryInput,
+  ThreadReplicaSettingInput,
+  ThreadReplicaReconcileInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpCreateThreadsResult,
@@ -22,6 +31,8 @@ import {
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpTaskStatusInput,
   OrchestratorMcpThreadInterruptInput,
+  OrchestratorMcpThreadRetryInput,
+  OrchestratorMcpThreadRetryResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadListResult,
@@ -78,13 +89,14 @@ const hostThreadResultDependencies = [
 
 const OrchestratorCapabilitiesTool = Tool.make(agentSurfaceRegistry["provider.list"].name, {
   description: agentSurfaceRegistry["provider.list"].description,
+  parameters: OrchestratorMcpCapabilitiesInput,
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.list"]));
 
-export const DelegateTaskTool = Tool.make(agentSurfaceRegistry["task.create"].name, {
+const DelegateTaskTool = Tool.make(agentSurfaceRegistry["task.create"].name, {
   description: agentSurfaceRegistry["task.create"].description,
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
@@ -138,7 +150,7 @@ const WorkflowStopTool = Tool.make(agentSurfaceRegistry["workflow.stop"].name, {
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["workflow.stop"]));
 
-export const ScheduleTaskTool = Tool.make(agentSurfaceRegistry["schedule.create"].name, {
+const ScheduleTaskTool = Tool.make(agentSurfaceRegistry["schedule.create"].name, {
   description: agentSurfaceRegistry["schedule.create"].description,
   parameters: OrchestratorMcpScheduleTaskInput,
   success: OrchestratorMcpScheduleTaskResult,
@@ -158,7 +170,7 @@ const ListScheduledTasksTool = Tool.make(agentSurfaceRegistry["schedule.list"].n
 
 const UpdateScheduledTaskTool = Tool.make(agentSurfaceRegistry["schedule.update"].name, {
   description: agentSurfaceRegistry["schedule.update"].description,
-  parameters: OrchestratorMcpUpdateScheduledTaskInput,
+  parameters: withClientRequestId(OrchestratorMcpUpdateScheduledTaskInput),
   success: OrchestratorMcpScheduleTaskResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -183,7 +195,7 @@ const RequestSecretTool = Tool.make(agentSurfaceRegistry["handoff.create"].name,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["handoff.create"]));
 
-export const CreateThreadsTool = Tool.make(agentSurfaceRegistry["thread.create_many"].name, {
+const CreateThreadsTool = Tool.make(agentSurfaceRegistry["thread.create_many"].name, {
   description: agentSurfaceRegistry["thread.create_many"].description,
   parameters: OrchestratorMcpCreateThreadsInput,
   success: OrchestratorMcpCreateThreadsResult,
@@ -212,7 +224,7 @@ const ThreadReadTool = Tool.make(agentSurfaceRegistry["thread.read"].name, {
   .annotate(Tool.Strict, true)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.read"]));
 
-export const ThreadUpdateTool = Tool.make(agentSurfaceRegistry["thread.update"].name, {
+const ThreadUpdateTool = Tool.make(agentSurfaceRegistry["thread.update"].name, {
   description: agentSurfaceRegistry["thread.update"].description,
   parameters: ThreadMetadataMcpUpdateInput,
   success: ThreadMetadataMcpUpdateResult,
@@ -247,6 +259,15 @@ const ThreadInterruptTool = Tool.make(agentSurfaceRegistry["thread.interrupt"].n
   failureMode: "return",
   dependencies: hostThreadDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.interrupt"]));
+
+const ThreadRetryTool = Tool.make(agentSurfaceRegistry["thread.retry"].name, {
+  description: agentSurfaceRegistry["thread.retry"].description,
+  parameters: OrchestratorMcpThreadRetryInput,
+  success: OrchestratorMcpThreadRetryResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.retry"]));
 
 const ThreadStatusTool = Tool.make(agentSurfaceRegistry["thread.status"].name, {
   description: agentSurfaceRegistry["thread.status"].description,
@@ -284,7 +305,60 @@ const ThreadWatchListTool = Tool.make(agentSurfaceRegistry["thread.watch_list"].
   dependencies: hostThreadDependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.watch_list"]));
 
+const CheckpointCaptureTool = Tool.make(agentSurfaceRegistry["thread.checkpoint_capture"].name, {
+  description: agentSurfaceRegistry["thread.checkpoint_capture"].description,
+  parameters: ThreadReplicaCaptureInput,
+  success: ThreadReplicaCaptureResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.checkpoint_capture"]));
+
+const CheckpointRestoreTool = Tool.make(agentSurfaceRegistry["thread.checkpoint_restore"].name, {
+  description: agentSurfaceRegistry["thread.checkpoint_restore"].description,
+  parameters: ThreadReplicaRestoreInput,
+  success: ThreadReplicaRestoreResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.checkpoint_restore"]));
+
+const CheckpointRecoveryTool = Tool.make(agentSurfaceRegistry["thread.handoff_host"].name, {
+  description: agentSurfaceRegistry["thread.handoff_host"].description,
+  parameters: ThreadReplicaRecoveryInput,
+  success: ThreadReplicaRestoreResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.handoff_host"]));
+
+const ReplicationSettingTool = Tool.make(agentSurfaceRegistry["thread.replication_set"].name, {
+  description: agentSurfaceRegistry["thread.replication_set"].description,
+  parameters: ThreadReplicaSettingInput,
+  success: ThreadReplicaSettingInput,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.replication_set"]));
+
+const CheckpointReconcileTool = Tool.make(
+  agentSurfaceRegistry["thread.checkpoint_reconcile"].name,
+  {
+    description: agentSurfaceRegistry["thread.checkpoint_reconcile"].description,
+    parameters: ThreadReplicaReconcileInput,
+    success: ThreadReplicaRestoreResult,
+    failure: OrchestratorMcpFailure,
+    failureMode: "return",
+    dependencies: hostThreadDependencies,
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.checkpoint_reconcile"]));
+
 export const OrchestratorToolkit = Toolkit.make(
+  CheckpointReconcileTool,
+  ReplicationSettingTool,
+  CheckpointCaptureTool,
+  CheckpointRestoreTool,
+  CheckpointRecoveryTool,
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,
@@ -305,6 +379,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadWaitTool,
   ThreadStatusTool,
   ThreadInterruptTool,
+  ThreadRetryTool,
   ThreadWatchTool,
   ThreadUnwatchTool,
   ThreadWatchListTool,

@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  InboxIcon,
   BrainIcon,
   BlocksIcon,
   BotIcon,
@@ -22,6 +23,7 @@ import {
   PlugIcon,
   PaletteIcon,
   SearchIcon,
+  ServerIcon,
   Settings2Icon,
   XIcon,
 } from "~/components/solar";
@@ -41,7 +43,9 @@ import {
   SidebarInput,
 } from "../ui/sidebar";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
+import { registerSettingsSearchInput } from "./SettingsSearchShortcut";
 import { scrollToSettingsTarget } from "./settingsLayout";
+import { SETTINGS_NAV_GROUPS } from "./settingsNav";
 import {
   searchSettings,
   isSettingsOverviewVisible,
@@ -52,14 +56,14 @@ import {
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
 import { validateSettingsScopeSearch } from "./settingsScope";
 
-const T3ConnectSidebarSignIn = lazy(() =>
-  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
-    default: module.T3ConnectSidebarSignIn,
+const GoatConnectSidebarSignIn = lazy(() =>
+  import("../clerk/GoatConnectSidebarSignIn").then((module) => ({
+    default: module.GoatConnectSidebarSignIn,
   })),
 );
-const T3ConnectSidebarAvatar = lazy(() =>
-  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
-    default: module.T3ConnectSidebarAvatar,
+const GoatConnectSidebarAvatar = lazy(() =>
+  import("../clerk/GoatConnectSidebarSignIn").then((module) => ({
+    default: module.GoatConnectSidebarAvatar,
   })),
 );
 
@@ -76,24 +80,14 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/integrations": BlocksIcon,
   "/settings/goat-bot": MessageCircleIcon,
+  "/settings/decision-inbox": InboxIcon,
+  "/settings/hub": ServerIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": PlugIcon,
   "/settings/archived": ArchiveIcon,
 };
-
-const SETTINGS_NAV_ITEMS: ReadonlyArray<{
-  label: string;
-  to: SettingsPath;
-  icon: ComponentType<{ className?: string }>;
-}> = (Object.keys(SETTINGS_SECTION_LABELS) as SettingsPath[])
-  .filter((to) => to !== "/settings/diagnostics")
-  .map((to) => ({
-    to,
-    label: SETTINGS_SECTION_LABELS[to],
-    icon: SETTINGS_SECTION_ICONS[to],
-  }));
 
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
@@ -106,12 +100,14 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
   const searchableItems = useAvailableSettingsSearchItems(scopeSearch);
-  const navItems = SETTINGS_NAV_ITEMS.filter(
-    (item) =>
-      (item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
-      (item.to !== "/settings/memory" || searchableItems.some((entry) => entry.to === item.to)),
-  );
-  const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
+  const isNavItemVisible = (to: SettingsPath) =>
+    (to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
+    (to !== "/settings/memory" || searchableItems.some((entry) => entry.to === to));
+  const navGroups = SETTINGS_NAV_GROUPS.map((group) => ({
+    ...group,
+    paths: group.paths.filter(isNavItemVisible),
+  })).filter((group) => group.paths.length > 0);
+  const { isMobile, setOpenMobile } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
@@ -131,47 +127,6 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       .getElementById(`settings-search-result-${result.id}`)
       ?.scrollIntoView({ block: "nearest" });
   }, [activeResultIndex, results]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing) return;
-      const isFindShortcut =
-        event.key.toLowerCase() === "f" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey;
-      const isSlashShortcut =
-        event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey;
-      if (!isFindShortcut && !isSlashShortcut) return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        ((isSlashShortcut &&
-          (target.tagName === "INPUT" ||
-            target.tagName === "TEXTAREA" ||
-            target.isContentEditable)) ||
-          target.closest(
-            '[role="dialog"], [aria-modal="true"], [data-slot$="popup"], [data-keybinding-capture]',
-          ) !== null)
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      if (isMobile) {
-        setOpenMobile(true);
-      } else if (!open) {
-        setOpen(true);
-      }
-      requestAnimationFrame(() => {
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      });
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobile, open, setOpen, setOpenMobile]);
 
   const handleSectionClick = (to: SettingsPath) => {
     if (isMobile) {
@@ -241,7 +196,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
             <div className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
               <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
               <SidebarInput
-                ref={searchInputRef}
+                ref={(input) => {
+                  searchInputRef.current = input;
+                  registerSettingsSearchInput(input);
+                }}
                 nativeInput
                 type="search"
                 value={query}
@@ -322,29 +280,43 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 ))}
               </SidebarMenu>
             ) : (
-              <SidebarMenu>
-                {navItems.map((item) => {
-                  const Icon = item.icon;
-                  const isGeneralDetailPage =
-                    item.to === "/settings/general" &&
-                    pathname === "/settings/open-source-licenses";
-                  const isActive =
-                    isGeneralDetailPage ||
-                    pathname === item.to ||
-                    pathname.startsWith(`${item.to}/`);
+              <nav aria-label="Settings sections" className="flex flex-col gap-3">
+                {navGroups.map((group, groupIndex) => {
+                  const headingId = `settings-nav-group-${groupIndex}`;
                   return (
-                    <SidebarMenuItem key={item.to}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        onClick={() => handleSectionClick(item.to)}
+                    <div key={group.label} className="flex flex-col gap-0.5">
+                      <h2
+                        id={headingId}
+                        className="px-2 py-1 text-xs font-medium text-sidebar-muted-foreground/70"
                       >
-                        <Icon />
-                        <span className="truncate">{item.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
+                        {group.label}
+                      </h2>
+                      <SidebarMenu aria-labelledby={headingId}>
+                        {group.paths.map((to) => {
+                          const Icon = SETTINGS_SECTION_ICONS[to];
+                          const isGeneralDetailPage =
+                            to === "/settings/general" &&
+                            pathname === "/settings/open-source-licenses";
+                          const isActive =
+                            isGeneralDetailPage || pathname === to || pathname.startsWith(`${to}/`);
+                          return (
+                            <SidebarMenuItem key={to}>
+                              <SidebarMenuButton
+                                isActive={isActive}
+                                aria-current={isActive ? "page" : undefined}
+                                onClick={() => handleSectionClick(to)}
+                              >
+                                <Icon />
+                                <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          );
+                        })}
+                      </SidebarMenu>
+                    </div>
                   );
                 })}
-              </SidebarMenu>
+              </nav>
             )}
           </div>
         </SidebarGroup>
@@ -352,7 +324,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       <SidebarFooter>
         {hasCloudPublicConfig() ? (
           <Suspense fallback={null}>
-            <T3ConnectSidebarSignIn />
+            <GoatConnectSidebarSignIn />
           </Suspense>
         ) : null}
         <div className="flex items-center gap-1">
@@ -361,7 +333,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           </div>
           {hasCloudPublicConfig() ? (
             <Suspense fallback={null}>
-              <T3ConnectSidebarAvatar />
+              <GoatConnectSidebarAvatar />
             </Suspense>
           ) : null}
         </div>

@@ -7,6 +7,7 @@ import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Nam
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
+import * as NodeURL from "node:url";
 // plist is CommonJS; Node cannot load its named exports from an ES module.
 import Plist from "plist";
 
@@ -34,19 +35,31 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper.ts";
+
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
+import { resolveDesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
+export { resolveDesktopBuildIconAssets };
+export type { DesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 import {
   isPlainReleaseVersion,
   RELEASE_VERSION_STAMP_COMMAND,
   resolveDevBuildVersion,
 } from "./lib/release-version.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
+import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
+import {
+  computerUseHelperEnvironment,
+  computerUseHelperRefusal,
+  signedComputerUseHelper,
+  CuaDriverArtifactError,
+  stageComputerUseHelper,
+  stageCuaDriverExecutable,
+  verifyEmbeddedComputerUseHelper,
+  withComputerUseHelper,
+} from "./desktop-artifact-computer-use.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -200,6 +213,7 @@ interface BuildCliInput {
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
+  readonly computerUseHelper?: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
@@ -478,7 +492,10 @@ const WINDOWS_DESKTOP_BUILD_PREREQUISITES = [
     id: "msvc",
     description: "Visual Studio Build Tools with C++, Windows SDK, and Spectre libraries",
   },
-  { id: "tar", description: "tar to inspect the bundled WSL runtime archive" },
+  {
+    id: "tar",
+    description: "tar.exe to extract Cua Driver and inspect the bundled WSL runtime archive",
+  },
 ] as const;
 
 export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedError<WindowsDesktopBuildPrerequisitesMissingError>()(
@@ -998,6 +1015,7 @@ interface ResolvedBuildOptions {
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
+  readonly computerUseHelper: boolean;
   readonly macPasskeys: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -1039,7 +1057,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // app; a second copy inside app.asar would stay ad hoc signed.
   "!apps/desktop/prod-resources/resource-monitor",
   "!apps/desktop/prod-resources/resource-monitor/**/*",
-  // T3 Code always passes the user's installed Claude executable to the SDK,
+  // GOAT always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
@@ -1061,16 +1079,26 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
+  "!apps/desktop/prod-resources/cua-driver",
+  "!apps/desktop/prod-resources/cua-driver/**/*",
+  "!apps/desktop/resources/cua-driver",
+  "!apps/desktop/resources/cua-driver/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
-export const MAC_FILE_EXCLUSIONS = [
+const WINDOWS_PTY_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
   "!**/node_modules/node-pty/third_party/conpty/**/*",
+] as const;
+export const MAC_FILE_EXCLUSIONS = [
+  ...WINDOWS_PTY_FILE_EXCLUSIONS,
+  // macOS uses helper stdio for both agents and readiness, never the SDK's native runtime.
+  "!**/node_modules/@trycua/cua-driver/**/*",
+  "!**/node_modules/@trycua/cua-driver-*/**/*",
 ] as const;
 // Linux builds node-pty from source, so every prebuild in the package is for
 // another platform (58 MB of it Windows debug symbols).
 export const LINUX_FILE_EXCLUSIONS = [
-  ...MAC_FILE_EXCLUSIONS,
+  ...WINDOWS_PTY_FILE_EXCLUSIONS,
   "!**/node_modules/node-pty/prebuilds/darwin-*/**/*",
 ] as const;
 
@@ -1084,6 +1112,15 @@ export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
   const unusedArch = arch === "arm64" ? "x64" : "arm64";
   return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/node-pty/prebuilds/darwin-${unusedArch}/**/*`];
 }
+
+// A universal app ships both halves of every per-architecture native payload
+// (`*-darwin-arm64/` packages, `prebuilds/darwin-x64/`, loader-adjacent
+// `*.darwin-arm64.node` copies), and loaders pick one by process.arch. Both
+// slices carry those thin binaries byte-for-byte, which @electron/universal
+// rejects unless they match x64ArchFiles. Only paths that name one darwin
+// architecture match, so modules rebuilt per slice still get merged with lipo.
+export const MAC_UNIVERSAL_SINGLE_ARCH_FILES =
+  "**/node_modules/**/{*darwin-{arm64,x64}/**,*.darwin-{arm64,x64}.node}";
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer then
 // extracts a handful of large archives instead of thousands of small files,
@@ -1159,6 +1196,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
     to: "node_modules/@cursor",
@@ -1717,9 +1755,14 @@ export function createStagePatchedDependencies(
   dependencies: Record<string, unknown>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(patchedDependencies).filter(([patchKey]) =>
-      Object.hasOwn(dependencies, getPatchedDependencyPackageName(patchKey)),
-    ),
+    Object.entries(patchedDependencies).filter(([patchKey]) => {
+      const name = getPatchedDependencyPackageName(patchKey);
+      // The Cua SDK's transitive loader needs the ASAR path fix too.
+      return (
+        Object.hasOwn(dependencies, name) ||
+        (name === "@ubjs/node" && Object.hasOwn(dependencies, "@trycua/cua-driver"))
+      );
+    }),
   );
 }
 
@@ -1752,6 +1795,9 @@ const BuildEnvConfig = Config.all({
   skipBuild: Config.Boolean("GOAT_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
   keepStage: Config.Boolean("GOAT_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.Boolean("GOAT_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
+  computerUseHelper: Config.Boolean("GOAT_DESKTOP_COMPUTER_USE_HELPER").pipe(
+    Config.withDefault(false),
+  ),
   macPasskeys: Config.Boolean("GOAT_DESKTOP_MAC_PASSKEYS").pipe(Config.withDefault(false)),
   verbose: Config.Boolean("GOAT_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.Boolean("GOAT_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
@@ -1850,6 +1896,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
+  const computerUseHelper = resolveBooleanFlag(
+    input.computerUseHelper ?? Option.none(),
+    env.computerUseHelper,
+  );
+  const helperRefusal = computerUseHelper && computerUseHelperRefusal({ platform, signed });
+  if (helperRefusal) return yield* new CuaDriverArtifactError({ message: helperRefusal });
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
@@ -1894,6 +1946,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     keepStage,
     signed,
+    computerUseHelper,
     macPasskeys: env.macPasskeys,
     verbose,
     mockUpdates,
@@ -2241,7 +2294,8 @@ export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(fu
       ),
       lipo:
         arch === "universal"
-          ? desktopBuildProbeSucceeds(ChildProcess.make("lipo", ["-version"]), "lipo")
+          ? // Command Line Tools' lipo rejects -version; xcrun finds it in either toolchain.
+            desktopBuildProbeSucceeds(ChildProcess.make("xcrun", ["--find", "lipo"]), "lipo")
           : Effect.succeed(true),
     },
     { concurrency: "unbounded" },
@@ -2274,7 +2328,7 @@ function windowsVswherePrerequisiteScript(arch: typeof BuildArch.Type): string {
 }
 
 export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBuild")(
-  function* (input: { readonly arch: typeof BuildArch.Type; readonly bundlesWslRuntime: boolean }) {
+  function* (input: { readonly arch: typeof BuildArch.Type }) {
     const rustTarget = resolveResourceMonitorRustTargets("win", input.arch)[0]!;
     const reuseResourceMonitor = yield* Config.Boolean("GOAT_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
       Config.withDefault(false),
@@ -2301,9 +2355,7 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
               ]),
               "Visual Studio Build Tools",
             ),
-        tar: input.bundlesWslRuntime
-          ? desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar")
-          : Effect.succeed(true),
+        tar: desktopBuildProbeSucceeds(ChildProcess.make("tar.exe", ["--version"]), "tar"),
       },
       { concurrency: "unbounded" },
     );
@@ -2315,51 +2367,6 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
     }
   },
 );
-
-function trimTrailingSeparators(value: string): string {
-  let end = value.length;
-  while (end > 1 && (value[end - 1] === "/" || value[end - 1] === "\\")) end -= 1;
-  return value.slice(0, end);
-}
-
-/**
- * The share is the highest real directory on a UNC path: `\\server` on its own
- * is not one, so the ancestor walk must stop there.
- */
-function uncShareRootLength(value: string): number {
-  const isUnc = value.startsWith("\\\\") || value.startsWith("//");
-  if (!isUnc) return 0;
-  const separator = /[\\/]/;
-  const serverEnd = value.slice(2).search(separator);
-  if (serverEnd < 0) return value.length;
-  const shareStart = 2 + serverEnd + 1;
-  const shareEnd = value.slice(shareStart).search(separator);
-  return shareEnd < 0 ? value.length : shareStart + shareEnd;
-}
-
-export function ancestorNodeModulesPaths(
-  startDir: string,
-  separator: string,
-): ReadonlyArray<string> {
-  // Walks with lastIndexOf rather than splitting into segments so UNC roots
-  // (\\server\share) and drive roots keep their prefix instead of being
-  // rebuilt into a relative path that silently resolves against the build cwd.
-  const paths: string[] = [];
-  let current = trimTrailingSeparators(startDir);
-  const uncRootLength = uncShareRootLength(current);
-  for (;;) {
-    const cut = Math.max(current.lastIndexOf("/"), current.lastIndexOf("\\"));
-    if (cut < 0 || (uncRootLength > 0 && cut < uncRootLength)) break;
-    const parent = cut === 0 ? current.slice(0, 1) : current.slice(0, cut);
-    if (parent === current) break;
-    paths.push(
-      parent.endsWith(separator) ? `${parent}node_modules` : `${parent}${separator}node_modules`,
-    );
-    if (cut === 0) break;
-    current = parent;
-  }
-  return paths;
-}
 
 const NativeMarkerManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -2473,6 +2480,46 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
+// Preloaded with --require, in argv and NODE_OPTIONS, before the server entry. A CommonJS preload
+// also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
+// into child Node processes. registerHooks covers import and require; dlopen is wrapped because
+// an addon loaded by path never passes through resolve.
+const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+
+const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
+// The hook lives beside the tree and is required again through argv after NODE_OPTIONS.
+const self = pathToFileURL(__filename).href;
+const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== self;
+// Fail the way a clean machine would, so optional-dependency probes still read it as missing.
+const escaped = (what, url, code) =>
+  Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context);
+    if (outside(resolved.url)) {
+      const code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
+      throw escaped(specifier, resolved.url, code);
+    }
+    return resolved;
+  },
+});
+
+const dlopen = process.dlopen;
+process.dlopen = function (module, filename, ...rest) {
+  let url;
+  try {
+    url = pathToFileURL(realpathSync(filename)).href;
+  } catch {
+    // A missing file fails in dlopen itself with its usual error.
+  }
+  if (url !== undefined && outside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
+  return dlopen.call(this, module, filename, ...rest);
+};
+`;
+
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -2493,17 +2540,12 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     });
     yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
 
-    // Guard the guard: if anything above the probe provides a node_modules, a
-    // missing dependency would resolve there and the check would pass while the
-    // packaged tree is broken.
-    for (const candidate of ancestorNodeModulesPaths(probeApp, path.sep)) {
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-        return yield* new BundleNotSelfContainedError({
-          exitCode: -1,
-          output: `Refusing to report success: ${candidate} is visible from the probe directory, so bare imports could resolve outside the packaged tree. Remove or rename it, or point TMPDIR somewhere without one.`,
-        });
-      }
-    }
+    // Node looks for node_modules in every ancestor directory, so a dependency missing from the
+    // packaged tree could resolve from whatever the machine has installed above the probe and
+    // pass this check. The hook fails any resolution that leaves the tree instead.
+    const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
+    const hookPath = path.join(probeRoot, "contain-resolution.cjs");
+    yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
 
     const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
     if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
@@ -2520,12 +2562,19 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
         // CommonJS resolution still falls back to $HOME/.node_modules,
         // $HOME/.node_libraries and the install prefix, so a globally installed
         // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", entryPoint, "--version"],
+        ["--no-global-search-paths", "--require", hookPath, entryPoint, "--version"],
         {
           cwd: probeApp,
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, NODE_PATH: "" },
+          // Replaces any inherited NODE_OPTIONS, which could preload code from outside the tree.
+          env: {
+            ...process.env,
+            NODE_PATH: "",
+            // Quoted so a path with spaces or backslashes survives NODE_OPTIONS parsing.
+            NODE_OPTIONS: `--require="${hookPath.replace(/["\\]/g, "\\$&")}"`,
+            GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
+          },
         },
       ),
       {
@@ -2790,7 +2839,7 @@ const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function
   }
 
   const tmpRoot = yield* fs.makeTempDirectoryScoped({
-    prefix: "t3code-icon-build-",
+    prefix: "goat-icon-build-",
   });
 
   const iconPngPath = path.join(stageResourcesDir, "icon.png");
@@ -2953,6 +3002,64 @@ const validateBundledClientAssets = Effect.fn("build-desktop-artifact.validateBu
   },
 );
 
+/** The sandboxed preload bundles in apps/desktop/dist-electron (see apps/desktop/vite.config.ts). */
+export const SANDBOXED_PRELOADS = [
+  "preload.cjs",
+  "preview-pick-preload.cjs",
+  "preview-pip-preload.cjs",
+  "mac-permission-preload.cjs",
+] as const;
+
+// The parameters Electron's sandbox wraps around a preload's source.
+const SANDBOXED_PRELOAD_PARAMETERS = [
+  "require",
+  "process",
+  "Buffer",
+  "global",
+  "setImmediate",
+  "clearImmediate",
+  "exports",
+  "module",
+] as const;
+
+/** Why Electron's sandbox would refuse this preload source, or undefined when it parses. */
+export function sandboxedPreloadSyntaxError(source: string): string | undefined {
+  try {
+    // Parses only: the function is never called.
+    Function(...SANDBOXED_PRELOAD_PARAMETERS, source);
+    return undefined;
+  } catch (error) {
+    return error instanceof SyntaxError ? error.message : undefined;
+  }
+}
+
+export class SandboxedPreloadInvalidError extends Schema.TaggedError<SandboxedPreloadInvalidError>()(
+  "SandboxedPreloadInvalidError",
+  { problems: Schema.Array(Schema.String) },
+) {
+  override get message(): string {
+    return [
+      "Electron's sandbox cannot load these preload bundles:",
+      ...this.problems.map((problem) => "  - " + problem),
+    ].join("\n");
+  }
+}
+
+const validateSandboxedPreloads = Effect.fn("build-desktop-artifact.validateSandboxedPreloads")(
+  function* (desktopDist: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const problems: string[] = [];
+    for (const name of SANDBOXED_PRELOADS) {
+      const problem = sandboxedPreloadSyntaxError(
+        yield* fs.readFileString(path.join(desktopDist, name)),
+      );
+      if (problem !== undefined) problems.push(name + ": " + problem);
+    }
+    if (problems.length > 0) return yield* new SandboxedPreloadInvalidError({ problems });
+  },
+);
+
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
   catalog: Record<string, string>,
@@ -2991,9 +3098,8 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   };
 });
 
-export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
-}
+import { resolveDesktopUpdateChannel } from "./lib/desktop-release-channel.ts";
+export { resolveDesktopUpdateChannel };
 
 export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
@@ -3001,22 +3107,6 @@ export function isDesktopPreviewVersion(version: string): boolean {
 
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
-}
-
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
-  return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
-  };
 }
 
 export function resolveMockUpdateServerUrl(mockUpdateServerPort: number | undefined): string {
@@ -3062,6 +3152,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
   sshRuntimeBundled = false,
+  computerUseHelperPath?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: resolveDesktopAppId(version),
@@ -3086,9 +3177,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // not inflate the loose-file count and slow NSIS installation.
     ...(platform === "win"
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
-      : {}),
+      : {
+          asarUnpack: [
+            ...(platform === "linux"
+              ? ["**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}"]
+              : []),
+            "**/node_modules/@ubjs/node-*/**/*.node",
+          ],
+        }),
     extraResources: [
-      ...DESKTOP_EXTRA_RESOURCES,
+      ...DESKTOP_EXTRA_RESOURCES.filter(
+        (resource) => platform !== "mac" || resource.to !== "cua-driver",
+      ),
+      ...(computerUseHelperPath
+        ? [{ from: computerUseHelperPath, to: "../Helpers/GOAT Computer Use.app" }]
+        : []),
       ...(sshRuntimeBundled ? SSH_RUNTIME_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
@@ -3120,6 +3223,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
       target: target === "dmg" ? [target, "zip"] : [target],
+      ...(arch === "universal" ? { x64ArchFiles: MAC_UNIVERSAL_SINGLE_ARCH_FILES } : {}),
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
@@ -3200,7 +3304,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
-      maintainer: "T3 Tools <hello@t3.codes>",
+      // The .deb Maintainer field, and the rpm vendor, which electron-builder copies from it.
+      maintainer: "GOAT <jun@lidgeai.com>",
       protocols: [
         {
           name: "GOAT",
@@ -3574,7 +3679,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
 
   const sidecarDependencies = {
-    ...input.runtimeExternalDependencies,
+    // The desktop host owns Cua; this server reaches it through telemetry IPC.
+    ...Object.fromEntries(
+      Object.entries(input.runtimeExternalDependencies).filter(
+        ([name]) => name !== "@trycua/cua-driver",
+      ),
+    ),
     ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
   };
   const sidecarPatchedDependencies = createStagePatchedDependencies(
@@ -3582,7 +3692,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
     sidecarDependencies,
   );
   const sidecarPackageJson = {
-    name: "t3code-server",
+    name: "goat-server",
     version: input.appVersion,
     private: true,
     packageManager: rootPackageJson.packageManager,
@@ -3979,13 +4089,18 @@ export const validateWindowsPackagedPayload = Effect.fn(
       );
     }
 
+    const hostPlatform = yield* HostProcess.Platform;
     const listing = yield* spawnAndCollectOutput(
-      ChildProcess.make("tar", ["-tzf", WSL_RUNTIME_ARCHIVE_NAME], {
-        cwd: resourcesDir,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
+      ChildProcess.make(
+        hostPlatform === "win32" ? windowsSystemTar() : "tar",
+        ["-tzf", WSL_RUNTIME_ARCHIVE_NAME],
+        {
+          cwd: resourcesDir,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      ),
     ).pipe(Effect.mapError(invalidWslRuntime));
     if (listing.exitCode !== 0) {
       return yield* invalidWslRuntime(
@@ -4069,10 +4184,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (hostPlatform === "win32" && options.platform === "win") {
     yield* preflightWindowsDesktopBuild({
       arch: options.arch,
-      bundlesWslRuntime: bundlesWslRuntime({
-        platform: options.platform,
-        runtimeArchivePath: options.wslRuntime,
-      }),
     });
   }
   const workspaceConfig = yield* readWorkspaceConfig();
@@ -4228,6 +4339,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   yield* applyWebBrandAssets(webAssetBrand, "apps/server/dist/client");
   yield* Effect.log(`[desktop-artifact] Applied ${webAssetBrand} web client branding.`);
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
+  yield* validateSandboxedPreloads(distDirs.desktopDist);
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
   if (options.platform !== "win") {
@@ -4281,6 +4393,32 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     arch: options.arch,
     verbose: options.verbose,
   });
+  yield* stageCuaDriverExecutable({
+    repoRoot,
+    stageRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+  });
+  // Signed mac builds always carry the Developer ID helper (#1351); --computer-use-helper adds
+  // an ad-hoc one to an unsigned build.
+  const computerUseHelper = options.computerUseHelper
+    ? yield* stageComputerUseHelper({
+        repoRoot,
+        stageRoot,
+        platform: options.platform,
+        appId: resolveDesktopAppId(appVersion),
+        signed: options.signed,
+      })
+    : signedComputerUseHelper(
+        yield* stageDesktopComputerUseHelper({
+          repoRoot,
+          output: path.join(stageRoot, "computer-use-helper"),
+          channel: resolveDesktopUpdateChannel(appVersion),
+          signed: options.platform === "mac" && options.signed,
+        }),
+        resolveDesktopAppId(appVersion),
+      );
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -4373,24 +4511,29 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     license: "MIT",
     // Required by the .deb control file. Public: the source repository is private (D-10).
     homepage: `https://github.com/${DESKTOP_UPDATE_REPOSITORY}`,
-    author: "T3 Tools",
+    // electron-builder reads the name as the Windows CompanyName and the default copyright holder.
+    author: "GOAT <jun@lidgeai.com>",
     main: "apps/desktop/dist-electron/boot.cjs",
-    build: yield* createBuildConfig(
-      options.platform,
-      options.target,
-      appVersion,
-      options.signed,
-      options.mockUpdates,
-      options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
-        ? {
-            entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-          }
-        : undefined,
-      bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
-      options.arch,
-      options.sshRuntimeArchiveDir !== undefined,
+    build: withComputerUseHelper(
+      yield* createBuildConfig(
+        options.platform,
+        options.target,
+        appVersion,
+        options.signed,
+        options.mockUpdates,
+        options.mockUpdateServerPort,
+        macPasskeySigning && macEntitlementsPath
+          ? {
+              entitlementsPath: macEntitlementsPath,
+              provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            }
+          : undefined,
+        bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
+        options.arch,
+        options.sshRuntimeArchiveDir !== undefined,
+        computerUseHelper?.bundle,
+      ),
+      computerUseHelper,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -4478,6 +4621,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // on `extendEnv` merging.
   let buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
+    ...computerUseHelperEnvironment(computerUseHelper),
   };
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
   for (const [key, value] of Object.entries(buildEnv)) {
@@ -4574,6 +4718,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       arch: options.arch,
     });
   }
+
+  if (computerUseHelper) yield* verifyEmbeddedComputerUseHelper(stageDistDir, computerUseHelper);
 
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
@@ -4680,6 +4826,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   signed: Flag.Boolean("signed").pipe(
     Flag.withDescription(
       "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: GOAT_DESKTOP_SIGNED).",
+    ),
+    Flag.optional,
+  ),
+  computerUseHelper: Flag.Boolean("computer-use-helper").pipe(
+    Flag.withDescription(
+      "Embed an ad-hoc GOAT Computer Use.app in an unsigned macOS build; signed builds always carry the Developer ID helper (env: GOAT_DESKTOP_COMPUTER_USE_HELPER).",
     ),
     Flag.optional,
   ),

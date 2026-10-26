@@ -6,12 +6,16 @@ import { type UpdateRunMachine } from "./updateEverything.logic";
 function runMachine(updatesProviders: boolean, updatesServer: boolean): UpdateRunMachine {
   const environmentId = EnvironmentId.make("environment-1");
   return {
+    key: environmentId,
     environmentId,
     label: "mini",
     updatesProviders,
     server: updatesServer
       ? { environmentId, serverLabel: "mini", selfUpdate: "boot-service", targetVersion: "0.0.50" }
       : null,
+    sshRuntime: null,
+    opencodex: false,
+    waitingForIdle: false,
     handedOffVersion: null,
     startedAt: 0,
     result: null,

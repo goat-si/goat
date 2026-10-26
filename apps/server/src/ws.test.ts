@@ -1,3 +1,4 @@
+import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
@@ -7,6 +8,10 @@ import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as CodexRouteService from "./provider/CodexRouteService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
+import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
+import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -84,9 +89,11 @@ import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -105,6 +112,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
@@ -120,10 +128,12 @@ import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -197,6 +207,31 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
     assert.equal(late?.type, "snapshot");
     if (late?.type === "snapshot") {
       assert.equal(late.config.shellRevealInFileManagerKind, "file-explorer");
+    }
+  }),
+);
+
+it.effect("sends a Defender result that missed the snapshot, once", () =>
+  Effect.gen(function* () {
+    const health = {
+      worktreesDirectory: "C:\\Users\\super\\.goat\\worktrees",
+      defender: "scanning" as const,
+    };
+    const events = yield* withLateEditorConfig(
+      snapshotConfig({ settings: { enableProviderUpdateChecks: true } as never }),
+      Stream.make(settingsUpdated({ enableProviderUpdateChecks: false })),
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.succeed(undefined as never),
+      },
+      Stream.make(health, health),
+    ).pipe(Stream.runCollect);
+
+    const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
+    assert.equal(snapshots.length, 1);
+    const [late] = snapshots;
+    if (late?.type === "snapshot") {
+      assert.deepEqual(late.config.worktreeCheckoutHealth, health);
     }
   }),
 );
@@ -387,6 +422,8 @@ it.live.each(["thread", "shell"] as const)(
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
+          getShellSnapshot: () => Effect.die("shell resume must not load a full snapshot"),
+          listActiveSubagentThreadIds: () => Effect.succeed([]),
           streamStoredEventsFrom: (
             input: Parameters<
               ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]
@@ -462,6 +499,10 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(CodexRouteService.CodexRouteService)({}),
   Layer.mock(Handoffs.Handoffs)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
+  Layer.mock(HubParity.HubParity)({}),
+  Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(OpenCodexSync.OpenCodexSync)({}),
+  Layer.mock(ChildBootstrap.OpenCodexChildBootstrap)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
@@ -484,6 +525,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
+  Layer.mock(CloudProviderAutoSetup.CloudProviderAutoSetup)({ apply: Effect.succeed([]) }),
   Layer.mock(CommandOutputHub.CommandOutputHub)({}),
   Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(DeviceService.DeviceService)({}),
@@ -525,9 +567,16 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
+  Layer.mock(StrayProcesses.StrayProcesses)({}),
+  Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
+    current: Effect.succeed(null),
+    subscribeChanges: Effect.succeed(Stream.empty),
+  }),
   Layer.mock(TerminalManager.TerminalManager)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+  Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageService.UsageService)({}),
@@ -583,7 +632,10 @@ it.effect(
           getProviders: Effect.succeed([]),
           streamChanges: Stream.never,
         }),
-        Layer.mock(UsageLimitSources.UsageLimitSources)({ streamChanges: Stream.make([]) }),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({
+          streamChanges: Stream.make([]),
+          projectProviders: (providers) => Effect.succeed(providers),
+        }),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
           resolveTargets: () => Effect.succeed([]),
         }),
@@ -623,6 +675,7 @@ it.effect(
           streamChanges: Stream.unwrap(settingsChanges),
           subscribeChanges: settingsChanges,
         }),
+        Layer.mock(PreviewSessions.PreviewSessions)({}),
       );
       const server = yield* RpcServer.makeNoSerialization(
         RpcGroup.make(WsSubscribeServerConfigRpc),

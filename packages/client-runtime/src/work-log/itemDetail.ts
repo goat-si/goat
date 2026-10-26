@@ -1,5 +1,5 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@goat/contracts";
-import { readToolOutputImage, toolOutputImages } from "@goat/shared/toolOutput";
+import { toolOutputImageBlocks, toolOutputImages } from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 
 const MAX_TEXT_BLOCK_DEPTH = 4;
@@ -12,18 +12,67 @@ function isSummarizedValue(value: unknown): boolean {
   return isRecord(value) && value.truncated === true && typeof value.summary === "string";
 }
 
-function textFromBlocks(value: unknown, depth: number): string | null {
+export interface ToolOutputLink {
+  readonly uri: string;
+  readonly name: string;
+}
+
+function firstText(...values: ReadonlyArray<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function outputLink(value: unknown): ToolOutputLink | null {
+  if (!isRecord(value)) return null;
+  if (value.type === "resource_link" && typeof value.uri === "string" && value.uri.trim()) {
+    return { uri: value.uri, name: firstText(value.title, value.name) ?? value.uri };
+  }
+  // An embedded resource with text shows that text; one without names only where it lives.
+  const resource = value.type === "resource" && isRecord(value.resource) ? value.resource : null;
+  if (resource && typeof resource.text !== "string" && typeof resource.uri === "string") {
+    return { uri: resource.uri, name: firstText(resource.title, resource.name) ?? resource.uri };
+  }
+  return null;
+}
+
+function isContentWrapper(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value).filter((key) => key !== "isError" && key !== "is_error");
+  return (
+    keys.includes("content") &&
+    keys.every((key) => key === "content" || key === "structuredContent")
+  );
+}
+
+function collectOutputLinks(value: unknown, depth: number): ToolOutputLink[] {
+  if (depth > MAX_TEXT_BLOCK_DEPTH) return [];
+  if (Array.isArray(value)) return value.flatMap((block) => collectOutputLinks(block, depth + 1));
+  const link = outputLink(value);
+  if (link) return [link];
+  return isRecord(value) && isContentWrapper(value)
+    ? collectOutputLinks(value.content, depth + 1)
+    : [];
+}
+
+function textFromBlocks(
+  value: unknown,
+  depth: number,
+  imageBlocks: ReadonlyArray<unknown>,
+  omitLinks: boolean,
+): string | null {
   if (depth > MAX_TEXT_BLOCK_DEPTH) return null;
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    const parts = value.map((block) => textFromBlocks(block, depth + 1));
+    const parts = value.map((block) => textFromBlocks(block, depth + 1, imageBlocks, omitLinks));
     return parts.every((part) => part !== null)
       ? parts.filter((part) => part !== "").join("\n")
       : null;
   }
   if (!isRecord(value)) return null;
   if (value.type === "text" && typeof value.text === "string") return value.text;
-  if (value.type === "image") return readToolOutputImage(value) ? "" : "[image]";
+  if (value.type === "image") return imageBlocks.includes(value) ? "" : "[image]";
+  if (omitLinks && outputLink(value) !== null) return "";
   if (value.type === "resource_link" && typeof value.uri === "string") return value.uri;
   if (value.type === "resource" && isRecord(value.resource)) {
     const resource = value.resource;
@@ -31,10 +80,15 @@ function textFromBlocks(value: unknown, depth: number): string | null {
     if (typeof resource.uri === "string") return resource.uri;
   }
   const keys = Object.keys(value).filter((key) => key !== "isError" && key !== "is_error");
-  if (keys.length === 1 && keys[0] === "content") return textFromBlocks(value.content, depth + 1);
+  if (keys.length === 1 && keys[0] === "content")
+    return textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);
   if (keys.length === 2 && keys.includes("content") && keys.includes("structuredContent")) {
-    const text = textFromBlocks(value.content, depth + 1);
-    return text?.trim() ? text : null;
+    const text = textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);
+    if (text?.trim()) return text;
+    // Content that was only links is fully shown by the link list; skip the JSON fallback.
+    return omitLinks && text !== null && collectOutputLinks(value.content, depth + 1).length > 0
+      ? ""
+      : null;
   }
   return null;
 }
@@ -58,10 +112,14 @@ function prettyJsonText(text: string): string {
   return documents.map((document) => JSON.stringify(document, null, 2)).join("\n\n");
 }
 
-function formatToolValue(value: unknown, hasImagePreview = false): string | null {
+function formatToolValue(
+  value: unknown,
+  hasImagePreview = false,
+  omitLinks = false,
+): string | null {
   if (value === undefined || value === null) return null;
   if (hasImagePreview && isRecord(value) && value.type === "image") return null;
-  const text = textFromBlocks(value, 0);
+  const text = textFromBlocks(value, 0, toolOutputImageBlocks(value), omitLinks);
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
   let json: string | undefined;
   try {
@@ -152,14 +210,22 @@ function commandOutputText(output: string): string {
     .join("\n");
 }
 
-export function turnItemOutputText(item: OrchestrationV2TurnItem): string | null {
+/** `omitLinks` leaves out the resource links a client lists separately with turnItemOutputLinks. */
+export function turnItemOutputText(
+  item: OrchestrationV2TurnItem,
+  options: { readonly omitLinks?: boolean } = {},
+): string | null {
   switch (item.type) {
     case "command_execution":
       return item.output?.trim() ? commandOutputText(item.output) || null : null;
     case "dynamic_tool":
       return item.outputOmitted === true
         ? null
-        : formatToolValue(item.output, item.viewedImagePath !== undefined);
+        : formatToolValue(
+            item.output,
+            item.viewedImagePath !== undefined,
+            options.omitLinks === true,
+          );
     case "file_search":
       return item.results?.length
         ? item.results
@@ -204,6 +270,11 @@ export function turnItemOutputImages(
   }));
 }
 
+export function turnItemOutputLinks(item: OrchestrationV2TurnItem): ReadonlyArray<ToolOutputLink> {
+  if (item.type !== "dynamic_tool" || item.outputOmitted === true) return [];
+  return collectOutputLinks(item.output, 0);
+}
+
 export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
   switch (item.type) {
     case "reasoning":
@@ -225,7 +296,11 @@ export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
     case "web_search":
       return (item.results?.length ?? 0) > 0 || (item.patterns?.length ?? 0) > 0;
     case "dynamic_tool":
-      return item.outputOmitted === true || toolCallHasLines(toolCallLines({ args: item.input }));
+      return (
+        item.outputOmitted === true ||
+        toolCallHasLines(toolCallLines({ args: item.input })) ||
+        turnItemOutputLinks(item).length > 0
+      );
     case "approval_request":
       return Boolean(item.prompt?.trim());
     case "user_input_request":

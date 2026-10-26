@@ -43,9 +43,11 @@ const SlackMessageEvent = Schema.Struct({
   channel_type: Schema.optionalKey(Schema.String),
   user: Schema.optionalKey(Schema.String),
   bot_id: Schema.optionalKey(Schema.String),
+  bot_profile: Schema.optionalKey(Schema.Unknown),
   subtype: Schema.optionalKey(Schema.String),
   hidden: Schema.optionalKey(Schema.Boolean),
   text: Schema.optionalKey(Schema.String),
+  blocks: Schema.optionalKey(Schema.Unknown),
   ts: Schema.optionalKey(Schema.String),
   thread_ts: Schema.optionalKey(Schema.String),
 });
@@ -132,6 +134,72 @@ const ignored = (reason: SlackIgnoredReason): SlackEventClassification => ({
 const LINK_COMMAND = /^link(?:\s+(\S+))?\s*$/i;
 const LINK_PREFIX = /^link\b/i;
 
+/** Bounds on reading a message's rich text; the payload is the sender's to shape. */
+const RICH_TEXT_MAX_NODES = 2000;
+const RICH_TEXT_MAX_CHARS = 8000;
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+const elementsOf = (value: unknown): ReadonlyArray<unknown> => {
+  const elements = asRecord(value)?.elements;
+  return Array.isArray(elements) ? elements : [];
+};
+
+/**
+ * The text of a message's `rich_text` blocks, for a message whose `text` field is empty.
+ * Sections and list items become lines; mentions, channels and emoji keep their Slack form so
+ * the bot mention is stripped like it is from `text`. Broadcasts and unknown elements are left
+ * out. Adapted from cli-jaw's src/slack/events.ts (MIT).
+ */
+function slackRichText(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return "";
+  const lines: Array<string> = [];
+  let nodes = 0;
+  const leaf = (value: unknown): string => {
+    const element = asRecord(value);
+    if (element === undefined) return "";
+    const text = (key: string) => (typeof element[key] === "string" ? element[key] : "");
+    switch (element.type) {
+      case "text":
+        return text("text");
+      case "link":
+        return text("text") || text("url");
+      case "user":
+        return isSlackId(element.user_id) ? "<@" + element.user_id + ">" : "";
+      case "channel":
+        return isSlackId(element.channel_id) ? "<#" + element.channel_id + ">" : "";
+      case "emoji":
+        return /^[a-z0-9_+'-]{1,100}$/.test(text("name")) ? ":" + text("name") + ":" : "";
+      default:
+        return "";
+    }
+  };
+  // Containers nest at most a few levels (a list of sections); recursion stays shallow.
+  const container = (value: unknown, depth: number) => {
+    if (depth > 4) return;
+    const element = asRecord(value);
+    if (element?.type === "rich_text_list") {
+      for (const item of elementsOf(element)) container(item, depth + 1);
+      return;
+    }
+    let line = "";
+    for (const child of elementsOf(element)) {
+      if (++nodes > RICH_TEXT_MAX_NODES) break;
+      line += leaf(child);
+    }
+    lines.push(line);
+  };
+  for (const block of blocks) {
+    const record = asRecord(block);
+    if (record?.type !== "rich_text") continue;
+    for (const element of elementsOf(record)) container(element, 0);
+    if (nodes > RICH_TEXT_MAX_NODES) break;
+  }
+  return lines.join("\n").slice(0, RICH_TEXT_MAX_CHARS);
+}
+
 export function classifySlackEvent(
   body: unknown,
   config: SlackClassifierConfig,
@@ -158,7 +226,14 @@ export function classifySlackEvent(
   if (Option.isNone(decodedEvent)) return ignored("unsupported_event");
   const event = decodedEvent.value;
 
-  if (event.bot_id !== undefined || event.subtype === "bot_message") return ignored("bot_message");
+  // An app with granular permissions can post with `bot_profile` and no `bot_id`.
+  if (
+    event.bot_id !== undefined ||
+    event.bot_profile !== undefined ||
+    event.subtype === "bot_message"
+  ) {
+    return ignored("bot_message");
+  }
   if (event.user === config.botUserId) return ignored("own_bot");
   if (event.subtype !== undefined) return ignored("subtype");
   if (event.hidden === true) return ignored("hidden");
@@ -183,7 +258,8 @@ export function classifySlackEvent(
   }
 
   const rootTs = threadTs ?? ts;
-  const text = stripBotMention(event.text ?? "", config.botUserId);
+  const written = event.text?.trim() ? event.text : slackRichText(event.blocks);
+  const text = stripBotMention(written, config.botUserId);
   const classified = (messageText: string): SlackClassifiedMessage => ({
     teamId,
     channelId,

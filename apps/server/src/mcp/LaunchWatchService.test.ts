@@ -1,15 +1,15 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
-  CommandId,
+  CheckpointId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  ProviderInstanceId,
+  type ThreadReplicaPayload,
   EnvironmentId,
   ProjectId,
   RunId,
   ThreadId,
-  type OrchestrationV2Command,
-  type OrchestrationV2ServerCommand,
-  type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -17,292 +17,34 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerConfig from "../config.ts";
-import {
-  OrchestratorCommandPreviouslyRejectedError,
-  OrchestratorDispatchError,
-} from "../orchestration-v2/Orchestrator.ts";
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
-import * as CompletionWebhook from "./completionWebhook.ts";
 import type { LaunchWatch, LaunchWatchWebhookTarget } from "./launchWatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 
-const launcher = ThreadId.make("launcher");
-const target = ThreadId.make("target");
-const projectId = ProjectId.make("project");
-const run1 = RunId.make("run-1");
-const run2 = RunId.make("run-2");
-
-type Dispatch = Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
-type WaitAnswer = Effect.Effect<
-  ThreadManagementService.ThreadManagementWaitResult,
-  ThreadManagementService.ThreadManagementError
->;
-
-/** Everything the service sees of the world, under the test's control. */
-interface World {
-  readonly shells: Map<string, Partial<OrchestrationV2ThreadShell>>;
-  /** Answers to local waits, taken one per wait. */
-  readonly waits: Queue.Queue<WaitAnswer>;
-  readonly waitCalls: Array<ThreadManagementService.ThreadManagementWaitInput>;
-  waitHandler?: (input: ThreadManagementService.ThreadManagementWaitInput) => WaitAnswer;
-  /** One entry per wait that started. */
-  readonly waitStarted: Queue.Queue<RunId | undefined>;
-  /** One entry per read of the launcher's shell. */
-  readonly launcherReads: Queue.Queue<void>;
-  readonly escalationMessages: Set<string>;
-  readonly escalationReads: Array<ReadonlyArray<string>>;
-  readonly assistantMessages: Array<{ runId: RunId; text: string }>;
-  providerThreads: Array<{ cloudTask?: { attach?: string; tracking: string } }>;
-  requests: Array<{ id: string; status: string; kind: string }>;
-  subagents: Array<{ origin: string; childThreadId: ThreadId }>;
-  /** Failures for the next dispatches, used up in order. */
-  readonly dispatchFailures: Array<"transient" | "refused">;
-  /**
-   * Command ids the orchestrator recorded as rejected. Like the real receipt
-   * store, a dispatch that fails is recorded, and its id is refused again.
-   */
-  readonly rejected: Set<string>;
-  readonly attempts: Array<Dispatch>;
-  readonly delivered: Queue.Queue<Dispatch>;
-  readonly deliveredLog: Array<Dispatch>;
-  hostCall: (
-    call: SshRemoteDispatch.SshHostToolCall,
-  ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
-  readonly hostCalls: Array<{
-    call: SshRemoteDispatch.SshHostToolCall;
-    ceiling: string;
-    at: number;
-  }>;
-  /** Reports handed to the completion webhook, with the watch they came from. */
-  readonly webhookReports: Array<{
-    watch: LaunchWatch;
-    report: CompletionWebhook.CompletionWebhookReport;
-  }>;
-  webhookNotify?: Effect.Effect<void>;
-  /** What the completion webhook answers when asked to watch an outside launch. */
-  webhookWatchesExternal: boolean;
-  /** Whether the completion webhook still posts a watch's reports. */
-  webhookWants: boolean;
-  /** Webhook targets whose kept secret the service released. */
-  readonly releasedTargets: Array<LaunchWatchWebhookTarget | null>;
-  webhookRelease?: Effect.Effect<void>;
-  /** One entry per time the service asked whether the webhook still posts a watch's reports. */
-  readonly wantsAsked: Queue.Queue<void>;
-}
-
-const makeWorld = Effect.gen(function* () {
-  const world: World = {
-    shells: new Map([
-      [launcher, { id: launcher, runtimeMode: "full-access", archivedAt: null, deletedAt: null }],
-      [
-        target,
-        {
-          id: target,
-          projectId,
-          title: "Fix the flake",
-          branch: "goat/fix",
-          worktreePath: "/work/fix",
-          archivedAt: null,
-          deletedAt: null,
-          creationSource: "mcp",
-          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: target },
-        },
-      ],
-    ]),
-    waits: yield* Queue.unbounded<WaitAnswer>(),
-    waitCalls: [],
-    waitStarted: yield* Queue.unbounded<RunId | undefined>(),
-    launcherReads: yield* Queue.unbounded<void>(),
-    escalationMessages: new Set(),
-    escalationReads: [],
-    assistantMessages: [],
-    providerThreads: [],
-    requests: [],
-    subagents: [],
-    dispatchFailures: [],
-    rejected: new Set(),
-    attempts: [],
-    delivered: yield* Queue.unbounded<Dispatch>(),
-    deliveredLog: [],
-    hostCall: (call) => Effect.die(new Error("unexpected host call " + call.tool)),
-    hostCalls: [],
-    webhookReports: [],
-    webhookWatchesExternal: true,
-    webhookWants: true,
-    releasedTargets: [],
-    wantsAsked: yield* Queue.unbounded<void>(),
-  };
-  return world;
-});
-
-const dispatchIn = (world: World, command: OrchestrationV2ServerCommand) =>
-  Effect.suspend(() => {
-    const dispatch = command as Dispatch;
-    world.attempts.push(dispatch);
-    const commandId = CommandId.make(dispatch.commandId);
-    if (world.rejected.has(commandId)) {
-      return Effect.fail(
-        new OrchestratorCommandPreviouslyRejectedError({
-          commandId,
-          commandType: dispatch.type,
-          detail: "rejected before",
-        }),
-      );
-    }
-    const failure = world.dispatchFailures.shift();
-    if (failure !== undefined) {
-      world.rejected.add(commandId);
-      return Effect.fail(
-        failure === "transient"
-          ? new OrchestratorDispatchError({ commandId, commandType: dispatch.type })
-          : new OrchestratorCommandPreviouslyRejectedError({
-              commandId,
-              commandType: dispatch.type,
-              detail: "refused",
-            }),
-      );
-    }
-    world.deliveredLog.push(dispatch);
-    return Queue.offer(world.delivered, dispatch).pipe(Effect.as({} as never));
-  });
-
-const layerFor = (world: World, baseDir: string) =>
-  LaunchWatchService.layerWithoutDependencies.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getThreadShell: (threadId) =>
-            (threadId === launcher
-              ? Queue.offer(world.launcherReads, undefined)
-              : Effect.void
-            ).pipe(
-              Effect.as((world.shells.get(threadId) ?? null) as OrchestrationV2ThreadShell | null),
-            ),
-          waitForThread: (input) =>
-            Effect.suspend(() => {
-              world.waitCalls.push(input);
-              return Queue.offer(world.waitStarted, input.runId).pipe(
-                Effect.andThen(
-                  world.waitHandler?.(input) ?? Queue.take(world.waits).pipe(Effect.flatten),
-                ),
-              );
-            }),
-          getThreadRecords: (_threadId, _fields, filter) =>
-            Effect.sync(() => {
-              if (filter?.messageIds !== undefined) {
-                world.escalationReads.push(filter.messageIds);
-                return {
-                  messages: filter.messageIds
-                    .filter((id) => world.escalationMessages.has(id))
-                    .map((id) => ({ id })),
-                } as never;
-              }
-              return {
-                thread: {},
-                messages: world.assistantMessages
-                  .filter((message) => filter?.messageRunIds?.includes(message.runId) ?? true)
-                  .map((message) => ({ ...message, role: "assistant" })),
-                runtimeRequests: world.requests,
-                subagents: world.subagents,
-                providerThreads: world.providerThreads,
-              } as never;
-            }),
-          dispatch: (command) => dispatchIn(world, command),
-        }),
-        Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-          callHostTool: (call, authorize) =>
-            authorize.pipe(
-              Effect.flatMap((ceiling) =>
-                Clock.currentTimeMillis.pipe(
-                  Effect.flatMap((at) => {
-                    world.hostCalls.push({ call, ceiling, at });
-                    return world.hostCall(call);
-                  }),
-                ),
-              ),
-            ),
-        }),
-        Layer.mock(CompletionWebhook.CompletionWebhook)({
-          notify: (watch, report) =>
-            Effect.suspend(() => {
-              world.webhookReports.push({ watch, report });
-              return world.webhookNotify ?? Effect.void;
-            }),
-          watchesExternal: () => Effect.sync(() => world.webhookWatchesExternal),
-          wants: () => Queue.offer(world.wantsAsked, undefined).pipe(Effect.as(world.webhookWants)),
-          release: (target) =>
-            Effect.suspend(() => {
-              world.releasedTargets.push(target);
-              return world.webhookRelease ?? Effect.void;
-            }),
-        }),
-        ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
-        NodeCrypto.layer,
-        NodeServices.layer,
-      ),
-    ),
-  );
-
-/** Runs body against a fresh service over baseDir; leaving it stops the service like a shutdown. */
-const withService = <A, E>(
-  world: World,
-  baseDir: string,
-  body: (service: LaunchWatchService.LaunchWatchServiceShape) => Effect.Effect<A, E>,
-) =>
-  Effect.gen(function* () {
-    const service = yield* LaunchWatchService.LaunchWatchService;
-    return yield* body(service);
-  }).pipe(Effect.provide(layerFor(world, baseDir)));
-
-const tempDir = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.makeTempDirectoryScoped({ prefix: "goat-launch-watch-" });
-}).pipe(Effect.provide(NodeServices.layer));
-
-/**
- * Advances the test clock until milestone arrives, for followers sleeping
- * through backoff or a retry pause.
- */
-const advanceUntil = <A, E>(milestone: Effect.Effect<A, E>) =>
-  Effect.raceFirst(
-    milestone,
-    Effect.forever(TestClock.adjust("10 seconds").pipe(Effect.andThen(Effect.yieldNow))),
-  );
-
-const finished = (runId: RunId, status: "completed" | "failed" = "completed"): WaitAnswer =>
-  Effect.succeed({ threadId: target, run: { id: runId, status } as never, timedOut: false });
-
-const stillRunning = (runId: RunId): WaitAnswer =>
-  Effect.succeed({
-    threadId: target,
-    run: { id: runId, status: "running" } as never,
-    timedOut: true,
-  });
-
-const local = { launcherThreadId: launcher, host: null, threadId: target } as const;
-
-const watchLocal = (service: LaunchWatchService.LaunchWatchServiceShape, runId: RunId | null) =>
-  service.register({ ...local, projectId, title: "Fix the flake", runId });
-
-const watchRemote = (service: LaunchWatchService.LaunchWatchServiceShape, runId: RunId) =>
-  service.register({
-    launcherThreadId: launcher,
-    host: " box ",
-    threadId: target,
-    projectId: null,
-    title: null,
-    runId,
-  });
-
-const pendingRuns = (service: LaunchWatchService.LaunchWatchServiceShape) =>
-  service.list(launcher).pipe(Effect.map(([watch]) => watch?.pendingRuns ?? null));
+import {
+  launcher,
+  target,
+  projectId,
+  run1,
+  run2,
+  type WaitAnswer,
+  type World,
+  makeWorld,
+  withService,
+  tempDir,
+  advanceUntil,
+  finished,
+  stillRunning,
+  local,
+  watchLocal,
+  watchRemote,
+  pendingRuns,
+} from "./LaunchWatchService.testkit.ts";
 
 describe("LaunchWatchService", () => {
   it.effect("wakes the launcher once when the followed run ends, with its answer and branch", () =>
@@ -442,7 +184,7 @@ describe("LaunchWatchService", () => {
           yield* Queue.offer(world.waits, stillRunning(run1));
           const first = yield* Queue.take(world.delivered);
           expect(first.text).toContain("waiting on a user input request (question-1)");
-          expect(first.text).toContain("goat_pending_request_read");
+          expect(first.text).toContain("pending_request.read");
           expect(first.notification?.outcome).toBe("updated");
 
           // The same question at the next tick is not news; an approval is, and it says
@@ -1069,6 +811,359 @@ describe("LaunchWatchService", () => {
     }),
   );
 
+  it.effect("tells the launcher why a run failed preparing its workspace, with the log", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      world.runs.push({
+        id: run1,
+        status: "failed",
+        workspacePreparation: { type: "worktree", baseRef: "dev" },
+      });
+      world.turnItems.push({
+        type: "error",
+        status: "failed",
+        runId: run1,
+        ordinal: 2,
+        failure: {
+          class: "unknown",
+          code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+          retryable: true,
+          message:
+            "Workspace preparation failed during provision worktree: Git made no progress for 2m 0s. It had already stalled once and was retried.",
+          log: "Fetching dev from its remote.\nReceiving objects:  45% (900/2000)",
+        },
+      });
+      yield* Queue.offer(world.waits, finished(run1, "failed"));
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain(
+            'Launched thread "Fix the flake" (threadId target, this environment) failed while GOAT prepared its workspace, in run run-1 (error class unknown, retryable).',
+          );
+          expect(wake.text).toContain("It had already stalled once and was retried.");
+          expect(wake.text).toContain(
+            "Preparation log (last lines, redacted):\nFetching dev from its remote.\nReceiving objects:  45% (900/2000)",
+          );
+          expect(wake.text).toContain("Suggested action: Git on this machine was slow or stuck");
+          expect(wake.text).toContain('"thread.retry", args: {threadId: "target"}}');
+          expect(wake.notification).toMatchObject({
+            outcome: "failed",
+            summary: 'Launched thread "Fix the flake" failed preparing its workspace',
+          });
+          expect(wake.notification?.detail).toContain("Receiving objects:  45%");
+        }),
+      );
+    }),
+  );
+
+  /** The followed run ended at `at`, as its wait observes it. */
+  const endedAt = (at: number, status: "failed" | "completed" = "completed"): WaitAnswer =>
+    Effect.succeed({
+      threadId: target,
+      run: { id: run1, status, completedAt: DateTime.makeUnsafe(at) } as never,
+      timedOut: false,
+    });
+
+  /** A run that ended at `at`, as the follower's details read it. */
+  const runEndedAt = (world: World, at: number, status: "failed" | "completed") => {
+    world.runs.splice(0, world.runs.length, {
+      id: run1,
+      status,
+      completedAt: DateTime.makeUnsafe(at),
+      ...(status === "failed"
+        ? { workspacePreparation: { type: "worktree", baseRef: "dev" } }
+        : {}),
+    });
+    world.turnItems.splice(
+      0,
+      world.turnItems.length,
+      ...(status === "failed"
+        ? [
+            {
+              type: "error",
+              status: "failed",
+              runId: run1,
+              ordinal: 2,
+              failure: {
+                class: "unknown",
+                code: ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+                retryable: true,
+                message: "Workspace preparation failed during provision worktree: timed out.",
+              },
+            },
+          ]
+        : []),
+    );
+  };
+
+  /** Answers the follower's next wait, returning once it holds the lock to apply the answer. */
+  const answerAndApply = (world: World, answer: WaitAnswer) =>
+    Effect.gen(function* () {
+      expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+      yield* Queue.takeAll(world.launcherReads);
+      yield* Queue.offer(world.waits, answer);
+      yield* Queue.take(world.launcherReads);
+    });
+
+  it.effect("reports each end of a run retried in place once, however retries repeat (#978)", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      runEndedAt(world, 1_000, "failed");
+      const retried = { host: null, threadId: target, runId: run1 };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          yield* Queue.offer(world.waits, endedAt(1_000, "failed"));
+          const failure = yield* Queue.take(world.delivered);
+          expect(failure.text).toContain("failed while GOAT prepared its workspace, in run run-1");
+          expect(yield* pendingRuns(service)).toEqual([]);
+
+          // The retry moves the same run back to preparing; a repeat of it while the run is
+          // owed (a replay, or an answer that the run is preparing already) changes nothing.
+          yield* service.rearmRetried(retried);
+          yield* service.rearmRetried(retried);
+          expect(yield* pendingRuns(service)).toEqual([run1]);
+          runEndedAt(world, 2_000, "completed");
+          world.assistantMessages.push({ runId: run1, text: "Prepared on the second try." });
+          yield* Queue.offer(world.waits, endedAt(2_000));
+          const completed = yield* Queue.take(world.delivered);
+          expect(completed.text).toContain("finished run run-1 with status completed");
+          expect(completed.text).toContain("Prepared on the second try.");
+          expect(completed.commandId).not.toBe(failure.commandId);
+          expect(completed.messageId).not.toBe(failure.messageId);
+          // The repeat is followed once more, to the same end, which is not reported again.
+          yield* answerAndApply(world, endedAt(2_000));
+
+          // A repeat after the end was reported finds that end again and settles quietly.
+          yield* service.rearmRetried(retried);
+          yield* answerAndApply(world, endedAt(2_000));
+
+          // A later retry still reports its own end.
+          yield* service.rearmRetried(retried);
+          runEndedAt(world, 3_000, "failed");
+          world.assistantMessages.length = 0;
+          yield* Queue.offer(world.waits, endedAt(3_000, "failed"));
+          const again = yield* Queue.take(world.delivered);
+          expect(again.text).toContain("failed while GOAT prepared its workspace, in run run-1");
+          expect([failure.commandId, completed.commandId]).not.toContain(again.commandId);
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(3);
+      // Each end reaches the completion webhook once too, which no command receipt dedupes.
+      expect(world.webhookReports.map(({ report }) => report.status)).toEqual([
+        "failed",
+        "completed",
+        "failed",
+      ]);
+      expect(world.waitCalls).toHaveLength(5);
+    }),
+  );
+
+  it.effect("reports a failure read before a retry and then the retried run's own end", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      runEndedAt(world, 1_000, "failed");
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+          // The retry lands while the follower holds the failure it is about to report.
+          yield* service.rearmRetried({ host: null, threadId: target, runId: run1 });
+          yield* Queue.offer(world.waits, endedAt(1_000, "failed"));
+          const failure = yield* Queue.take(world.delivered);
+          expect(failure.text).toContain("failed while GOAT prepared its workspace");
+          runEndedAt(world, 2_000, "completed");
+          yield* Queue.offer(world.waits, endedAt(2_000));
+          const completed = yield* Queue.take(world.delivered);
+          expect(completed.text).toContain("finished run run-1 with status completed");
+          expect(completed.commandId).not.toBe(failure.commandId);
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(2);
+    }),
+  );
+
+  it.effect("follows a retry that lands while the follower re-reads an end it reported", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      runEndedAt(world, 1_000, "failed");
+      const retried = { host: null, threadId: target, runId: run1 };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          yield* Queue.offer(world.waits, endedAt(1_000, "failed"));
+          yield* Queue.take(world.delivered);
+          // A repeated request re-arms the run, and the follower reads the reported end again.
+          yield* service.rearmRetried(retried);
+          expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+          // A real retry lands before that read is applied.
+          yield* service.rearmRetried(retried);
+          yield* Queue.takeAll(world.launcherReads);
+          yield* Queue.offer(world.waits, endedAt(1_000, "failed"));
+          yield* Queue.take(world.launcherReads);
+          expect(yield* pendingRuns(service)).toEqual([run1]);
+          runEndedAt(world, 2_000, "completed");
+          yield* Queue.offer(world.waits, endedAt(2_000));
+          const completed = yield* Queue.take(world.delivered);
+          expect(completed.text).toContain("finished run run-1 with status completed");
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(2);
+    }),
+  );
+
+  it.effect("reports each end of a remote retried run by the end its wait observed", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const ends = [
+        { status: "failed", completedAt: "2026-10-24T00:00:01.000Z" },
+        { status: "failed", completedAt: "2026-10-24T00:00:02.000Z" },
+        { status: "completed", completedAt: "2026-10-24T00:00:03.000Z" },
+      ] as const;
+      let waits = 0;
+      world.hostCall = (call) => {
+        switch (call.tool) {
+          case "goat_thread_wait": {
+            const observed = ends[waits] ?? ends[2];
+            waits += 1;
+            return Effect.succeed({ threadId: target, runId: run1, ...observed, timedOut: false });
+          }
+          case "goat_thread_read": {
+            // A retry fails the run again before the first read, so that read already shows the
+            // second end; later reads show the end their wait saw.
+            const latest = ends[Math.max(1, waits - 1)] ?? ends[2];
+            return Effect.succeed(
+              remoteRead({
+                itemCount: 1,
+                recentRuns: [
+                  {
+                    runId: run1,
+                    ordinal: 1,
+                    status: latest.status,
+                    providerInstanceId: "codex",
+                    model: "gpt-5",
+                    requestedAt: "2026-10-24T00:00:00.000Z",
+                    startedAt: null,
+                    completedAt: latest.completedAt,
+                  },
+                ],
+              }),
+            );
+          }
+          case "goat_thread_status":
+            return Effect.succeed({
+              threadId: target,
+              title: "Remote fix",
+              phase: "completed",
+              terminal: true,
+              run: { runId: run1, status: "completed" },
+              lastError: null,
+              lastErrorClass: null,
+            });
+          default:
+            return Effect.die(new Error("unexpected " + call.tool));
+        }
+      };
+      const retried = { host: "box", threadId: target, runId: run1 };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          const first = yield* Queue.take(world.delivered);
+          yield* service.rearmRetried(retried);
+          const second = yield* Queue.take(world.delivered);
+          yield* service.rearmRetried(retried);
+          const third = yield* Queue.take(world.delivered);
+          const wakes = [first, second, third];
+          expect(wakes.map((wake) => /with status (\w+)/.exec(wake.text)?.[1])).toEqual([
+            "failed",
+            "failed",
+            "completed",
+          ]);
+          expect(new Set(wakes.map((wake) => wake.commandId)).size).toBe(3);
+        }),
+      );
+    }),
+  );
+
+  it.effect.each([
+    {
+      host: "an older host",
+      status: {
+        lastError:
+          "Workspace preparation failed during provision worktree: Git command failed in GitVcsDriver.fetchRemote (/repo): Git command timed out.",
+        lastErrorClass: "validation_error",
+      },
+      retry: "Retry it from a GOAT client connected to box",
+    },
+    {
+      host: "an updated host",
+      status: {
+        lastError: "Workspace preparation failed during provision worktree: timed out.",
+        lastErrorClass: "unknown",
+        failure: {
+          runId: run1,
+          stage: "workspace_preparation",
+          errorClass: "unknown",
+          retryable: true,
+          message: "Workspace preparation failed during provision worktree: timed out.",
+          log: "Fetching dev from its remote.",
+          canRetry: true,
+        },
+      },
+      retry:
+        'Retry with goat_call {path: "thread.retry", args: {threadId: "target", host: "box"}}, and this watch reports the retried run. A Retry pressed in that thread on box is not reported here.',
+    },
+  ])("reports a remote run that failed preparing its workspace, from $host", (example) =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      world.hostCall = (call) => {
+        switch (call.tool) {
+          case "goat_thread_wait":
+            return Effect.succeed({
+              threadId: target,
+              runId: run1,
+              status: "failed",
+              timedOut: false,
+            });
+          case "goat_thread_read":
+            return Effect.succeed(remoteRead({ itemCount: 1 }));
+          case "goat_thread_status":
+            return Effect.succeed({
+              threadId: target,
+              title: "Remote fix",
+              phase: "failed",
+              terminal: true,
+              run: { runId: run1, status: "failed" },
+              ...example.status,
+            });
+          default:
+            return Effect.die(new Error("unexpected " + call.tool));
+        }
+      };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain(
+            "(threadId target, host box) failed while GOAT prepared its workspace, in run run-1",
+          );
+          expect(wake.text).toContain(example.status.lastError);
+          expect(wake.text).toContain("Suggested action: Git on box was slow or stuck");
+          expect(wake.text).toContain(example.retry);
+          expect(wake.notification?.outcome).toBe("failed");
+        }),
+      );
+      expect(world.hostCalls.every(({ call }) => call.writes === false)).toBe(true);
+    }),
+  );
+
   it.effect("reads a short remote transcript from its start", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
@@ -1537,6 +1632,7 @@ const remoteRead = (input: {
   readonly itemCount: number;
   readonly items?: ReadonlyArray<unknown>;
   readonly nextPosition?: number;
+  readonly recentRuns?: ReadonlyArray<unknown>;
 }) => ({
   thread: {
     threadId: target,
@@ -1568,7 +1664,7 @@ const remoteRead = (input: {
     createdAt: "2026-10-12T00:00:00.000Z",
     updatedAt: "2026-10-12T00:00:00.000Z",
   },
-  recentRuns: [],
+  recentRuns: input.recentRuns ?? [],
   items: input.items ?? [],
   nextPosition: input.nextPosition ?? null,
   hasMore: input.nextPosition !== undefined,
@@ -1945,5 +2041,763 @@ describe("LaunchWatchService launcherless watches", () => {
         expect.objectContaining({ pendingRuns: [], reportedRuns: [run1] }),
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+const watchReplica = (now: number): ThreadReplicaPayload => {
+  const context = "Checkpoint context";
+  const bytes = Buffer.from("fixture bundle");
+  return {
+    sourceEnvironmentId: EnvironmentId.make("box-env"),
+    sourceThreadId: target,
+    runId: run1,
+    checkpointId: CheckpointId.make("cp-1"),
+    repositoryKey: "github.com/example/recovery",
+    capturedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+    headOid: "a".repeat(40),
+    commitOid: "b".repeat(40),
+    replicaRef: "refs/goat/replicas/watch/0",
+    bytes: bytes.length,
+    sha256: ThreadReplicaService.replicaDigest(bytes),
+    contextSha256: ThreadReplicaService.replicaDigest(context),
+    contextKind: "bounded_conversation",
+    context,
+    bundleBase64: bytes.toString("base64"),
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+  };
+};
+const replicaWatchInput = {
+  launcherThreadId: launcher,
+  host: "box",
+  threadId: target,
+  projectId: null,
+  title: "Recover me",
+  runId: run1,
+} as const;
+const recoveryInput = {
+  ...replicaWatchInput,
+  fromReplicatedCheckpoint: true,
+  expectedRunId: run1,
+  destinationHost: "destination",
+  destinationProjectId: projectId,
+} as const;
+const recoveryGrant = Effect.succeed({
+  runtimeMode: "full-access",
+  interactionMode: "default",
+} as const);
+
+describe("ordinary watch replicas", () => {
+  it.effect.each(["profiles", "pressure"] as const)(
+    "blocks fresh watch recovery before reservation for %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica }
+              : call.tool === "goat_thread_checkpoint_restore"
+                ? {
+                    operationId: call.arguments.operationId,
+                    status: "launched",
+                    threadId: "replacement",
+                    runId: "replacement-run",
+                  }
+                : call.tool === "goat_thread_wait"
+                  ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                  : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeDefined();
+            if (reason === "profiles")
+              yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            else world.pressureBlocked = true;
+            const result = yield* service.recover(recoveryInput, recoveryGrant).pipe(Effect.result);
+            expect(result._tag).toBe("Failure");
+            expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_restore"),
+            ).toHaveLength(0);
+          }),
+        );
+      }),
+  );
+
+  it.effect.each(["disabled", "authority_changed", "profiles_enabled"] as const)(
+    "does not publish an in-flight copy after %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        world.hostCall = (call) =>
+          call.tool === "goat_thread_checkpoint_capture"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ status: "captured", replica }),
+              )
+            : Effect.succeed(
+                call.tool === "goat_thread_wait"
+                  ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                  : remoteRead({ itemCount: 0 }),
+              );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(entered);
+            if (reason === "disabled")
+              yield* service.register({
+                ...replicaWatchInput,
+                runId: null,
+                checkpointReplication: "off",
+              });
+            else if (reason === "profiles_enabled")
+              yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            else world.shells.set(launcher, { ...world.shells.get(launcher), runtimeMode: "auto" });
+            yield* Deferred.succeed(release, undefined);
+            yield* Queue.take(world.delivered);
+            const saved = yield* service.find(replicaWatchInput);
+            expect(saved?.replica).toBeUndefined();
+            expect(saved?.replicaAttempt?.reason).toBe(
+              reason === "profiles_enabled" ? "disabled" : reason,
+            );
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+          }),
+        );
+      }),
+  );
+
+  it.effect("resumes an interrupted active follower after a definite destination refusal", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      const activeWait = yield* Deferred.make<void>();
+      let activeWaitCount = 0;
+      world.hostCall = (call) => {
+        if (call.tool === "goat_thread_checkpoint_restore")
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "refused",
+            threadId: "unused",
+            runId: null,
+            reason: "project_missing",
+          });
+        if (call.tool === "goat_thread_checkpoint_capture")
+          return Effect.succeed({
+            status: "captured",
+            replica: { ...replica, runId: call.arguments.runId },
+          });
+        if (call.tool === "goat_thread_wait") {
+          const currentRun = call.arguments.runId;
+          if (currentRun === run2 && ++activeWaitCount === 1)
+            return Deferred.succeed(activeWait, undefined).pipe(Effect.andThen(Effect.never));
+          return Effect.succeed({
+            threadId: target,
+            runId: currentRun,
+            status: "completed",
+            timedOut: false,
+          });
+        }
+        return Effect.succeed(remoteRead({ itemCount: 0 }));
+      };
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Queue.take(world.delivered);
+          yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+          yield* Deferred.await(activeWait);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("refused");
+          const resumed = yield* Queue.take(world.delivered);
+          expect(resumed.text).toContain("finished run run-2");
+          expect(activeWaitCount).toBe(2);
+          expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+        }),
+      );
+    }),
+  );
+
+  it.effect("does not repeat a capture claimed before a restart", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const entered = yield* Deferred.make<void>();
+      world.hostCall = (call) =>
+        call.tool === "goat_thread_checkpoint_capture"
+          ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(
+              call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+            );
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Deferred.await(entered);
+          expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+            "capturing",
+          );
+        }),
+      );
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.find(replicaWatchInput);
+          yield* Queue.take(world.delivered);
+          expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+            "capture_interrupted",
+          );
+          expect(
+            world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+          ).toHaveLength(1);
+        }),
+      );
+    }),
+  );
+
+  it.effect(
+    "allows correcting a definitely refused destination without losing report routing",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const operations: string[] = [];
+        world.hostCall = (call) => {
+          if (call.tool === "goat_thread_checkpoint_restore") {
+            operations.push(String(call.arguments.operationId));
+            return Effect.succeed({
+              operationId: call.arguments.operationId,
+              status: call.arguments.projectId === "missing" ? "refused" : "launched",
+              threadId: "replacement",
+              runId: call.arguments.projectId === "missing" ? null : "replacement-run",
+              reason: "project_missing",
+            });
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt")
+            return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Effect.succeed({ status: "captured", replica });
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+              notifyWebhook: true,
+            });
+            yield* Queue.take(world.delivered);
+            expect(
+              (yield* service.recover(
+                { ...recoveryInput, destinationProjectId: ProjectId.make("missing") },
+                recoveryGrant,
+              )).status,
+            ).toBe("refused");
+            expect((yield* service.find(replicaWatchInput))?.recovery).toBeUndefined();
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            expect(new Set(operations).size).toBe(2);
+            expect(
+              (yield* service.find({
+                launcherThreadId: launcher,
+                host: "destination",
+                threadId: ThreadId.make("replacement"),
+              }))?.notifyWebhook,
+            ).toBe(true);
+            expect((yield* service.find(replicaWatchInput))?.notifyWebhook).toBe(false);
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "an older unknown reply cannot downgrade a known launch, including offline replay",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const sent = yield* Deferred.make<string>();
+        const release = yield* Deferred.make<void>();
+        let destinationDown = false;
+        let mutationCalls = 0;
+        world.hostCall = (call) => {
+          if (
+            call.tool === "goat_thread_checkpoint_restore" ||
+            call.tool === "goat_thread_checkpoint_reconcile"
+          ) {
+            mutationCalls++;
+            if (destinationDown)
+              return Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "destination offline",
+                }),
+              );
+            const operationId = String(call.arguments.operationId);
+            if (call.tool === "goat_thread_checkpoint_reconcile")
+              return Effect.succeed({
+                operationId,
+                status: "launched",
+                threadId: "replacement",
+                runId: "replacement-run",
+              });
+            return Deferred.succeed(sent, operationId).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({
+                operationId,
+                status: "launch_unknown",
+                threadId: "replacement",
+                runId: null,
+              }),
+            );
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt")
+            return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Effect.succeed({ status: "captured", replica });
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            const first = yield* service
+              .recover(recoveryInput, recoveryGrant)
+              .pipe(Effect.forkChild);
+            yield* Deferred.await(sent);
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            yield* Deferred.succeed(release, undefined);
+            expect((yield* Fiber.join(first)).status).toBe("launched");
+            destinationDown = true;
+            expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+            expect(mutationCalls).toBe(2);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.status).toBe("launched");
+          }),
+        );
+      }),
+  );
+
+  it.effect("expires payload contents but still reconciles and retains the source fence", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      world.hostCall = (call) => {
+        if (call.tool === "goat_thread_checkpoint_restore")
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "launch_unknown",
+            threadId: "replacement",
+            runId: null,
+          });
+        if (call.tool === "goat_thread_checkpoint_reconcile") {
+          expect(call.arguments).not.toHaveProperty("replica");
+          return Effect.succeed({
+            operationId: call.arguments.operationId,
+            status: "launched",
+            threadId: "replacement",
+            runId: "replacement-run",
+          });
+        }
+        if (call.host === "destination") return Effect.never;
+        if (call.tool === "goat_thread_interrupt")
+          return Effect.succeed({ threadId: target, runId: run1, status: "completed" });
+        if (call.tool === "goat_thread_checkpoint_capture")
+          return Effect.succeed({ status: "captured", replica });
+        return Effect.succeed(
+          call.tool === "goat_thread_wait"
+            ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+            : remoteRead({ itemCount: 0 }),
+        );
+      };
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Queue.take(world.delivered);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe(
+            "launch_unknown",
+          );
+          yield* service.unwatch(replicaWatchInput);
+          yield* TestClock.adjust("8 days");
+          const kept = yield* service.find(replicaWatchInput);
+          expect(kept?.replica).toBeUndefined();
+          expect(kept?.recovery?.status).toBe("launch_unknown");
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          expect(yield* fs.readDirectory(path.join(dir, "userdata", "watch-replicas"))).toEqual([]);
+          expect((yield* service.recover(recoveryInput, recoveryGrant)).status).toBe("launched");
+        }).pipe(Effect.provide(NodeServices.layer)),
+      );
+    }),
+  );
+
+  it.effect.each([undefined, "off"] as const)(
+    "does no capture work when host setting is %s",
+    (setting) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        if (setting !== undefined) world.hostReplication = setting;
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register(replicaWatchInput);
+            yield* Queue.take(world.delivered);
+            expect(
+              world.hostCalls.some(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toBe(false);
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "captures once per completed turn across restart and rejects stale requests and lowered grants",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica }
+              : call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Queue.take(world.delivered);
+            const stored = yield* service.find(replicaWatchInput);
+            expect(stored?.replica?.sha256).toBe(replica.sha256);
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            const again = yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            expect(again.replicaAttempts).toEqual([run1]);
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+            const denied = yield* service
+              .recover(
+                recoveryInput,
+                Effect.succeed({ runtimeMode: "auto", interactionMode: "default" }),
+              )
+              .pipe(Effect.result);
+            expect(denied._tag).toBe("Failure");
+            const stale = yield* service
+              .recover({ ...recoveryInput, expectedRunId: run2 }, recoveryGrant)
+              .pipe(Effect.result);
+            expect(stale._tag).toBe("Failure");
+          }),
+        );
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "off wins staged ordinary payload publication (reenable=%s)",
+    (reenable) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const staged = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        world.payloadStaged = Deferred.succeed(staged, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        let completedRun = run1;
+        world.hostCall = (call) =>
+          Effect.succeed(
+            call.tool === "goat_thread_checkpoint_capture"
+              ? { status: "captured", replica: { ...replica, runId: completedRun } }
+              : call.tool === "goat_thread_wait"
+                ? { threadId: target, runId: completedRun, status: "completed", timedOut: false }
+                : remoteRead({ itemCount: 0 }),
+          );
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(staged);
+            yield* world.settings!.updateSettings({ responseStreamingMode: "turn" });
+            yield* world.settings!.updateSettings({
+              fleet: {
+                hosts: {
+                  other: { checkpointReplication: "off" },
+                  box: { checkpointReplication: "off" },
+                },
+              },
+            });
+            if (reenable)
+              yield* world.settings!.updateSettings({
+                fleet: { hosts: { box: { checkpointReplication: "on" } } },
+              });
+            yield* Deferred.succeed(release, undefined);
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeUndefined();
+            expect((yield* service.find(replicaWatchInput))?.replicaAttempt?.reason).toBe(
+              "disabled",
+            );
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            expect((yield* service.find(replicaWatchInput))?.replica).toBeUndefined();
+            yield* world.settings!.updateSettings({
+              fleet: { hosts: { box: { checkpointReplication: "on" } } },
+            });
+            completedRun = run2;
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            yield* Queue.take(world.delivered);
+            expect((yield* service.find(replicaWatchInput))?.replica?.runId).toBe(run2);
+          }),
+        );
+      }),
+  );
+
+  it.effect("cancelled ordinary publication removes staged payload and restart keeps dedup", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const replica = watchReplica(yield* Clock.currentTimeMillis);
+      const staged = yield* Deferred.make<void>();
+      world.payloadStaged = Deferred.succeed(staged, undefined).pipe(Effect.andThen(Effect.never));
+      world.hostCall = (call) =>
+        Effect.succeed(
+          call.tool === "goat_thread_checkpoint_capture"
+            ? { status: "captured", replica }
+            : call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+        );
+      const dir = yield* tempDir;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...replicaWatchInput,
+            checkpointReplication: "on",
+            replicaCeiling: "full-access",
+          });
+          yield* Deferred.await(staged);
+        }),
+      );
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      expect(yield* fs.readDirectory(path.join(dir, "userdata", "watch-replicas"))).toEqual([]);
+      delete world.payloadStaged;
+      yield* withService(world, dir, (service) =>
+        Effect.gen(function* () {
+          const watch = yield* service.find(replicaWatchInput);
+          expect(watch?.replica).toBeUndefined();
+          expect(watch?.replicaAttempt?.reason).toBe("capture_interrupted");
+          expect(
+            world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+          ).toHaveLength(1);
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["completed", "question"] as const)(
+    "fences a late %s while recovering and retains it across unwatch and restart",
+    (late) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const replica = watchReplica(yield* Clock.currentTimeMillis);
+        const captured = yield* Deferred.make<void>();
+        const sourceWaiting = yield* Deferred.make<void>();
+        const sourceWaitEnded = yield* Deferred.make<void>();
+        const releaseSource = yield* Deferred.make<void>();
+        const interrupted = yield* Queue.unbounded<Record<string, unknown>>();
+        let sourceOffline = false;
+        let sourceReturned = false;
+        const operations: string[] = [];
+        world.hostCall = (call) => {
+          if (call.tool === "goat_thread_checkpoint_restore") {
+            const operationId = String(call.arguments.operationId);
+            operations.push(operationId);
+            return Effect.succeed({
+              operationId,
+              status: "launched",
+              threadId: "replacement",
+              runId: "replacement-run",
+            });
+          }
+          if (call.host === "destination") return Effect.never;
+          if (call.tool === "goat_thread_interrupt") {
+            if (!sourceReturned)
+              return Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "offline",
+                }),
+              );
+            return Queue.offer(interrupted, call.arguments).pipe(
+              Effect.as({ threadId: target, runId: run2, status: "interrupt_requested" }),
+            );
+          }
+          if (sourceOffline) {
+            if (call.tool === "goat_thread_wait")
+              return Deferred.succeed(sourceWaiting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSource)),
+                Effect.as({
+                  threadId: target,
+                  runId: run2,
+                  status: late === "completed" ? "completed" : "waiting",
+                  timedOut: false,
+                  pendingRequestIds: late === "question" ? ["old-question"] : [],
+                }),
+                Effect.ensuring(Deferred.succeed(sourceWaitEnded, undefined)),
+              );
+            return Effect.succeed(
+              call.tool === "goat_pending_request_list"
+                ? { requestIds: ["old-question"] }
+                : remoteRead({ itemCount: 0 }),
+            );
+          }
+          if (call.tool === "goat_thread_checkpoint_capture")
+            return Deferred.succeed(captured, undefined).pipe(
+              Effect.as({ status: "captured", replica }),
+            );
+          return Effect.succeed(
+            call.tool === "goat_thread_wait"
+              ? { threadId: target, runId: run1, status: "completed", timedOut: false }
+              : remoteRead({ itemCount: 0 }),
+          );
+        };
+        const dir = yield* tempDir;
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            yield* service.register({
+              ...replicaWatchInput,
+              checkpointReplication: "on",
+              replicaCeiling: "full-access",
+            });
+            yield* Deferred.await(captured);
+            yield* Queue.take(world.delivered);
+            sourceOffline = true;
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            yield* Deferred.await(sourceWaiting);
+            const result = yield* service.recover(
+              recoveryInput,
+              recoveryGrant.pipe(
+                Effect.tap(() => Deferred.succeed(releaseSource, undefined)),
+                Effect.tap(() => Deferred.await(sourceWaitEnded)),
+              ),
+            );
+            expect(result.status).toBe("launched");
+            yield* Deferred.await(sourceWaitEnded);
+            const old = yield* service.find(replicaWatchInput);
+            expect(old?.recovery?.sourceRunId).toBe(run2);
+            yield* service.unwatch(replicaWatchInput);
+          }),
+        );
+        yield* withService(world, dir, (service) =>
+          Effect.gen(function* () {
+            const recovered = yield* service.register({ ...replicaWatchInput, runId: run2 });
+            expect(recovered.recovery?.status).toBe("launched");
+            yield* service.rearm({ ...replicaWatchInput, runId: run2 });
+            const replay = yield* service.recover(recoveryInput, recoveryGrant);
+            expect(replay.status).toBe("launched");
+            expect(new Set(operations).size).toBe(1);
+            expect(operations).toHaveLength(1);
+            expect(world.deliveredLog).toHaveLength(1);
+            sourceReturned = true;
+            yield* world.settings!.updateSettings({ goatclaw: { enabled: true } });
+            yield* TestClock.adjust("2 minutes");
+            expect(yield* Queue.size(interrupted)).toBe(0);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.sourceInterrupted).toBe(
+              false,
+            );
+            yield* world.settings!.updateSettings({ goatclaw: { enabled: false } });
+            world.shells.set(launcher, {
+              ...world.shells.get(launcher),
+              interactionMode: "plan",
+            });
+            yield* TestClock.adjust("2 minutes");
+            expect(yield* Queue.size(interrupted)).toBe(0);
+            expect((yield* service.find(replicaWatchInput))?.recovery?.sourceInterrupted).toBe(
+              false,
+            );
+            world.shells.set(launcher, {
+              ...world.shells.get(launcher),
+              interactionMode: "default",
+            });
+            yield* TestClock.adjust("2 minutes");
+            const stopped = yield* Queue.take(interrupted);
+            expect(stopped.threadId).toBe(target);
+            expect(stopped.runId).toBe(run2);
+            expect(stopped.stopCascade).toBeUndefined();
+            expect(
+              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_checkpoint_capture"),
+            ).toHaveLength(1);
+          }),
+        );
+      }),
   );
 });

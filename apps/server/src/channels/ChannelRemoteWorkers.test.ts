@@ -1,25 +1,18 @@
-// @effect-diagnostics nodeBuiltinImport:off - the fake remote hashes read keys like the real one.
-import * as NodeCrypto from "node:crypto";
-
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import {
-  type ChannelReceptionInput,
   type ChannelTask,
   ChannelTaskEvent,
   ChannelQuestionId,
-  type RemoteReportedOutcome,
   type ChannelWorkerObservation,
-  type RemoteKnownRun,
-  type RemoteObservedRun,
   RuntimeRequestId,
+  RunId,
   ProjectId,
   EnvironmentId,
   ProviderInstanceId,
-  type RemoteReport,
-  type RemoteReportKind,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -34,6 +27,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
@@ -42,6 +36,8 @@ import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import {
   ChannelRemoteWorkers,
@@ -57,10 +53,11 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
   botMessages,
-  defaultScript,
+  latestCard,
   goatInput,
   linkSlackUser,
   makeHarness,
+  modelSelection,
   onlyTask,
   resultsTo,
   rpcContext,
@@ -69,6 +66,18 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+import {
+  REPLICA_BYTES,
+  REPLICA_COMMIT,
+  REPLICA_OUTPUT,
+  RemoteMachine,
+  correlationOf,
+  remoteScript,
+  replicaOutput,
+  settle,
+  sha256,
+  until,
+} from "./testing/RemoteMachine.ts";
 
 /**
  * Tasks on another machine. The other machine is a fake GOAT reached over a fake SSH dispatch:
@@ -76,636 +85,6 @@ import {
  * real goat_thread_launch), the reports its worker files with goat_origin_report, and its runs.
  * Tests drive the worker's side and the network; the channel side is the real core.
  */
-
-interface RemoteRun {
-  readonly runId: string;
-  status: string;
-  summary: string | null;
-  reported?: RemoteReportedOutcome | undefined;
-  pendingRequestIds?: RemoteObservedRun["pendingRequestIds"];
-  observation?: ChannelWorkerObservation;
-}
-
-class RemoteMachine {
-  host = "mac-studio";
-  readonly environmentId = "environment:mac-studio";
-  projects = [
-    {
-      id: "remote-project:goat",
-      title: "goat-si/goat",
-      workspaceRoot: "/Users/jun/developer/goat-si/goat",
-      repositoryIdentity: { canonicalKey: "github.com/goat-si/goat" },
-      defaultModelSelection: null,
-    },
-  ];
-  readonly bindings = new Map<
-    string,
-    { readonly threadId: string; readonly readKeyHash: string; last: number }
-  >();
-  readonly reports = new Map<string, Array<RemoteReport>>();
-  readonly threads = new Map<string, Array<RemoteRun>>();
-  readonly launches: Array<SshRemoteDispatch.SshLaunchInput> = [];
-  readonly sends: Array<Readonly<Record<string, unknown>>> = [];
-  readonly calls: Array<{
-    readonly tool: string;
-    readonly ceiling: string;
-    readonly host: string;
-    readonly arguments: Readonly<Record<string, unknown>>;
-  }> = [];
-  readonly peers: Array<RemoteMachine> = [];
-  readonly scripts: Array<{
-    readonly host: string;
-    readonly script: string;
-    readonly kind: "capture" | "apply";
-  }> = [];
-  readonly interrupts: Array<Readonly<Record<string, unknown>>> = [];
-  readonly captureFibers: Array<Fiber.Fiber<unknown, unknown>> = [];
-  captureOutput = "GOAT_REPLICA_NO_WORKTREE\n";
-  applyOutput = "GOAT_REPLICA_APPLIED " + REPLICA_COMMIT + "\n";
-  captureGate:
-    | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
-    | undefined;
-  refuseProbeWith: string | undefined;
-  probeAttempted = Deferred.makeUnsafe<void>();
-  probeCount = 0;
-  refuseInterruptWith: string | undefined;
-  /** An older GOAT rejects `stopCascade` before the interrupt runs. */
-  refuseStopCascade = false;
-  interruptAttempted = Deferred.makeUnsafe<void>();
-  scriptDown = false;
-  scriptCalled = Deferred.makeUnsafe<void>();
-  waitUnavailable = Deferred.makeUnsafe<void>();
-  waitIdle = Deferred.makeUnsafe<void>();
-  unreachableWaitCount = 0;
-  /** A test observes the persisted brief before SSH accepts the launch. */
-  beforeLaunch: ((input: SshRemoteDispatch.SshLaunchInput) => Effect.Effect<void>) | undefined;
-  /** While true, every call fails as if SSH could not reach the host. */
-  down = false;
-  /** While true, only goat_environment_read fails, after the projects were listed. */
-  environmentReadDown = false;
-  /** Hosts this machine has only seen in known_hosts, never configured. */
-  knownHostsOnly: ReadonlyArray<string> = [];
-  /** The next launch starts the thread but its answer never arrives. */
-  loseNextLaunchAnswer = false;
-  /** The worker's old run files a question right after an answer is sent (a late report). */
-  staleQuestionOnSend = false;
-  /** Answers every wait with all reports ever filed, as if acknowledgements were lost. */
-  replayReports = false;
-  /** Launch attempts that fail on the wire before the remote stores anything. */
-  failBeforeBinding = 0;
-  /** The project is deleted there right after a failed launch attempt. */
-  dropProjectsOnFailedLaunch = false;
-  /** The next launch stores its binding, then its answer is lost before the thread exists. */
-  slowThreadCreation = false;
-  /** Every launch is refused outright with this text (nothing is stored). */
-  refuseLaunchWith: string | undefined;
-  refuseLaunchCode = "invalid_request";
-  /** Waits on this binding block until `release` completes. */
-  holdWaitsFor: string | undefined;
-  /** goat_thread_send fails with this remote code. */
-  refuseSendWith: string | undefined;
-  /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
-  offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
-  /** orchestrator_capabilities alone cannot be reached (the call times out). */
-  capabilitiesUnreachable = false;
-  /** Weekly quota use per account that goat_host_status reports; unset, the tool is refused. */
-  hostQuotas: Readonly<Record<string, number>> | undefined;
-  /** Accounts orchestrator_capabilities lists but reports as unable to run work. */
-  unrunnable: ReadonlyArray<string> = [];
-  /** goat_thread_send names a run that never exists. */
-  sendNamesMissingRun = false;
-  /** After the answer's run, another run starts at once and asks this. */
-  questionInRunAfterAnswer: string | undefined;
-  readonly release = Deferred.makeUnsafe<void>();
-  onWait: ((input: Readonly<Record<string, unknown>>) => Effect.Effect<void>) | undefined;
-  private readonly pendingThreads = new Map<string, string>();
-  private readonly everFiled = new Map<string, Array<RemoteReport>>();
-  private changed = Deferred.makeUnsafe<void>();
-  private nextThread = 1;
-
-  private poke() {
-    const previous = this.changed;
-    this.changed = Deferred.makeUnsafe<void>();
-    Deferred.doneUnsafe(previous, Effect.void);
-  }
-
-  thread(correlationId: string) {
-    const binding = this.bindings.get(correlationId);
-    if (binding === undefined) throw new Error("no binding " + correlationId);
-    return binding.threadId;
-  }
-
-  /** The thread a slow launch was creating shows up, with its first run. */
-  revealThread(correlationId: string) {
-    const threadId = this.pendingThreads.get(correlationId)!;
-    this.pendingThreads.delete(correlationId);
-    this.threads.set(threadId, []);
-    this.startRun(correlationId);
-  }
-
-  runs(correlationId: string) {
-    return this.threads.get(this.thread(correlationId)) ?? [];
-  }
-
-  startRun(correlationId: string) {
-    const threadId = this.thread(correlationId);
-    const runs = this.threads.get(threadId) ?? [];
-    const run = { runId: threadId + ":run:" + (runs.length + 1), status: "running", summary: null };
-    this.threads.set(threadId, [...runs, run]);
-    this.poke();
-    return run.runId;
-  }
-
-  finishRun(
-    correlationId: string,
-    status: string,
-    summary: string | null,
-    reported?: RemoteReportedOutcome,
-  ) {
-    const run = this.runs(correlationId).at(-1)!;
-    run.status = status;
-    run.summary = summary;
-    run.reported = reported;
-    this.poke();
-  }
-
-  /** What holds a finished run's thread open; undefined plays an older GOAT that omits it. */
-  holds: { backgroundTasks: number; continuationPending: boolean } | undefined;
-  setHolds(holds: { backgroundTasks: number; continuationPending: boolean }) {
-    this.holds = holds;
-    this.poke();
-  }
-
-  observeRun(
-    correlationId: string,
-    observation: ChannelWorkerObservation,
-    pendingRequestIds: RemoteObservedRun["pendingRequestIds"] = [],
-  ) {
-    const run = this.runs(correlationId).at(-1)!;
-    run.observation = observation;
-    run.pendingRequestIds = pendingRequestIds;
-    this.poke();
-  }
-
-  /** The remote long poll reaches its deadline without changing durable state. */
-  timeoutWait() {
-    this.poke();
-  }
-
-  report(correlationId: string, kind: RemoteReportKind, summary: string, runId?: string | null) {
-    const binding = this.bindings.get(correlationId)!;
-    binding.last += 1;
-    const list = this.reports.get(correlationId) ?? [];
-    list.push({
-      sequence: binding.last,
-      runId: (runId === undefined
-        ? (this.runs(correlationId).at(-1)?.runId ?? null)
-        : runId) as never,
-      kind,
-      summary,
-      createdAt: "2026-10-12T01:00:00.000Z" as never,
-    });
-    this.reports.set(correlationId, list);
-    this.everFiled.set(correlationId, [...(this.everFiled.get(correlationId) ?? []), list.at(-1)!]);
-    this.poke();
-  }
-
-  unreachable(message: string) {
-    return new SshRemoteDispatch.SshRemoteDispatchError({ reason: "host_unavailable", message });
-  }
-
-  refused(code: string) {
-    return new SshRemoteDispatch.SshRemoteDispatchError({
-      reason: "remote_refused",
-      message: code,
-      remoteCode: code,
-    });
-  }
-
-  private read(input: Readonly<Record<string, unknown>>) {
-    const correlationId = input.correlationId as string;
-    const binding = this.bindings.get(correlationId);
-    const hash = sha256(input.readKey as string);
-    if (binding === undefined || binding.readKeyHash !== hash) {
-      return { error: this.refused("capability_denied") } as const;
-    }
-    const runs = this.threads.get(binding.threadId);
-    if (runs === undefined) return { error: this.refused("thread_not_found") } as const;
-    const afterSequence = input.afterSequence as number;
-    const kept = this.replayReports
-      ? (this.everFiled.get(correlationId) ?? [])
-      : (this.reports.get(correlationId) ?? []).filter((report) => report.sequence > afterSequence);
-    this.reports.set(correlationId, kept);
-    const latest = runs.at(-1);
-    const watch = (input.watchRunId as string | null) ?? latest?.runId ?? null;
-    const run = watch === null ? undefined : runs.find((candidate) => candidate.runId === watch);
-    if (watch !== null && run === undefined)
-      return { error: this.refused("run_not_found") } as const;
-    return {
-      value: {
-        threadId: binding.threadId,
-        reports: kept.slice(0, 50),
-        hasMore: kept.length > 50,
-        observedRun:
-          run === undefined
-            ? null
-            : {
-                runId: run.runId,
-                status: run.status,
-                summary: TERMINAL.has(run.status) ? run.summary : null,
-                ...(TERMINAL.has(run.status) && run.reported !== undefined
-                  ? { reported: run.reported }
-                  : {}),
-                ...(run.pendingRequestIds === undefined
-                  ? {}
-                  : { pendingRequestIds: run.pendingRequestIds }),
-                ...(run.observation === undefined ? {} : { observation: run.observation }),
-                ...(TERMINAL.has(run.status) && this.holds !== undefined
-                  ? { holds: this.holds }
-                  : {}),
-              },
-        latestRunId: latest?.runId ?? null,
-        timedOut: false,
-      },
-    } as const;
-  }
-
-  readonly layer: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch> = this.makeLayer();
-
-  private makeLayer() {
-    // oxlint-disable-next-line typescript/no-this-alias -- the fake's handlers close over it.
-    const network = this;
-    const machineFor = (host: string | undefined) =>
-      [network, ...network.peers].find((candidate) => candidate.host === host) ?? network;
-    return Layer.succeed(
-      SshRemoteDispatch.SshRemoteDispatch,
-      SshRemoteDispatch.SshRemoteDispatch.of({
-        listHosts: () =>
-          Effect.sync(() => [
-            ...[network, ...network.peers].map((machine) => ({
-              alias: machine.host,
-              source: "ssh-config" as const,
-            })),
-            ...network.knownHostsOnly.map((alias) => ({ alias, source: "known-hosts" as const })),
-          ]),
-        launchThread: <E, R>(
-          input: SshRemoteDispatch.SshLaunchInput,
-          beforeLaunch: Effect.Effect<void, E, R>,
-        ) =>
-          Effect.gen(function* () {
-            const machine = machineFor(input.host);
-            if (machine.down) return yield* machine.unreachable("down");
-            yield* beforeLaunch;
-            if (machine.beforeLaunch !== undefined) yield* machine.beforeLaunch(input);
-            machine.launches.push(input);
-            const report = input.report!;
-            if (machine.failBeforeBinding > 0) {
-              machine.failBeforeBinding -= 1;
-              if (machine.dropProjectsOnFailedLaunch) machine.projects = [];
-              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                reason: "ssh_failed",
-                message: "connection reset",
-                launchMayHaveStarted: true,
-              });
-            }
-            if (machine.refuseLaunchWith !== undefined) {
-              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                reason: "remote_refused",
-                message: machine.refuseLaunchWith,
-                remoteCode: machine.refuseLaunchCode,
-              });
-            }
-            if (machine.bindings.has(report.correlationId)) {
-              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                reason: "remote_refused",
-                message: "The remote server is unavailable.",
-                remoteCode: "orchestration_error",
-              });
-            }
-            const threadId = "remote-thread:" + machine.nextThread++;
-            machine.bindings.set(report.correlationId, {
-              threadId,
-              readKeyHash: report.readKeyHash,
-              last: 0,
-            });
-            if (machine.slowThreadCreation) {
-              machine.slowThreadCreation = false;
-              machine.pendingThreads.set(report.correlationId, threadId);
-              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                reason: "host_unavailable",
-                message: "timed out",
-                launchMayHaveStarted: true,
-              });
-            }
-            machine.threads.set(threadId, []);
-            const runId = machine.startRun(report.correlationId);
-            if (machine.loseNextLaunchAnswer) {
-              machine.loseNextLaunchAnswer = false;
-              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                reason: "ssh_failed",
-                message: "connection reset",
-                launchMayHaveStarted: true,
-              });
-            }
-            return {
-              host: machine.host,
-              cwd: input.cwd,
-              projectId: "remote-project:goat",
-              projectCreated: false,
-              threadId,
-              reportsSupported: true,
-              runId,
-              workspaceStrategy: { type: "root" },
-              runtimeMode: input.runtimeMode,
-              remoteServerKind: "managed",
-              notes: [],
-            } as never;
-          }),
-        runHostScript: (input: {
-          readonly host: string;
-          readonly script: string;
-          readonly timeoutMs: number;
-        }) =>
-          Effect.gen(function* () {
-            const machine = machineFor(input.host);
-            const kind = input.script.includes("git bundle create") ? "capture" : "apply";
-            assert.include(
-              input.script,
-              kind === "capture" ? "git bundle create" : "git bundle verify",
-            );
-            machine.scripts.push({ ...input, kind });
-            if (kind === "capture")
-              machine.captureFibers.push(yield* Effect.withFiberSucceed((fiber) => fiber));
-            const unavailable = machine.down || machine.scriptDown;
-            const stdout = kind === "capture" ? machine.captureOutput : machine.applyOutput;
-            yield* Deferred.succeed(machine.scriptCalled, undefined);
-            if (unavailable) return yield* machine.unreachable("script transport down");
-            if (kind === "capture" && machine.captureGate !== undefined) {
-              yield* Deferred.succeed(machine.captureGate.entered, undefined);
-              yield* Deferred.await(machine.captureGate.release);
-            }
-            return { stdout, stderr: "" };
-          }),
-        callHostTool: <E, R>(
-          call: SshRemoteDispatch.SshHostToolCall,
-          authorize: Effect.Effect<RuntimeMode, E, R>,
-        ) =>
-          Effect.gen(function* () {
-            const machine = machineFor(call.host);
-            const ceiling = yield* authorize;
-            machine.calls.push({
-              tool: call.tool,
-              ceiling,
-              host: call.host,
-              arguments: call.arguments,
-            });
-            debugTrail.push(call.tool);
-            if (machine.down) {
-              if (call.tool === "goat_origin_reports_wait") {
-                const failed = machine.waitUnavailable;
-                machine.unreachableWaitCount += 1;
-                machine.waitUnavailable = Deferred.makeUnsafe<void>();
-                yield* Deferred.succeed(failed, undefined);
-              }
-              return yield* machine.unreachable("down");
-            }
-            switch (call.tool) {
-              case "goat_project_list":
-                return { projects: machine.projects, nextCursor: null };
-              case "goat_environment_read":
-                if (machine.environmentReadDown) return yield* machine.unreachable("down");
-                return { environmentId: machine.environmentId };
-              case "orchestrator_capabilities":
-                if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
-                if (machine.offeredModels === undefined) break;
-                return {
-                  providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
-                    (instance) => ({
-                      providerInstanceId: instance,
-                      driverKind: "codex",
-                      // A real GOAT sends null for an account without a display name.
-                      displayName: null,
-                      canRunChildTask: !machine.unrunnable.includes(instance),
-                      models: machine
-                        .offeredModels!.filter((entry) => entry.instance === instance)
-                        .map((entry) => ({ id: entry.model })),
-                    }),
-                  ),
-                };
-              case "goat_host_status":
-                if (machine.hostQuotas === undefined) break;
-                return {
-                  hosts: [
-                    {
-                      host: null,
-                      reachability: "ok",
-                      metrics: {
-                        threads: { running: 0, waiting: 0, queued: 0 },
-                        quotas: Object.entries(machine.hostQuotas).map(([instanceId, used]) => ({
-                          instanceId,
-                          driver: "codex",
-                          fromCache: true,
-                          limits: {
-                            checkedAt: "2026-10-17T00:00:00.000Z",
-                            windows: [
-                              {
-                                id: "weekly",
-                                kind: "weekly",
-                                label: "Weekly",
-                                usedPercent: used,
-                                resetsAt: "2099-01-01T00:00:00.000Z",
-                              },
-                            ],
-                          },
-                        })),
-                      },
-                    },
-                  ],
-                };
-              case "goat_thread_interrupt": {
-                machine.interrupts.push(call.arguments);
-                const attempted = machine.interruptAttempted;
-                machine.interruptAttempted = Deferred.makeUnsafe<void>();
-                const refused = machine.refuseInterruptWith;
-                yield* Deferred.succeed(attempted, undefined);
-                if (refused !== undefined) return yield* machine.refused(refused);
-                // An older GOAT has no stopCascade argument and refuses it before anything runs.
-                if (call.arguments.stopCascade === true && machine.refuseStopCascade) {
-                  return yield* new SshRemoteDispatch.SshRemoteDispatchError({
-                    reason: "remote_refused",
-                    message: "goat_thread_interrupt does not take stopCascade, so nothing ran.",
-                    remoteCode: "invalid_request",
-                  });
-                }
-                return {};
-              }
-              case "goat_thread_send": {
-                machine.sends.push(call.arguments);
-                if (machine.refuseSendWith !== undefined) {
-                  return yield* machine.refused(machine.refuseSendWith);
-                }
-                const threadId = call.arguments.threadId as string;
-                const correlationId = [...machine.bindings].find(
-                  ([, b]) => b.threadId === threadId,
-                )![0];
-                const previous = machine.runs(correlationId).at(-1)?.runId ?? null;
-                const runId = machine.startRun(correlationId);
-                if (machine.staleQuestionOnSend) {
-                  machine.report(correlationId, "needs_input", "Stale question?", previous);
-                }
-                if (machine.questionInRunAfterAnswer !== undefined) {
-                  // The answer's run ends at once and a continuation asks again.
-                  machine.finishRun(correlationId, "completed", "Handed on.");
-                  machine.startRun(correlationId);
-                  machine.report(correlationId, "needs_input", machine.questionInRunAfterAnswer);
-                }
-                if (machine.sendNamesMissingRun) {
-                  return { runId: runId + ":missing", messageId: "remote-message" };
-                }
-                return { runId, messageId: "remote-message" };
-              }
-              case "goat_origin_reports_wait": {
-                if (call.arguments.timeoutMs === 0) {
-                  machine.probeCount += 1;
-                  const attempted = machine.probeAttempted;
-                  machine.probeAttempted = Deferred.makeUnsafe<void>();
-                  const refused = machine.refuseProbeWith;
-                  yield* Deferred.succeed(attempted, undefined);
-                  if (refused !== undefined) return yield* machine.refused(refused);
-                }
-                if (call.arguments.correlationId === machine.holdWaitsFor) {
-                  yield* Deferred.await(machine.release);
-                }
-                const first = machine.read(call.arguments);
-                if ("error" in first) return yield* first.error!;
-                const known = call.arguments.knownRun as RemoteKnownRun | null;
-                const holds = first.value.observedRun?.holds;
-                const changed =
-                  first.value.reports.length > 0 ||
-                  first.value.observedRun?.runId !== known?.runId ||
-                  first.value.observedRun?.status !== known?.status ||
-                  (known?.holds !== undefined &&
-                    (known.holds.backgroundTasks !== (holds?.backgroundTasks ?? 0) ||
-                      known.holds.continuationPending !== (holds?.continuationPending ?? false))) ||
-                  (known?.pendingRequestIds !== undefined &&
-                    JSON.stringify(known.pendingRequestIds) !==
-                      JSON.stringify(first.value.observedRun?.pendingRequestIds ?? [])) ||
-                  (known?.observation !== undefined &&
-                    JSON.stringify(known.observation) !==
-                      JSON.stringify(first.value.observedRun?.observation));
-                const timeoutMs = call.arguments.timeoutMs as number;
-                const change = machine.changed;
-                if (machine.onWait !== undefined) yield* machine.onWait(call.arguments);
-                if (changed || timeoutMs === 0) return first.value;
-                yield* Deferred.succeed(machine.waitIdle, undefined);
-                yield* Effect.raceFirst(
-                  Deferred.await(change),
-                  Effect.sleep(Duration.millis(timeoutMs)),
-                );
-                const second = machine.read(call.arguments);
-                if ("error" in second) return yield* second.error!;
-                return { ...second.value, timedOut: true };
-              }
-            }
-            return yield* machine.refused("invalid_request");
-          }),
-      } as unknown as SshRemoteDispatch.SshRemoteDispatch["Service"]),
-    );
-  }
-}
-
-const REPLICA_COMMIT = "b".repeat(40);
-// The transport fixture need only satisfy the wire parser; no shell or git is run here.
-const REPLICA_BYTES = Buffer.from("worker commits and uncommitted edits\n");
-const replicaOutput = (commitOid: string, bytes: Buffer) =>
-  [
-    "GOAT_REPLICA_OK",
-    "HEAD " + "a".repeat(40),
-    "COMMIT " + commitOid,
-    "BYTES " + bytes.length,
-    "EXCLUDED ",
-    "GOAT_REPLICA_BUNDLE_BEGIN",
-    bytes.toString("base64"),
-    "GOAT_REPLICA_BUNDLE_END",
-    "",
-  ].join("\n");
-const REPLICA_OUTPUT = replicaOutput(REPLICA_COMMIT, REPLICA_BYTES);
-
-const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
-const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
-
-/** "do@host: text" asks for work on host; everything else is the default script. */
-const remoteScript = (input: ChannelReceptionInput) => {
-  const text = input.inputText ?? "";
-  const match = /^do@([^:]+):\s*(.+)$/u.exec(text);
-  if (input.mode === "input" && match !== null) {
-    return Effect.succeed({
-      replyText: "On it.",
-      action: {
-        type: "create_task" as const,
-        title: match[2]!,
-        instruction: match[2]!,
-        host: match[1]!,
-      },
-    });
-  }
-  if (input.mode === "input" && text.startsWith("answer:")) {
-    const task = input.tasks.find((candidate) => candidate.openQuestions.length > 0);
-    const question = task?.openQuestions[0];
-    if (task !== undefined && question !== undefined) {
-      return Effect.succeed({
-        replyText: "Thanks.",
-        action: {
-          type: "answer_question" as const,
-          taskId: task.taskId,
-          questionId: question.questionId,
-          answer: text.slice("answer:".length).trim(),
-        },
-      });
-    }
-  }
-  return defaultScript(input);
-};
-
-/** Lets background fibers run, moving the test clock a little each turn. */
-const settle = (rounds = 40, stepMs = 100) =>
-  Effect.gen(function* () {
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    for (let round = 0; round < rounds; round += 1) {
-      yield* runtime.drain;
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust(Duration.millis(stepMs));
-    }
-  });
-
-const until = (label: string, check: (task: ChannelTask) => boolean, rounds = 200) =>
-  Effect.gen(function* () {
-    for (let round = 0; round < rounds; round += 1) {
-      yield* settle(1);
-      const task = yield* onlyTask;
-      if (check(task)) return task;
-    }
-    const task = yield* onlyTask;
-    return yield* Effect.die(
-      new Error(
-        "timed out waiting for " +
-          label +
-          ": " +
-          JSON.stringify({
-            status: task.status,
-            host: task.host,
-            q: task.openQuestions,
-            summary: task.resultSummary,
-          }) +
-          " " +
-          JSON.stringify(debugTrail),
-      ),
-    );
-  });
-
-const debugTrail: Array<unknown> = [];
-
-const correlationOf = (machine: RemoteMachine) => [...machine.bindings.keys()].at(-1)!;
 
 const remoteHarness = () => {
   const machine = new RemoteMachine();
@@ -759,7 +138,9 @@ const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
   });
 
 /** Observes committed SQLite writes without replacing their behavior or polling the ledger. */
-const channelWriteMilestones = Effect.gen(function* () {
+const taskWriteMilestones = Effect.fn("test.channelWriteMilestones")(function* (
+  taskId?: ChannelTask["taskId"],
+) {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const completedForwards = new Set<number>();
   const forwardListeners = new Map<number, Deferred.Deferred<void>>();
@@ -769,7 +150,8 @@ const channelWriteMilestones = Effect.gen(function* () {
   }>();
   const notify = Effect.gen(function* () {
     if (listeners.size === 0) return;
-    const task = yield* onlyTask;
+    const task = taskId === undefined ? yield* onlyTask : (yield* ledger.getTask(taskId))?.task;
+    if (task === undefined) return;
     const json = yield* ledger.getRemoteWorker(task.taskId);
     const state = json === undefined ? undefined : (JSON.parse(json) as RemoteWorkerState);
     for (const listener of listeners) {
@@ -826,6 +208,8 @@ const channelWriteMilestones = Effect.gen(function* () {
       }),
   };
 });
+
+const channelWriteMilestones = taskWriteMilestones();
 
 type ChannelWriteMilestones = Effect.Success<typeof channelWriteMilestones>;
 
@@ -929,6 +313,125 @@ const dispatchMovedTask = (
   });
 
 describe("copies of remote work and host failover", () => {
+  it.effect(
+    "disabled host replication issues no capture commands while reports still settle",
+    () => {
+      const { machine, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+        });
+        const writes = yield* channelWriteMilestones;
+        const task = yield* startFailoverTask(writes, machine);
+        const correlationId = correlationOf(machine);
+        machine.finishRun(correlationId, "completed", "Finished without copying.");
+        yield* writes.waitFor((_task, state) => state?.settleRunId !== undefined);
+        yield* TestClock.adjust(Duration.millis(REMOTE_SETTLE_WAIT_MS));
+        yield* writes.waitFor((current) => current.status === "completed");
+        assert.lengthOf(
+          machine.scripts.filter((call) => call.kind === "capture"),
+          0,
+        );
+        assert.isUndefined((yield* readState(task.taskId)).replica);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([false, true])(
+    "off wins staged channel payload publication (reenable=%s)",
+    (reenable) => {
+      const { machine, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const fs = yield* FileSystem.FileSystem;
+        const staged = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const rename = fs.rename;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            Object.defineProperty(fs, "rename", {
+              value: (from: string, to: string) =>
+                rename(from, to).pipe(
+                  Effect.andThen(
+                    to.includes("channel-replicas/")
+                      ? Deferred.succeed(staged, undefined).pipe(
+                          Effect.andThen(Deferred.await(release)),
+                        )
+                      : Effect.void,
+                  ),
+                ),
+            });
+          }),
+          () =>
+            Effect.sync(() => {
+              Object.defineProperty(fs, "rename", { value: rename });
+            }),
+        );
+        const writes = yield* channelWriteMilestones;
+        const task = yield* startFailoverTask(writes, machine);
+        machine.finishRun(correlationOf(machine), "waiting", null);
+        yield* Deferred.await(staged);
+        yield* settings.updateSettings({ responseStreamingMode: "turn" });
+        yield* settings.updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+        });
+        if (reenable)
+          yield* settings.updateSettings({
+            fleet: { hosts: { "mac-studio": { checkpointReplication: "on" } } },
+          });
+        yield* Deferred.succeed(release, undefined);
+        yield* Effect.forEach(machine.captureFibers, Fiber.await);
+        assert.isUndefined((yield* readState(task.taskId)).replica);
+        assert.deepStrictEqual(yield* replicaFiles, []);
+        yield* settings.updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "on" } } },
+        });
+        machine.startRun(correlationOf(machine));
+        machine.finishRun(correlationOf(machine), "waiting", null);
+        yield* TestClock.adjust("2 seconds");
+        yield* writes.waitFor((_task, state) => state?.replica !== undefined);
+        assert.isDefined((yield* readState(task.taskId)).replica);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("cancelled channel publication removes staged bytes and releases admission", () => {
+    const { machine, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const staged = yield* Deferred.make<void>();
+      const rename = fs.rename;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          Object.defineProperty(fs, "rename", {
+            value: (from: string, to: string) =>
+              rename(from, to).pipe(
+                Effect.andThen(
+                  to.includes("channel-replicas/")
+                    ? Deferred.succeed(staged, undefined).pipe(Effect.andThen(Effect.never))
+                    : Effect.void,
+                ),
+              ),
+          });
+        }),
+        () =>
+          Effect.sync(() => {
+            Object.defineProperty(fs, "rename", { value: rename });
+          }),
+      );
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine);
+      machine.finishRun(correlationOf(machine), "waiting", null);
+      yield* Deferred.await(staged);
+      yield* Fiber.interrupt(machine.captureFibers[0]!);
+      assert.isUndefined((yield* readState(task.taskId)).replica);
+      assert.deepStrictEqual(yield* replicaFiles, []);
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect.each(["completed", "waiting"] as const)(
     "saves the bundle after a %s turn and does not recapture that turn",
     (status) => {
@@ -1536,10 +1039,9 @@ describe("copies of remote work and host failover", () => {
         assert.strictEqual(destination.scripts[0]?.kind, "apply");
         assert.lengthOf(destination.launches, 0);
         yield* runtime.drain;
-        assert.isTrue(
-          (yield* botMessages).messages.some((message) =>
-            message.text.includes(REMOTE_COPY.resumeBaseMissing(destination.host, machine.host)),
-          ),
+        assert.strictEqual(
+          (yield* latestCard)?.summary,
+          REMOTE_COPY.resumeBaseMissing(destination.host, machine.host),
         );
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
@@ -1664,10 +1166,9 @@ describe("memory grants on another machine", () => {
         assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
         assert.lengthOf(harness.world.launches, 0);
         const records = yield* botMessages;
-        assert.isTrue(
-          records.messages.some((message) =>
-            message.text.includes(REMOTE_COPY.memoryUnsupported(machine.host)),
-          ),
+        assert.strictEqual(
+          (yield* latestCard)?.summary,
+          REMOTE_COPY.memoryUnsupported(machine.host),
         );
         assert.notInclude(JSON.stringify([task, records.messages]), "do-not-show");
       }).pipe(
@@ -1741,6 +1242,124 @@ describe("reported outcomes from another machine", () => {
           assert.strictEqual((yield* onlyTask).resultSummary, "The coding thread was stopped.");
         }
         assert.isUndefined((yield* onlyTask).completionReport);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect.each([
+    { disposition: "failed-check", automatic: false },
+    { disposition: "not-run", automatic: false },
+    { disposition: "failed-check", automatic: true },
+    { disposition: "not-run", automatic: true },
+  ] as const)(
+    "keeps late remote $disposition beside reported success (automatic: $automatic)",
+    ({ disposition, automatic }) => {
+      const { machine, harness } = automatic ? autoPlacementHarness() : remoteHarness();
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(
+          goatInput(
+            automatic ? "do: verify the check" : "do@mac-studio: verify the check",
+            "late-check",
+          ),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const running = yield* writes.waitFor((task) => task.status === "running");
+        const correlation = correlationOf(machine);
+        const runId = RunId.make(running.worker!.runId!);
+        const tests = { ok: true, command: "vp test run", passed: 12, failed: 0 };
+        const settling = yield* Deferred.make<void>();
+        machine.onWait = (input) =>
+          input.timeoutMs === REMOTE_SETTLE_WAIT_MS
+            ? Deferred.succeed(settling, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: { runId, tests, observedCheckPending: true },
+        });
+        machine.finishRun(correlation, "completed", "Done.", {
+          outcome: "succeeded",
+          summary: "Done and verified.",
+        });
+        yield* Deferred.await(settling);
+        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
+        const completed = yield* writes.waitFor((task) => task.status === "completed");
+        assert.isUndefined(completed.observed?.result?.observedCheck);
+        const check = {
+          status: "running" as const,
+          command: "vp test run",
+          exitCode: null,
+          durationMs: null,
+          at: "2026-10-12T00:00:00.000Z",
+        };
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: { runId, tests, observedCheck: check, observedCheckPending: true },
+        });
+        yield* Effect.raceFirst(
+          writes.waitFor((task) => task.observed?.result?.observedCheck?.status === "running"),
+          Deferred.await(machine.authorizationDenied).pipe(
+            Effect.andThen(
+              Effect.die(new Error("pending terminal evidence authorization was rejected")),
+            ),
+          ),
+        );
+        // A terminal task ignores late agent claims, including requests to reopen it.
+        machine.report(correlation, "needs_input", "Run it again?");
+        const finalCheck = {
+          ...check,
+          status: "completed" as const,
+          exitCode: 3,
+          durationMs: 1250,
+          outputTail: "one test failed",
+        };
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: {
+            runId,
+            tests,
+            ...(disposition === "failed-check" ? { observedCheck: finalCheck } : {}),
+            observedCheckPending: false,
+          },
+        });
+        const final = yield* writes.waitFor(
+          (task) => task.observed?.result?.observedCheckPending === false,
+        );
+        assert.strictEqual(final.status, "completed");
+        assert.strictEqual(final.completedAt, completed.completedAt);
+        assert.strictEqual(final.resultSummary, completed.resultSummary);
+        assert.strictEqual(final.completionReport, "present");
+        assert.deepStrictEqual(final.openQuestions, []);
+        assert.deepStrictEqual(final.observed?.result, {
+          runId,
+          tests,
+          ...(disposition === "failed-check" ? { observedCheck: finalCheck } : {}),
+          observedCheckPending: false,
+        });
+        yield* runtime.drain;
+        machine.timeoutWait();
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).version, final.version);
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          count: number;
+        }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE type = 'task.completed'`;
+        assert.strictEqual(rows[0]?.count, 1);
+        assert.isTrue(
+          machine.calls.some(
+            (call) =>
+              call.tool === "goat_origin_reports_wait" && call.arguments.watchRunId === runId,
+          ),
+        );
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );
@@ -2537,10 +2156,13 @@ describe("Slack defaults for work on another machine", () => {
   const remoteModel = { instanceId: ProviderInstanceId.make("codex"), model: "remote-default" };
 
   /** A machine whose project has its own default model, and a Slack connection's defaults. */
-  const defaultsHarness = (defaultTarget: {
-    readonly projectId?: ProjectId;
-    readonly modelSelection?: typeof slackModel;
-  }) => {
+  const defaultsHarness = (
+    defaultTarget: {
+      readonly projectId?: ProjectId;
+      readonly modelSelection?: typeof slackModel;
+    },
+    settingsLayer?: NonNullable<Parameters<typeof makeHarness>[0]>["settingsLayer"],
+  ) => {
     const machine = new RemoteMachine();
     machine.projects = machine.projects.map((project) => ({
       ...project,
@@ -2559,6 +2181,7 @@ describe("Slack defaults for work on another machine", () => {
     const harness = makeHarness({
       sshRemote: machine.layer,
       channelsLayer: ChannelLayers.makeLayerServices(settings),
+      ...(settingsLayer === undefined ? {} : { settingsLayer }),
     });
     harness.script.current = remoteScript;
     return { machine, harness };
@@ -2581,6 +2204,36 @@ describe("Slack defaults for work on another machine", () => {
       // The default picks a model, never more authority.
       assert.strictEqual(launch.callerRuntimeMode, "auto-accept-edits");
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps the Slack connection's model when a GOAT Bot model is configured", () => {
+    const { machine, harness } = defaultsHarness(
+      { modelSelection: slackModel },
+      ServerSettings.layerTest({
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-luna",
+        },
+        goatBotModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-astra",
+        },
+        defaultRuntimeMode: "full-access",
+      }).pipe(Layer.orDie),
+    );
+    machine.offeredModels = [
+      { instance: "codex", model: "slack-default" },
+      { instance: "codex", model: "remote-default" },
+      { instance: "codex", model: "gpt-6-astra" },
+    ];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d1b"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.deepStrictEqual(machine.launches[0]?.modelSelection, slackModel);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -2730,6 +2383,52 @@ describe("Slack defaults for work on another machine", () => {
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "g3"), slackContext);
       yield* until("running", (task) => task.generation === 2 && task.status === "running");
       assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("asks again on the machine a task moved to instead of reusing an older answer", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    const destination = new RemoteMachine();
+    destination.host = "mac-mini";
+    destination.projects = machine.projects.map((project) => ({ ...project }));
+    machine.peers.push(destination);
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reached = (check: (task: ChannelTask) => boolean) =>
+        Effect.flatMap(runtime.drain, () => writes.waitFor(check));
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "mv1"), slackContext);
+      const first = yield* reached((task) => task.status === "waiting_input");
+      // mac-studio stops answering, so this answer is never matched against its projects.
+      machine.down = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "mv2"), slackContext);
+      yield* reached((task) => task.status === "waiting_input" && task.version > first.version);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* commitTransition(ledger, (yield* ledger.getTask((yield* onlyTask).taskId))!, {
+        type: "task.moved",
+        payload: {
+          generation: 2,
+          host: destination.host,
+          fromHost: machine.host,
+          replicaCapturedAt: "2026-10-12T00:00:00.000Z",
+        },
+      });
+      // mac-mini has a project with the same title; the answer for mac-studio still does not
+      // pick it.
+      const asked = yield* reached(
+        (task) =>
+          task.generation === 2 && task.status !== "received" && task.status !== "dispatching",
+      );
+      assert.strictEqual(asked.status, "waiting_input");
+      assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-mini");
+      assert.strictEqual(destination.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "mv3"), slackContext);
+      yield* reached((task) => task.generation === 2 && task.status === "running");
+      assert.strictEqual(destination.launches.length, 1);
+      assert.strictEqual(machine.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -3225,16 +2924,14 @@ describe("what a worker on another machine is told", () => {
         assert.include(message, '<goat_bot_skill name="deploy-staging">\n# Deploy staging');
         assert.notInclude(message, "Unrelated");
         assert.include(message, "ask first: show the draft or plan in a needs_input report.");
-        assert.include(message, "goat_origin_report with status progress");
+        assert.include(message, 'goat_call {path:"origin.report"} with status progress');
         // The home machine's paths mean nothing over there.
         assert.notInclude(message, files.notes);
         const ledger = yield* ChannelLedger.ChannelLedger;
         const brief = yield* ledger.latestTaskBrief((yield* onlyTask).taskId);
         assert.strictEqual(
           brief?.context.notesRevision,
-          NodeCrypto.createHash("sha256")
-            .update("- 2026-10-17: open PRs as drafts (asked in x)\n")
-            .digest("hex"),
+          sha256("- 2026-10-17: open PRs as drafts (asked in x)\n"),
         );
       }).pipe(Effect.provide(harness.layer));
     },
@@ -3450,4 +3147,780 @@ describe("stopping a worker on another machine", () => {
       );
     },
   );
+});
+
+const autoPlacementHarness = (enabled = true, localUsed = 80, projects = 1) => {
+  const machine = new RemoteMachine();
+  machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+  machine.hostQuotas = { codex: 20 };
+  const harness = makeHarness({
+    sshRemote: machine.layer,
+    projects,
+    repositoryIdentity: {
+      canonicalKey: "github.com/goat-si/goat",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "https://github.com/goat-si/goat.git",
+      },
+    },
+    settingsLayer: ServerSettings.layerTest({
+      channelAutoPlacement: enabled,
+      textGenerationModelSelection: modelSelection,
+    }).pipe(Layer.orDie),
+    providerInstances: [
+      { instanceId: "codex", displayName: "Local Codex", weeklyUsedPercent: localUsed },
+    ],
+  });
+  harness.script.current = remoteScript;
+  return { machine, harness };
+};
+
+const receivePlacementTask = (key: string, text = "do: inspect the build") =>
+  Effect.gen(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.claimOwnership({ token: "placement-owner", now, staleBefore: now });
+    const input = yield* gateway.ingest(goatInput(text, key), rpcContext);
+    yield* reception.receive(input.inputId, "placement-owner");
+    return (yield* ledger.listTasksByStatus(["received"])).find(
+      (stored) => stored.task.originInputId === input.inputId,
+    )!.task;
+  });
+
+describe("automatic same-repository placement through the dispatcher", () => {
+  it.effect.each(["matching", "other-model", "other-home"] as const)(
+    "uses remote pooled quotas only for the matching home and model: %s",
+    (scenario) => {
+      const { machine, harness } = autoPlacementHarness();
+      return Effect.gen(function* () {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        machine.hostQuotaPool = {
+          schema: "ocx.quota-pool/1",
+          producer: { version: "test", role: "standalone", homeId: "remote-home" },
+          generatedAt: now,
+          providers: [
+            {
+              provider: "codex",
+              accounts: [],
+              pooled: {
+                windows: [
+                  {
+                    id: "weekly",
+                    kind: "weekly",
+                    label: "Weekly",
+                    source: "measured",
+                    observedAt: now,
+                    usedPercent: 95,
+                    scopeModel: scenario === "other-model" ? "different-model" : "gpt-6.1-sol",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+        if (scenario === "other-home") machine.hostQuotaHomeId = "wrong-home";
+        yield* setupBot;
+        const milestone = yield* channelWriteMilestones;
+        const task = yield* receivePlacementTask("auto-pool-" + scenario);
+        yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(
+          task.taskId,
+          "placement-owner",
+        );
+        const running = yield* milestone.waitFor(
+          (next) => next.status !== "received" && next.status !== "dispatching",
+        );
+        assert.strictEqual(running.status, "running", JSON.stringify(running.openQuestions));
+        if (scenario === "matching") {
+          assert.isUndefined(running.host);
+          assert.lengthOf(machine.launches, 0);
+          assert.lengthOf(harness.world.launches, 1);
+        } else {
+          assert.strictEqual(running.host, "mac-studio");
+          assert.lengthOf(machine.launches, 1);
+        }
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "claims the lower weekly quota host, persists its reason and reuses its worker identity",
+    () => {
+      const { machine, harness } = autoPlacementHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const milestone = yield* channelWriteMilestones;
+        const task = yield* receivePlacementTask("auto-lower-weekly");
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        yield* dispatcher.dispatch(task.taskId, "placement-owner");
+        const running = yield* milestone.waitFor(
+          (next) => next.status !== "received" && next.status !== "dispatching",
+        );
+        assert.strictEqual(running.status, "running", JSON.stringify(running.openQuestions));
+        assert.strictEqual(running.host, "mac-studio");
+        assert.strictEqual(running.target?.modelSelection.model, "gpt-6.1-sol");
+        assert.strictEqual(running.target?.modelSelection.instanceId, "codex");
+        assert.include(running.target?.placementReason ?? "", "20% weekly used");
+        assert.strictEqual(running.worker?.host, running.target?.remote?.host);
+        assert.strictEqual(running.worker?.threadId, machine.thread(correlationOf(machine)));
+        assert.isTrue(machine.launches[0]?.requireReady);
+        assert.isTrue(machine.calls.every((call) => call.requireReady));
+        assert.isTrue(
+          machine.calls
+            .filter(
+              (call) =>
+                call.tool === "orchestrator_capabilities" || call.tool === "goat_provider_diagnose",
+            )
+            .every((call) => call.existingSessionOnly),
+        );
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const claimed = (yield* ledger.listPendingNarrations(50)).find(
+          (entry) => entry.event.type === "task.dispatch.claimed",
+        )?.event;
+        assert.strictEqual(claimed?.type, "task.dispatch.claimed");
+        if (claimed?.type === "task.dispatch.claimed")
+          assert.deepStrictEqual(claimed.payload.target, running.target);
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        for (const pending of yield* ledger.listPendingNarrations(50))
+          yield* reception.narrate(pending, "placement-owner");
+        const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+        yield* delivery.deliverDue("placement-owner");
+        const chips = (yield* botMessages).turnItems.flatMap((item) =>
+          item.type === "notification" && item.ledgerTask !== undefined ? [item.ledgerTask] : [],
+        );
+        assert.strictEqual(chips.at(-1)?.placementReason, running.target?.placementReason);
+        assert.strictEqual(chips.at(-1)?.worker?.host, "mac-studio");
+        yield* dispatcher.dispatch(task.taskId, "placement-owner");
+        assert.lengthOf(machine.launches, 1);
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("spreads simultaneous claims using the committed host load", () => {
+    const { machine, harness } = autoPlacementHarness(true, 45);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const first = yield* receivePlacementTask("auto-spread-first");
+      const second = yield* receivePlacementTask("auto-spread-second");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const claims: ChannelTask[] = [];
+      const bothClaimed = yield* Deferred.make<void>();
+      const bound: ChannelTask[] = [];
+      const bothBound = yield* Deferred.make<void>();
+      const observed: { applyTaskEvent: typeof ledger.applyTaskEvent } = ledger;
+      const original = observed.applyTaskEvent;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          observed.applyTaskEvent = (input) =>
+            original(input).pipe(
+              Effect.tap(() =>
+                Effect.gen(function* () {
+                  if (input.write.event.type === "task.worker.bound") {
+                    bound.push(input.write.next);
+                    if (bound.length === 2) yield* Deferred.succeed(bothBound, undefined);
+                  }
+                  if (input.write.event.type !== "task.dispatch.claimed") return;
+                  claims.push(input.write.next);
+                  if (claims.length === 2) yield* Deferred.succeed(bothClaimed, undefined);
+                }),
+              ),
+            );
+        }),
+        () =>
+          Effect.sync(() => {
+            observed.applyTaskEvent = original;
+          }),
+      );
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* Effect.all(
+        [
+          dispatcher.dispatch(first.taskId, "placement-owner"),
+          dispatcher.dispatch(second.taskId, "placement-owner"),
+        ],
+        { concurrency: 2 },
+      );
+      yield* Deferred.await(bothClaimed);
+      yield* Deferred.await(bothBound);
+      assert.lengthOf(machine.launches, 1);
+      assert.lengthOf(harness.world.launches, 1);
+      assert.strictEqual(new Set(bound.map((task) => task.worker?.threadId)).size, 2);
+      assert.deepStrictEqual(bound.map((task) => task.worker?.host ?? "local").toSorted(), [
+        "local",
+        "mac-studio",
+      ]);
+      assert.deepStrictEqual(
+        claims.map((task) => task.host ?? "local"),
+        ["mac-studio", "local"],
+      );
+      assert.include(claims[1]?.target?.placementReason ?? "", "free while others work");
+      assert.strictEqual(
+        claims[0]?.target?.modelSelection.model,
+        claims[1]?.target?.modelSelection.model,
+      );
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect.each([
+    "disabled",
+    "wrong-repository",
+    "disconnected",
+    "unreachable",
+    "unready",
+    "wrong-model",
+    "missing-capabilities",
+    "exhausted",
+    "project-disabled",
+    "missing-project-policy",
+  ] as const)("keeps work local when %s", (scenario) => {
+    const { machine, harness } = autoPlacementHarness(scenario !== "disabled");
+    if (scenario === "wrong-repository")
+      machine.projects[0]!.repositoryIdentity.canonicalKey = "github.com/other/repo";
+    if (scenario === "disconnected") machine.connected = false;
+    if (scenario === "unreachable") machine.down = true;
+    if (scenario === "unready") machine.unrunnable = ["codex"];
+    if (scenario === "exhausted") machine.hostQuotas = { codex: 100 };
+    if (scenario === "project-disabled") machine.projectDisabled = ["codex"];
+    if (scenario === "missing-project-policy") machine.projectPolicyKnown = false;
+    if (scenario === "wrong-model")
+      machine.offeredModels = [{ instance: "codex", model: "another-model" }];
+    if (scenario === "missing-capabilities") machine.offeredModels = undefined;
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const milestone = yield* channelWriteMilestones;
+      const task = yield* receivePlacementTask("auto-negative-" + scenario);
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* dispatcher.dispatch(task.taskId, "placement-owner");
+      const running = yield* milestone.waitFor(
+        (next) => next.status !== "received" && next.status !== "dispatching",
+      );
+      assert.strictEqual(running.status, "running", JSON.stringify(running.openQuestions));
+      assert.isUndefined(running.host);
+      assert.isUndefined(running.target?.remote);
+      assert.lengthOf(machine.launches, 0);
+      assert.lengthOf(harness.world.launches, 1);
+      if (scenario === "disabled" || scenario === "disconnected") assert.lengthOf(machine.calls, 0);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("does not block dispatch and abandons a hung probe at its bounded deadline", () => {
+    const { machine, harness } = autoPlacementHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const milestone = yield* channelWriteMilestones;
+      const entered = yield* Deferred.make<void>();
+      const held = yield* Deferred.make<void>();
+      machine.onProjectList = Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(held)),
+      );
+      const task = yield* receivePlacementTask("auto-hung-probe");
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      // This returns while the probe is held, so other channel work can run.
+      yield* dispatcher.dispatch(task.taskId, "placement-owner");
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust(Duration.seconds(5));
+      const running = yield* milestone.waitFor(
+        (next) => next.status !== "received" && next.status !== "dispatching",
+      );
+      assert.strictEqual(running.status, "running", JSON.stringify(running.openQuestions));
+      assert.isUndefined(running.host);
+      assert.lengthOf(machine.launches, 0);
+      assert.lengthOf(harness.world.launches, 1);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect.each(["unready", "project-disabled"] as const)(
+    "keeps an explicitly named host pinned while excluding %s",
+    (scenario) => {
+      const { machine, harness } = autoPlacementHarness(true, 0);
+      machine.offeredModels = [
+        { instance: "codex", model: "gpt-6.1-sol" },
+        { instance: "codex-ready", model: "gpt-6.1-sol" },
+      ];
+      if (scenario === "unready") machine.unrunnable = ["codex"];
+      else machine.projectDisabled = ["codex"];
+      machine.hostQuotas = { codex: 0, "codex-ready": 90 };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const milestone = yield* channelWriteMilestones;
+        const task = yield* receivePlacementTask("auto-pinned", "do@mac-studio: inspect the build");
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        yield* dispatcher.dispatch(task.taskId, "placement-owner");
+        const running = yield* milestone.waitFor(
+          (next) => next.status !== "received" && next.status !== "dispatching",
+        );
+        assert.strictEqual(running.status, "running", JSON.stringify(running.openQuestions));
+        assert.strictEqual(running.host, "mac-studio");
+        assert.strictEqual(running.target?.modelSelection.instanceId, "codex-ready");
+        assert.isUndefined(running.target?.remote?.automatic);
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    },
+  );
+});
+
+it.effect("rechecks a revoked channel grant after automatic discovery and before claim", () => {
+  const { machine, harness } = autoPlacementHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const milestone = yield* channelWriteMilestones;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.claimOwnership({ token: "placement-owner", now, staleBefore: now });
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    machine.onProjectList = Deferred.succeed(entered, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+    );
+    const input = yield* gateway.ingest(
+      slackInput("do: inspect permission", "auto-revoked"),
+      slackContext,
+    );
+    yield* reception.receive(input.inputId, "placement-owner");
+    const task = yield* onlyTask;
+    yield* dispatcher.dispatch(task.taskId, "placement-owner");
+    yield* Deferred.await(entered);
+    yield* ledger.unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" });
+    yield* Deferred.succeed(release, undefined);
+    const failed = yield* milestone.waitFor((next) => next.status === "failed");
+    assert.isUndefined(failed.target);
+    assert.include(failed.resultSummary ?? "", "permission");
+    assert.lengthOf(machine.launches, 0);
+    assert.lengthOf(harness.world.launches, 0);
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+it.effect(
+  "a fresh remote worker service recovers an automatic ambiguous launch without choosing again",
+  () => {
+    const { machine, harness } = autoPlacementHarness();
+    machine.loseNextLaunchAnswer = true;
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const milestone = yield* channelWriteMilestones;
+      const task = yield* receivePlacementTask("auto-restart-ambiguous");
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* dispatcher.dispatch(task.taskId, "placement-owner");
+      yield* Deferred.await(machine.launchAnswerLost);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const claimed = (yield* ledger.getTask(task.taskId))!.task;
+      assert.strictEqual(claimed.status, "dispatching");
+      assert.strictEqual(claimed.host, "mac-studio");
+      machine.hostQuotas = { codex: 100 };
+      const restored = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+        Effect.provide(machine.layer),
+      );
+      yield* Context.get(restored, ChannelRemoteWorkers).launch(task.taskId, "placement-owner");
+      const running = yield* milestone.waitFor((next) => next.status === "running");
+      assert.deepStrictEqual(running.target, claimed.target);
+      assert.strictEqual(running.worker?.threadId, machine.thread(correlationOf(machine)));
+      assert.lengthOf(machine.launches, 1);
+      assert.strictEqual(machine.threads.size, 1);
+      assert.lengthOf(harness.world.launches, 0);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);
+
+it.effect("automatic project questions retain their selectable choices", () => {
+  const { machine, harness } = autoPlacementHarness(true, 80, 2);
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const milestone = yield* channelWriteMilestones;
+    const task = yield* receivePlacementTask("auto-project-choices");
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+    const waiting = yield* milestone.waitFor((next) => next.status === "waiting_input");
+    expect(waiting.openQuestions[0]?.options).toEqual(["Channel work", "Other work 1"]);
+    assert.lengthOf(machine.calls, 0);
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+it.effect("workerless questions do not consume automatic worker slots", () => {
+  const { machine, harness } = autoPlacementHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    for (const key of ["one", "two", "three", "four"]) {
+      const task = yield* receivePlacementTask("question-" + key);
+      const stored = (yield* ledger.getTask(task.taskId))!;
+      yield* commitTransition(
+        ledger,
+        stored,
+        {
+          type: "task.question.opened",
+          payload: {
+            question: {
+              questionId: ChannelQuestionId.make("question:" + key),
+              text: "Which project?",
+              askedAt: DateTime.formatIso(yield* DateTime.now),
+            },
+          },
+        },
+        { owner: "placement-owner" },
+      );
+    }
+    const task = yield* receivePlacementTask("auto-after-four-questions");
+    const milestone = yield* taskWriteMilestones(task.taskId);
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+    const running = yield* milestone.waitFor((next) => next.status === "running");
+    assert.strictEqual(running.host, "mac-studio");
+    assert.lengthOf(machine.launches, 1);
+    assert.strictEqual((yield* ledger.listTasksByStatus(["waiting_input"])).length, 4);
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+it.effect("bounds an unreachable automatic claim even before its first launch attempt", () => {
+  const { machine, harness } = autoPlacementHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const task = yield* receivePlacementTask("auto-before-first-attempt");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const milestones = yield* taskWriteMilestones(task.taskId);
+    const observed: { applyTaskEvent: typeof ledger.applyTaskEvent } = ledger;
+    const original = observed.applyTaskEvent;
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        observed.applyTaskEvent = (input) =>
+          original(input).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (input.write.event.type === "task.dispatch.claimed") machine.down = true;
+              }),
+            ),
+          );
+      }),
+      () =>
+        Effect.sync(() => {
+          observed.applyTaskEvent = original;
+        }),
+    );
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+    yield* milestones.waitFor(
+      (next, state) => next.status === "dispatching" && state?.attempts === 0,
+    );
+    yield* TestClock.adjust(Duration.minutes(6));
+    const restarted = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+      Effect.provide(machine.layer),
+    );
+    yield* Context.get(restarted, ChannelRemoteWorkers).launch(task.taskId, "placement-owner");
+    const failed = yield* milestones.waitFor((next) => next.status === "failed");
+    assert.include(failed.resultSummary ?? "", "can't reach");
+    assert.lengthOf(machine.launches, 0);
+    assert.lengthOf(harness.world.launches, 0);
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+it.effect("refuses a legacy automatic claim without a recorded ceiling before launch", () => {
+  const { machine, harness } = autoPlacementHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const task = yield* receivePlacementTask("legacy-claim-ceiling");
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const milestones = yield* taskWriteMilestones(task.taskId);
+    const observed: { applyTaskEvent: typeof ledger.applyTaskEvent } = ledger;
+    const original = observed.applyTaskEvent;
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        observed.applyTaskEvent = (input) => {
+          const event = input.write.event;
+          if (event.type !== "task.dispatch.claimed") return original(input);
+          const remote = event.payload.target.remote!;
+          const target = {
+            ...event.payload.target,
+            remote: {
+              ...remote,
+              automatic: {
+                ...remote.automatic!,
+                runtimeModeCeiling: undefined,
+              },
+            },
+          };
+          return original({
+            ...input,
+            write: {
+              ...input.write,
+              next: { ...input.write.next, target },
+              event: { ...event, payload: { ...event.payload, target } },
+            },
+          });
+        };
+      }),
+      () =>
+        Effect.sync(() => {
+          observed.applyTaskEvent = original;
+        }),
+    );
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+    const failed = yield* milestones.waitFor((next) => next.status === "failed");
+    assert.include(failed.resultSummary ?? "", "permission to start this work changed");
+    assert.lengthOf(machine.launches, 0);
+    assert.lengthOf(harness.world.launches, 0);
+    assert.strictEqual(
+      yield* ledger.countBusyTasks({
+        ownerId: task.requester.ownerId,
+        principalId: task.requester.principalId,
+      }),
+      0,
+    );
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+it.effect.each(["connection", "ceiling"] as const)(
+  "terminates an automatic claim whose durable %s is missing without granting or relaunching",
+  (missing) => {
+    const { machine, harness } = autoPlacementHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const task = yield* receivePlacementTask("missing-authority-" + missing);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const milestones = yield* taskWriteMilestones(task.taskId);
+      const observed: { applyTaskEvent: typeof ledger.applyTaskEvent } = ledger;
+      const original = observed.applyTaskEvent;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          observed.applyTaskEvent = (input) =>
+            original(input).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (input.write.event.type === "task.dispatch.claimed") machine.down = true;
+                }),
+              ),
+            );
+        }),
+        () =>
+          Effect.sync(() => {
+            observed.applyTaskEvent = original;
+          }),
+      );
+      yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+      yield* milestones.waitFor(
+        (next, state) => next.status === "dispatching" && state?.attempts === 0,
+      );
+      yield* ledger.updateRemoteWorker({
+        owner: "placement-owner",
+        now: DateTime.formatIso(yield* DateTime.now),
+        update: {
+          taskId: task.taskId,
+          update: (json) => {
+            const state: RemoteWorkerState = JSON.parse(json!);
+            return JSON.stringify({
+              ...state,
+              connection:
+                missing === "connection"
+                  ? undefined
+                  : {
+                      ...state.connection,
+                      runtimeModeCeiling: undefined,
+                    },
+            });
+          },
+        },
+      });
+      machine.down = false;
+      const previousCalls = machine.calls.length;
+      yield* TestClock.adjust(Duration.minutes(6));
+      const restarted = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+        Effect.provide(machine.layer),
+      );
+      yield* Context.get(restarted, ChannelRemoteWorkers).launch(task.taskId, "placement-owner");
+      const failed = yield* milestones.waitFor((next) => next.status === "failed");
+      assert.include(failed.resultSummary ?? "", "recorded authority is incomplete");
+      assert.strictEqual(machine.calls.length, previousCalls);
+      assert.lengthOf(machine.launches, 0);
+      assert.lengthOf(harness.world.launches, 0);
+      assert.strictEqual(
+        yield* ledger.countBusyTasks({
+          ownerId: task.requester.ownerId,
+          principalId: task.requester.principalId,
+        }),
+        0,
+      );
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);
+
+it.effect.each(
+  [
+    "revoked",
+    "narrowed-memory",
+    "lowered-mode",
+    "cancelled",
+    "stale-generation",
+    "changed-host",
+    "changed-thread",
+    "changed-scope",
+    "missing-state",
+    "missing-ceiling",
+  ].flatMap((scenario) => [
+    { scenario, pinned: false },
+    ...([
+      "revoked",
+      "narrowed-memory",
+      "lowered-mode",
+      "cancelled",
+      "stale-generation",
+      "changed-host",
+      "changed-thread",
+    ].includes(scenario)
+      ? [{ scenario, pinned: true }]
+      : []),
+  ]),
+)(
+  "recovery fails closed for $scenario before the tool request (pinned=$pinned)",
+  ({ scenario, pinned }) => {
+    const { machine, harness } = autoPlacementHarness();
+    machine.loseNextLaunchAnswer = true;
+    const memoryOwner = {
+      ...owner,
+      grantedScopes: [...owner.grantedScopes, "memory:read" as const],
+    };
+    const memoryContext = { ...slackContext, grantedScopes: memoryOwner.grantedScopes };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const identities = yield* ChannelIdentityService.ChannelIdentityService;
+      const link = Effect.fn("test.linkPlacementRequester")(function* (
+        key: string,
+        memory: boolean,
+        runtimeModeCeiling: RuntimeMode,
+      ) {
+        const { code } = yield* identities.createLink(
+          {
+            connectionId: "slack-1",
+            runtimeModeCeiling,
+            grantedScopes: memory ? memoryOwner.grantedScopes : owner.grantedScopes,
+          },
+          memoryOwner,
+        );
+        yield* gateway.linkIdentity(
+          {
+            connectionId: "slack-1",
+            externalActorId: "U1",
+            code,
+            idempotencyKey: key,
+            replyAddress: {
+              kind: "slack",
+              connectionId: "slack-1",
+              teamId: "T1",
+              channelId: "D1",
+              rootTs: "1",
+            },
+          },
+          memoryContext,
+        );
+      });
+      yield* link("initial-" + scenario, true, "auto-accept-edits");
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger.claimOwnership({ token: "placement-owner", now, staleBefore: now });
+      const input = yield* gateway.ingest(
+        slackInput(
+          pinned ? "do@mac-studio: guarded recovery" : "do: guarded recovery",
+          "negative-recovery-" + scenario,
+        ),
+        memoryContext,
+      );
+      yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+        input.inputId,
+        "placement-owner",
+      );
+      const task = yield* onlyTask;
+      yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+      yield* Deferred.await(machine.launchAnswerLost);
+      const previousCalls = machine.calls.length;
+      machine.beforeHostCall = () =>
+        Effect.gen(function* () {
+          machine.beforeHostCall = undefined;
+          if (scenario === "revoked")
+            yield* ledger.unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" });
+          else if (scenario === "narrowed-memory")
+            yield* link("narrowed", false, "auto-accept-edits");
+          else if (scenario === "lowered-mode") yield* link("lowered", true, "approval-required");
+          else if (scenario === "cancelled")
+            yield* commitTransition(
+              ledger,
+              (yield* ledger.getTask(task.taskId))!,
+              { type: "task.cancelled", payload: { reason: "Stopped" } },
+              { owner: "placement-owner" },
+            );
+          else if (scenario === "stale-generation") {
+            yield* commitTransition(
+              ledger,
+              (yield* ledger.getTask(task.taskId))!,
+              {
+                type: "task.failed",
+                payload: { generation: task.generation, reason: "interrupted" },
+              },
+              { owner: "placement-owner" },
+            );
+            yield* commitTransition(
+              ledger,
+              (yield* ledger.getTask(task.taskId))!,
+              { type: "task.retry.requested", payload: { generation: task.generation + 1 } },
+              { owner: "placement-owner" },
+            );
+          } else
+            yield* ledger.updateRemoteWorker({
+              owner: "placement-owner",
+              now,
+              update: {
+                taskId: task.taskId,
+                update: (json) => {
+                  const state: RemoteWorkerState = JSON.parse(json!);
+                  return JSON.stringify({
+                    ...state,
+                    ...(scenario === "changed-host" ? { host: "different-host" } : {}),
+                    ...(scenario === "changed-thread"
+                      ? { remoteThreadId: "different-thread" }
+                      : {}),
+                    ...(scenario === "changed-scope"
+                      ? { connection: { ...state.connection, memoryGrantCeiling: "read_write" } }
+                      : {}),
+                    ...(scenario === "missing-state" ? { connection: undefined } : {}),
+                    ...(scenario === "missing-ceiling"
+                      ? { connection: { ...state.connection, runtimeModeCeiling: undefined } }
+                      : {}),
+                  });
+                },
+              },
+            });
+        }).pipe(Effect.orDie);
+      const restored = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+        Effect.provide(machine.layer),
+      );
+      yield* Context.get(restored, ChannelRemoteWorkers).launch(task.taskId, "placement-owner");
+      yield* Deferred.await(machine.authorizationDenied);
+      assert.strictEqual(machine.calls.length, previousCalls);
+      assert.lengthOf(machine.launches, 1);
+      assert.strictEqual(machine.threads.size, 1);
+      assert.lengthOf(harness.world.launches, 0);
+      assert.isUndefined((yield* ledger.getTask(task.taskId))?.task.worker);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);
+
+it.effect("automatic recovery refuses a different environment behind the same host alias", () => {
+  const { machine, harness } = autoPlacementHarness();
+  machine.loseNextLaunchAnswer = true;
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const task = yield* receivePlacementTask("auto-changed-environment");
+    const milestones = yield* taskWriteMilestones(task.taskId);
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, "placement-owner");
+    yield* Deferred.await(machine.launchAnswerLost);
+    machine.environmentReadId = "environment:replacement";
+    const restored = yield* Layer.build(Layer.fresh(remoteWorkersLayer)).pipe(
+      Effect.provide(machine.layer),
+    );
+    yield* Context.get(restored, ChannelRemoteWorkers).launch(task.taskId, "placement-owner");
+    const failed = yield* milestones.waitFor((next) => next.status === "failed");
+    assert.include(failed.resultSummary ?? "", "identity changed");
+    assert.lengthOf(machine.launches, 1);
+    assert.isUndefined(failed.worker);
+  }).pipe(Effect.scoped, Effect.provide(harness.layer));
 });

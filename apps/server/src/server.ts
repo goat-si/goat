@@ -1,76 +1,45 @@
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
+import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
+import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import * as HostProcess from "@goat/shared/HostProcess";
-import { resolveCommandPath } from "@goat/shared/shell";
 import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
 import * as NotesLayers from "./notes/NotesLayers.ts";
 import * as HomeRequests from "./provider/CodexHomeRequests.ts";
 import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as HomeRoute from "./provider/OpenCodexRoute.ts";
 import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
+import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
+import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import type * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
-import * as NodeCrypto from "node:crypto";
 import * as ChannelLayers from "./channels/ChannelLayers.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
-import * as BoatClient from "./cloudMachines/BoatClient.ts";
-import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
-import * as CloudMachineSsh from "./cloudMachines/sshConfig.ts";
+import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
 import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
-import * as McpToolAccess from "./mcp/McpToolAccess.ts";
+import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
-import { invocationPermit, memoryError } from "./mcp/toolkits/memory/handlers.ts";
-import { MemoryAdministrationToolkit } from "./mcp/toolkits/memoryAdministration/tools.ts";
-import { parseClaudeMemory } from "./memory/imports/ClaudeMemoryImporter.ts";
-import { parseCodexMemory } from "./memory/imports/CodexMemoryImporter.ts";
-import {
-  acquireMemoryImportReader,
-  preflightMemoryImportStateDirectory,
-  type MemoryImportReaderConfig,
-} from "./memory/imports/MemoryImportReader.ts";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
-import { parseOmoMemory } from "./memory/imports/OmoMemoryImporter.ts";
-import { makeProviderMemoryImport } from "./memory/imports/ProviderMemoryImport.ts";
-import * as MemoryCompactor from "./memory/MemoryCompactor.ts";
-import * as MemoryMaintenance from "./memory/MemoryFtsMaintenance.ts";
-import * as MemoryGenerationHold from "./memory/MemoryGenerationHold.ts";
-import * as MemoryHubAuth from "./memory/MemoryHubAuth.ts";
-import * as MemoryHubHttp from "./memory/MemoryHubHttp.ts";
-import * as MemoryHub from "./memory/MemoryHubService.ts";
-import * as MemoryOwnerSourceReadPolicyBinding from "./memory/MemoryOwnerSourceReadPolicyBinding.ts";
-import * as MemoryQuota from "./memory/MemoryQuotaService.ts";
-import * as MemoryReportAdapter from "./memory/MemoryReportAdapter.ts";
-import * as MemoryReportWorker from "./memory/MemoryReportWorker.ts";
-import * as MemoryService from "./memory/MemoryService.ts";
-import * as MemorySettings from "./memory/MemorySettingsService.ts";
-import { parseAsideMemory } from "./memory/imports/AsideMemoryImporter.ts";
-import * as MemorySnapshot from "./memory/MemorySnapshot.ts";
-import * as MemorySnapshotBinding from "./memory/MemorySnapshotBinding.ts";
-import * as MemoryStore from "./memory/MemoryStore.ts";
-import * as MemorySyncRuntimeLive from "./memory/MemorySyncRuntimeLive.ts";
-import * as MemorySync from "./memory/MemorySyncService.ts";
-import * as MemoryWorker from "./memory/MemoryWorker.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
+import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
 import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
@@ -81,9 +50,11 @@ import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
-import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
+import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
@@ -91,22 +62,13 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  EnvironmentHttpApi,
-  MemoryHubDisableInput,
-  MemoryHubDisableResult,
-  MemoryHubError,
-  MemorySettingsUpdateInput,
-  type RepositoryIdentity,
-} from "@goat/contracts";
+import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
@@ -145,13 +107,23 @@ import * as CloudHttp from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
+import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
+import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
+import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
+import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
+import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
+import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -159,10 +131,12 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as FleetFallback from "./fleet/resources/Fallback.ts";
+import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
 import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ServerHttp from "./http.ts";
+import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
 import {
   guardHttpResponseWriteErrors,
@@ -202,6 +176,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -215,7 +190,9 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
+import { MuseUsageHome } from "@goat/provider-muse/server";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
@@ -252,6 +229,9 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
+import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
+
+export { MemorySourceReadBinding } from "./memory/MemoryApplicationLayers.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -284,7 +264,7 @@ const HTTP_ROUTER_CONFIG = {
 } as const;
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
-// T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
+// GOAT's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
 // already closes the websocket gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
@@ -318,7 +298,7 @@ const layerProviderEventLoggers = Layer.effect(
 
 const layerPtyAdapter = NodePtyAdapter.layer;
 
-const layerServerSettings = ServerSettings.layer.pipe(
+export const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provideMerge(SqlitePersistence.layerConfig),
@@ -344,10 +324,38 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
 
+// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
+const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
+  Layer.provide(HostPressureMonitor.layer),
+);
+const layerFleetPressure = FleetPressure.layer.pipe(
+  Layer.provide(layerFleetHealth),
+  Layer.provideMerge(layerPressureAdmission),
+);
+const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
+const layerLaunchWatches = LaunchWatchService.layer.pipe(
+  Layer.provideMerge(layerThreadReplicas),
+  Layer.provide(layerPressureAdmission),
+);
+
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
+  Layer.provide(LinuxHelperReport.layer),
+);
+
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
+
+// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
+const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
+  Layer.provide(layerCuaDriver),
+  Layer.provide(LinuxHelperReport.layer),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -359,6 +367,7 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       AntigravityUsage.layer,
+      MuseUsageHome.layer,
       CodexUsageHistory.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
@@ -411,7 +420,7 @@ const layerHttpServer = Layer.unwrap(
 
 const layerPlatformServices = NodeServices.layer;
 
-const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
+export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 
@@ -421,7 +430,7 @@ const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.p
   Layer.provideMerge(layerVcsDriverRegistry),
 );
 
-const layerRepositoryIdentityResolver = Layer.effect(
+export const layerRepositoryIdentityResolver = Layer.effect(
   RepositoryIdentityResolver.RepositoryIdentityResolver,
   Effect.gen(function* () {
     const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
@@ -453,7 +462,7 @@ const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(SourceControlRateLimit.layer),
 );
 
-const layerTextGeneration = TextGeneration.layer.pipe(
+export const layerTextGeneration = TextGeneration.layer.pipe(
   Layer.provide(layerSourceControlProviderRegistry),
 );
 
@@ -544,7 +553,7 @@ const layerDevice = DeviceService.layer.pipe(
 // SshRemoteDispatch layer reference as the MCP tools, so the proxy shares their tunnel manager.
 const layerHubProxy = HubProxySessions.layer.pipe(
   Layer.provideMerge(HubProxyNodes.layerFromHubNodes),
-  Layer.provide(SshRemoteDispatch.layer),
+  Layer.provide(SshRemoteDispatchLive.layer),
 );
 
 const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
@@ -566,412 +575,35 @@ const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
   Layer.provide(GoatProjectFileLoader.layer),
 );
 
-// Sync needs the core service at construction; source reads need Sync only at invocation.
-// The application owns this single binding so neither service constructs a second core.
-export class MemorySourceReadBinding extends Context.Service<
-  MemorySourceReadBinding,
-  {
-    readonly readSource: MemoryService.MemorySourceReadAuthority["readSource"];
-    readonly importSync: Pick<
-      MemorySync.MemorySyncService["Service"],
-      "readLocalReadiness" | "requireBootstrap" | "syncStatus"
-    >;
-    readonly bind: (sync: MemorySync.MemorySyncService["Service"]) => Effect.Effect<void>;
-  }
->()("goat/server/MemorySourceReadBinding") {}
-export const layerMemorySourceReadBinding = Layer.effect(
-  MemorySourceReadBinding,
-  Effect.gen(function* () {
-    const current = yield* Ref.make<MemorySync.MemorySyncService["Service"] | null>(null);
-    return MemorySourceReadBinding.of({
-      readSource: (input, permit) =>
-        Ref.get(current).pipe(
-          Effect.flatMap((sync) =>
-            sync === null
-              ? Effect.fail(new MemoryHubError({ code: "route_unavailable" }))
-              : sync.readSource(input, permit),
-          ),
-        ),
-      importSync: {
-        readLocalReadiness: () =>
-          Ref.get(current).pipe(
-            Effect.flatMap((sync) =>
-              sync === null
-                ? Effect.fail(new MemoryHubError({ code: "route_unavailable" }))
-                : sync.readLocalReadiness(),
-            ),
-          ),
-        requireBootstrap: (space) =>
-          Ref.get(current).pipe(
-            Effect.flatMap((sync) =>
-              sync === null
-                ? Effect.fail(new MemoryHubError({ code: "route_unavailable" }))
-                : sync.requireBootstrap(space),
-            ),
-          ),
-        syncStatus: (input, permit) =>
-          Ref.get(current).pipe(
-            Effect.flatMap((sync) =>
-              sync === null
-                ? Effect.fail(new MemoryHubError({ code: "route_unavailable" }))
-                : sync.syncStatus(input, permit),
-            ),
-          ),
-      },
-      bind: (sync) => Ref.set(current, sync),
-    });
-  }),
-);
-// One layer reference for the worker and layerMemorySync, so the worker, conflict resolution and
-// the status read share one set of holds. The registry supplies the provider version in each key.
-const layerMemoryGenerationHold = MemoryGenerationHold.layer.pipe(
-  Layer.provide(ProviderRegistry.layer),
-);
-const layerMemoryQuota = MemoryQuota.layer.pipe(Layer.provideMerge(MemoryStore.layer));
-export const layerMemorySourceReadService = Layer.unwrap(
-  Effect.gen(function* () {
-    const binding = yield* MemorySourceReadBinding;
-    return MemoryService.layerWithSourceReadAuthority(binding.readSource);
-  }),
-).pipe(Layer.provide(layerMemorySourceReadBinding));
-const layerMemoryService = layerMemorySourceReadService.pipe(
-  Layer.provide(layerServerSettings),
-  Layer.provideMerge(layerMemoryQuota),
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provide(layerRepositoryIdentityResolver),
-  Layer.provide(layerPersistence),
-);
-const layerMemoryWorker = Layer.mergeAll(
-  MemoryWorker.layer,
-  MemoryReportWorker.layer.pipe(Layer.provide(MemoryReportAdapter.layer)),
-).pipe(
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provideMerge(layerMemoryService),
-  Layer.provide(MemoryMaintenance.layer.pipe(Layer.provide(layerMemoryQuota))),
-  Layer.provide(RuntimeLayer.layerEventSink),
-  Layer.provide(layerTextGeneration),
-  Layer.provide(RuntimeIdentity.layer),
-  Layer.provide(layerMemoryGenerationHold),
-);
-const layerMemoryStarted = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const worker = yield* MemoryWorker.MemoryWorker;
-    yield* worker.start();
-    const reports = yield* MemoryReportWorker.MemoryReportWorker;
-    yield* reports.start();
-  }),
-).pipe(Layer.provideMerge(layerMemoryWorker));
-
-// These layers are also used by the real-store HTTP scenarios. Dependencies are
-// supplied by the application, so WP2 and the hub share one core and settings owner.
-export const layerMemoryHubServices = Layer.mergeAll(
-  MemoryHub.layer,
-  MemoryHub.administratorLayer,
-  MemoryCompactor.layer,
-  MemoryHubAuth.layer,
-).pipe(
-  Layer.provideMerge(MemoryHub.activityLayer),
-  Layer.provideMerge(
-    Layer.effect(
-      MemoryHub.MemoryHubConfiguration,
-      Effect.gen(function* () {
-        const settings = yield* ServerSettings.MemoryHubCommittedSettings;
-        const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
-        const hubEnvironmentId = yield* identity.getEnvironmentId;
-        return MemoryHub.MemoryHubConfiguration.of({
-          read: settings.read.pipe(
-            Effect.map(({ settings: memoryHub }) =>
-              memoryHub.mode === "hub" && memoryHub.memorySpaceId !== null
-                ? { memorySpaceId: memoryHub.memorySpaceId, hubEnvironmentId }
-                : null,
-            ),
-          ),
-        });
-      }),
-    ),
-  ),
-);
-
-// L3's interface tag has the L2 runtime key. Supply the actual instance, without
-// constructing another service or introducing a per-request runtime.
-const layerMemoryHubHttpService = Layer.effect(
-  MemoryHubHttp.MemoryHubService,
-  MemoryHub.MemoryHubService,
-);
-export const layerMemoryHubRoutes = MemoryHubHttp.layer.pipe(
-  HttpRouter.provideRequest(layerMemoryHubHttpService),
-  Layer.provide(layerMemoryHubHttpService),
-);
-
-export const layerMemoryHubStarted = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const settings = yield* ServerSettings.ServerSettingsService;
-    const configuration = yield* MemoryHub.MemoryHubConfiguration;
-    const store = yield* MemoryStore.MemoryStore;
-    const compactor = yield* MemoryCompactor.MemoryCompactor;
-    const applicationScope = yield* Scope.Scope;
-    // Subscribe before readiness/read to retain a concurrent first enable.
-    const changes = yield* settings.subscribeChanges;
-    const readyPrincipal = Effect.gen(function* () {
-      const hub = yield* configuration.read;
-      if (!hub) return Option.none();
-      return yield* store.transact(
-        Effect.gen(function* () {
-          const member = yield* store.readHubMember(hub.memorySpaceId, hub.hubEnvironmentId);
-          const retention = yield* store.readHubRetentionTx(hub.memorySpaceId);
-          if (!member || member.status !== "active" || retention.checkpointId === null)
-            return yield* new MemoryHubError({ code: "bootstrap_required" });
-          return Option.some({
-            memorySpaceId: hub.memorySpaceId,
-            environmentId: hub.hubEnvironmentId,
-            credentialVersion: member.credentialVersion,
-            scopes: ["memory:sync"] as const,
-          });
-        }),
-      );
-    });
-    // One start in this application scope, after migrations, settings and the
-    // published initial membership checkpoint. Disabled startup has no sweep.
-    yield* Stream.concat(Stream.succeed(undefined), changes).pipe(
-      Stream.mapEffect(() =>
-        Effect.gen(function* () {
-          const principal = yield* readyPrincipal;
-          if (Option.isNone(principal)) return false;
-          const startScope = yield* Scope.fork(applicationScope);
-          yield* compactor.start(principal.value).pipe(
-            Effect.provideService(Scope.Scope, startScope),
-            // Release subscriptions from a failed sweep; a successful start
-            // keeps its child scope until the application closes.
-            Effect.onExit((exit) =>
-              Exit.isFailure(exit) ? Scope.close(startScope, exit) : Effect.void,
-            ),
-          );
-          return true;
-        }).pipe(
-          // Readiness and the initial sweep can race with disable. Keep the
-          // settings subscription alive and retry on the next transition.
-          Effect.catch((error) =>
-            Effect.logWarning("Memory compactor startup deferred", { errorTag: error._tag }).pipe(
-              Effect.as(false),
-            ),
-          ),
-        ),
-      ),
-      Stream.filter((started) => started),
-      Stream.take(1),
-      Stream.runDrain,
-      // Startup marks settings ready after building its dependencies. Await it
-      // in the scoped fiber so acquisition cannot deadlock that startup.
-      (run) => Effect.andThen(settings.ready, run),
-      Effect.forkScoped,
-    );
-  }),
-);
-
-const layerMemoryHub = layerMemoryHubStarted.pipe(
-  Layer.provideMerge(layerMemoryHubServices),
-  Layer.provideMerge(layerMemoryService),
-  Layer.provideMerge(layerServerSettings),
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provide(ServerSecretStore.layer),
-);
-const layerRegisteredMemoryHub = layerMemoryHubRoutes.pipe(
-  HttpRouter.provideRequest(layerMemoryHub),
-  Layer.provideMerge(layerMemoryHub),
-);
-export const layerMemoryDefaultStarted = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sync = yield* MemorySync.MemorySyncService;
-    const settings = yield* ServerSettings.ServerSettingsService;
-    yield* Effect.andThen(settings.ready, sync.initializeDefaultHub).pipe(
-      Effect.catch(() =>
-        Effect.logWarning("memory initialization unavailable", {
-          code: "memory_default_unavailable",
-        }),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
-export const layerMemorySyncStarted = Layer.merge(
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const sync = yield* MemorySync.MemorySyncService;
-      const binding = yield* Effect.serviceOption(MemorySourceReadBinding);
-      if (Option.isSome(binding)) yield* binding.value.bind(sync);
-      yield* sync.start;
-    }),
-  ),
+const memoryApplicationLayers = makeMemoryApplicationLayers({
+  layerPersistence,
+  layerRepositoryIdentityResolver,
+  layerServerSettings,
+  layerTextGeneration,
+});
+export const {
+  layerMemorySourceReadBinding,
+  layerMemorySourceReadService,
+  layerMemoryHubServices,
+  layerMemoryHubRoutes,
+  layerMemoryHubStarted,
   layerMemoryDefaultStarted,
-).pipe(Layer.provideMerge(MemorySync.layer));
-
-/** Shared production runtime composition, including the single committed policy adapter. */
-export const layerMemorySyncRuntime = MemorySyncRuntimeLive.layer.pipe(
-  Layer.provideMerge(MemoryOwnerSourceReadPolicyBinding.layer),
-);
-const layerMemorySync = layerMemorySyncStarted.pipe(
-  Layer.provide(layerMemorySourceReadBinding),
-  Layer.provideMerge(layerMemorySyncRuntime),
-  Layer.provide(layerMemoryHub),
-  Layer.provide(layerTextGeneration),
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provide(layerMemoryGenerationHold),
-);
-
-/** Acquisition is isolated from the core graph; only a fully acquired reader publishes the tag. */
-export const layerMemoryImport = (config?: MemoryImportReaderConfig) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const service = yield* MemoryService.MemoryService;
-      const { importSync: sync } = yield* MemorySourceReadBinding;
-      const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
-      const environmentId = yield* identity.getEnvironmentId;
-      const server = yield* ServerConfig.ServerConfig;
-      const path = yield* Path.Path;
-      const home = yield* HostProcess.HomeDirectory;
-      const gitExecutable =
-        config === undefined ? yield* resolveCommandPath("git") : config.gitExecutable;
-      const readerConfig = config ?? {
-        stateDir: server.stateDir,
-        ...(gitExecutable ? { gitExecutable } : {}),
-        roots: [
-          { format: "codex", rootSlot: "default", path: path.join(home, ".codex") },
-          { format: "claude", rootSlot: "default", path: path.join(home, ".claude", "projects") },
-          {
-            format: "omo",
-            rootSlot: "default",
-            path: path.join(home, ".omo", "memory", "agents"),
-          },
-          // Listed only when the user asks to discover Aside; each store slot's semantic
-          // directories become separate sources and nothing under ~/.aside is ever written.
-          { format: "aside", rootSlot: "default", path: path.join(home, ".aside", "u") },
-        ],
-      };
-      const reader = yield* preflightMemoryImportStateDirectory(readerConfig.stateDir).pipe(
-        Effect.andThen(acquireMemoryImportReader(readerConfig)),
-        Effect.result,
-      );
-      if (reader._tag === "Failure") {
-        yield* Effect.logWarning("Provider memory import unavailable", {
-          issue: reader.failure.issue,
-          ...(reader.failure.issue === "path_rejected"
-            ? {
-                stateDir: readerConfig.stateDir,
-                recovery:
-                  "Match the stateDir owner to the server execution UID. If shared writes are not needed, remove group/other write permission and restart. If shared writes are needed, use a dedicated stateDir.",
-              }
-            : {}),
-        });
-        return Layer.empty;
-      }
-      return Layer.succeed(
-        ProviderMemoryImportRuntime,
-        makeProviderMemoryImport(
-          {
-            ...service.importPorts,
-            readiness: sync.readLocalReadiness,
-            requireBootstrap: sync.requireBootstrap,
-            syncStatus: sync.syncStatus,
-          },
-          reader.success,
-          {
-            codex: parseCodexMemory,
-            claude: parseClaudeMemory,
-            omo: parseOmoMemory,
-            aside: parseAsideMemory,
-          },
-          {
-            uuid: () => NodeCrypto.randomUUID(),
-            now: () => Clock.currentTimeMillis,
-            environmentId,
-          },
-        ),
-      );
-    }),
-  );
-const layerProviderMemoryImport = layerMemoryImport().pipe(
-  Layer.provide(layerMemoryService),
-  Layer.provide(layerMemorySourceReadBinding),
-  Layer.provide(ServerEnvironment.layerIdentity),
-);
-
-export const layerMemorySnapshot = MemorySnapshot.layer;
-export const provideMemorySnapshot = MemorySnapshotBinding.provide;
-const layerMemorySnapshotWithDependencies = layerMemorySnapshot.pipe(
-  Layer.provide(layerMemorySync),
-  Layer.provide(layerMemoryService),
-  Layer.provide(layerMemoryQuota),
-  Layer.provide(ProjectionStoreV2.layer),
-  Layer.provide(ServerEnvironment.layerIdentity),
-  Layer.provide(layerPersistence),
-);
-
-const decodeMemoryHubDisable = Schema.decodeUnknownEffect(MemoryHubDisableInput);
-const decodeMemoryHubDisabled = Schema.decodeUnknownEffect(MemoryHubDisableResult);
-export const layerMemoryHubAdministration = Layer.effect(
-  ServerSettings.MemoryHubAdministration,
-  Effect.gen(function* () {
-    const sync = yield* MemorySync.MemorySyncService;
-    return ServerSettings.MemoryHubAdministration.of({
-      disableHub: (input, permit) =>
-        decodeMemoryHubDisable(input).pipe(
-          Effect.flatMap((value) =>
-            sync.updateHubSettings(
-              { ...value, action: "configure", settings: { mode: "disabled" } },
-              permit,
-            ),
-          ),
-          Effect.flatMap((result) =>
-            decodeMemoryHubDisabled({
-              settings: result.view.settings,
-              version: result.view.version,
-            }),
-          ),
-          Effect.mapError(memoryError),
-        ),
-    });
-  }),
-);
-
-// The application supplies settings administration without exposing hub credentials.
-const layerMemoryAdministrationToolkit = McpHttpServer.toolkitRegistration(
-  MemoryAdministrationToolkit,
-  McpToolAccess.toLayer(
-    MemoryAdministrationToolkit,
-    Effect.gen(function* () {
-      const service = yield* ServerSettings.MemoryHubAdministration;
-      const memorySettings = yield* MemorySettings.MemorySettingsService;
-      return {
-        memory_settings_get: McpToolAccess.reads(() =>
-          Effect.gen(function* () {
-            return yield* memorySettings.get(yield* invocationPermit("read"));
-          }).pipe(Effect.mapError(memoryError)),
-        ),
-        memory_settings_update: McpToolAccess.writesWithCapability((input) =>
-          Effect.gen(function* () {
-            return yield* memorySettings.update(
-              yield* Schema.decodeUnknownEffect(MemorySettingsUpdateInput)(input),
-              yield* invocationPermit("settings"),
-            );
-          }).pipe(Effect.mapError(memoryError)),
-        ),
-        memory_hub_disable: McpToolAccess.writesWithCapability((input) =>
-          Effect.gen(function* () {
-            return yield* service.disableHub(
-              yield* decodeMemoryHubDisable(input),
-              yield* invocationPermit("settings"),
-            );
-          }).pipe(Effect.mapError(memoryError)),
-        ),
-      };
-    }),
-  ),
-).pipe(Layer.provide(layerMemoryHubAdministration), Layer.provide(MemorySettings.layer));
-
-export const layerMemoryToolkits = Layer.mergeAll(
-  McpHttpServer.layerMemoryToolkit,
-  layerMemoryAdministrationToolkit,
-);
+  layerMemorySyncStarted,
+  layerMemorySyncRuntime,
+  layerMemoryImport,
+  layerMemorySnapshot,
+  provideMemorySnapshot,
+  layerMemoryToolkits,
+} = memoryApplicationLayers;
+const {
+  layerMemoryService,
+  layerMemoryStarted,
+  layerMemoryHub,
+  layerRegisteredMemoryHub,
+  layerMemorySync,
+  layerProviderMemoryImport,
+  layerMemorySnapshotWithDependencies,
+} = memoryApplicationLayers;
 
 const layerServerEnvironment = ServerEnvironment.layer.pipe(
   Layer.provide(layerProviderMemoryImport),
@@ -1095,11 +727,6 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
   }),
 );
 
-const layerCloudMachines = CloudMachineService.layerWithoutDependencies.pipe(
-  Layer.provide(BoatClient.layer),
-  Layer.provide(CloudMachineSsh.layer()),
-);
-
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerMemoryStarted,
   layerMemorySync,
@@ -1109,13 +736,18 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerThreadSettlementWorker,
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
+  ComputerUseTurnEnd.layer,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(
       Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
     ),
   ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
+  StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
@@ -1146,6 +778,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
+  CloudFolderTrust.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
@@ -1158,7 +791,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     ChannelLayers.layer.pipe(
       Layer.provide(RuntimeLayer.layerEventSink),
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
       // GOAT Bot searches memory when it answers; same references, so one memory instance.
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
     ),
@@ -1167,17 +800,36 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
     ),
   ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
   // per-alias readiness lock and SSH cache invalidation span every caller.
-  Layer.provideMerge(layerCloudMachines),
+  Layer.provideMerge(SshRemoteDispatchLive.layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    DecisionLayers.layer.pipe(
+      Layer.provide(
+        OrchestratorMcpService.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+      ),
+      Layer.provide(ThreadResultService.layer),
+      Layer.provide(RemoteDispatchCoordinator.layer),
+      Layer.provide(layerLaunchWatches),
+      // The first build of the thread services, which layer memoization shares with every
+      // later caller and the MCP tools, so goatclaw fleet sync must be here, not further up.
+      Layer.provideMerge(GoatclawFleetSync.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provideMerge(layerOrchestrationApplication),
+    ),
+  ),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
+      // One instance, shared with the auto-update scheduler, so arbitration sees its target.
+      Layer.provide(SshRuntimeAutoUpdate.layerArbiter),
+      Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
       Layer.provideMerge(RuntimeAdmission.layer),
@@ -1185,17 +837,30 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // pipe takes at most 20 steps, so the Cua Driver and cloud auto setup join this merge.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ProjectStore.layer,
+      ThreadSearch.layer,
+      layerCuaDriver,
+      layerLinuxFrameSource,
+      ComputerUseAgentConnections.layer,
+      ComputerUseLeases.layer.pipe(
+        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(layerLinuxFrameSource),
+        Layer.provide(layerLinuxHelperHost),
+      ),
+      CloudProviderAutoSetup.layer,
+    ),
+  ),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
-  ),
-  Layer.provideMerge(ProviderRegistry.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
   (application) =>
     provideMemorySnapshot(
       application,
@@ -1204,6 +869,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
           layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
         ),
         Layer.provide(ProjectionStoreV2.layer),
+        // Stateless reads over the database; Claude Cloud checks folders against projects.
+        Layer.provide(ProjectStore.layer),
       ),
       layerMemorySnapshotWithDependencies,
     ),
@@ -1243,6 +910,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -1312,6 +980,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerRuntimeDrainRoute,
+    RuntimeSessionRoute.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
@@ -1319,16 +988,19 @@ const layerMakeRoutes = Layer.mergeAll(
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer,
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(layerFleetHealth)),
+    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit,
+    McpHttpServer.layerProviderToolkit.pipe(Layer.provide(PermissionProfiles.layer)),
     HandoffExpiry.layer,
     // Fleet goals act through the same launch, watch and dispatch services as these tools.
     McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(GoalLayers.layer.pipe(Layer.provideMerge(layerFleetHealth))),
+      Layer.provide(
+        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+      ),
     ),
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
@@ -1357,7 +1029,7 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(MaintenanceAudit.layer),
+          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(
@@ -1373,6 +1045,7 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.mergeAll(
       HomeRequests.layer.pipe(Layer.provideMerge(CodexRoutes.layer)),
       ProviderOnboarding.layer,
+      ProviderSettings.layer.pipe(Layer.provide(PermissionProfiles.layer)),
     ),
   ),
   Layer.provide(
@@ -1404,8 +1077,8 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
-  Layer.provide(LaunchWatchService.layer),
-  Layer.provide(SshRemoteDispatch.layer),
+  Layer.provide(layerLaunchWatches),
+  Layer.provide(SshRemoteDispatchLive.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
@@ -1431,11 +1104,17 @@ const layerMakeRoutes = Layer.mergeAll(
 const layerMakeServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    // Before anything opens the database: one server per T3 home.
+    // Before anything opens the database: one server per GOAT home.
     const ownership = yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath);
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One slot for the whole server: every projection store reads through it, and the archive
+    // service fills it once it has loaded which threads are archived.
+    const layerArchiveGate = Layer.succeed(
+      ThreadArchiveGate.ThreadArchiveGate,
+      ThreadArchiveGate.makeThreadArchiveGateSlot(),
+    );
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
@@ -1590,6 +1269,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
+      Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(

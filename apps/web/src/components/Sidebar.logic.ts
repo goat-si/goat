@@ -10,9 +10,14 @@ import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@goat/contracts/settings";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  type SidebarProjectSortOrder,
+  type SidebarThreadSortOrder,
+} from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
+import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
 import {
   effectiveSnoozed,
   threadWokeAt,
@@ -613,7 +618,7 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   ];
 }
 
-function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return thread.lineage.relationshipToParent === "subagent";
 }
 
@@ -817,7 +822,7 @@ export function resolveSidebarViewIsProjects(input: {
 }): boolean | null {
   if (input.status === "ready") return input.value;
   if (input.synchronousValue !== null) return input.synchronousValue;
-  if (input.status === "failed") return true;
+  if (input.status === "failed") return DEFAULT_CLIENT_SETTINGS.projectsSidebarEnabled;
   return null;
 }
 
@@ -842,12 +847,11 @@ export function resolveSidebarRowThreadId(
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "sideChatOf"> & {
-    environmentId: string;
-    projectId: string;
-    id?: SidebarThreadSummary["id"];
-    deletedAt?: SidebarThreadSummary["deletedAt"];
-  },
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "sideChatOf"> &
+    SidebarProjectScopeInput & {
+      id?: SidebarThreadSummary["id"];
+      deletedAt?: SidebarThreadSummary["deletedAt"];
+    },
 >(
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
@@ -864,10 +868,7 @@ export function filterSidebarV2VisibleThreads<
       );
       if (!retainedArchivedKeys.has(key)) return false;
     }
-    return (
-      scopedProjectKeys === null ||
-      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)
-    );
+    return isInSidebarProjectScope(thread, scopedProjectKeys);
   });
 }
 
@@ -1819,7 +1820,9 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+  TThread extends ScopedSidebarThread &
+    Pick<SidebarThreadSummary, "lineage" | "sideChatOf"> &
+    SidebarProjectScopeInput,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

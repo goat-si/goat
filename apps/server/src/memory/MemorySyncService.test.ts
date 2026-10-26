@@ -40,16 +40,17 @@ import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import migration from "../persistence/Migrations/076_Memory.ts";
-import lastReadyMigration from "../persistence/Migrations/086_MemoryLastReadySpace.ts";
-import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
-import searchMigration from "../persistence/Migrations/078_MemorySearchCounters.ts";
-import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
+import lastReadyMigration from "../persistence/Migrations/087_MemoryLastReadySpace.ts";
+import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import searchMigration from "../persistence/Migrations/079_MemorySearchCounters.ts";
+import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import { migrationManifest } from "../persistence/Migrations.ts";
+import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -2170,17 +2171,11 @@ it.effect.each([
             assert.isEmpty(
               yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`,
             );
-            assert.deepStrictEqual(yield* runMigrations(), [
-              [86, "MemoryLastReadySpace"],
-              [87, "MemoryHubAdministered"],
-              [88, "MemoryCheckpointLifecycle"],
-              [89, "FleetGoals"],
-              [90, "FleetHealth"],
-              [91, "ThreadRunObservedChecks"],
-              [92, "RemoteDispatchObservation"],
-              [93, "MemoryRevisionCheckpointSize"],
-              [94, "HubNodes"],
-            ]);
+            // Every migration from 086 on runs once against the earlier schema.
+            assert.deepStrictEqual(
+              yield* runMigrations(),
+              migrationManifest.filter(([id]) => id >= 86),
+            );
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
               Effect.gen(function* () {
@@ -6813,6 +6808,7 @@ it.effect.each(["accepted", "rejected"] as const)(
             }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "unavailable" }))),
         });
         const integrated = McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(fixture(client)),
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(McpAccess.liveThreadsLayer),
@@ -6850,7 +6846,7 @@ it.effect.each(["accepted", "rejected"] as const)(
               Effect.void,
             );
           }
-          const first = yield* McpFixture.call("memory_upsert", input, invocation);
+          const first = yield* McpFixture.call("goat_memory_upsert", input, invocation);
           assert.isNotTrue(first.result.isError);
           const pending = yield* decodeReplayReceipt(first.body, {
             onExcessProperty: "error",
@@ -6863,7 +6859,7 @@ it.effect.each(["accepted", "rejected"] as const)(
           const counts = sql`SELECT (SELECT count(*) FROM memory_events) AS events,(SELECT count(*) FROM memory_payloads) AS payloads,(SELECT count(*) FROM memory_outbox) AS outbox`;
           const replay = Effect.gen(function* () {
             const before = yield* counts;
-            const response = yield* McpFixture.call("memory_upsert", input, invocation);
+            const response = yield* McpFixture.call("goat_memory_upsert", input, invocation);
             assert.isNotTrue(response.result.isError);
             const receipt = yield* decodeReplayReceipt(response.body, {
               onExcessProperty: "error",

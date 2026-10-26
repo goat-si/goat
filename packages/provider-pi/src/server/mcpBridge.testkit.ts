@@ -1,7 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Executes the shipped Pi extension at its native JavaScript boundary.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Executes the shipped Pi extension at its native JavaScript boundary, including its own fetch.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 
 interface RegisteredTool {
@@ -52,7 +53,20 @@ export async function loadMcpBridge(
       readonly name: string;
       readonly description?: string;
       readonly annotations?: { readonly readOnlyHint?: boolean };
+      readonly _meta?: Record<string, unknown>;
     }>;
+    /** A stdio MCP server the bridge starts as the managed Cua Driver. */
+    readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
+    /** The per-turn computer use gate file the adapter writes. */
+    readonly cuaGate?: string;
+    readonly inputSchema?: Record<string, unknown>;
+    /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
+    readonly goatMcp?: boolean;
+    /**
+     * A real GOAT /mcp: the environment the adapter launches Pi with. The bridge reads its
+     * credentials from it and reaches the server with the real fetch instead of the catalog.
+     */
+    readonly server?: { readonly env: NodeJS.ProcessEnv };
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -76,24 +90,29 @@ export async function loadMcpBridge(
   const catalog = (
     options.catalog ?? [
       {
-        name: "orchestrator_capabilities",
-        description: "Discover available providers and models.",
+        name: "goat_describe",
+        description: "Find GOAT capabilities.",
         annotations: { readOnlyHint: true },
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
       },
-      { name: "delegate_task", description: "Delegate work to another agent." },
       {
-        name: "task_status",
-        description: "Check delegated work.",
+        name: "goat_call",
+        description: "Call any GOAT capability by path.",
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
+      },
+      {
+        name: "goat_task_create",
+        description: "Delegate work to another agent.",
         annotations: { readOnlyHint: false },
       },
       {
-        name: "preview_snapshot",
+        name: "goat_preview_snapshot",
         description: "Inspect the collaborative browser.",
       },
     ]
   ).map((tool) => ({
     ...tool,
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: options.inputSchema ?? { type: "object", properties: {} },
     outputSchema: { type: "object", properties: { count: { type: "number" } } },
   }));
   const source = NodeModule.stripTypeScriptTypes(
@@ -102,88 +121,107 @@ export async function loadMcpBridge(
       "async function",
     ),
   );
-  await NodeVM.runInNewContext(`${source}\ngoatMcpExtension(pi)`, {
-    process: {
-      env: {
-        GOAT_MCP_URL: "http://fixture.invalid/mcp",
-        GOAT_MCP_BEARER_TOKEN: "fixture-token",
-        GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
-        GOAT_PI_RUNTIME_MODE: options.runtimeMode,
+  await NodeVM.runInNewContext(
+    `${source}\ngoatMcpExtension(pi)`,
+    {
+      process: {
+        env: {
+          ...(options.goatMcp === false
+            ? {}
+            : options.server !== undefined
+              ? {
+                  GOAT_MCP_URL: options.server.env.GOAT_MCP_URL,
+                  GOAT_MCP_BEARER_TOKEN: options.server.env.GOAT_MCP_BEARER_TOKEN,
+                }
+              : {
+                  GOAT_MCP_URL: "http://fixture.invalid/mcp",
+                  GOAT_MCP_BEARER_TOKEN: "fixture-token",
+                }),
+          GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
+          GOAT_PI_RUNTIME_MODE: options.runtimeMode,
+          ...(options.cua === undefined
+            ? {}
+            : { GOAT_CUA_MCP: JSON.stringify({ ...options.cua, env: {} }) }),
+          ...(options.cuaGate === undefined ? {} : { GOAT_CUA_GATE: options.cuaGate }),
+        },
+      },
+      AbortSignal,
+      NodePath,
+      Type: { Unsafe: (schema: unknown) => schema },
+      fetch: async (
+        url: string,
+        transport: {
+          body: string;
+          headers: Record<string, string>;
+          signal?: AbortSignal;
+        },
+      ) => {
+        transport.signal?.throwIfAborted();
+        transports.push({
+          url,
+          authorization: transport.headers.authorization!,
+          signal: transport.signal,
+        });
+        if (options.server !== undefined) return fetch(url, transport);
+        const request = JSON.parse(transport.body) as {
+          id: number;
+          method: string;
+          params?: unknown;
+        };
+        requests.push(request);
+        const result =
+          request.method === "tools/list"
+            ? { tools: catalog }
+            : request.method === "tools/call"
+              ? (options.result ?? {
+                  content: [{ type: "text", text: "browser snapshot" }],
+                })
+              : {};
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      pi: {
+        on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
+        registerTool: (tool: RegisteredTool) => {
+          registrations.push(tool.name);
+          if (options.allowsTool && !options.allowsTool(tool.name)) return;
+          const index = tools.findIndex((current) => current.name === tool.name);
+          if (index === -1) tools.push(tool);
+          else tools[index] = tool;
+        },
+        getActiveTools: () => activeTools,
+        setActiveTools: (names: string[]) => {
+          activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
+        },
+        getAllTools: () => [
+          ...tools.map((tool) => ({
+            name: tool.name,
+            sourceInfo: { path: bridgeSourcePath },
+          })),
+          ...(options.toolSearchAvailable &&
+          !options.toolSearchDisabled &&
+          (options.allowsTool?.("tool_search") ?? true)
+            ? [
+                {
+                  name: "tool_search",
+                  sourceInfo: { path: "builtin:tool-search" },
+                },
+              ]
+            : []),
+        ],
+        ...(options.modern
+          ? {
+              registerMcpServer: (name: string, config: Record<string, unknown>) =>
+                servers.push({ name, config }),
+              unregisterMcpServer: () => servers.splice(0),
+            }
+          : {}),
       },
     },
-    AbortSignal,
-    NodePath,
-    Type: { Unsafe: (schema: unknown) => schema },
-    fetch: async (
-      url: string,
-      transport: {
-        body: string;
-        headers: Record<string, string>;
-        signal?: AbortSignal;
-      },
-    ) => {
-      transport.signal?.throwIfAborted();
-      transports.push({
-        url,
-        authorization: transport.headers.authorization!,
-        signal: transport.signal,
-      });
-      const request = JSON.parse(transport.body) as {
-        id: number;
-        method: string;
-        params?: unknown;
-      };
-      requests.push(request);
-      const result =
-        request.method === "tools/list"
-          ? { tools: catalog }
-          : request.method === "tools/call"
-            ? (options.result ?? {
-                content: [{ type: "text", text: "browser snapshot" }],
-              })
-            : {};
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
-    pi: {
-      on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
-      registerTool: (tool: RegisteredTool) => {
-        registrations.push(tool.name);
-        if (options.allowsTool && !options.allowsTool(tool.name)) return;
-        const index = tools.findIndex((current) => current.name === tool.name);
-        if (index === -1) tools.push(tool);
-        else tools[index] = tool;
-      },
-      getActiveTools: () => activeTools,
-      setActiveTools: (names: string[]) => {
-        activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
-      },
-      getAllTools: () => [
-        ...tools.map((tool) => ({
-          name: tool.name,
-          sourceInfo: { path: bridgeSourcePath },
-        })),
-        ...(options.toolSearchAvailable &&
-        !options.toolSearchDisabled &&
-        (options.allowsTool?.("tool_search") ?? true)
-          ? [
-              {
-                name: "tool_search",
-                sourceInfo: { path: "builtin:tool-search" },
-              },
-            ]
-          : []),
-      ],
-      ...(options.modern
-        ? {
-            registerMcpServer: (name: string, config: Record<string, unknown>) =>
-              servers.push({ name, config }),
-            unregisterMcpServer: () => servers.splice(0),
-          }
-        : {}),
-    },
-  });
+    // The driver bridge loads node:child_process on first use.
+    { importModuleDynamically: NodeVM.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER },
+  );
   return {
     handlers,
     tools,

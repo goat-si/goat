@@ -20,15 +20,29 @@ const lucideIconsDirectory = NodePath.join(
   NodePath.dirname(requireFromWeb.resolve("lucide-react/package.json")),
   "dist/esm/icons",
 );
-const webChipSource = NodeFS.readFileSync(
-  NodePath.join(repositoryRoot, "apps/web/src/components/composerInlineChip.ts"),
-  "utf8",
+// Web sources import siblings without an extension, which Vite resolves but Node's type stripping
+// does not, so spell out `.ts` for relative imports made from a TypeScript module.
+NodeModule.registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (
+      context.parentURL?.endsWith(".ts") &&
+      specifier.startsWith(".") &&
+      !specifier.endsWith(".ts")
+    ) {
+      return nextResolve(`${specifier}.ts`, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const { SKILL_CHIP_ICON_SVG: skillSvg } = await import(
+  NodeURL.pathToFileURL(
+    NodePath.join(repositoryRoot, "apps/web/src/components/composerInlineChip.ts"),
+  ).href
 );
-const skillSvg = webChipSource.match(/SKILL_CHIP_ICON_SVG = `([\s\S]*?)`;/)?.[1];
 
-if (!skillSvg) {
+if (typeof skillSvg !== "string" || !skillSvg.startsWith("<svg")) {
   throw new Error(
-    "Could not read SKILL_CHIP_ICON_SVG from apps/web/src/components/composerInlineChip.ts",
+    "SKILL_CHIP_ICON_SVG from apps/web/src/components/composerInlineChip.ts is not SVG markup",
   );
 }
 
@@ -36,12 +50,14 @@ const lucideIcons = [
   "circle-dashed",
   "film",
   "git-merge",
+  "globe",
   "git-pull-request-arrow",
   "git-pull-request-closed",
   "git-pull-request-draft",
   "image",
   "message-circle",
   "messages-square",
+  "monitor",
   "mouse-pointer-click",
   "terminal",
 ];

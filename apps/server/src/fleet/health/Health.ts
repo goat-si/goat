@@ -1,6 +1,8 @@
 import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadStatusResult,
+  type OrchestrationV2ThreadShell,
+  type OrchestratorMcpThreadPhase,
   type RuntimeMode,
   type ThreadId,
 } from "@goat/contracts";
@@ -76,7 +78,8 @@ export const probeRemoteStatus = (host: string, threadId: ThreadId, ceiling: Run
       // Only a refusal proves the host answered; an unknown alias or a changed caller says
       // nothing about the host either way.
       if (unreachable(answer.failure)) yield* monitor.recordContact(host, answer.failure.message);
-      const answered = answer.failure.reason === "remote_refused";
+      const answered =
+        answer.failure.reason === "remote_refused" || answer.failure.reason === "remote_outdated";
       if (answered) yield* monitor.recordContact(host, null);
       return { answered, status: null };
     }
@@ -90,37 +93,51 @@ export const probeRemoteStatus = (host: string, threadId: ThreadId, ceiling: Run
     return { answered: true, status };
   });
 
-export const readRemoteStatus = (host: string, threadId: ThreadId, ceiling: RuntimeMode) =>
+const readRemoteStatus = (host: string, threadId: ThreadId, ceiling: RuntimeMode) =>
   probeRemoteStatus(host, threadId, ceiling).pipe(Effect.map((probe) => probe.status));
 
+/** Between runs: the latest run ended or none started, nothing is queued and nothing is asked. */
+export const isStopped = (status: {
+  readonly phase: OrchestratorMcpThreadPhase;
+  readonly queuedRunId: unknown;
+  readonly pendingRequest: unknown;
+}) =>
+  (isTerminalPhase(status.phase) || status.phase === "idle") &&
+  status.queuedRunId === null &&
+  status.pendingRequest === null;
+
 /** A thread on this machine, from its shell row. */
+export const localStatusOf = (shell: OrchestrationV2ThreadShell) => {
+  const pending = shell.pendingRuntimeRequest ?? null;
+  const runId = shell.activeRunId ?? shell.latestRunId;
+  const phase = threadPhase(runId === null ? null : shell.status, pending?.kind ?? null);
+  const snapshot: ThreadStatusSnapshot & { readonly terminal: boolean } = {
+    phase,
+    run: runId === null ? null : { runId },
+    pendingRequest: pending,
+    // A newer run behind the active one is queued work, as statusFromRead reads it.
+    queuedRunId:
+      shell.activeRunId !== null &&
+      shell.latestRunId !== null &&
+      shell.latestRunId !== shell.activeRunId
+        ? shell.latestRunId
+        : null,
+    lastActivityAt: DateTime.formatIso(shell.updatedAt),
+    lastErrorClass: shell.lastErrorClass ?? null,
+    terminal: isTerminalPhase(phase),
+  };
+  return snapshot;
+};
+
 export const readLocalStatus = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
     if (shell === null || shell.deletedAt !== null) return null;
-    const pending = shell.pendingRuntimeRequest ?? null;
-    const runId = shell.activeRunId ?? shell.latestRunId;
-    const phase = threadPhase(runId === null ? null : shell.status, pending?.kind ?? null);
-    const snapshot: ThreadStatusSnapshot & { readonly terminal: boolean } = {
-      phase,
-      run: runId === null ? null : { runId },
-      pendingRequest: pending,
-      // A newer run behind the active one is queued work, as statusFromRead reads it.
-      queuedRunId:
-        shell.activeRunId !== null &&
-        shell.latestRunId !== null &&
-        shell.latestRunId !== shell.activeRunId
-          ? shell.latestRunId
-          : null,
-      lastActivityAt: DateTime.formatIso(shell.updatedAt),
-      lastErrorClass: shell.lastErrorClass ?? null,
-      terminal: isTerminalPhase(phase),
-    };
-    return snapshot;
+    return localStatusOf(shell);
   });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const monitor = yield* HostHealthMonitor;
   const context = yield* Effect.context<
     | SshRemoteDispatch.SshRemoteDispatch

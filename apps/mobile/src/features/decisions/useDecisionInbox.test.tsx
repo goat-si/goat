@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
@@ -835,7 +834,7 @@ it("renders recovery and honest empty states then allows a recovered answer", as
   write([], { loadingRefs: [a.ref], isLoading: true });
   await render(<DecisionsRouteScreen />);
   expect(container.textContent).toContain("Loading decisions…");
-  expect(container.textContent).not.toContain("No decisions waiting");
+  expect(container.textContent).not.toContain("No pending thread requests");
   await act(async () => write([], { errors: [{ ref: a.ref, message: "Detail failure" }] }));
   expect(container.textContent).toContain("Some decisions could not be loaded.");
   await click("Retry");
@@ -844,7 +843,7 @@ it("renders recovery and honest empty states then allows a recovered answer", as
   await click("Submit answers");
   expect(fixture.userInput).toHaveBeenCalledTimes(1);
   await act(async () => write([]));
-  expect(container.textContent).toContain("No decisions waiting");
+  expect(container.textContent).toContain("No pending thread requests");
 });
 
 it("shows partial counts, failure text and disabled nonresumable actions", async () => {
@@ -952,6 +951,10 @@ vi.mock("@legendapp/list/react-native", () => ({
     </section>
   ),
 }));
+vi.mock("@legendapp/list/reanimated", async () => ({
+  AnimatedLegendList: (await import("@legendapp/list/react-native")).LegendList,
+}));
+vi.mock("../threads/threadListAnimations", () => ({ THREAD_SIDEBAR_ROW_LAYOUT: undefined }));
 vi.mock("react-native-screens", () => ({ ScrollViewMarker: Box }));
 vi.mock("react-native-gesture-handler", () => ({
   GestureDetector: Box,
@@ -1276,7 +1279,7 @@ it("supports a direct empty route and Home fallback", async () => {
   const navigate = vi.fn();
   fixture.navigate = navigate;
   await render(<DecisionsRouteScreen />);
-  expect(container.textContent).toContain("No decisions waiting");
+  expect(container.textContent).toContain("No pending thread requests");
   await click("Back");
   expect(navigate).toHaveBeenCalledWith("Home", undefined);
 });

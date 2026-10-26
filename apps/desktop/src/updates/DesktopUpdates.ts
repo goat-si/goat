@@ -8,7 +8,6 @@ import {
   type DesktopUpdateCheckResult,
   type DesktopUpdateState,
 } from "@goat/contracts";
-import { errorTag } from "@goat/shared/observability";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -38,6 +37,15 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import {
+  checkFailureMessage,
+  DesktopUpdateCheckTimeoutError,
+  describeUpdateErrorCause,
+  downloadFailureMessage,
+  isAbandonedCheckFailure,
+  UPDATE_CHECK_TIMEOUT,
+  UPDATE_CHECK_TIMEOUT_MINUTES,
+} from "./updateFailures.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   classifyDesktopUpdateInstallation,
@@ -55,10 +63,13 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
   resolveNotAppliedInstallVersion,
+  shouldBroadcastDownloadProgress,
 } from "./updateMachine.ts";
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
+// Remote installs (DesktopRemoteUpdates) must answer within the server's commit budget, so
+// they wait less than a check's full deadline; quit passes UPDATE_CHECK_SETTLE_WAIT instead.
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
@@ -202,7 +213,7 @@ export class DesktopUpdates extends Context.Service<
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
     readonly installPrepared: (
       expectedVersion: string,
-      options?: { readonly waitForCheck: boolean },
+      options?: { readonly waitForCheck: boolean; readonly checkWait?: Duration.Duration },
     ) => Effect.Effect<DesktopPreparedUpdateInstallResult>;
   }
 >()("@goat/desktop/updates/DesktopUpdates") {}
@@ -212,61 +223,6 @@ const {
   logWarning: logUpdaterWarning,
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
-
-function redactMessage(message: string): string {
-  return (message.split(/[\r\n]/, 1)[0] ?? "")
-    .replace(/\b(?:https?|file):\/\/[^\s"'<>]+/gi, "[redacted URL]")
-    .replace(/\b(?:Bearer|Basic)\s+[^\s,;]+/gi, "[redacted credential]")
-    .replace(
-      /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=].*$/gi,
-      "[redacted header]",
-    )
-    .replace(
-      /\b[\w-]*(?:token|password|secret|credential|api[_-]?key)[\w-]*\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-      "[redacted credential]",
-    )
-    .slice(0, 512);
-}
-
-function summarizeCause(cause: unknown, depth: number): string {
-  if (depth >= 3) return "[truncated cause]";
-  if (Cause.isCause(cause)) {
-    return cause.reasons
-      .slice(0, 3)
-      .map((reason) =>
-        reason._tag === "Fail"
-          ? summarizeCause(reason.error, depth + 1)
-          : reason._tag === "Die"
-            ? summarizeCause(reason.defect, depth + 1)
-            : "Interrupted",
-      )
-      .join("; ");
-  }
-  if (typeof cause === "string") return redactMessage(cause);
-  if (typeof cause !== "object" || cause === null) return errorTag(cause);
-
-  const error = cause as {
-    readonly message?: unknown;
-    readonly code?: unknown;
-    readonly cause?: unknown;
-  };
-  const code =
-    typeof error.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(error.code)
-      ? ` [${error.code}]`
-      : "";
-  const message = typeof error.message === "string" ? `: ${redactMessage(error.message)}` : "";
-  const nested =
-    error.cause === undefined ? "" : `; caused by ${summarizeCause(error.cause, depth + 1)}`;
-  return `${errorTag(cause)}${code}${message}${nested}`;
-}
-
-export function describeUpdateErrorCause(cause: unknown): string {
-  try {
-    return summarizeCause(cause, 0).slice(0, 1024);
-  } catch {
-    return "UnknownError";
-  }
-}
 
 function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
@@ -299,24 +255,6 @@ function createBaseUpdateState(
 
 function getCanRetryFromState(state: DesktopUpdateState): boolean {
   return state.availableVersion !== null || state.downloadedVersion !== null;
-}
-
-function shouldBroadcastDownloadProgress(
-  currentState: DesktopUpdateState,
-  nextPercent: number,
-): boolean {
-  if (currentState.status !== "downloading") {
-    return true;
-  }
-
-  const currentPercent = currentState.downloadPercent;
-  if (currentPercent === null) {
-    return true;
-  }
-
-  const previousStep = Math.floor(currentPercent / 10);
-  const nextStep = Math.floor(nextPercent / 10);
-  return nextStep !== previousStep || nextPercent === 100;
 }
 
 function getAutoUpdateDisabledReason(args: {
@@ -551,7 +489,10 @@ export const make = Effect.gen(function* () {
     reason: string,
     actionReservation: "acquire" | "held" = "acquire",
   ) {
-    yield* Effect.annotateCurrentSpan({ reason });
+    yield* Effect.annotateCurrentSpan({
+      reason,
+      channel: (yield* Ref.get(updateStateRef)).channel,
+    });
     if (yield* Ref.get(desktopState.quitting)) return false;
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
 
@@ -602,27 +543,53 @@ export const make = Effect.gen(function* () {
       }));
       yield* logUpdaterInfo("checking for updates", { reason });
 
+      const channel = (yield* Ref.get(updateStateRef)).channel;
+      const failCheck = Effect.fn("desktop.updates.applyCheckFailure")(function* (message: string) {
+        const failedAt = yield* currentIsoTimestamp;
+        yield* updateState((current) => ({
+          ...reduceDesktopUpdateStateOnCheckFailure(current, message, failedAt),
+          recoveryStatus:
+            current.pendingUpdate && !current.downloadedVersion
+              ? "needs-network"
+              : current.recoveryStatus,
+        }));
+      });
+
       return yield* electronUpdater.checkForUpdates.pipe(
+        // Without a deadline one stalled request keeps the check reserved, and every
+        // later poll then returns without checking while the app looks up to date.
+        Effect.timeoutOrElse({
+          duration: UPDATE_CHECK_TIMEOUT,
+          orElse: () => Effect.fail(new DesktopUpdateCheckTimeoutError({ channel })),
+        }),
         Effect.as(true),
         Effect.catchTags({
           ElectronUpdaterCheckForUpdatesError: Effect.fn(
             "desktop.updates.handleCheckForUpdatesFailure",
           )(function* (error) {
-            const failedAt = yield* currentIsoTimestamp;
-            yield* updateState((current) => ({
-              ...reduceDesktopUpdateStateOnCheckFailure(current, error.message, failedAt),
-              recoveryStatus:
-                current.pendingUpdate && !current.downloadedVersion
-                  ? "needs-network"
-                  : current.recoveryStatus,
-            }));
+            const cause = describeUpdateErrorCause(error.cause);
+            yield* failCheck(checkFailureMessage(cause));
             yield* logUpdaterError(error.message, {
               errorTag: error._tag,
-              cause: describeUpdateErrorCause(error.cause),
+              cause,
               channel: error.channel,
             });
             return true;
           }),
+          DesktopUpdateCheckTimeoutError: Effect.fn("desktop.updates.handleCheckTimeout")(
+            function* (error) {
+              yield* failCheck(
+                checkFailureMessage(
+                  `the update server did not answer within ${UPDATE_CHECK_TIMEOUT_MINUTES} minutes.`,
+                ),
+              );
+              yield* logUpdaterError(error.message, {
+                errorTag: error._tag,
+                channel: error.channel,
+              });
+              return true;
+            },
+          ),
         }),
       );
     });
@@ -687,7 +654,10 @@ export const make = Effect.gen(function* () {
         ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
           function* (error) {
             yield* updateState((current) => ({
-              ...reduceDesktopUpdateStateOnDownloadFailure(current, error.message),
+              ...reduceDesktopUpdateStateOnDownloadFailure(
+                current,
+                downloadFailureMessage(error.cause),
+              ),
               recoveryStatus: null,
             }));
             yield* logUpdaterError(error.message, {
@@ -838,6 +808,7 @@ export const make = Effect.gen(function* () {
     expectedVersion?: string,
     automaticAdmission?: Effect.Effect<boolean>,
     waitForCheck = true,
+    checkWait: Duration.Duration = PREPARED_INSTALL_CHECK_WAIT,
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -877,7 +848,7 @@ export const make = Effect.gen(function* () {
           );
           if (admission === "wait-for-check") {
             const finishedAction = yield* PubSub.take(actionCompletions).pipe(
-              Effect.timeoutOption(PREPARED_INSTALL_CHECK_WAIT),
+              Effect.timeoutOption(checkWait),
             );
             if (Option.isNone(finishedAction)) admission = "refused";
           }
@@ -951,6 +922,7 @@ export const make = Effect.gen(function* () {
   const installWithExpectedVersion = Effect.fn("desktop.updates.install")(function* (
     expectedVersion?: string,
     waitForCheck = true,
+    checkWait?: Duration.Duration,
   ) {
     if (yield* Ref.get(desktopState.quitting)) {
       return {
@@ -960,7 +932,12 @@ export const make = Effect.gen(function* () {
         state: yield* Ref.get(updateStateRef),
       };
     }
-    const result = yield* installDownloadedUpdate(expectedVersion, undefined, waitForCheck);
+    const result = yield* installDownloadedUpdate(
+      expectedVersion,
+      undefined,
+      waitForCheck,
+      checkWait,
+    );
     return {
       accepted: result.accepted,
       completed: result.completed,
@@ -1196,8 +1173,16 @@ export const make = Effect.gen(function* () {
 
   const handleUpdaterError = Effect.fn("desktop.updates.handleUpdaterError")(function* (
     cause: unknown,
+    detail: unknown,
   ) {
     const activeAction = yield* activeUpdateAction;
+    if (isAbandonedCheckFailure(detail, Option.getOrUndefined(activeAction))) {
+      yield* logUpdaterWarning("an update check failed after its deadline", {
+        cause: describeUpdateErrorCause(cause),
+        activeAction: Option.getOrUndefined(activeAction),
+      });
+      return;
+    }
     const error = new DesktopUpdaterReportedError({
       operation: Option.match(activeAction, {
         onNone: () => "background" as const,
@@ -1220,7 +1205,7 @@ export const make = Effect.gen(function* () {
       yield* updateState((current) => ({
         ...current,
         status: "error",
-        message: error.message,
+        message: `${error.message} ${describeUpdateErrorCause(error.cause)}`,
         checkedAt,
         downloadPercent: null,
         errorContext: current.errorContext,
@@ -1368,13 +1353,6 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      if (config.mockUpdates) {
-        yield* electronUpdater.setFeedURL({
-          provider: "generic",
-          url: `http://localhost:${config.mockUpdateServerPort}`,
-        } as ElectronUpdater.ElectronUpdaterFeedUrl);
-      }
-
       let settings = yield* desktopSettings.get;
       let pendingPersistenceFailed = false;
       // Startup recovery intentionally drops lower/equal versions, including a
@@ -1415,6 +1393,15 @@ export const make = Effect.gen(function* () {
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
+      // Setting a feed constructs electron-updater, which throws for an unpackaged build's
+      // non-semver version, so even the mock feed waits until updates are enabled (#1545).
+      if (config.mockUpdates) {
+        yield* electronUpdater.setFeedURL({
+          provider: "generic",
+          url: `http://localhost:${config.mockUpdateServerPort}`,
+        } as ElectronUpdater.ElectronUpdaterFeedUrl);
+      }
+
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
       yield* applyAutoUpdaterChannel(settings.updateChannel);
@@ -1443,8 +1430,8 @@ export const make = Effect.gen(function* () {
       yield* electronUpdater.on("update-not-available", () => {
         runEffect(handleUpdateNotAvailable);
       });
-      yield* electronUpdater.on("error", (error: unknown) => {
-        runEffect(handleUpdaterError(error));
+      yield* electronUpdater.on("error", (error: unknown, detail: unknown) => {
+        runEffect(handleUpdaterError(error, detail));
       });
       yield* electronUpdater.on("download-progress", (progress: unknown) => {
         runEffect(handleDownloadProgress(progress));
@@ -1549,7 +1536,11 @@ export const make = Effect.gen(function* () {
       Effect.map(({ accepted, completed, state }) => ({ accepted, completed, state })),
     ),
     installPrepared: (expectedVersion, options) =>
-      installWithExpectedVersion(expectedVersion, options?.waitForCheck ?? true),
+      installWithExpectedVersion(
+        expectedVersion,
+        options?.waitForCheck ?? true,
+        options?.checkWait,
+      ),
   });
 });
 

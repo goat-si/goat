@@ -178,6 +178,78 @@ describe("note edit session", () => {
     session.acceptTheirs();
     expect(session.getSnapshot().body).toBe("Changed before rename");
   });
+  it("moves a draft onto a pin or link change without asking to compare", () => {
+    const session = new NoteSession(document(), vi.fn());
+    session.edit("Mine");
+    session.receive({ ...document("Original", "b".repeat(64)), pinned: true });
+    expect(session.getSnapshot().incoming).toBe(null);
+    expect(session.getSnapshot().document.revision).toBe("b".repeat(64));
+    expect(session.getSnapshot().body).toBe("Mine");
+  });
+  it("rereads after a save when a pin made before the save arrives first", async () => {
+    const reply = deferred<NoteReply<NoteDocument>>();
+    const saved = document("Mine", "c".repeat(64));
+    const read = vi.fn(async (): Promise<NoteReply<NoteDocument>> => ({ ok: true, value: saved }));
+    const session = new NoteSession(document(), () => reply.promise, read);
+    session.edit("Mine");
+    const saving = session.save();
+    session.receive({ ...document("Original", "b".repeat(64)), pinned: true });
+    reply.resolve({ ok: true, value: saved });
+    await saving;
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(session.getSnapshot().incoming).toBe(null);
+    expect(session.getSnapshot().document.revision).toBe(saved.revision);
+    expect(isNoteDirty(session.getSnapshot())).toBe(false);
+  });
+  it("adopts a pin made after the save without prompting and keeps later typing", async () => {
+    const reply = deferred<NoteReply<NoteDocument>>();
+    const saved = document("Mine", "c".repeat(64));
+    const pinnedAfter = { ...document("Mine", "d".repeat(64)), pinned: true };
+    const read = vi.fn(async (): Promise<NoteReply<NoteDocument>> => ({
+      ok: true,
+      value: pinnedAfter,
+    }));
+    const session = new NoteSession(document(), () => reply.promise, read);
+    session.edit("Mine");
+    const saving = session.save();
+    session.receive(pinnedAfter);
+    session.edit("Mine, then more");
+    reply.resolve({ ok: true, value: saved });
+    await saving;
+    expect(session.getSnapshot().incoming).toBe(null);
+    expect(session.getSnapshot().document.revision).toBe(pinnedAfter.revision);
+    expect(session.getSnapshot().body).toBe("Mine, then more");
+  });
+  it("still asks to compare when another writer changed the body during the save", async () => {
+    const reply = deferred<NoteReply<NoteDocument>>();
+    const theirs = document("Theirs", "d".repeat(64));
+    const read = vi.fn(async (): Promise<NoteReply<NoteDocument>> => ({ ok: true, value: theirs }));
+    const session = new NoteSession(document(), () => reply.promise, read);
+    session.edit("Mine");
+    const saving = session.save();
+    session.receive(theirs);
+    session.edit("Mine again");
+    reply.resolve({ ok: true, value: document("Mine", "c".repeat(64)) });
+    await saving;
+    expect(session.getSnapshot().incoming).toEqual(theirs);
+    expect(session.getSnapshot().body).toBe("Mine again");
+  });
+  it("retries once on a conflict caused only by a header change", async () => {
+    const pinned = { ...document("Original", "b".repeat(64)), pinned: true };
+    const write = vi
+      .fn<(input: NotesWriteInput) => Promise<NoteReply<NoteDocument>>>()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: new NoteConflictError({ path: pinned.path, current: pinned, message: "Changed" }),
+      })
+      .mockResolvedValueOnce({ ok: true, value: document("Mine", "c".repeat(64)) });
+    const session = new NoteSession(document(), write);
+    session.edit("Mine");
+    await session.save();
+    expect(write.mock.calls[1]?.[0].baseRevision).toBe(pinned.revision);
+    expect(session.getSnapshot().incoming).toBe(null);
+    expect(isNoteDirty(session.getSnapshot())).toBe(false);
+  });
   it("preserves the draft on transport failure and retries with the original revision", async () => {
     const write = vi
       .fn<(input: NotesWriteInput) => Promise<NoteReply<NoteDocument>>>()

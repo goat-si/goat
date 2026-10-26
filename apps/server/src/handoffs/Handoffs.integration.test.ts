@@ -10,92 +10,18 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SecretStore from "../auth/ServerSecretStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Option from "effect/Option";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import {
-  CommandId,
-  EnvironmentId,
-  Handoff,
-  MessageId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  TurnItemId,
-} from "@goat/contracts";
+import { CommandId, EnvironmentId, Handoff, TurnItemId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as Worker from "../orchestration-v2/EffectWorker.ts";
-import * as Registry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { makeFakeCloudAdapter } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
-import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(Handoff));
-const threadId = ThreadId.make("thread:handoff-tests");
-const instanceId = ProviderInstanceId.make("codex");
-const withHarness = <A, E, R>(
-  body: (input: {
-    orchestrator: Orchestrator.OrchestratorV2["Service"];
-    worker: Worker.OrchestrationEffectWorkerV2["Service"];
-  }) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const fake = yield* makeFakeCloudAdapter(true, instanceId);
-    const adapter = {
-      ...fake.adapter,
-      getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-      openSession: (input: Parameters<typeof fake.adapter.openSession>[0]) =>
-        fake.adapter
-          .openSession(input)
-          .pipe(Effect.map((session) => ({ ...session, startTurn: () => Effect.void }))),
-    };
-    const databaseLayer = Sqlite.layerMemory;
-    return yield* Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const worker = yield* Worker.OrchestrationEffectWorkerV2;
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("create-thread"),
-        threadId,
-        projectId: ProjectId.make("project:handoff-tests"),
-        title: "Human handoff",
-        modelSelection: { instanceId, model: "fake" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("start-run"),
-        threadId,
-        messageId: MessageId.make("message:handoff"),
-        text: "Set up the provider",
-        attachments: [],
-        dispatchMode: { type: "start_immediately" },
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* worker.drain();
-      return yield* body({ orchestrator, worker });
-    }).pipe(
-      Effect.provide(
-        Harness.layerWithRegistry(
-          { name: "human-handoff" },
-          Registry.layerFromAdapters([adapter]),
-          { runEffectWorker: false, databaseLayer },
-        ).pipe(Layer.provideMerge(databaseLayer)),
-      ),
-    );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 const create = (
   orchestrator: Orchestrator.OrchestratorV2["Service"],
@@ -793,6 +719,101 @@ it.effect(
       }),
     ),
 );
+it.effect(
+  "provider settings progress survives restart and its outcome stays readable for a day",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-provider-progress-" });
+        const store = Context.get(
+          yield* Layer.build(
+            SecretStore.layer.pipe(
+              Layer.provide(ServerConfig.layerTest(home, { prefix: "provider-progress-" })),
+            ),
+          ),
+          SecretStore.ServerSecretStore,
+        );
+        const reviewer = AuthSessionId.make("provider-settings-reviewer");
+        const now = yield* DateTime.now;
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(SecretStore.ServerSecretStore, store),
+          Layer.mock(Environment.ServerEnvironment)({
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("provider-settings-host")),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: orchestrator.dispatch,
+            getThreadRecords: orchestrator.getThreadRecords,
+          }),
+          Layer.mock(SessionStore.SessionStore)({
+            cookieName: "test",
+            legacyCookieName: undefined,
+            listActive: () =>
+              Effect.succeed([
+                {
+                  sessionId: reviewer,
+                  subject: "test",
+                  method: "browser-session-cookie",
+                  scopes: ["orchestration:operate", "providers:manage"],
+                  client: { label: "Human reviewer", deviceType: "unknown" },
+                  issuedAt: now,
+                  expiresAt: DateTime.add(now, { days: 2 }),
+                  lastConnectedAt: now,
+                  connected: true,
+                  current: true,
+                },
+              ]),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+        );
+        const start = Layer.build(
+          Layer.fresh(Handoffs.layer).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, Handoffs.Handoffs)));
+        const service = yield* start;
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const summary = yield* service.create({
+          kind: "approval",
+          title: "Change provider settings?",
+          reason: "An agent asked",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "provider.settings" },
+          target: {
+            environmentId: EnvironmentId.make("provider-settings-host"),
+            path: "provider.settings",
+          },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Add Devin." },
+          args: { version: 1 },
+        });
+        const address = { threadId, handoffId: summary.handoffId };
+        const recordBeforeApproval = yield* Effect.flip(
+          service.recordProviderProgress(address, { step: "early" }),
+        );
+        assert.equal(recordBeforeApproval.reason, "invalid_request");
+        yield* service.respond({ ...address, action: "completed" }, reviewer);
+        yield* service.recordProviderProgress(address, { effects: { install: "done" } });
+
+        const restarted = yield* start;
+        const [continuation] = yield* restarted.completedProviderContinuations("provider.settings");
+        assert.deepStrictEqual(continuation?.progress, { effects: { install: "done" } });
+        assert.deepStrictEqual(continuation?.args, { version: 1 });
+
+        const settled = {
+          effects: { install: "done", save: "done" },
+          outcome: { state: "applied" },
+        };
+        yield* restarted.finishProviderContinuation(address, settled);
+        assert.deepStrictEqual(
+          yield* restarted.completedProviderContinuations("provider.settings"),
+          [],
+        );
+        assert.deepStrictEqual(yield* restarted.readProviderProgress(address), settled);
+        yield* TestClock.adjust("25 hours");
+        assert.isUndefined(yield* restarted.readProviderProgress(address));
+      }),
+    ),
+);
+
 it.effect(
   "provider Home approval survives its requesting run and expires after fifteen minutes",
   () =>

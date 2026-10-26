@@ -1,6 +1,18 @@
+import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
+import { admitLaunch } from "./pressureAdmission.ts";
 import {
+  OrchestratorMcpFailure,
+  ThreadReplicaCaptureResult,
+  ThreadReplicaPayload,
+  ThreadReplicaMetadata,
+  THREAD_REPLICA_MAX_BYTES,
+  THREAD_REPLICA_RETENTION_MS,
+  ThreadReplicaRestoreResult,
+  type ThreadReplicaRecoveryInput,
   MessageId,
+  ModelSelection,
   OrchestratorMcpThreadReadResult,
+  OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadWaitResult,
   type ProjectId,
   type RunId,
@@ -14,6 +26,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -24,6 +37,8 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { localQuestionLauncher } from "../orchestration-v2/QuestionEscalationService.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -32,17 +47,23 @@ import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
+  dormantExpired,
+  endReported,
   EXCERPT_MAX_CHARS,
+  failureFromRemoteStatus,
   finishedWake,
   goneWake,
   isTerminalStatus,
+  launcherlessExpired,
   type LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
   type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
+  type LaunchWatchRunDetails,
   type LaunchWatchWebhookTarget,
   newLaunchWatch,
+  noRunDetails,
   normalizeHost,
   outageWake,
   questionKey,
@@ -51,9 +72,15 @@ import {
   recordFailure,
   recordQuestion,
   recordFailedAttempt,
+  rearmRetriedRun,
+  RemoteRunFailureStatus,
+  settleEnd,
   settleRun,
   wakeAttempt,
+  watchExpired as expired,
 } from "./launchWatch.ts";
+import { runFailure } from "./threadStatus.ts";
+import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
  * Wakes a thread when a thread it launched finishes, so orchestrators do not
@@ -87,14 +114,6 @@ const REMOTE_ANSWER_MARGIN_MS = 60_000;
 /** Bound on one whole remote step, including SSH setup. */
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
 const REMOTE_READ_TIMEOUT_MS = 60_000;
-/** A watch with nothing left to report is dropped this long after its last change. */
-const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
-/**
- * A launcherless watch has no thread that could unwatch it, so it is dropped
- * this long after it was last armed even while its run is still owed, for
- * example when the host never comes back or a question is never answered.
- */
-const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 /** How often dormant watches past their retention are dropped while the server runs. */
 const SWEEP_MS = 60 * 60_000;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
@@ -152,6 +171,8 @@ export interface LaunchWatchServiceShape {
       readonly notifyWebhook?: boolean;
       /** The launch's chosen webhook receiver. Omitted keeps an existing watch's choice. */
       readonly webhookTarget?: LaunchWatchWebhookTarget | null;
+      readonly checkpointReplication?: "on" | "off";
+      readonly replicaCeiling?: RuntimeMode;
     },
   ) => Effect.Effect<LaunchWatch, LaunchWatchStoreError>;
   /**
@@ -161,6 +182,12 @@ export interface LaunchWatchServiceShape {
   readonly rearm: (
     input: LaunchWatchKey & { readonly runId: RunId },
   ) => Effect.Effect<void, LaunchWatchStoreError>;
+  /** Follows a run again on every watch of its thread once a retry moved it back to preparing. */
+  readonly rearmRetried: (input: {
+    readonly host: string | null | undefined;
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+  }) => Effect.Effect<void, LaunchWatchStoreError>;
   /** The watch under this key, if any. */
   readonly find: (
     input: LaunchWatchKey,
@@ -185,6 +212,10 @@ export interface LaunchWatchServiceShape {
   readonly resolveRoute: CompletionWebhook.CompletionWebhookShape["resolveRoute"];
   /** Frees what resolveRoute kept, for a launch that recorded no watch. */
   readonly releaseRoute: (route: CompletionWebhook.WebhookRoute) => Effect.Effect<void>;
+  readonly recover: (
+    input: ThreadReplicaRecoveryInput & { readonly launcherThreadId: ThreadId },
+    authorize: ThreadReplicaService.ReplicaAuthorization,
+  ) => Effect.Effect<ThreadReplicaRestoreResult, OrchestratorMcpFailure>;
 }
 
 export class LaunchWatchService extends Context.Service<
@@ -210,6 +241,8 @@ type StepResult =
        * message was promoted into, which carries on its work.
        */
       readonly runId: RunId;
+      /** When it ended, where the step could read it. */
+      readonly end?: string | null;
     }
   | {
       readonly _tag: "Running";
@@ -223,58 +256,25 @@ type StepResult =
   | { readonly _tag: "CallerChanged" }
   | { readonly _tag: "Unreachable"; readonly error: string };
 
-interface Details {
-  readonly title: string | null;
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly excerpt: string | null;
-  readonly prUrl: string | null;
-  /**
-   * A registered cloud run GOAT could only link: its attach run ends without a result, so
-   * the completion webhook is not told it completed. The launching thread still hears why.
-   */
-  readonly linkOnlyRegistration: boolean;
-}
-
-const noDetails: Details = {
-  title: null,
-  branch: null,
-  worktreePath: null,
-  excerpt: null,
-  prUrl: null,
-  linkOnlyRegistration: false,
-};
-
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
-
-/**
- * Orchestrator refusals a retry cannot change. A previously rejected command
- * is not one of them: the orchestrator also records a command that failed for
- * a passing reason as rejected, so the wake is retried under a fresh id.
- */
-const PERMANENT_DISPATCH_ERRORS = new Set([
-  "OrchestratorCommandRejectedError",
-  "OrchestratorSubagentThreadReadOnlyError",
-  "OrchestratorThreadAboveModeLimitError",
-]);
-
-const isPermanentDispatchFailure = (cause: Cause.Cause<unknown>) =>
-  Option.match(Cause.findErrorOption(cause), {
-    onNone: () => false,
-    onSome: (error) =>
-      typeof error === "object" &&
-      error !== null &&
-      "_tag" in error &&
-      PERMANENT_DISPATCH_ERRORS.has(String(error._tag)),
-  });
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
+const encodeReplicaPayload = Schema.encodeEffect(Schema.fromJsonString(ThreadReplicaPayload));
+const decodeReplicaPayload = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ThreadReplicaPayload),
+);
+const encodeReplicaMetadata = Schema.encodeEffect(Schema.fromJsonString(ThreadReplicaMetadata));
+const encodeReplicaModel = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.NullOr(ModelSelection)),
+);
+const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeRequestIds = Schema.decodeUnknownEffect(
   Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
 );
+const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 
 const describe = (error: unknown) =>
   error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
@@ -289,6 +289,9 @@ export const make = Effect.gen(function* () {
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const config = yield* ServerConfig.ServerConfig;
   const webhook = yield* CompletionWebhook.CompletionWebhook;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const pressure = yield* Effect.serviceOption(PressureNudger.PressureAdmissionService);
+  const replicas = yield* ThreadReplicaService.ThreadReplicaService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
@@ -296,6 +299,12 @@ export const make = Effect.gen(function* () {
   const lock = yield* Semaphore.make(1);
   const statePath = path.join(config.stateDir, LAUNCH_WATCH_FILE);
   const launcherlessPath = path.join(config.stateDir, LAUNCHERLESS_WATCH_FILE);
+  const replicaDir = path.join(config.stateDir, "watch-replicas");
+  const replicaFile = (watch: LaunchWatch, runId: RunId) =>
+    path.join(
+      replicaDir,
+      ThreadReplicaService.replicaDigest(`${watch.id}:${watch.incarnation}:${runId}`) + ".json",
+    );
 
   let watches = new Map<string, LaunchWatch>();
   /** What each state file holds on disk, so a save rewrites only the file that changed. */
@@ -494,11 +503,13 @@ export const make = Effect.gen(function* () {
       }
       const status = waited.result.run?.status;
       if (status !== undefined && isTerminalStatus(status)) {
+        const completedAt = waited.result.run?.completedAt;
         // The wait follows a promoted queued message into the run it joined.
         return {
           _tag: "Terminal",
           status,
           runId: waited.result.run?.id ?? runId,
+          end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
       const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
@@ -591,6 +602,7 @@ export const make = Effect.gen(function* () {
           _tag: "Terminal",
           status: waited.status,
           runId: waited.runId ?? runId,
+          end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
       // Only user questions are listed remotely; approvals show up when the run ends.
@@ -641,8 +653,14 @@ export const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(watch.threadId);
       const records = yield* threads.getThreadRecords(
         watch.threadId,
-        ["messages", "providerThreads"],
-        { messageRoles: ["assistant"], messageRunIds: [runId] },
+        ["messages", "providerThreads", "runs", "turnItems"],
+        {
+          messageRoles: ["assistant"],
+          messageRunIds: [runId],
+          runIds: [runId],
+          turnItemRunIds: [runId],
+          turnItemTypes: ["assistant_message", "error"],
+        },
       );
       return {
         title: shell?.title ?? null,
@@ -654,7 +672,11 @@ export const make = Effect.gen(function* () {
           (thread) =>
             thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
         ),
-      } satisfies Details;
+        failure: runFailure(
+          records.runs.find((run) => run.id === runId) ?? null,
+          records.turnItems,
+        ),
+      } satisfies LaunchWatchRunDetails;
     });
 
   /**
@@ -662,7 +684,12 @@ export const make = Effect.gen(function* () {
    * Positions count every visible item while the messages view only filters,
    * so the read starts a fixed window before the end.
    */
-  const remoteDetails = (watch: LaunchWatch, host: string, runId: RunId) =>
+  const remoteDetails = (
+    watch: LaunchWatch,
+    host: string,
+    runId: RunId,
+    status: LaunchWatchTerminalStatus,
+  ) =>
     Effect.gen(function* () {
       const read = (args: Record<string, unknown>) =>
         callHost(
@@ -689,46 +716,59 @@ export const make = Effect.gen(function* () {
         if (!result.hasMore || result.nextPosition === null) break;
         afterPosition = result.nextPosition;
       }
+      const excerpt = lastText(texts);
+      // A run that failed before its agent spoke has nothing to quote; its status says why.
+      const failure =
+        status === "failed" && excerpt === null
+          ? yield* callHost(
+              watch,
+              host,
+              "goat_thread_status",
+              { threadId: watch.threadId },
+              REMOTE_READ_TIMEOUT_MS,
+            ).pipe(
+              Effect.flatMap(decodeFailureStatus),
+              Effect.map((remote) => failureFromRemoteStatus(remote, runId)),
+              Effect.catch((error) =>
+                error instanceof LauncherGone
+                  ? Effect.fail(error)
+                  : Effect.logDebug("launch watch: failure status unreadable", {
+                      host,
+                      cause: error,
+                    }).pipe(Effect.as(null)),
+              ),
+            )
+          : null;
       return {
         title: head.thread.title,
         branch: head.thread.branch,
         worktreePath: head.thread.worktreePath,
-        excerpt: lastText(texts),
+        excerpt,
         prUrl: head.thread.linkedPullRequest?.url ?? null,
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
-      } satisfies Details;
+        failure,
+      } satisfies LaunchWatchRunDetails;
     });
 
   /** Details make a wake more useful but never hold it back. */
-  const detailsFor = (watch: LaunchWatch, runId: RunId) =>
+  const detailsFor = (watch: LaunchWatch, runId: RunId, status: LaunchWatchTerminalStatus) =>
     (watch.host === null
       ? localDetails(watch, runId)
-      : remoteDetails(watch, watch.host, runId)
+      : remoteDetails(watch, watch.host, runId, status)
     ).pipe(
       Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
-      Effect.map(Option.getOrElse(() => noDetails)),
+      Effect.map(Option.getOrElse(() => noRunDetails)),
       Effect.catch((error) =>
         Effect.logDebug("launch watch: details unavailable", {
           watchId: watch.id,
           cause: error,
-        }).pipe(Effect.as(noDetails)),
+        }).pipe(Effect.as(noRunDetails)),
       ),
     );
 
   const wake = (launcherThreadId: ThreadId, message: LaunchWatchWake) =>
-    threads.dispatch({
-      type: "message.dispatch",
-      commandId: message.commandId,
-      threadId: launcherThreadId,
-      messageId: message.messageId,
-      text: message.text,
-      notification: message.notification,
-      attachments: [],
-      dispatchMode: { type: "queue_after_active" },
-      createdBy: "agent",
-      creationSource: "server",
-    });
+    wakeThread(threads, launcherThreadId, message);
 
   /**
    * Sends a wake. A refusal the orchestrator will repeat settles it, with a
@@ -752,12 +792,18 @@ export const make = Effect.gen(function* () {
     ).pipe(
       Effect.tap((sent) =>
         sent.delivered && report !== undefined
-          ? webhook.notify(watch, {
-              ...report,
-              id: message.commandId,
-              summary: message.notification.summary,
-              excerpt: message.notification.detail ?? null,
-            })
+          ? webhook.notify(
+              watch,
+              {
+                ...report,
+                id: message.commandId,
+                summary: message.notification.summary,
+                excerpt: message.notification.detail ?? null,
+              },
+              () =>
+                current(watch.id, watch.incarnation)?.recovery === undefined &&
+                current(watch.id, watch.incarnation) !== undefined,
+            )
           : Effect.void,
       ),
     );
@@ -815,21 +861,6 @@ export const make = Effect.gen(function* () {
     return watch?.incarnation === incarnation ? watch : undefined;
   };
 
-  const launcherlessExpired = (watch: LaunchWatch, now: number) =>
-    watch.launcherThreadId === null &&
-    now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
-
-  /** A watch past its retention, which every operation treats as gone. */
-  const expired = (watch: LaunchWatch, now: number) =>
-    launcherlessExpired(watch, now) ||
-    (watch.pendingRuns.length === 0 &&
-      watch.outage === null &&
-      now - watch.updatedAt >= DORMANT_RETENTION_MS);
-
-  /** An expired watch with nothing owed. One still owed is left to its follower to drop. */
-  const dormantExpired = (watch: LaunchWatch, now: number) =>
-    watch.pendingRuns.length === 0 && watch.outage === null && expired(watch, now);
-
   /**
    * Whether a launcherless watch can no longer report: the completion webhook,
    * its only destination, stopped taking it, or it outlived its retention.
@@ -851,13 +882,19 @@ export const make = Effect.gen(function* () {
     incarnation: string,
     runId: RunId,
     result: StepResult,
-    details: Details,
+    details: LaunchWatchRunDetails,
   ) =>
     locked(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const watch = current(watchId, incarnation);
-          if (watch === undefined || !watch.pendingRuns.includes(runId)) return 0;
+          if (
+            watch === undefined ||
+            watch.recovery !== undefined ||
+            watch.detached ||
+            !watch.pendingRuns.includes(runId)
+          )
+            return 0;
           const now = yield* Clock.currentTimeMillis;
           // Kept dormant once nothing is owed, so a later send can re-arm it.
           const keep = (next: LaunchWatch) => save((map) => map.set(watchId, next));
@@ -877,15 +914,28 @@ export const make = Effect.gen(function* () {
             case "Terminal": {
               missingEscalations.delete(watchId);
               const endedRunId = result.runId;
-              // A promoted message ends with the run it joined; that run is reported once.
-              if (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) {
-                yield* keep(settleRun(recordContact(watch, now), runId, now));
+              // The end is the one the step observed, so it always belongs to the status it saw.
+              const end = result.end ?? null;
+              // A promoted message ends with the run it joined, and a run retried in place may
+              // still sit at the end already reported; either is reported once.
+              if (
+                (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) ||
+                endReported(watch, endedRunId, end)
+              ) {
+                const contacted = recordContact(watch, now);
+                // A retry that arrived meanwhile still has the run followed once more.
+                yield* keep(
+                  endedRunId === runId
+                    ? settleEnd(contacted, runId, end, now)
+                    : settleRun(contacted, runId, now),
+                );
                 return 0;
               }
               const title = details.title ?? watch.title;
+              const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
               const sent = yield* deliver(
                 watch,
-                finishedWake({ watch, runId: endedRunId, status: result.status, ...details }),
+                finishedWake(wake),
                 details.linkOnlyRegistration
                   ? undefined
                   : {
@@ -900,9 +950,11 @@ export const make = Effect.gen(function* () {
                 yield* keep(sent.watch);
                 return RETRY_MS;
               }
-              const settled = settleRun(recordContact(sent.watch, now), runId, now);
+              const contacted = recordContact(sent.watch, now);
               yield* keep({
-                ...(endedRunId === runId ? settled : settleRun(settled, endedRunId, now)),
+                ...(endedRunId === runId
+                  ? settleEnd(contacted, runId, end, now)
+                  : settleRun(settleRun(contacted, runId, now), endedRunId, now)),
                 title,
               });
               return 0;
@@ -1044,7 +1096,8 @@ export const make = Effect.gen(function* () {
     locked(
       Effect.gen(function* () {
         const watch = current(watchId, incarnation);
-        const runId = watch?.pendingRuns[0];
+        const runId =
+          watch?.recovery !== undefined || watch?.detached ? undefined : watch?.pendingRuns[0];
         if (watch === undefined || runId === undefined) {
           releaseSlot(watchId, incarnation);
           return { _tag: "Exit" } satisfies Plan;
@@ -1079,6 +1132,543 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const captureEnabled = Effect.fn("LaunchWatchService.captureEnabled")(function* (
+    watch: LaunchWatch,
+  ) {
+    if (
+      watch.host === null ||
+      watch.launcherThreadId === null ||
+      watch.recovery !== undefined ||
+      watch.detached
+    )
+      return false;
+    const currentSettings = yield* settings.getSettings;
+    if (currentSettings.goatclaw.enabled) return false;
+    const hostChoice = currentSettings.fleet.hosts?.[watch.host]?.checkpointReplication;
+    return hostChoice !== "off" && (watch.checkpointReplication ?? hostChoice) === "on";
+  });
+
+  const capture = Effect.fn("LaunchWatchService.capture")(
+    function* (watch: LaunchWatch, runId: RunId) {
+      if (watch.host === null) return;
+      const permit = yield* settings.checkpointReplicationPermit(watch.host);
+      const claimed = yield* locked(
+        Effect.gen(function* () {
+          const active = current(watch.id, watch.incarnation);
+          if (
+            active === undefined ||
+            !(yield* captureEnabled(active)) ||
+            active.replicaAttempts?.includes(runId)
+          )
+            return false;
+          yield* save((map) =>
+            map.set(active.id, {
+              ...active,
+              replicaAttempts: [...(active.replicaAttempts ?? []), runId],
+              replicaAttempt: { runId, reason: "capturing" },
+            }),
+          );
+          return true;
+        }),
+      );
+      if (!claimed || watch.host === null) return;
+      const authorize = Effect.gen(function* () {
+        const active = current(watch.id, watch.incarnation);
+        if (
+          active === undefined ||
+          !(yield* captureEnabled(active)) ||
+          active.replicaCeiling !== "full-access"
+        )
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Checkpoint capture is no longer authorized.",
+          });
+        const ceiling = yield* launcherCeiling(active);
+        const launcher = yield* threads.getThreadShell(active.launcherThreadId!);
+        if (ceiling !== "full-access" || launcher?.interactionMode !== "default")
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Checkpoint capture requires full access and default interaction mode.",
+          });
+        return ceiling;
+      });
+      const result = yield* ssh
+        .callHostTool(
+          {
+            host: watch.host,
+            tool: "goat_thread_checkpoint_capture",
+            arguments: { threadId: watch.threadId, runId },
+            writes: true,
+            requireReady: true,
+            existingSessionOnly: true,
+            timeoutMs: 150_000,
+          },
+          authorize,
+        )
+        .pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(ThreadReplicaCaptureResult)),
+          Effect.result,
+        );
+      yield* locked(
+        Effect.gen(function* () {
+          const active = current(watch.id, watch.incarnation);
+          if (active === undefined || active.recovery !== undefined || active.detached) return;
+          const enabled = yield* captureEnabled(active);
+          const authority = enabled ? yield* authorize.pipe(Effect.result) : null;
+          if (!enabled || authority?._tag === "Failure") {
+            yield* save((map) =>
+              map.set(active.id, {
+                ...active,
+                replicaAttempt: { runId, reason: enabled ? "authority_changed" : "disabled" },
+              }),
+            );
+            return;
+          }
+          const kept =
+            result._tag === "Success" && result.success.status === "captured"
+              ? result.success.replica
+              : null;
+          const reason =
+            result._tag === "Failure"
+              ? "capture_failed"
+              : result.success.status === "skipped"
+                ? result.success.reason
+                : "captured";
+          if (kept === null) {
+            yield* save((map) =>
+              map.set(active.id, { ...active, replicaAttempt: { runId, reason } }),
+            );
+            return;
+          }
+          const invalid = ThreadReplicaService.validateReplica(
+            kept,
+            yield* Clock.currentTimeMillis,
+          );
+          if (kept.sourceThreadId !== active.threadId || kept.runId !== runId || invalid !== null) {
+            yield* save((map) =>
+              map.set(active.id, {
+                ...active,
+                replicaAttempt: { runId, reason: invalid ?? "identity_mismatch" },
+              }),
+            );
+            return;
+          }
+          yield* fs.makeDirectory(replicaDir, { recursive: true, mode: 0o700 });
+          const file = replicaFile(active, runId);
+          yield* Effect.gen(function* () {
+            yield* writeFileStringAtomically({
+              filePath: file,
+              contents: yield* encodeReplicaPayload(kept),
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fs),
+              Effect.provideService(Path.Path, path),
+            );
+            const { bundleBase64: _bundle, context: _context, ...metadata } = kept;
+            const published = yield* permit.publish(
+              Effect.gen(function* () {
+                yield* authorize;
+                yield* save((map) =>
+                  map.set(active.id, {
+                    ...active,
+                    replica: metadata,
+                    replicaAttempt: { runId, reason: "captured" },
+                  }),
+                );
+              }),
+            );
+            if (Option.isNone(published)) {
+              yield* save((map) =>
+                map.set(active.id, {
+                  ...active,
+                  replicaAttempt: { runId, reason: "disabled" },
+                }),
+              );
+              return;
+            }
+            if (active.replica !== undefined && active.replica.runId !== runId)
+              yield* fs.remove(replicaFile(active, active.replica.runId)).pipe(Effect.ignore);
+          }).pipe(
+            Effect.ensuring(
+              Effect.suspend(() =>
+                current(active.id, active.incarnation)?.replica?.runId === runId
+                  ? Effect.void
+                  : fs.remove(file).pipe(Effect.ignore),
+              ),
+            ),
+          );
+        }),
+      );
+    },
+    Effect.catch(() => Effect.logWarning("launch watch: checkpoint capture failed")),
+  );
+
+  const knownRecovery = (
+    recovery: NonNullable<LaunchWatch["recovery"]>,
+  ): ThreadReplicaRestoreResult | undefined =>
+    recovery.status === "launched" && recovery.threadId !== null && recovery.runId !== null
+      ? {
+          operationId: recovery.request.operationId,
+          status: "launched",
+          threadId: recovery.threadId,
+          runId: recovery.runId,
+        }
+      : undefined;
+
+  const recover: LaunchWatchServiceShape["recover"] = Effect.fn("LaunchWatchService.recover")(
+    function* (input, authorize) {
+      authorize = authorize.pipe(
+        Effect.tap(() => ThreadReplicaService.assertCheckpointProfilesDisabled(settings)),
+      );
+      const admitted = yield* locked(
+        Effect.gen(function* () {
+          yield* ensureLoaded;
+          const watch = watches.get(keyOf(input).id);
+          if (watch === undefined || watch.host === null)
+            return yield* new OrchestratorMcpFailure({
+              code: "not_found",
+              message: "No checkpoint watch exists.",
+            });
+          const authority = yield* authorize;
+          if (
+            authority.runtimeMode !== "full-access" ||
+            authority.interactionMode !== "default" ||
+            watch.replicaCeiling !== "full-access"
+          )
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message:
+                "Recovery requires current full access and the stored full-access capture grant.",
+            });
+          const destinationHost = normalizeHost(input.destinationHost);
+          if (watch.recovery !== undefined) {
+            const prior = watch.recovery;
+            if (
+              prior.capturedRunId !== input.expectedRunId ||
+              prior.destinationHost !== destinationHost ||
+              prior.request.projectId !== input.destinationProjectId ||
+              (yield* encodeReplicaModel(prior.request.modelSelection ?? null)) !==
+                (yield* encodeReplicaModel(input.modelSelection ?? null))
+            )
+              return yield* new OrchestratorMcpFailure({
+                code: "conflict",
+                message:
+                  "This watch already has a recovery operation with a different checkpoint, destination or model.",
+              });
+            return { watch, payload: null, recovery: prior };
+          }
+          if (pressure._tag === "Some")
+            yield* admitLaunch(destinationHost).pipe(
+              Effect.provideService(PressureNudger.PressureAdmissionService, pressure.value),
+            );
+          if (watch.replica === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "not_found",
+              message: "No retained checkpoint exists for this watch.",
+            });
+          if (watch.replica.runId !== input.expectedRunId)
+            return yield* new OrchestratorMcpFailure({
+              code: "conflict",
+              message: "The retained checkpoint changed; read watch status again.",
+            });
+          if (destinationHost === watch.host)
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "Recovery needs a different destination.",
+            });
+          const file = replicaFile(watch, input.expectedRunId);
+          if (!(yield* fs.exists(file)))
+            return yield* new OrchestratorMcpFailure({
+              code: "not_found",
+              message: "Retained checkpoint is missing.",
+            });
+          if ((yield* fs.stat(file)).size > THREAD_REPLICA_MAX_BYTES * 2)
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "Retained checkpoint is oversized.",
+            });
+          const payload = yield* fs.readFileString(file).pipe(
+            Effect.flatMap(decodeReplicaPayload),
+            Effect.mapError(
+              () =>
+                new OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message: "Retained checkpoint is corrupt or unreadable.",
+                }),
+            ),
+          );
+          const invalid = ThreadReplicaService.validateReplica(
+            payload,
+            yield* Clock.currentTimeMillis,
+          );
+          const { bundleBase64: _bundle, context: _context, ...metadata } = payload;
+          if (
+            invalid !== null ||
+            (yield* encodeReplicaMetadata(metadata)) !==
+              (yield* encodeReplicaMetadata(watch.replica))
+          )
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `Retained checkpoint refused: ${invalid ?? "identity_mismatch"}.`,
+            });
+          const request = {
+            operationId: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+            projectId: input.destinationProjectId,
+            ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          };
+          const recovery: NonNullable<LaunchWatch["recovery"]> = {
+            request,
+            destinationHost,
+            requestDigest: yield* ThreadReplicaService.replicaRestoreDigest({
+              ...request,
+              replica: payload,
+            }),
+            capturedRunId: payload.runId,
+            capturedDigest: payload.sha256,
+            sourceRunId: watch.pendingRuns[0] ?? payload.runId,
+            status: "reserved",
+            threadId: null,
+            runId: null,
+            sourceInterrupted: false,
+          };
+          const atCommit = yield* authorize;
+          if (atCommit.runtimeMode !== "full-access" || atCommit.interactionMode !== "default")
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message: "Recovery authorization changed before reservation.",
+            });
+          yield* save((map) => map.set(watch.id, { ...watch, recovery }));
+          return { watch, payload, recovery };
+        }),
+      );
+      const { watch, payload, recovery } = admitted;
+      const known = knownRecovery(recovery);
+      if (known !== undefined) return known;
+      const oldFollower = followers.get(watch.id);
+      if (oldFollower?.incarnation === watch.incarnation && oldFollower.fiber !== undefined) {
+        yield* Fiber.interrupt(oldFollower.fiber);
+        yield* locked(
+          Effect.sync(() => {
+            if (followers.get(watch.id) === oldFollower) releaseSlot(watch.id, watch.incarnation);
+          }),
+        );
+      }
+      if (payload !== null)
+        yield* locked(
+          save((map) => {
+            const active = current(watch.id, watch.incarnation);
+            if (
+              active?.recovery?.request.operationId === recovery.request.operationId &&
+              active.recovery.status === "reserved"
+            )
+              map.set(watch.id, {
+                ...active,
+                recovery: { ...active.recovery, status: "launch_unknown" },
+              });
+          }),
+        );
+      const guarded = authorize.pipe(
+        Effect.tap((caller) =>
+          caller.runtimeMode === "full-access" && caller.interactionMode === "default"
+            ? Effect.void
+            : Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "capability_denied",
+                  message: "Recovery authorization changed.",
+                }),
+              ),
+        ),
+      );
+      const reconcileInput = {
+        operationId: recovery.request.operationId,
+        requestDigest: recovery.requestDigest,
+      };
+      const result =
+        recovery.destinationHost === null
+          ? payload === null
+            ? yield* replicas.reconcile(reconcileInput, guarded)
+            : yield* replicas.restore({ ...recovery.request, replica: payload }, guarded)
+          : yield* ssh
+              .callHostTool(
+                {
+                  host: recovery.destinationHost,
+                  tool:
+                    payload === null
+                      ? "goat_thread_checkpoint_reconcile"
+                      : "goat_thread_checkpoint_restore",
+                  arguments:
+                    payload === null ? reconcileInput : { ...recovery.request, replica: payload },
+                  writes: true,
+                  requireReady: true,
+                  existingSessionOnly: true,
+                  timeoutMs: 180_000,
+                },
+                guarded.pipe(Effect.map((caller) => caller.runtimeMode)),
+              )
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(ThreadReplicaRestoreResult)),
+                Effect.mapError(
+                  () =>
+                    new OrchestratorMcpFailure({
+                      code: "host_unavailable",
+                      message:
+                        "Recovery launch outcome is unknown. Retry this same recovery to reconcile; do not start another launch.",
+                    }),
+                ),
+              );
+      if (
+        result.operationId !== recovery.request.operationId ||
+        (result.status === "launched" && result.runId === null)
+      )
+        return yield* new OrchestratorMcpFailure({
+          code: "conflict",
+          message: "Destination recovery identity did not match.",
+        });
+      const committed = yield* locked(
+        Effect.gen(function* () {
+          const active = current(watch.id, watch.incarnation);
+          if (
+            active?.recovery === undefined ||
+            active.recovery.request.operationId !== result.operationId
+          )
+            return result;
+          const alreadyKnown = knownRecovery(active.recovery);
+          if (alreadyKnown !== undefined) return alreadyKnown;
+          if (result.status === "refused") {
+            // The destination persisted a terminal non-launch tombstone; delayed requests cannot launch.
+            const { recovery: _retired, ...resumed } = active;
+            yield* save((map) => map.set(watch.id, resumed));
+            yield* ensureFollower(resumed);
+            return result;
+          }
+          const now = yield* Clock.currentTimeMillis;
+          const nextStatus = result.status;
+          yield* save((map) => {
+            map.set(watch.id, {
+              ...active,
+              ...(nextStatus === "launched" ? { notifyWebhook: false, webhookTarget: null } : {}),
+              recovery: {
+                ...active.recovery!,
+                status: nextStatus,
+                threadId: result.threadId,
+                runId: result.runId,
+              },
+            });
+            if (result.status === "launched" && result.runId !== null && !active.detached) {
+              const replacement = addPendingRun(
+                newLaunchWatch({
+                  launcherThreadId: input.launcherThreadId,
+                  host: recovery.destinationHost,
+                  threadId: result.threadId,
+                  projectId: recovery.destinationHost === null ? recovery.request.projectId : null,
+                  title: active.title,
+                  incarnation: result.operationId,
+                  notifyWebhook: active.notifyWebhook,
+                  webhookTarget: active.webhookTarget,
+                  now,
+                }),
+                result.runId,
+                now,
+              );
+              if (!map.has(replacement.id)) map.set(replacement.id, replacement);
+            }
+          });
+          if (result.status === "launched") {
+            const replacement = watches.get(
+              launchWatchId({
+                launcherThreadId: input.launcherThreadId,
+                host: recovery.destinationHost,
+                threadId: result.threadId,
+              }),
+            );
+            if (replacement !== undefined) yield* ensureFollower(replacement);
+          }
+          return result;
+        }),
+      );
+      if (committed.status === "launched")
+        yield* interruptRetired().pipe(Effect.forkIn(layerScope));
+      return committed;
+    },
+    Effect.mapError((error) =>
+      isMcpFailure(error)
+        ? error
+        : new OrchestratorMcpFailure({
+            code: "orchestration_error",
+            message: "Recovery state could not be saved.",
+          }),
+    ),
+  );
+
+  const interruptRetired = Effect.fn("LaunchWatchService.interruptRetired")(
+    function* () {
+      for (const snapshot of watches.values()) {
+        const retired = snapshot.recovery;
+        if (
+          retired === undefined ||
+          retired.status !== "launched" ||
+          retired.sourceInterrupted ||
+          snapshot.host === null
+        )
+          continue;
+        const result = yield* ssh
+          .callHostTool(
+            {
+              host: snapshot.host,
+              tool: "goat_thread_interrupt",
+              writes: true,
+              requireReady: true,
+              existingSessionOnly: true,
+              arguments: {
+                threadId: snapshot.threadId,
+                runId: retired.sourceRunId,
+                clientRequestId: `recovery-fence:${retired.request.operationId}`,
+              },
+              timeoutMs: REMOTE_READ_TIMEOUT_MS,
+            },
+            Effect.gen(function* () {
+              yield* ThreadReplicaService.assertCheckpointProfilesDisabled(settings);
+              const mode = yield* launcherCeiling(snapshot);
+              const launcher =
+                snapshot.launcherThreadId === null
+                  ? null
+                  : yield* threads.getThreadShell(snapshot.launcherThreadId);
+              if (
+                mode !== "full-access" ||
+                snapshot.replicaCeiling !== "full-access" ||
+                launcher?.interactionMode !== "default"
+              )
+                return yield* new OrchestratorMcpFailure({
+                  code: "capability_denied",
+                  message: "Source interruption is no longer authorized.",
+                });
+              return mode;
+            }),
+          )
+          .pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(OrchestratorMcpThreadInterruptResult)),
+            Effect.result,
+          );
+        if (
+          result._tag === "Failure" ||
+          result.success.threadId !== snapshot.threadId ||
+          (result.success.runId !== null && result.success.runId !== retired.sourceRunId)
+        )
+          continue;
+        yield* locked(
+          save((map) => {
+            const currentWatch = current(snapshot.id, snapshot.incarnation);
+            if (currentWatch?.recovery?.request.operationId === retired.request.operationId)
+              map.set(snapshot.id, {
+                ...currentWatch,
+                recovery: { ...currentWatch.recovery, sourceInterrupted: true },
+              });
+          }),
+        );
+      }
+    },
+    Effect.catch(() => Effect.logWarning("launch watch: retired source interruption pending")),
+  );
+
   /** Follows one watch's pending runs until none is left or the watch goes away. */
   const follow = (watchId: string, incarnation: string): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -1095,8 +1685,12 @@ export const make = Effect.gen(function* () {
           watch.host === null
             ? yield* localStep(watch, runId)
             : yield* remoteStep(watch, watch.host, runId, capability);
+        if (result._tag === "Terminal" && result.status === "completed")
+          yield* capture(watch, result.runId);
         const details =
-          result._tag === "Terminal" ? yield* detailsFor(watch, result.runId) : noDetails;
+          result._tag === "Terminal"
+            ? yield* detailsFor(watch, result.runId, result.status)
+            : noRunDetails;
         const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {
@@ -1177,14 +1771,27 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     // Keep only watches that still owe a report or changed recently.
     watches = new Map(
-      stored.watches.filter((watch) => !expired(watch, now)).map((watch) => [watch.id, watch]),
+      stored.watches
+        .filter((watch) => !expired(watch, now))
+        .map((watch) => [
+          watch.id,
+          watch.replicaAttempt?.reason === "capturing"
+            ? {
+                ...watch,
+                replicaAttempt: { ...watch.replicaAttempt, reason: "capture_interrupted" },
+              }
+            : watch,
+        ]),
     );
     loaded = true;
     yield* releaseDroppedTargets(
       new Map(stored.watches.map((watch) => [watch.id, watch])),
       watches,
     );
-    if (stored.misplaced) {
+    if (
+      stored.misplaced ||
+      stored.watches.some((watch) => watch.replicaAttempt?.reason === "capturing")
+    ) {
       yield* persist(watches).pipe(
         Effect.catch((error) =>
           Effect.logWarning("launch watches: launcherless watches not moved to their own file", {
@@ -1216,8 +1823,17 @@ export const make = Effect.gen(function* () {
             webhookTarget: input.webhookTarget ?? null,
             now,
           });
+        if (base.recovery !== undefined) return base;
+        const replicaCeiling =
+          base.replicaCeiling ??
+          input.replicaCeiling ??
+          (host !== null ? yield* launcherCeiling(base) : undefined);
         const withMeta = {
           ...base,
+          ...(input.checkpointReplication === undefined
+            ? {}
+            : { checkpointReplication: input.checkpointReplication }),
+          ...(replicaCeiling === undefined ? {} : { replicaCeiling }),
           projectId: base.projectId ?? input.projectId,
           title: input.title ?? base.title,
           notifyWebhook: input.notifyWebhook ?? base.notifyWebhook,
@@ -1228,7 +1844,16 @@ export const make = Effect.gen(function* () {
         yield* save((map) => map.set(id, watch));
         yield* ensureFollower(watch);
         return watch;
-      }),
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof LaunchWatchStoreError
+            ? cause
+            : new LaunchWatchStoreError({
+                message: "Could not register checkpoint replication.",
+                cause,
+              }),
+        ),
+      ),
     );
 
   const rearm: LaunchWatchServiceShape["rearm"] = (input) =>
@@ -1237,7 +1862,7 @@ export const make = Effect.gen(function* () {
         yield* ensureLoaded;
         const { id } = keyOf(input);
         const existing = watches.get(id);
-        if (existing === undefined) return;
+        if (existing === undefined || existing.recovery !== undefined || existing.detached) return;
         const now = yield* Clock.currentTimeMillis;
         if (expired(existing, now)) {
           // Past its retention it is gone; re-arming must not revive its webhook.
@@ -1251,11 +1876,48 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const rearmRetried: LaunchWatchServiceShape["rearmRetried"] = (input) =>
+    locked(
+      Effect.gen(function* () {
+        yield* ensureLoaded;
+        const host = normalizeHost(input.host);
+        const now = yield* Clock.currentTimeMillis;
+        const rearmed = [...watches.values()].flatMap((watch) => {
+          if (watch.host !== host || watch.threadId !== input.threadId) return [];
+          if (watch.recovery !== undefined || watch.detached || expired(watch, now)) return [];
+          const next = rearmRetriedRun(watch, input.runId, now);
+          return next === watch ? [] : [next];
+        });
+        if (rearmed.length === 0) return;
+        yield* save((map) => rearmed.forEach((watch) => map.set(watch.id, watch)));
+        yield* Effect.forEach(rearmed, ensureFollower, { discard: true });
+      }),
+    );
+
+  const withReplicationChoice = Effect.fn("LaunchWatchService.withReplicationChoice")(function* (
+    watch: LaunchWatch,
+  ) {
+    if (watch.launcherThreadId === null) return { ...watch, checkpointReplication: "off" as const };
+    const config = yield* settings.getSettings.pipe(Effect.option);
+    const choice =
+      Option.isSome(config) && watch.host !== null
+        ? config.value.fleet.hosts?.[watch.host]?.checkpointReplication
+        : "off";
+    return {
+      ...watch,
+      checkpointReplication:
+        choice === "off"
+          ? ("off" as const)
+          : (watch.checkpointReplication ?? choice ?? ("off" as const)),
+    };
+  });
+
   const find: LaunchWatchServiceShape["find"] = (input) =>
     locked(
       Effect.gen(function* () {
         yield* ensureLoaded;
-        return live(keyOf(input).id, yield* Clock.currentTimeMillis) ?? null;
+        const watch = live(keyOf(input).id, yield* Clock.currentTimeMillis);
+        return watch === undefined ? null : yield* withReplicationChoice(watch);
       }),
     );
 
@@ -1266,7 +1928,11 @@ export const make = Effect.gen(function* () {
           yield* ensureLoaded;
           const { id } = keyOf(input);
           if (!watches.has(id)) return { removed: false, fiber: undefined } as const;
-          yield* save((map) => map.delete(id));
+          yield* save((map) => {
+            const watch = map.get(id)!;
+            if (watch.recovery !== undefined) map.set(id, { ...watch, detached: true });
+            else map.delete(id);
+          });
           const slot = followers.get(id);
           followers.delete(id);
           return { removed: true, fiber: slot?.fiber } as const;
@@ -1278,10 +1944,13 @@ export const make = Effect.gen(function* () {
 
   const list: LaunchWatchServiceShape["list"] = (launcherThreadId) =>
     locked(ensureLoaded).pipe(
-      Effect.map(() =>
-        [...watches.values()]
-          .filter((watch) => watch.launcherThreadId === launcherThreadId)
-          .toSorted((left, right) => right.updatedAt - left.updatedAt),
+      Effect.flatMap(() =>
+        Effect.forEach(
+          [...watches.values()]
+            .filter((watch) => watch.launcherThreadId === launcherThreadId && !watch.detached)
+            .toSorted((left, right) => right.updatedAt - left.updatedAt),
+          withReplicationChoice,
+        ),
       ),
     );
 
@@ -1358,8 +2027,32 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (!loaded) return;
       const now = yield* Clock.currentTimeMillis;
-      if (![...watches.values()].some((watch) => dormantExpired(watch, now))) return;
-      yield* save(() => {});
+      if ([...watches.values()].some((watch) => dormantExpired(watch, now))) yield* save(() => {});
+      const expiredCopies = [...watches.values()].filter(
+        (watch) =>
+          watch.replica !== undefined &&
+          now - Date.parse(watch.replica.capturedAt) >= THREAD_REPLICA_RETENTION_MS,
+      );
+      if (expiredCopies.length > 0)
+        yield* save((map) => {
+          for (const watch of expiredCopies) {
+            const { replica, ...rest } = watch;
+            map.set(watch.id, {
+              ...rest,
+              replicaAttempt: { runId: replica!.runId, reason: "expired" },
+            });
+          }
+        });
+      const retained = new Set(
+        [...watches.values()].flatMap((watch) =>
+          watch.replica === undefined ? [] : [replicaFile(watch, watch.replica.runId)],
+        ),
+      );
+      for (const name of yield* fs.readDirectory(replicaDir).pipe(Effect.orElseSucceed(() => []))) {
+        const file = path.join(replicaDir, name);
+        if (/^[a-f0-9]{64}\.json$/u.test(name) && !retained.has(file))
+          yield* fs.remove(file).pipe(Effect.ignore);
+      }
     }),
   ).pipe(
     Effect.catch((error) =>
@@ -1367,10 +2060,15 @@ export const make = Effect.gen(function* () {
     ),
   );
   yield* forkParked(Effect.forever(Effect.sleep(SWEEP_MS).pipe(Effect.andThen(sweep))));
+  yield* forkParked(
+    Effect.forever(Effect.sleep(REMOTE_TICK_MS).pipe(Effect.andThen(interruptRetired()))),
+  );
 
   return LaunchWatchService.of({
     register,
+    recover,
     rearm,
+    rearmRetried,
     find,
     unwatch,
     list,

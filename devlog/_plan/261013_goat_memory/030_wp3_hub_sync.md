@@ -195,7 +195,12 @@ type AdminRecord = {
   memberVersion: number | null;
 }; // Never persists credential bytes; private secret reference only.
 type TicketState =
-  "recoverable" | "running" | "submitting" | "approved" | "finalizing" | "terminal";
+  | "recoverable"
+  | "running"
+  | "submitting"
+  | "approved"
+  | "finalizing"
+  | "terminal";
 type TicketRow = {
   ticket: M.MemoryResolutionLease;
   version: number;

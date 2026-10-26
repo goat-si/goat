@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./opencodexCompat": {
+      "types": "./src/opencodexCompat.ts",
+      "import": "./src/opencodexCompat.ts"
+    },
+    "./channelEvidence": {
+      "types": "./src/channelEvidence.ts",
+      "import": "./src/channelEvidence.ts"
+    },
     "./sshFailure": {
       "types": "./src/sshFailure.ts",
       "import": "./src/sshFailure.ts"
@@ -10,6 +18,26 @@
     "./sshDestination": {
       "types": "./src/sshDestination.ts",
       "import": "./src/sshDestination.ts"
+    },
+    "./cuaDriverRelease": {
+      "types": "./src/cuaDriverRelease.ts",
+      "import": "./src/cuaDriverRelease.ts"
+    },
+    "./computerUseActions": {
+      "types": "./src/computerUseActions.ts",
+      "import": "./src/computerUseActions.ts"
+    },
+    "./computerUseObservation": {
+      "types": "./src/computerUseObservation.ts",
+      "import": "./src/computerUseObservation.ts"
+    },
+    "./computerUseWindows": {
+      "types": "./src/computerUseWindows.ts",
+      "import": "./src/computerUseWindows.ts"
+    },
+    "./cuaDriverManifest": {
+      "types": "./src/cuaDriverManifest.ts",
+      "import": "./src/cuaDriverManifest.ts"
     },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
@@ -231,6 +259,10 @@
       "types": "./src/telemetryId.ts",
       "import": "./src/telemetryId.ts"
     },
+    "./analyticsAllowlist": {
+      "types": "./src/analyticsAllowlist.ts",
+      "import": "./src/analyticsAllowlist.ts"
+    },
     "./relayAuth": {
       "types": "./src/relayAuth.ts",
       "import": "./src/relayAuth.ts"
@@ -319,6 +351,10 @@
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"
     },
+    "./turnCapabilities": {
+      "types": "./src/turnCapabilities.ts",
+      "import": "./src/turnCapabilities.ts"
+    },
     "./composerContextLegacy": {
       "types": "./src/composerContextLegacy.ts",
       "import": "./src/composerContextLegacy.ts"
@@ -395,6 +431,14 @@
       "types": "./src/testing/symlinks.ts",
       "import": "./src/testing/symlinks.ts"
     },
+    "./testing/fileNames": {
+      "types": "./src/testing/fileNames.ts",
+      "import": "./src/testing/fileNames.ts"
+    },
+    "./testing/gitEnv": {
+      "types": "./src/testing/gitEnv.ts",
+      "import": "./src/testing/gitEnv.ts"
+    },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
@@ -462,10 +506,6 @@
     "./hostClassification": {
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
-    },
-    "./dateTime": {
-      "types": "./src/dateTime.ts",
-      "import": "./src/dateTime.ts"
     },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
@@ -566,10 +606,14 @@
     "./markdownMath": {
       "types": "./src/markdownMath.ts",
       "import": "./src/markdownMath.ts"
+    },
+    "./cloneUrl": {
+      "types": "./src/cloneUrl.ts",
+      "import": "./src/cloneUrl.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsc-rs --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {

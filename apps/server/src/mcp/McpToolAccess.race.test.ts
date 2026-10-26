@@ -28,6 +28,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -141,6 +142,7 @@ const renameRacingTheUser = (threadId: ThreadId, userRaises: boolean) =>
       Effect.provideService(McpSchema.McpServerClient, mcpClient),
       Effect.provide(
         McpHttpServer.toolkitRegistration(RenameToolkit, handlers).pipe(
+          Layer.provide(layerPermissionProfilesOff),
           Layer.provideMerge(McpServer.McpServer.layer),
         ),
       ),

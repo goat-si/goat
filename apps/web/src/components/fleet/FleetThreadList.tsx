@@ -4,6 +4,8 @@ import { Link } from "@tanstack/react-router";
 import { cn } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { useThreadContextDragHandle } from "../sidebar/useThreadContextDrag";
+import { FleetSubagents } from "./FleetSubagents";
 
 export const STATE_LABEL: Record<FleetThread["state"], string> = {
   running: "Running",
@@ -31,16 +33,49 @@ export function FleetThreadList({ threads }: { readonly threads: ReadonlyArray<F
 }
 
 function FleetThreadRow({ thread }: { readonly thread: FleetThread }) {
-  const content = (
-    <>
+  const dragHandle = useThreadContextDragHandle({
+    threadKey: thread.key,
+    title: thread.title,
+    disabled: thread.ref === null,
+    refs: thread.ref === null ? [] : [thread.ref],
+    unrestricted: true,
+  });
+  const titleClass = "min-w-0 truncate";
+  return (
+    // The link stretches over the row so the subagent chip can be its own button beside the title.
+    <div
+      className={cn(
+        "relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+        thread.ref !== null && "hover:bg-accent",
+      )}
+    >
       <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STATE_DOT[thread.state])} />
-      <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        {thread.ref === null ? (
+          <span className={titleClass}>{thread.title}</span>
+        ) : (
+          <Link
+            {...dragHandle}
+            draggable={false}
+            to="/$environmentId/$threadId"
+            params={buildThreadRouteParams(thread.ref)}
+            className={cn(
+              titleClass,
+              "outline-hidden after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset",
+            )}
+          >
+            {thread.title}
+          </Link>
+        )}
+        <FleetSubagents subagents={thread.subagents} />
+      </span>
       <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
         {thread.agentDriver ? (
           <ProviderInstanceIcon
             driverKind={thread.agentDriver}
             displayName={thread.agentLabel}
             iconClassName="size-3.5"
+            focusable
           />
         ) : null}
         {thread.ref === null && thread.reportedBy !== null
@@ -50,20 +85,6 @@ function FleetThreadRow({ thread }: { readonly thread: FleetThread }) {
       <span className="w-20 shrink-0 text-right text-xs text-muted-foreground">
         {STATE_LABEL[thread.state]}
       </span>
-    </>
-  );
-  const rowClass = "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm";
-  if (thread.ref === null) return <div className={rowClass}>{content}</div>;
-  return (
-    <Link
-      to="/$environmentId/$threadId"
-      params={buildThreadRouteParams(thread.ref)}
-      className={cn(
-        rowClass,
-        "outline-hidden hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-      )}
-    >
-      {content}
-    </Link>
+    </div>
   );
 }

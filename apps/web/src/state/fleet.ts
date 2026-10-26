@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { connectionRoutes } from "@goat/client-runtime/connection";
+import { connectionProgressLabel, connectionRoutes } from "@goat/client-runtime/connection";
 import {
   buildFleet,
   createFleetSummaryAtom,
@@ -18,7 +18,13 @@ import type { CloudMachine, EnvironmentId, RemoteLaunch } from "@goat/contracts"
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
-import { presentFleetConnection, type FleetConnection } from "../components/fleet/fleetConnection";
+import {
+  isFleetConnectionWait,
+  presentFleetConnection,
+  presentFleetMachineConnection,
+  UNKNOWN_FLEET_CONNECTION,
+  type FleetConnection,
+} from "../components/fleet/fleetConnection";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations, environmentSummaries } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
@@ -41,6 +47,8 @@ function sameEnvironments(
         environment.sshAliases.join("\n") === other.sshAliases.join("\n") &&
         environment.os === other.os &&
         environment.machineKind === other.machineKind &&
+        environment.machineId === other.machineId &&
+        environment.machineUserId === other.machineUserId &&
         environment.connected === other.connected
       );
     })
@@ -80,6 +88,8 @@ function fleetEnvironments(
       sshAliases,
       os: serverConfig?.environment.platform.os ?? null,
       machineKind: serverConfig ? (machineKinds.get(environmentId) ?? null) : null,
+      machineId: serverConfig?.environment.machineId ?? null,
+      machineUserId: serverConfig?.environment.machineUserId ?? null,
       connected: connected.has(environmentId),
     });
   }
@@ -97,9 +107,10 @@ export const fleetPageEnvironmentsAtom = Atom.make((get) => fleetEnvironments(ge
   Atom.withLabel("fleet-page-environments"),
 );
 
-export const fleetSummaryAtom = createFleetSummaryAtom({
+const fleetSummaryAtom = createFleetSummaryAtom({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   environmentsAtom: fleetEnvironmentsAtom,
+  primaryEnvironmentIdAtom,
 });
 
 export function useFleetSummary(): FleetSummary {
@@ -108,18 +119,39 @@ export function useFleetSummary(): FleetSummary {
 
 /**
  * Only what the graph shows of a connection, so the page rebuilds when a host's
- * state or reason changes, not on every step of a connection attempt.
+ * state, reason or named step changes, not on every retry countdown tick. It keeps when the
+ * state began, so a wait can say how long it has lasted.
  */
 const fleetConnectionAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get): FleetConnection | null => {
     const connection = get(environmentPresentations.presentationAtom(environmentId))?.connection;
-    const next = connection === undefined ? null : presentFleetConnection(connection);
+    const presented = connection === undefined ? null : presentFleetConnection(connection);
     const previous = Option.getOrNull(get.self<FleetConnection | null>());
+    const step =
+      presented === null || connection === undefined || !isFleetConnectionWait(presented.state)
+        ? null
+        : connection.retryAt != null
+          ? "Waiting to retry"
+          : connectionProgressLabel({ ...connection, retryAt: null }, 0);
+    const next =
+      presented === null
+        ? null
+        : {
+            ...presented,
+            step,
+            since:
+              previous !== null &&
+              previous.state === presented.state &&
+              previous.since !== undefined
+                ? previous.since
+                : Date.now(),
+          };
     return previous !== null &&
       next !== null &&
       previous.state === next.state &&
       previous.label === next.label &&
-      previous.reason === next.reason
+      previous.reason === next.reason &&
+      previous.step === next.step
       ? previous
       : next;
   }).pipe(Atom.withLabel(`fleet-connection:${environmentId}`)),
@@ -184,7 +216,9 @@ function snapshotKey(
       machine.id,
       machine.label,
       machine.subtitle,
-      machine.cloudState,
+      machine.boat,
+      machine.reportedAliases,
+      machine.answering,
       machine.os,
       machine.machineKind,
       machine.running,
@@ -200,7 +234,13 @@ function snapshotKey(
         agent.reported,
       ]),
     ]),
-    snapshot.threads.map((thread) => [thread.key, thread.title, thread.state, thread.agentKey]),
+    snapshot.threads.map((thread) => [
+      thread.key,
+      thread.title,
+      thread.state,
+      thread.agentKey,
+      thread.subagents.map((subagent) => [subagent.key, subagent.title, subagent.status]),
+    ]),
   ]);
 }
 
@@ -236,10 +276,11 @@ export const fleetPageAtom = Atom.make((get): FleetPageState => {
   const connections = new Map<string, FleetConnection>();
   let currentMachineId: string | null = null;
   for (const machine of snapshot.machines) {
-    if (machine.environmentId === null) continue;
     if (machine.environmentId === primaryEnvironmentId) currentMachineId = machine.id;
-    const connection = get(fleetConnectionAtom(machine.environmentId));
-    if (connection !== null) connections.set(machine.id, connection);
+    const live =
+      machine.environmentId === null ? null : get(fleetConnectionAtom(machine.environmentId));
+    const connection = presentFleetMachineConnection(machine.boat, live);
+    if (connection !== UNKNOWN_FLEET_CONNECTION) connections.set(machine.id, connection);
   }
   const key = snapshotKey(snapshot, connections, currentMachineId);
   const previous = Option.getOrNull(get.self<FleetPageState>());

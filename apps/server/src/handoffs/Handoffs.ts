@@ -1,3 +1,4 @@
+import { describeHolderForPerson } from "../cua/computerUseGrants.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import {
   EnvironmentAuthorizationError,
@@ -12,9 +13,13 @@ import {
   Handoff,
   HandoffError,
   HandoffHuman,
+  MessageId,
   handoffSummary,
   isHandoffPending,
-  isProviderHandoffPath,
+  isClockedHandoffPath,
+  isHubDeviceHandoffPath,
+  endsWithItsRun,
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
   type HandoffRespondInput,
@@ -39,6 +44,10 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
+import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
+import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -54,6 +63,16 @@ export const SshProgressBinding = Schema.Struct({
   threadId: ThreadId,
 });
 export type SshProgressBinding = typeof SshProgressBinding.Type;
+/** Provider approvals whose approval the server applies, keeping their arguments until it does. */
+const PROVIDER_CONTINUATION_PATHS = [
+  "provider.home_request",
+  "provider.host_sync",
+  "provider.settings",
+  "provider.setup",
+] as const;
+export type ProviderContinuationPath = (typeof PROVIDER_CONTINUATION_PATHS)[number];
+export const isProviderContinuationPath = (path: string): path is ProviderContinuationPath =>
+  (PROVIDER_CONTINUATION_PATHS as ReadonlyArray<string>).includes(path);
 const ContinuationPayload = Schema.Struct({
   version: Schema.Literal(1),
   kind: Schema.Literal("continuation"),
@@ -61,7 +80,9 @@ const ContinuationPayload = Schema.Struct({
   args: Schema.Record(Schema.String, Schema.Unknown),
   approvedBySessionId: Schema.optional(AuthSessionId),
   sshProgress: Schema.optional(SshProgressBinding),
-  namespace: Schema.optional(Schema.Literal("provider.home_request")),
+  namespace: Schema.optional(Schema.Literals(PROVIDER_CONTINUATION_PATHS)),
+  /** What an approved provider change has done so far; its owning service decodes it. */
+  progress: Schema.optional(Schema.Unknown),
 });
 const PrivatePayload = Schema.fromJsonString(
   Schema.Union([
@@ -72,6 +93,14 @@ const PrivatePayload = Schema.fromJsonString(
       sshProgress: SshProgressBinding,
       retainUntil: Schema.Number,
     }),
+    // A finished provider change keeps what it did, apart from the arguments it ran with.
+    Schema.Struct({
+      version: Schema.Literal(1),
+      kind: Schema.Literal("provider_outcome"),
+      namespace: Schema.Literals(PROVIDER_CONTINUATION_PATHS),
+      progress: Schema.Unknown,
+      retainUntil: Schema.Number,
+    }),
     // Legacy non-SSH payloads remain readable, but are never resumed as SSH work.
     Schema.Struct({
       version: Schema.optional(Schema.Literal(0)),
@@ -79,6 +108,9 @@ const PrivatePayload = Schema.fromJsonString(
       human: HandoffHuman,
       args: Schema.Record(Schema.String, Schema.Unknown),
     }),
+    // A person ended this computer use grant after approving it; the sweep drops it with the rest.
+    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
+    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_consumed") }),
   ]),
 );
 const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
@@ -100,6 +132,8 @@ const targetKey = (args: Readonly<Record<string, unknown>>) =>
       : value,
   );
 
+type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations>>;
+
 export class Handoffs extends Context.Service<
   Handoffs,
   {
@@ -116,8 +150,14 @@ export class Handoffs extends Context.Service<
       readonly args: Readonly<Record<string, unknown>>;
       readonly expiresAt?: DateTime.Utc;
       readonly sshProgress?: SshProgressBinding;
+      /** A computer use grant's apps, recorded on the handoff itself. */
+      readonly apps?: ReadonlyArray<string>;
+      readonly computerUseForeground?: Handoff["computerUseForeground"];
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    /** A computer use request's answer for its waiting call; see computerUseContinuations. */
+    readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
+    readonly deliverComputerUseWake: Continuations["deliverWake"];
     /** Client-only; caller supplies an authenticated, server-resolved label. */
     readonly open: (
       input: HandoffReadInput,
@@ -149,6 +189,58 @@ export class Handoffs extends Context.Service<
     readonly finishProviderHomeContinuation: (
       input: HandoffReadInput,
     ) => Effect.Effect<void, HandoffError>;
+    /** Approved handoffs on a provider path whose change has not been applied yet. */
+    readonly completedProviderContinuations: (path: ProviderContinuationPath) => Effect.Effect<
+      ReadonlyArray<{
+        readonly handoff: Handoff;
+        readonly args: Readonly<Record<string, unknown>>;
+        readonly approvedBySessionId: AuthSessionId;
+        readonly progress?: unknown;
+      }>,
+      HandoffError
+    >;
+    /** Replaces the progress an approved provider change has recorded. */
+    readonly recordProviderProgress: (
+      input: HandoffReadInput,
+      progress: unknown,
+    ) => Effect.Effect<void, HandoffError>;
+    /**
+     * Ends a provider continuation. With progress, that record stays readable for a day after
+     * the approval resolved, so approved and applied remain separate facts.
+     */
+    readonly finishProviderContinuation: (
+      input: HandoffReadInput,
+      progress?: unknown,
+    ) => Effect.Effect<void, HandoffError>;
+    /** The progress an approved provider change recorded, while unfinished or retained after. */
+    readonly readProviderProgress: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<unknown, HandoffError>;
+    /**
+     * One thread's handoff with its provider continuation, read in one load: `applying` while an
+     * approved change has not finished, and the progress it recorded. No arguments leave it.
+     */
+    readonly readProviderContinuation: (input: HandoffReadInput) => Effect.Effect<
+      {
+        readonly handoff: Handoff;
+        readonly applying: boolean;
+        readonly progress?: unknown;
+      },
+      HandoffError
+    >;
+    /**
+     * Whether an approved provider change is still waiting for the server to apply it, and the
+     * progress it recorded once it finished (absent when it finished without one).
+     */
+    readonly providerApplyState: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<{ readonly applying: boolean; readonly progress?: unknown }, HandoffError>;
+    /** Whether a person ended this computer use grant after approving it, which stopped its agent. */
+    readonly computerUseEndedByPerson: (handoff: Handoff) => Effect.Effect<boolean, HandoffError>;
+    /** Withdraws that grant's approval wake while it has not started its turn. */
+    readonly withdrawComputerUseWake: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<void, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -172,6 +264,11 @@ export class Handoffs extends Context.Service<
       sessionId: AuthSessionId,
     ) => Effect.Effect<SshProgressBinding | null, HandoffError | EnvironmentAuthorizationError>;
     readonly sweep: Effect.Effect<void, HandoffError>;
+    /** Whether a handoff was created with exactly these continuation arguments. */
+    readonly matchesArgs: (
+      handoff: Handoff,
+      args: Readonly<Record<string, unknown>>,
+    ) => Effect.Effect<boolean>;
   }
 >()("goat/handoffs/Handoffs") {}
 
@@ -179,10 +276,12 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const store = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
+  const archiveGate = yield* ThreadArchiveGate;
   const fs = yield* FileSystem.FileSystem;
   const sessions = yield* SessionStore.SessionStore;
   const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
   const secrets = yield* SecretRequests.SecretRequests;
+  const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const key = yield* store
     .getOrCreateRandom("handoff-encryption-key", 32)
     .pipe(Effect.mapError(unavailable));
@@ -221,6 +320,7 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.mapError(unavailable));
     });
   const read = Effect.fn("Handoffs.read")(function* (input: HandoffReadInput) {
+    yield* archiveGate.restore(input.threadId);
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items
@@ -238,6 +338,7 @@ const make = Effect.gen(function* () {
     input: HandoffReadInput,
     state: Handoff["state"],
     actor: Handoff["actor"],
+    keepPrivate = false,
   ) {
     yield* threads
       .dispatch({
@@ -255,6 +356,7 @@ const make = Effect.gen(function* () {
     const handoff = yield* read(input);
     // Completed payloads retain continuation arguments until the next rollout consumes them.
     if (
+      !keepPrivate &&
       !isHandoffPending(handoff.state) &&
       handoff.state !== "completed" &&
       !handoff.target.path.startsWith("ssh.")
@@ -262,12 +364,69 @@ const make = Effect.gen(function* () {
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     return handoff;
   });
-  const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
+  const continuations = yield* makeComputerUseContinuations({
+    lock,
+    read,
+    expire: (input) => transition(input, "expired", { type: "server" }),
+    cancelAsAgent: (input) =>
+      transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
+    recordKind: (id) =>
+      loadPrivate(id).pipe(
+        Effect.map((payload) => (payload !== null && "kind" in payload ? payload.kind : null)),
+      ),
+    markConsumed: (id) => savePrivate(id, CONSUMED, true),
+    removeRecord: (id) => store.remove(storeName(id)).pipe(Effect.mapError(unavailable)),
+  });
+  /**
+   * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
+   * stops that agent (#1521). The wake reactor withdraws the grant's approval wake while it has
+   * not taken the screen yet: queued behind the thread's running turn, or still starting. A turn
+   * already running keeps the control the Stop ended.
+   */
+  const withdrawComputerUseWake = Effect.fn("Handoffs.withdrawComputerUseWake")(function* (
     input: HandoffReadInput,
+  ) {
+    yield* continuations.forget(input.handoffId);
+    const records = yield* threads
+      .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
+      .pipe(Effect.mapError(unavailable));
+    const wake = MessageId.make(`message:handoff-wake:${input.handoffId}:completed`);
+    const run = records.runs.find((candidate) => candidate.userMessageId === wake);
+    if (run === undefined) return;
+    // A wake run that started only after the grant ended is a turn the Stop should have kept from
+    // starting. One already working before the Stop keeps going, like every other turn then.
+    const ended = (yield* read(input)).resolvedAt;
+    const startedAfterEnd =
+      (run.status === "running" || run.status === "waiting") &&
+      run.startedAt !== null &&
+      ended !== undefined &&
+      DateTime.toEpochMillis(run.startedAt) >= DateTime.toEpochMillis(ended);
+    // A retry after a rejection needs a fresh id; the run's state decides whether one is due.
+    const commandId = CommandId.make(
+      `handoff:${input.handoffId}:withdraw-wake:${run.status}:${NodeCrypto.randomUUID()}`,
+    );
+    if (run.status === "queued")
+      yield* threads
+        .dispatch({ type: "queued-run.cancel", commandId, threadId: input.threadId, runId: run.id })
+        .pipe(Effect.mapError(unavailable));
+    else if (run.status === "preparing" || run.status === "starting" || startedAfterEnd)
+      yield* threads
+        .dispatch({
+          type: "run.interrupt",
+          commandId,
+          threadId: input.threadId,
+          runId: run.id,
+          reason: "A person ended this thread's computer use before this turn started.",
+        })
+        .pipe(Effect.mapError(unavailable));
+  });
+  const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
+    input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
-    if (record.target.path.startsWith("ssh.") || isProviderHandoffPath(record.target.path)) {
+    // Host-bound requests are answered on the environment they would change.
+    if (record.target.path.startsWith("ssh.") || isClockedHandoffPath(record.target.path)) {
       if (Option.isNone(environment)) return yield* new HandoffError({ reason: "unavailable" });
       const origin = yield* environment.value.getEnvironmentId;
       if (record.target.environmentId !== origin)
@@ -280,9 +439,21 @@ const make = Effect.gen(function* () {
           ? ("environment:maintain" as const)
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
-            : ("orchestration:operate" as const);
+            : // Admitting an unattended thread to the screen, or changing the hub's members, is as
+              // strong as changing this environment's settings. Ending a screen grant only narrows
+              // what agents may do, so whoever may stop agents can end it (Stop all).
+              (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                  input.action !== "cancelled") ||
+                isHubDeviceHandoffPath(record.target.path)
+              ? ("settings:write" as const)
+              : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
+    if (session && !canResolveHumanStep(sessionResolver(session), "person_only"))
+      return yield* new EnvironmentAuthorizationError({
+        requiredScope: "orchestration:operate",
+        message: "Only a person's client can act on this handoff.",
+      });
     for (const requiredScope of new Set(["orchestration:operate" as const, targetScope])) {
       if (!session || !(session.permissions ?? session.scopes).includes(requiredScope))
         return yield* new EnvironmentAuthorizationError({
@@ -292,27 +463,99 @@ const make = Effect.gen(function* () {
     }
     return session!.client.label ?? "GOAT client";
   });
+  const respondLocked = Effect.fn("Handoffs.respondLocked")(
+    function* (
+      input: HandoffRespondInput,
+      sessionId: AuthSessionId,
+      foregroundEpoch: number | undefined,
+    ) {
+      const label = yield* clientLabel(input, sessionId);
+      const record = yield* read(input);
+      const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+      // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
+      if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
+        const held = Option.isNone(computerUseLeases)
+          ? Option.none()
+          : yield* computerUseLeases.value
+              .holder(record.requestedBy.threadId, record.apps)
+              .pipe(Effect.mapError(unavailable));
+        if (Option.isSome(held)) {
+          const rows = yield* sql<{ readonly title: string | null }>`
+            SELECT title FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${held.value.threadId}
+          `.pipe(Effect.orElseSucceed(() => []));
+          const title = rows[0]?.title?.trim();
+          return yield* new HandoffError({
+            reason: "conflict",
+            detail: `${describeHolderForPerson(held.value, title || undefined)} End that admission first, or deny this one.`,
+          });
+        }
+      }
+      if (
+        input.action === "completed" &&
+        (record.target.path.startsWith("ssh.") || isProviderContinuationPath(record.target.path)) &&
+        isHandoffPending(record.state)
+      ) {
+        const payload = yield* loadPrivate(input.handoffId);
+        if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
+          return yield* new HandoffError({ reason: "unavailable" });
+        // Approvals asked before a path became a continuation path carry no namespace yet.
+        const namespace = isProviderContinuationPath(record.target.path)
+          ? { namespace: record.target.path }
+          : {};
+        yield* savePrivate(
+          input.handoffId,
+          { ...payload, ...namespace, approvedBySessionId: sessionId },
+          true,
+        );
+      }
+      const endsApproved =
+        isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
+      // Recorded before the transition commits, so the wake reactor never sees the end without
+      // it; a repeated cancel keeps it.
+      if (endsApproved)
+        yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      const result = yield* transition(
+        input,
+        input.action,
+        { type: "client", label },
+        // A resolved grant's payload is already settled: it may record how it ended.
+        isComputerUseGrant && !isHandoffPending(record.state),
+      );
+      if (
+        foregroundEpoch !== undefined &&
+        isComputerUseGrant &&
+        isHandoffPending(record.state) &&
+        record.computerUseForeground !== undefined &&
+        result.state === "completed" &&
+        Option.isSome(computerUseLeases)
+      )
+        yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
+      if (isComputerUseGrant && Option.isSome(computerUseLeases))
+        yield* computerUseLeases.value.changed;
+      if (isComputerUseGrant) yield* continuations.answered(input.handoffId);
+      if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
+      if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
+      return result;
+    },
+    lock.withPermits(1),
+    // A computer use grant's holder check and commit must not straddle an unattended claim.
+    (effect) =>
+      Option.isSome(computerUseLeases)
+        ? computerUseLeases.value.serializeAdmission(effect)
+        : effect,
+  );
   const respond = Effect.fn("Handoffs.respond")(function* (
     input: HandoffRespondInput,
     sessionId: AuthSessionId,
   ) {
-    const label = yield* clientLabel(input, sessionId);
-    const record = yield* read(input);
-    if (
-      input.action === "completed" &&
-      (record.target.path.startsWith("ssh.") || record.target.path === "provider.home_request") &&
-      isHandoffPending(record.state)
-    ) {
-      const payload = yield* loadPrivate(input.handoffId);
-      if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
-        return yield* new HandoffError({ reason: "unavailable" });
-      yield* savePrivate(input.handoffId, { ...payload, approvedBySessionId: sessionId }, true);
-    }
-    const result = yield* transition(input, input.action, { type: "client", label });
-    if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
-    if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
-    return result;
-  }, lock.withPermits(1));
+    // Authorization, holder reads and lock acquisition can all overlap a person's Stop.
+    const foregroundEpoch =
+      input.action === "completed" && Option.isSome(computerUseLeases)
+        ? yield* computerUseLeases.value.foregroundApprovalEpoch
+        : undefined;
+    return yield* respondLocked(input, sessionId, foregroundEpoch);
+  });
   const open = Effect.fn("Handoffs.open")(function* (
     input: HandoffReadInput,
     sessionId: AuthSessionId,
@@ -379,18 +622,20 @@ const make = Effect.gen(function* () {
         expiresAt:
           input.kind === "approval" &&
           !input.target.path.startsWith("ssh.") &&
-          !isProviderHandoffPath(input.target.path)
+          !isClockedHandoffPath(input.target.path)
             ? null
             : (input.expiresAt ?? DateTime.add(now, { minutes: 15 })),
         createdAt: now,
         actor: { type: "agent", threadId: input.requestedBy.threadId },
+        ...(input.apps === undefined ? {} : { apps: input.apps }),
+        ...(input.computerUseForeground === undefined
+          ? {}
+          : { computerUseForeground: input.computerUseForeground }),
       };
       yield* savePrivate(handoff.handoffId, {
         version: 1,
         kind: "continuation",
-        ...(input.target.path === "provider.home_request"
-          ? { namespace: "provider.home_request" as const }
-          : {}),
+        ...(isProviderContinuationPath(input.target.path) ? { namespace: input.target.path } : {}),
         human: input.human,
         args: input.args,
         ...(input.sshProgress === undefined ? {} : { sshProgress: input.sshProgress }),
@@ -405,6 +650,8 @@ const make = Effect.gen(function* () {
           handoff,
         })
         .pipe(Effect.mapError(unavailable));
+      if (input.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
+        yield* continuations.supersede(input.requestedBy.threadId, pending, handoff.handoffId);
       return handoffSummary(handoff);
     }).pipe(lock.withPermits(1));
 
@@ -431,9 +678,7 @@ const make = Effect.gen(function* () {
       if (
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
-        (handoff.kind === "approval" &&
-          !handoff.target.path.startsWith("ssh.") &&
-          !isProviderHandoffPath(handoff.target.path) &&
+        (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
@@ -441,17 +686,21 @@ const make = Effect.gen(function* () {
           handoffId: row.turn_item_id,
         }).pipe(Effect.mapError(unavailable));
         yield* transition(input, "expired", { type: "server" });
+        if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
+          yield* continuations.answered(input.handoffId);
       }
     }
   });
-  const completedContinuations = (namespace: "ssh" | "provider.home_request") =>
+  const completedContinuations = (namespace: "ssh" | ProviderContinuationPath) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
+      // The redundant status term matches the resolved-handoff partial index; without it this
+      // poll scans every turn item.
       const rows = yield* sql<{
         handoff_json: string;
       }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items WHERE type = 'human_handoff' AND status = 'completed'
-      AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
+      AND status <> 'waiting' AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
         Effect.mapError(unavailable),
       );
       const results: Array<{
@@ -459,13 +708,14 @@ const make = Effect.gen(function* () {
         args: Readonly<Record<string, unknown>>;
         approvedBySessionId: AuthSessionId;
         sshProgress?: SshProgressBinding;
+        progress?: unknown;
       }> = [];
       for (const row of rows) {
         const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
         if (
           namespace === "ssh"
             ? !handoff.target.path.startsWith("ssh.")
-            : handoff.target.path !== "provider.home_request"
+            : handoff.target.path !== namespace
         )
           continue;
         const payload = yield* loadPrivate(handoff.handoffId);
@@ -473,8 +723,7 @@ const make = Effect.gen(function* () {
           payload !== null &&
           "kind" in payload &&
           payload.kind === "continuation" &&
-          (namespace !== "provider.home_request" ||
-            payload.namespace === "provider.home_request") &&
+          (namespace === "ssh" || payload.namespace === namespace) &&
           payload.approvedBySessionId !== undefined
         )
           results.push({
@@ -482,19 +731,80 @@ const make = Effect.gen(function* () {
             args: payload.args,
             approvedBySessionId: payload.approvedBySessionId,
             ...(payload.sshProgress === undefined ? {} : { sshProgress: payload.sshProgress }),
+            ...(payload.progress === undefined ? {} : { progress: payload.progress }),
           });
       }
       return results;
     });
   const completedSshContinuations = completedContinuations("ssh");
   const completedProviderHomeContinuations = completedContinuations("provider.home_request");
-  const finishProviderHomeContinuation = (input: HandoffReadInput) =>
+  const recordProviderProgress = (input: HandoffReadInput, progress: unknown) =>
     Effect.gen(function* () {
       const handoff = yield* read(input);
-      if (handoff.target.path !== "provider.home_request" || isHandoffPending(handoff.state))
-        return;
-      yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+      if (!isProviderContinuationPath(handoff.target.path) || handoff.state !== "completed")
+        return yield* new HandoffError({ reason: "invalid_request" });
+      const payload = yield* loadPrivate(input.handoffId);
+      if (
+        payload === null ||
+        payload.kind !== "continuation" ||
+        payload.approvedBySessionId === undefined
+      )
+        return yield* new HandoffError({ reason: "unavailable" });
+      yield* savePrivate(input.handoffId, { ...payload, progress }, true);
     }).pipe(lock.withPermits(1));
+  const finishProviderContinuation = (input: HandoffReadInput, progress?: unknown) =>
+    Effect.gen(function* () {
+      const handoff = yield* read(input);
+      const path = handoff.target.path;
+      if (!isProviderContinuationPath(path) || isHandoffPending(handoff.state)) return;
+      if (progress === undefined) {
+        yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+        return;
+      }
+      const retainedFrom = handoff.resolvedAt ?? handoff.createdAt;
+      yield* savePrivate(
+        input.handoffId,
+        {
+          version: 1,
+          kind: "provider_outcome",
+          namespace: path,
+          progress,
+          retainUntil: DateTime.toEpochMillis(DateTime.add(retainedFrom, { hours: 24 })),
+        },
+        true,
+      );
+    }).pipe(lock.withPermits(1));
+  const readProviderProgress = (input: HandoffReadInput) =>
+    Effect.gen(function* () {
+      const payload = yield* loadPrivate(input.handoffId);
+      if (payload?.kind === "continuation") return payload.progress;
+      if (
+        payload?.kind === "provider_outcome" &&
+        payload.retainUntil > DateTime.toEpochMillis(yield* DateTime.now)
+      )
+        return payload.progress;
+      return undefined;
+    });
+  const readProviderContinuation = Effect.fn("Handoffs.readProviderContinuation")(function* (
+    input: HandoffReadInput,
+  ) {
+    // The thread-scoped read first: another thread's handoff is not_found here.
+    const handoff = yield* read(input);
+    if (!isProviderContinuationPath(handoff.target.path)) return { handoff, applying: false };
+    const payload = yield* loadPrivate(input.handoffId);
+    if (payload?.kind === "continuation" && payload.approvedBySessionId !== undefined)
+      return {
+        handoff,
+        applying: true,
+        ...(payload.progress === undefined ? {} : { progress: payload.progress }),
+      };
+    if (
+      payload?.kind === "provider_outcome" &&
+      payload.retainUntil > DateTime.toEpochMillis(yield* DateTime.now)
+    )
+      return { handoff, applying: false, progress: payload.progress };
+    return { handoff, applying: false };
+  });
   const resolvedSshOutcomes = Effect.gen(function* () {
     const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }));
     const rows = yield* sql<{
@@ -621,7 +931,11 @@ const make = Effect.gen(function* () {
   ) {
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
-    if (!session || !(session.permissions ?? session.scopes).includes("orchestration:operate"))
+    if (
+      !session ||
+      !canResolveHumanStep(sessionResolver(session), "person_only") ||
+      !(session.permissions ?? session.scopes).includes("orchestration:operate")
+    )
       return yield* new EnvironmentAuthorizationError({
         requiredScope: "orchestration:operate",
         message: "This client cannot answer this request.",
@@ -634,14 +948,46 @@ const make = Effect.gen(function* () {
     open,
     respond,
     sweep,
+    matchesArgs: (handoff, args) =>
+      Effect.sync(() => {
+        const expected = Buffer.from(
+          NodeCrypto.createHmac("sha256", key).update(targetKey(args)).digest("hex"),
+        );
+        const actual = Buffer.from(handoff.dedupeKey);
+        return expected.length === actual.length && NodeCrypto.timingSafeEqual(expected, actual);
+      }),
     answerSecret,
     completedSshContinuations,
     completedProviderHomeContinuations,
-    finishProviderHomeContinuation,
+    finishProviderHomeContinuation: finishProviderContinuation,
+    completedProviderContinuations: completedContinuations,
+    recordProviderProgress,
+    finishProviderContinuation,
+    readProviderProgress,
+    readProviderContinuation,
+    providerApplyState: (input) =>
+      loadPrivate(input.handoffId).pipe(
+        Effect.map((payload) =>
+          payload?.kind === "continuation" && payload.approvedBySessionId !== undefined
+            ? { applying: true }
+            : payload?.kind === "provider_outcome"
+              ? { applying: false, progress: payload.progress }
+              : { applying: false },
+        ),
+      ),
     resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,
     readSshProgressBinding,
+    computerUseEndedByPerson: (handoff) =>
+      handoff.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH || handoff.state !== "cancelled"
+        ? Effect.succeed(false)
+        : loadPrivate(handoff.handoffId).pipe(
+            Effect.map((payload) => payload?.kind === "computer_use_ended"),
+          ),
+    withdrawComputerUseWake,
+    awaitComputerUseAnswer: continuations.awaitAnswer,
+    deliverComputerUseWake: continuations.deliverWake,
   });
 });
 export const layer = Layer.effect(Handoffs, make);

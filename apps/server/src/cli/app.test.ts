@@ -63,12 +63,13 @@ async function startFakeDesktop(input: {
   readonly platform: NodeJS.Platform;
   readonly userId: number | undefined;
   readonly legacy?: boolean;
+  readonly tempDir?: string;
   readonly reply?: (request: DesktopAppActivationRequest) => unknown;
 }) {
   const target = resolveDesktopAppControlAddresses({
     stateDir: NodePath.join(input.baseDir, input.stateSubdirectory ?? "userdata"),
     platform: input.platform,
-    tempDir: NodeOS.tmpdir(),
+    tempDir: input.tempDir ?? NodeOS.tmpdir(),
     userId: input.userId,
     joinPath: NodePath.join,
   })[input.legacy ? 1 : 0];
@@ -149,7 +150,8 @@ describe("goat server command safety", () => {
         const baseDir = NodePath.join(root, "home");
         for (const word of [
           "account",
-          "login",
+          // goat login is a command; a near miss stays unknown.
+          "signin",
           "clients",
           "conenct",
           "package.json",
@@ -303,6 +305,25 @@ describe("goat app", () => {
           explicitPath,
         ]);
         expect(desktop.received.every((request) => request.platform === platform)).toBe(true);
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("finds the desktop from a thread shell whose TMPDIR is the thread's own (#1206)", () =>
+    withTempDirectory("goat-app-thread-tmp-", (root) =>
+      Effect.gen(function* () {
+        const baseDir = NodePath.join(root, "home");
+        const systemTemp = yield* Effect.acquireRelease(
+          // Short, so the socket path stays within the platform limit.
+          Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "g-"))),
+          (directory) =>
+            Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
+        );
+        const desktop = yield* fakeDesktop({ baseDir, tempDir: systemTemp });
+
+        yield* runCli(["app"], { GOAT_HOME: baseDir, GOAT_SYSTEM_TMPDIR: systemTemp });
+
+        expect(desktop.received).toHaveLength(1);
       }).pipe(Effect.scoped),
     ),
   );

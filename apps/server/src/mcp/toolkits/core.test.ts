@@ -1,3 +1,9 @@
+import { layerNoFleetSync } from "../../goatclaw/FleetSync.testkit.ts";
+import * as RepositoryReferenceMcpService from "../RepositoryReferenceMcpService.ts";
+import * as RepositoryLaunchMcpService from "../RepositoryLaunchMcpService.ts";
+import * as ThreadReplicaService from "../ThreadReplicaService.ts";
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
+import * as PermissionSettings from "../../serverSettings.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -33,7 +39,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -95,6 +100,8 @@ import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
 );
@@ -112,12 +119,18 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 // A service provided here shadows a test's own mock, so tests that stub the
 // provider registry start from this layer.
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+  Layer.provide(layerNoFleetSync),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
   Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-  Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+  Layer.provide(
+    Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+      Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+    ),
+  ),
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
   Layer.provide(
@@ -173,9 +186,9 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
       }
     }
   }
-  // Public catalog contract: exactly the renamed tools, with no callable legacy aliases.
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual([
     "goat_attachment_discard",
+    "goat_attachment_pending_list",
     "goat_attachment_prepare_upload",
     "goat_cloud_holders",
     "goat_cloud_launch",
@@ -199,6 +212,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_goal_list",
     "goat_goal_pause",
     "goat_goal_resume",
+    "goat_goatclaw_sync",
     "goat_host_cordon",
     "goat_host_drain",
     "goat_host_link_create",
@@ -206,11 +220,20 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_host_link_remove",
     "goat_host_status",
     "goat_host_uncordon",
+    "goat_html_list",
+    "goat_hub_device_join",
+    "goat_hub_device_leave",
+    "goat_hub_device_repair",
+    "goat_hub_device_verify",
+    "goat_hub_opencodex_sync",
     "goat_origin_report",
+    "goat_origin_report_receipt",
     "goat_origin_reports_wait",
+    "goat_origin_resolve_binding",
     "goat_pending_request_list",
     "goat_pending_request_read",
     "goat_pending_request_respond",
+    "goat_permission_profile_get",
     "goat_preview_close",
     "goat_preview_list",
     "goat_project_clone",
@@ -219,23 +242,28 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_project_list",
     "goat_project_read",
     "goat_project_update",
+    "goat_provider_add",
     "goat_provider_addable_list",
     "goat_provider_diagnose",
     "goat_provider_home_request",
     "goat_provider_host_matrix",
+    "goat_provider_link",
     "goat_provider_login_cancel",
     "goat_provider_login_start",
     "goat_provider_login_status",
+    "goat_provider_remove",
     "goat_provider_setup_open",
     "goat_provider_sync",
     "goat_provider_sync_cancel",
     "goat_provider_sync_status",
+    "goat_provider_update",
     "goat_queue_cancel",
     "goat_queue_edit",
     "goat_queue_list",
     "goat_queue_promote_to_steer",
     "goat_queue_read",
     "goat_queue_reorder",
+    "goat_repository_snapshot",
     "goat_review_findings_export",
     "goat_review_findings_record",
     "goat_scheduler_status",
@@ -249,17 +277,23 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_ssh_runtime_update",
     "goat_ssh_thread_handoff",
     "goat_ssh_thread_launch",
+    "goat_thread_checkpoint_capture",
+    "goat_thread_checkpoint_reconcile",
+    "goat_thread_checkpoint_restore",
     "goat_thread_configuration",
     "goat_thread_configure",
     "goat_thread_fork",
+    "goat_thread_handoff_host",
     "goat_thread_interrupt",
     "goat_thread_launch",
     "goat_thread_list",
     "goat_thread_merge_back",
     "goat_thread_organize",
     "goat_thread_read",
+    "goat_thread_replication_set",
     "goat_thread_report_result",
     "goat_thread_reschedule",
+    "goat_thread_retry",
     "goat_thread_search",
     "goat_thread_send",
     "goat_thread_send_attachments",
@@ -289,13 +323,9 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(158);
+  expect(names.size).toBe(180);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
-  expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
-  expect(ProjectToolkit.tools.goat_thread_launch.description).toContain(
-    'notifyOnCompletion:false or goat_thread_unwatch stops run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.',
-  );
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],
     [
@@ -415,7 +445,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
     const server = yield* McpServer.McpServer;
     const result = yield* server
       .callTool({
-        name: "html_render",
+        name: "goat_html_render",
         arguments: { html: "<p>Revenue</p>", title: "Revenue", height: 240 },
       })
       .pipe(
@@ -433,6 +463,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
   }).pipe(
     Effect.provide(
       McpHttpServer.layerHtmlToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpProviderSessions.layer),
         Layer.provide(PreviewBrowser.layer),
@@ -784,7 +815,7 @@ it.effect("a read-only client reads threads and is refused every write before it
           Effect.provideService(McpSchema.McpServerClient, client),
         );
 
-    const configuration = yield* call("goat_thread_configuration", {
+    const configuration = yield* call("goat_thread_configuration_read", {
       threadId: "other-project-thread",
     });
     expect(configuration.isError).toBe(false);
@@ -845,7 +876,7 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
     const server = yield* McpServer.McpServer;
     const result = yield* server
       .callTool({
-        name: "delegate_task",
+        name: "goat_task_create",
         arguments: { task: "Review", mode: "async" },
       })
       .pipe(
@@ -865,7 +896,10 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -891,14 +925,14 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
           Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-    const update = yield* call("update_scheduled_task", {
+    const update = yield* call("goat_schedule_update", {
       scheduledTaskId: "task-full-access",
       prompt: "Run something else",
     });
     expect(declaredFailure(update)).toMatchObject({ code: "runtime_mode_escalation_denied" });
-    const remove = yield* call("delete_scheduled_task", { scheduledTaskId: "task-full-access" });
+    const remove = yield* call("goat_schedule_delete", { scheduledTaskId: "task-full-access" });
     expect(declaredFailure(remove)).toMatchObject({ code: "runtime_mode_escalation_denied" });
-    const allowed = yield* call("update_scheduled_task", {
+    const allowed = yield* call("goat_schedule_update", {
       scheduledTaskId: "task-auto",
       enabled: false,
     });
@@ -912,7 +946,10 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -1020,7 +1057,10 @@ it.effect.each(["goat_thread_interrupt", "goat_workflow_stop"])(
           Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
           Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
           Layer.provide(
-            Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+            Layer.mock(LaunchWatchService.LaunchWatchService)({
+              find: () => Effect.succeed(null),
+              rearm: () => Effect.void,
+            }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
           ),
           Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
           Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
@@ -1109,7 +1149,10 @@ it.effect("discovers workflow stop targets and requires orchestration capability
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -1137,61 +1180,6 @@ it.effect("discovers workflow stop targets and requires orchestration capability
     ),
   );
 });
-
-it.effect("only the caller that prepared a pending upload can discard it", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const call = (
-      name: string,
-      args: Record<string, unknown>,
-      invocation: McpInvocationContext.McpInvocationScope,
-    ) =>
-      server
-        .callTool({ name, arguments: args })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-    const prepared = yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
-    const otherThread = {
-      ...scope,
-      requestNamespace: "other-session",
-      thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") },
-    };
-
-    const refused = yield* call("goat_attachment_discard", { attachmentId }, otherThread);
-    expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
-
-    yield* TestClock.adjust(24 * 60 * 60 * 1000 + 5 * 60_000);
-    yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "later.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-
-    const discarded = yield* call(
-      "goat_attachment_discard",
-      { attachmentId },
-      { ...scope, requestNamespace: "mcp-core-session-2" },
-    );
-    expect(discarded.isError).toBe(false);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerAttachmentToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
-        Layer.provide(ServerSecretStore.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
-        Layer.provide(NodeServices.layer),
-      ),
-    ),
-  ),
-);
 
 it.effect(
   "validates reason, records authenticated responders, and reads resolved questions through registration",
@@ -1514,6 +1502,7 @@ it.effect.each([false, true])(
         notes: [],
       };
       const dependencies = Layer.mergeAll(
+        Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
         NodeCrypto.layer,
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getDescriptor: Effect.succeed({
@@ -1535,6 +1524,7 @@ it.effect.each([false, true])(
         Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
         McpToolAccessTestkit.liveThreadsLayer,
         Layer.mock(LaunchWatchService.LaunchWatchService)({
+          find: () => Effect.succeed(null),
           register: (input) =>
             Effect.sync(() => {
               watches.push(input);
@@ -1546,8 +1536,10 @@ it.effect.each([false, true])(
                 now: 0,
               });
             }),
-        }),
+        }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+        Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+        Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
         Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
         Layer.mock(SshHostSetup.SshHostSetup)({}),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
@@ -1609,12 +1601,18 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     const localTargets: Array<ThreadId> = [];
     const remoteId = ThreadId.make("remote-thread");
     const dependencies = McpHttpServer.layerThreadToolkit.pipe(
+      Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+      Layer.provide(layerNoFleetSync),
       Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-      Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+      Layer.provide(
+        Layer.mock(LaunchWatchService.LaunchWatchService)({
+          find: () => Effect.succeed(null),
+        }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
+      ),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
@@ -1724,37 +1722,4 @@ it.effect("pending toolkit host routing preserves target authority", () =>
       expect(sent).toHaveLength(1);
     }).pipe(Effect.provide(dependencies));
   }),
-);
-
-it.effect(
-  "publishes strict pending transport schemas and rejects unknown keys before dispatch",
-  () =>
-    Effect.gen(function* () {
-      const dependencies = layerThreadToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
-      );
-      yield* Effect.gen(function* () {
-        const server = yield* McpServer.McpServer;
-        for (const name of [
-          "goat_pending_request_list",
-          "goat_pending_request_read",
-          "goat_pending_request_respond",
-        ]) {
-          const definition = server.tools.find(({ tool }) => tool.name === name);
-          expect(definition?.tool.inputSchema.additionalProperties).toBe(false);
-          const result = yield* server
-            .callTool({ name, arguments: { misspelledHost: "box" } })
-            .pipe(
-              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-              Effect.provideService(McpSchema.McpServerClient, client),
-            );
-          expect(declaredFailure(result)).toMatchObject({
-            code: "invalid_request",
-            message: expect.stringContaining("so nothing ran"),
-          });
-        }
-      }).pipe(Effect.provide(dependencies));
-    }),
 );

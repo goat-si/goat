@@ -2,10 +2,108 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   compactDynamicToolOutput,
+  htmlRenderFromToolItem,
+  imageBlockFromDataUrl,
   MAX_TOOL_OUTPUT_IMAGES,
+  mcpToolResultWithRawImages,
+  mcpToolResultOutput,
+  omitToolOutputImageData,
   toolOutputImages,
   toolOutputIndicatesFailure,
+  toolOutputSettle,
 } from "./toolOutput.ts";
+
+describe("toolOutputSettle", () => {
+  const expected = { outcome: "unsupported", reason: "private_or_unknown_focus" };
+  const summary =
+    "Notification settle: unsupported (private_or_unknown_focus). Quiet does not establish task completion.";
+
+  it("reads a settle wait's outcome from every provider's result shape (#1585)", () => {
+    const shapes: ReadonlyArray<readonly [string, unknown]> = [
+      [
+        "MCP result",
+        { content: [{ type: "text", text: summary }], structuredContent: { settle: expected } },
+      ],
+      ["OpenCode plain string", summary],
+      ["Cursor text parts", { content: [{ text: { text: summary } }] }],
+      ["ACP content wrappers", [{ type: "content", content: { type: "text", text: summary } }]],
+      [
+        "structured fields folded beside a screenshot",
+        [
+          { type: "text", text: JSON.stringify({ pid: 1, settle: expected }) },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+      ],
+      ["compact wire output", { settle: expected }],
+    ];
+    for (const [name, output] of shapes) expect(toolOutputSettle(output), name).toEqual(expected);
+  });
+
+  it("finds the outcome beside a sample too large to parse", () => {
+    const pending = { outcome: "pending", reason: "deadline" };
+    const line =
+      "Notification settle: pending (deadline). Quiet does not establish task completion.";
+    const folded = JSON.stringify({ tree: "x".repeat(20_000), settle: pending });
+    // GOAT folds the structured sample in front of the content when a screenshot remains.
+    expect(
+      toolOutputSettle([
+        { type: "text", text: folded },
+        { type: "text", text: line },
+      ]),
+    ).toEqual(pending);
+    // A provider that joins the text into one string puts the folded sample first.
+    expect(toolOutputSettle(folded + "\n" + line)).toEqual(pending);
+    // A window title can contain the same words; the real line at a line start still counts.
+    const titled = JSON.stringify({
+      window_title: "Notification settle: example",
+      tree: "x".repeat(20_000),
+      settle: pending,
+    });
+    expect(toolOutputSettle(titled + "\n" + line)).toEqual(pending);
+    expect(
+      compactDynamicToolOutput({
+        content: [
+          { type: "text", text: folded },
+          { type: "text", text: line },
+        ],
+      })?.settle,
+    ).toEqual(pending);
+  });
+
+  it("reads a reason that lists several privacy problems", () => {
+    const reason =
+      "private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204,tree_role:AXUnknown,tree_subrole:AXTextField";
+    expect(
+      toolOutputSettle(
+        `Notification settle: unsupported (${reason}). Quiet does not establish task completion.`,
+      ),
+    ).toEqual({ outcome: "unsupported", reason });
+  });
+
+  it("reads a reason that names an AX notification", () => {
+    const reason = { outcome: "unsupported", reason: "notification_unsupported:AXMoved" };
+    const line =
+      "Notification settle: unsupported (notification_unsupported:AXMoved). Quiet does not establish task completion.";
+    expect(toolOutputSettle(line)).toEqual(reason);
+    expect(compactDynamicToolOutput(line)?.settle).toEqual(reason);
+  });
+
+  it("finds no outcome in other tools' results", () => {
+    for (const output of [
+      undefined,
+      "Done",
+      { content: [{ type: "text", text: "{}" }] },
+      { settle: "x" },
+    ])
+      expect(toolOutputSettle(output)).toBeUndefined();
+  });
+
+  it("compact wire output keeps the outcome, so a projected row can show it", () => {
+    expect(compactDynamicToolOutput({ content: [{ type: "text", text: summary }] })).toEqual({
+      settle: expected,
+    });
+  });
+});
 
 describe("compactDynamicToolOutput", () => {
   it("extracts IDs through the MCP result envelopes used by T3 summaries", () => {
@@ -20,6 +118,35 @@ describe("compactDynamicToolOutput", () => {
     ]) {
       expect(compactDynamicToolOutput(value)).toEqual(metadata);
     }
+  });
+
+  it("reads goat call's printed envelope: ids and pages from ok values, failure from errors", () => {
+    const htmlRender = { attachmentId: "attachment-1", title: "Report", height: 400 };
+    const ok = JSON.stringify({
+      status: "ok",
+      value: { threadId: "thread-1", taskId: "task-1", htmlRender, response: "Private body" },
+      meta: { host: "box" },
+    });
+    expect(compactDynamicToolOutput(ok)).toMatchObject({ threadId: "thread-1", taskId: "task-1" });
+    expect(compactDynamicToolOutput(ok)).not.toHaveProperty("isError");
+    expect(htmlRenderFromToolItem({ toolName: "goat.html_render", output: ok })).toEqual(
+      compactDynamicToolOutput({ htmlRender })?.htmlRender,
+    );
+
+    const error = JSON.stringify({
+      status: "error",
+      error: {
+        code: "not_found",
+        reason: "thread_not_found",
+        message: "Private",
+        retryable: false,
+      },
+    });
+    expect(compactDynamicToolOutput(error)).toEqual({ isError: true });
+    // A tool's own value that merely has status "ok" keeps its other fields.
+    expect(compactDynamicToolOutput({ status: "ok", value: 1, threadId: "thread-2" })).toEqual({
+      threadId: "thread-2",
+    });
   });
 
   it("keeps nested thread identity and scalar task IDs without result bodies", () => {
@@ -197,5 +324,63 @@ describe("toolOutputImages", () => {
   it("stops after the first few images", () => {
     const images = toolOutputImages(Array.from({ length: 10_000 }, () => mcpImage));
     expect(images).toHaveLength(MAX_TOOL_OUTPUT_IMAGES);
+  });
+});
+
+describe("mcpToolResultOutput", () => {
+  const screenshot = { type: "image", mimeType: "image/png", data: "AAAA" };
+  const structuredContent = { threadId: "thread-1", app: "Finder" };
+
+  it("keeps a screenshot that only content carries, and readers still find the structured data", () => {
+    const output = mcpToolResultOutput({
+      content: [{ type: "text", text: "Finder" }, screenshot],
+      structuredContent,
+    });
+    expect(toolOutputImages(output)).toEqual([{ mimeType: "image/png", data: "AAAA" }]);
+    expect(compactDynamicToolOutput(output)).toEqual({ threadId: "thread-1" });
+    expect(JSON.stringify(omitToolOutputImageData(output))).not.toContain("AAAA");
+  });
+
+  it("stores only the structured output when content has no image", () => {
+    expect(
+      mcpToolResultOutput({ content: [{ type: "text", text: "{}" }], structuredContent }),
+    ).toBe(structuredContent);
+    expect(mcpToolResultOutput({ content: [screenshot], structuredContent: null })).toEqual([
+      screenshot,
+    ]);
+  });
+});
+
+describe("imageBlockFromDataUrl", () => {
+  it("reads base64 raster data URLs and refuses everything else", () => {
+    expect(imageBlockFromDataUrl("data:image/png;base64,AAAA")).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: "AAAA",
+    });
+    expect(imageBlockFromDataUrl("data:image/svg+xml;base64,AAAA")).toBeUndefined();
+    expect(imageBlockFromDataUrl("data:image/png,raw")).toBeUndefined();
+    expect(imageBlockFromDataUrl("https://example.com/a.png")).toBeUndefined();
+  });
+});
+
+describe("mcpToolResultWithRawImages", () => {
+  // Claude reports an MCP result with structured output as its text and that output.
+  const claudeResult = { content: "Finder", structuredContent: { app: "Finder" } };
+  const rawContent = [
+    { type: "text", text: "Finder" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+  ];
+
+  it("regression: brings back the screenshot only the raw tool result kept", () => {
+    const output = mcpToolResultWithRawImages(claudeResult, rawContent);
+    expect(toolOutputImages(output)).toEqual([{ mimeType: "image/png", data: "AAAA" }]);
+    expect(output).toMatchObject({ structuredContent: { app: "Finder" } });
+  });
+
+  it("leaves a result alone when the raw result has no image", () => {
+    expect(mcpToolResultWithRawImages(claudeResult, [{ type: "text", text: "Finder" }])).toBe(
+      claudeResult,
+    );
   });
 });

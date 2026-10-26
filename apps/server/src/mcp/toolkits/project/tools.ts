@@ -1,5 +1,8 @@
 import {
+  GoatclawRole,
+  HostPressureAdvice,
   MemoryTaskGrantCeiling,
+  PermissionProfile,
   ModelSelection,
   NonNegativeInt,
   OrchestrationV2RunStatus,
@@ -15,6 +18,9 @@ import {
   RemoteReportBindingInput,
   RunId,
   RuntimeMode,
+  RepositoryReferenceRequest,
+  RepositoryReferenceSnapshot,
+  RepositoryReferences,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   ThreadId,
@@ -31,9 +37,11 @@ import * as SourceControlRepositoryService from "../../../sourceControl/SourceCo
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
 import { McpAttachmentInput } from "../attachment/input.ts";
+import { KeyedClientRequestId, withClientRequestId } from "../keyedParameters.ts";
 
 const shared = {
   success: Project,
@@ -80,10 +88,12 @@ const ProjectReadTool = Tool.make(agentSurfaceRegistry["project.read"].name, {
 const ProjectCreateTool = Tool.make(agentSurfaceRegistry["project.create"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.create"].description,
-  parameters: Schema.Struct({
-    ...ProjectCreatePayload.fields,
-    workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      ...ProjectCreatePayload.fields,
+      workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
+    }),
+  ),
   success: Schema.Struct({ ...Project.fields, commitError: Schema.optional(Schema.String) }),
   dependencies: [...shared.dependencies, ManagedProjectFolders.ManagedProjectFolders],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.create"]));
@@ -95,7 +105,11 @@ const ProjectUpdateTool = Tool.make(agentSurfaceRegistry["project.update"].name,
 const ProjectDeleteTool = Tool.make(agentSurfaceRegistry["project.delete"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.delete"].description,
-  parameters: Schema.Struct({ projectId: ProjectId, force: Schema.optionalKey(Schema.Boolean) }),
+  parameters: Schema.Struct({
+    projectId: ProjectId,
+    force: Schema.optionalKey(Schema.Boolean),
+    clientRequestId: Schema.optional(KeyedClientRequestId),
+  }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.delete"]));
 const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ...shared,
@@ -108,6 +122,7 @@ const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.clone"]));
 export const ThreadLaunchParameters = Schema.Struct({
+  references: Schema.optional(RepositoryReferences),
   projectId: Schema.optional(ProjectId),
   scratch: Schema.optional(
     Schema.Boolean.annotate({
@@ -118,6 +133,13 @@ export const ThreadLaunchParameters = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: Schema.optional(ModelSelection),
   memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
+  goatclawRole: Schema.optional(
+    GoatclawRole.annotate({
+      description:
+        "Only while goatclaw is on: launch as a goatclaw role. The thread runs under that role's permission profile, narrowed by yours, and its message is preceded by the role's instructions and report protocol. supervisor reads, plans and asks; domain-manager owns one goal; merge-manager lands green pull requests one at a time; issue-sweeper triages and fixes small issues. Needs message.",
+    }),
+  ),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   workspaceStrategy: Schema.optional(
@@ -154,7 +176,7 @@ export const ThreadLaunchParameters = Schema.Struct({
   notifyTarget: Schema.optional(
     NotifyTargetInput.annotate({
       description:
-        "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
+        "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from goat_handoff_create and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, a url that resolves to a loopback, private, or link-local address (a local receiver needs a named target), or webhooks switched off in settings refuse the launch before any thread is created.",
     }),
   ),
   launchedBy: Schema.optional(
@@ -184,21 +206,38 @@ export const ThreadLaunchSuccess = Schema.Struct({
   report: Schema.optional(
     Schema.Struct({ correlationId: RemoteReportBindingInput.fields.correlationId }),
   ),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
 });
 
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
   ...shared,
   description: agentSurfaceRegistry["thread.launch"].description,
-  parameters: ThreadLaunchParameters,
+  parameters: withClientRequestId(ThreadLaunchParameters),
   success: ThreadLaunchSuccess,
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadLaunchMcpService.ThreadLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
     ThreadManagementService.ThreadManagementService,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.launch"]));
 
+const RepositorySnapshotTool = Tool.make(agentSurfaceRegistry["repository.snapshot"].name, {
+  description: agentSurfaceRegistry["repository.snapshot"].description,
+  parameters: RepositoryReferenceRequest,
+  success: RepositoryReferenceSnapshot,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["repository.snapshot"]));
+
 export const ProjectToolkit = Toolkit.make(
+  RepositorySnapshotTool,
   ThreadLaunchTool,
   ProjectListTool,
   ProjectReadTool,

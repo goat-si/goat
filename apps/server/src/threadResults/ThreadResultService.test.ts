@@ -15,6 +15,7 @@ const firstRun = RunId.make("run-1");
 const secondRun = RunId.make("run-2");
 
 const thread = {
+  id: threadId,
   branch: "feat/result",
   linkedPullRequest: null,
   pullRequests: [
@@ -159,4 +160,17 @@ it.effect("publishes a result report only after it is durable", () =>
     assert.deepStrictEqual(yield* Fiber.join(received), [threadId]);
     assert.strictEqual((yield* results.forRun(threadId))?.outcome, "succeeded");
   }).pipe(Effect.provide(layerWithRuns([run(firstRun, 1, "completed")]))),
+);
+
+it.effect("stores and returns a report without the GOAT MCP token an agent pasted", () =>
+  Effect.gen(function* () {
+    const results = yield* ThreadResultService.ThreadResultService;
+    // Synthetic, shaped like an issued MCP credential.
+    const summary =
+      "env: GOAT_MCP_BEARER_TOKEN=otherrunSyntheticMcpTokenNotARealCredential00000000";
+    const reported = yield* results.report(threadId, { outcome: "succeeded", summary });
+    const stored = yield* results.forRun(threadId);
+    assert.strictEqual(reported.summary, "env: GOAT_MCP_BEARER_TOKEN=[redacted]");
+    assert.strictEqual(stored?.summary, "env: GOAT_MCP_BEARER_TOKEN=[redacted]");
+  }).pipe(Effect.provide(layerWithRuns([run(firstRun, 1, "running")]))),
 );

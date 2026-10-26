@@ -330,6 +330,24 @@ describe("CompletionWebhook", () => {
     }),
   );
 
+  it.effect("a superseded watch cannot publish a queued webhook retry", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(enabled, [503, 200]);
+      let current = true;
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport(), () => current);
+          yield* Queue.take(h.received);
+          const backoff = yield* Queue.take(h.retryScheduled);
+          current = false;
+          yield* TestClock.adjust(backoff);
+          yield* Queue.take(h.completed);
+          expect(h.log).toHaveLength(1);
+        }),
+      );
+    }),
+  );
+
   it.effect("retries failures with the launch watch backoff until the receiver accepts", () =>
     Effect.gen(function* () {
       const h = yield* harness(enabled, [503, "network", 408, 429, 204]);
@@ -797,7 +815,7 @@ describe("CompletionWebhook notify targets", () => {
           })
           .pipe(Effect.flip),
       );
-      expect(error.message).toContain("request_secret");
+      expect(error.message).toContain('goat_call {path:"handoff.create"}');
       expect(h.secrets.size).toBe(0);
     }),
   );

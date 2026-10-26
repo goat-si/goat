@@ -34,20 +34,29 @@ export function useProviderUpdates() {
       : [];
   });
 
-  const updateAll = async ({ quiet = false }: { readonly quiet?: boolean } = {}) => {
+  const updateAll = async ({
+    quiet = false,
+    only,
+  }: {
+    readonly quiet?: boolean;
+    /** Only these machines, such as the rows a person left checked. */
+    readonly only?: ReadonlySet<string>;
+  } = {}) => {
     const runs = await Promise.all(
-      machines.flatMap(({ environmentId, label, candidates }) =>
-        candidates.map(async (candidate): Promise<ProviderUpdateRun> => ({
-          environmentId,
-          machineLabel: label,
-          driver: candidate.driver,
-          instanceId: candidate.instanceId,
-          result: await updateProvider({
+      machines
+        .filter(({ environmentId }) => only === undefined || only.has(environmentId))
+        .flatMap(({ environmentId, label, candidates }) =>
+          candidates.map(async (candidate): Promise<ProviderUpdateRun> => ({
             environmentId,
-            input: { provider: candidate.driver, instanceId: candidate.instanceId },
-          }),
-        })),
-      ),
+            machineLabel: label,
+            driver: candidate.driver,
+            instanceId: candidate.instanceId,
+            result: await updateProvider({
+              environmentId,
+              input: { provider: candidate.driver, instanceId: candidate.instanceId },
+            }),
+          })),
+        ),
     );
     const view = quiet ? null : getProviderUpdateRunToastView(runs);
     if (view) {

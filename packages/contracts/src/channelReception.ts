@@ -41,6 +41,8 @@ export const ChannelReceptionTaskSummary = Schema.Struct({
   host: Schema.optional(TrimmedNonEmptyString),
   /** Pull requests the worker linked, as "repo#123 (merged)". */
   pullRequests: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /** Separate summaries of agent-reported tests and the host-observed check. */
+  evidence: Schema.optional(Schema.Array(Schema.String)),
   openQuestions: Schema.Array(
     Schema.Struct({ questionId: ChannelQuestionId, text: TrimmedNonEmptyString }),
   ),

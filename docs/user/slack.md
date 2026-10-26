@@ -39,13 +39,22 @@ GOAT Bot screen shows only a chip for the work and its final report.
   disk, what several threads concluded, something on the web), GOAT Bot says
   it is on it and looks into it itself, then answers in the same conversation.
   Messages you send while it works are added to what it is doing. It uses the
-  model chosen under **Settings → GOAT Bot** (by default, the default model for
-  new threads). It runs with full access, never more than the person who asked
+  model shown at the top of the GOAT Bot screen, which you can change there or
+  under **Settings → GOAT Bot** (by default, the default model for new
+  threads). Turn off the model switch in Settings to follow the default again.
+  It runs with full access, never more than the person who asked
   may use, so it can read files, logs, and status anywhere on the machine
   without asking. It is told to change nothing itself and to start a coding
   task or ask you when something needs changing. That rule is part of its
   instructions; GOAT does not block changes, so link people at a lower access
   level if they should not be able to make the bot change things.
+- GOAT Bot and work started from Slack never see or control this computer's
+  screen on their own, even when [computer use](./computer-use.md) is on. When
+  a task needs it, GOAT asks for approval in that task's thread, for a set time.
+  Someone allowed to change GOAT's settings approves it in the GOAT app on
+  desktop, web, or mobile; replying in Slack does not approve it. Approval
+  admits that thread until the time shown, not each action, and you can end it
+  early from the request.
 - Ask GOAT Bot about earlier work ("did the login PR merge?", "what did the
   docs thread do?", "when did I mention the lighthouse score?") and it looks
   it up itself and answers, without starting a coding agent. It reads the work
@@ -66,6 +75,15 @@ GOAT Bot screen shows only a chip for the work and its final report.
   starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
+- **Settings → GOAT Bot → Automatically choose a worker computer** lets work
+  use an already-connected SSH computer with the same repository and requested
+  model. It is off by default. Turning it on allows the worker's instructions,
+  notes and named skills to go to the selected computer. GOAT prefers ready
+  accounts with more quota left and less channel work, and shows why it chose
+  one. Naming a computer keeps work there. Unknown or unavailable repositories
+  are skipped; GOAT does not prepare computers or sign in for this choice.
+  Retrying automatically placed work chooses again; a running worker never
+  moves automatically.
 - Work counts as waiting on you when the agent working on it, or a subagent it
   started in GOAT, needs your approval or an answer. That includes a subagent
   running in GOAT on another machine. Subagents that run on another service
@@ -108,7 +126,7 @@ GOAT Bot screen shows only a chip for the work and its final report.
   stops answering on every machine and its screen says so. Use **Move GOAT Bot
   to …** there, or pick another machine in **Settings → Integrations → GOAT
   Bot**. An agent with full access can do the same on the machine it runs on
-  with the `channel_bot_home_claim` tool. Other machines follow the move once
+  with `goat_call {path:"channel.bot_home_claim"}`. Other machines follow the move once
   a GOAT app connected to them is open.
 - When GOAT Bot can't read a message, its reply says why, such as a model that
   needs you to sign in again or a usage limit, so you know whether resending

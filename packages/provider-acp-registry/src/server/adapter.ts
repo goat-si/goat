@@ -185,7 +185,11 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const registryAgentId = options.settings.source === "local" ? "" : options.settings.agentId;
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
-  const isDevin = registryAgentId === "devin";
+  // Cloud auto setup adds Devin as a local `devin acp` command, so match the binary too.
+  const isDevin =
+    registryAgentId === "devin" ||
+    (options.settings.source === "local" &&
+      /^devin(\.exe)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? ""));
   // Local installs launch the `copilot` binary directly with no registry id.
   const isCopilot =
     registryAgentId === "github-copilot-cli" ||

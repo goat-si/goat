@@ -18,9 +18,10 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { BoatIcon } from "../Icons";
 import { GoatWordmark } from "../GoatWordmark";
 import { renderProviderGlyph } from "../chat/ProviderInstanceIcon";
-import { describeMachine } from "./describeMachine";
+import { fleetMachineSubtitle } from "./describeMachine";
 import {
   fleetConnectionVisual,
   UNKNOWN_FLEET_CONNECTION,
@@ -407,9 +408,12 @@ export const FleetGraph = memo(function FleetGraph(props: {
   readonly onSelectMachine: (machineId: string) => void;
   /** How hard each machine is working, by machine id; absent draws every node normal. */
   readonly heat?: ReadonlyMap<string, FleetMachineHeat>;
+  /** Connection attempts that have run long: their edges stop moving and say so. */
+  readonly slowMachineIds?: ReadonlySet<string>;
 }) {
   const { snapshot, connections, currentMachineId, selectedMachineId, onSelectMachine, heat } =
     props;
+  const slow = props.slowMachineIds;
   const [wrapperRef, width] = useElementWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -537,7 +541,10 @@ export const FleetGraph = memo(function FleetGraph(props: {
                     <path
                       d={entry.edge}
                       fill="none"
-                      className={cn(link.className, link.animated && !reduced && "fleet-flow")}
+                      className={cn(
+                        link.className,
+                        link.animated && !reduced && !slow?.has(machine!.id) && "fleet-flow",
+                      )}
                       strokeWidth={1.4}
                       strokeDasharray={link.dash}
                     />
@@ -662,6 +669,7 @@ export const FleetGraph = memo(function FleetGraph(props: {
                   halo={infoHalo}
                   machine={machinesById.get(entry.layout.id)!}
                   connection={connections.get(entry.layout.id) ?? UNKNOWN_FLEET_CONNECTION}
+                  slow={slow?.has(entry.layout.id) === true}
                   heat={heat?.get(entry.layout.id) ?? NO_FLEET_HEAT}
                   current={currentMachineId === entry.layout.id}
                   selected={selectedMachineId === entry.layout.id}
@@ -749,6 +757,8 @@ function MachineNode(props: {
   readonly halo: string;
   readonly machine: FleetMachine;
   readonly connection: FleetConnection;
+  /** The connection attempt has run long. */
+  readonly slow: boolean;
   readonly heat: FleetMachineHeat;
   /** The machine this app runs on. */
   readonly current: boolean;
@@ -768,23 +778,24 @@ function MachineNode(props: {
     event.preventDefault();
     onSelect(machine.id);
   };
-  const device = describeMachine(machine.os, machine.machineKind);
   // The user knows their own hardware; naming the machine is what matters here.
   const sub = current
     ? THIS_MACHINE
-    : [device, machine.subtitle].filter((part) => part !== null).join(" · ") ||
-      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh");
+    : (fleetMachineSubtitle(machine) ??
+      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh"));
   const status =
     connection.state === "unknown"
       ? []
       : [
-          connection.reason === null
-            ? connection.label
-            : connection.label + ": " + connection.reason,
+          (props.slow ? "Still connecting" : connection.label) +
+            (connection.reason === null ? "" : ": " + connection.reason),
         ];
-  const description = [current ? THIS_MACHINE : null, ...status, workSummary(machine)].filter(
-    (part) => part !== null,
-  );
+  const description = [
+    current ? THIS_MACHINE : null,
+    machine.boat === null ? null : "Boat machine",
+    ...status,
+    workSummary(machine),
+  ].filter((part) => part !== null);
   // Only heat is worth announcing; a normal reading stays in the tooltip.
   const spoken =
     heated === null ? description : [...description, heat.summary.replaceAll(" · ", ", ")];
@@ -832,17 +843,25 @@ function MachineNode(props: {
       {heated === null ? null : (
         <circle r={MACHINE_RADIUS - 0.8} className={cn("pointer-events-none", HEAT_TINT[heated])} />
       )}
-      <EnvironmentMachineIcon
-        kind={
-          machine.machineKind ??
-          (machine.kind === "cloud" || machine.cloudState !== null ? "cloud" : "server")
-        }
-        x={-8}
-        y={-8}
-        width={16}
-        height={16}
-        className={quiet ? "text-muted-foreground/70" : "text-foreground"}
-      />
+      {machine.boat !== null ? (
+        <BoatIcon
+          data-fleet-boat-logo=""
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "opacity-55" : undefined}
+        />
+      ) : (
+        <EnvironmentMachineIcon
+          kind={machine.machineKind ?? (machine.kind === "cloud" ? "cloud" : "server")}
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "text-muted-foreground/70" : "text-foreground"}
+        />
+      )}
       <g transform={"translate(" + STATUS_OFFSET + " " + STATUS_OFFSET + ")"}>
         <FleetConnectionGlyph state={connection.state} halo />
       </g>

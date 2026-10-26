@@ -4,10 +4,12 @@ import {
   IsoDateTime,
   PositiveInt,
   RuntimeRequestId,
+  RunId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { PullRequestState } from "./pullRequest.ts";
+import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 
 /**
  * What the channel ledger last saw in a task's worker thread besides its run status. A task keeps
@@ -60,11 +62,21 @@ export const ChannelTaskNeedsYou = Schema.Struct({
 });
 export type ChannelTaskNeedsYou = typeof ChannelTaskNeedsYou.Type;
 
+/** Evidence belongs to one run; it never decides the channel task's outcome. */
+export const ChannelWorkerResult = Schema.Struct({
+  runId: RunId,
+  tests: Schema.optional(ThreadResultTests),
+  observedCheck: Schema.optional(ThreadResultObservedCheck),
+  observedCheckPending: Schema.optional(Schema.Boolean),
+});
+export type ChannelWorkerResult = typeof ChannelWorkerResult.Type;
+
 export const ChannelWorkerObservation = Schema.Struct({
   pullRequests: Schema.Array(ChannelTaskPullRequest),
   needsYou: Schema.Array(ChannelTaskNeedsYou),
   /** The worker stopped on a provider usage limit and continues after this time. */
   usageLimitResetAt: Schema.optional(IsoDateTime),
+  result: Schema.optional(ChannelWorkerResult),
 });
 export type ChannelWorkerObservation = typeof ChannelWorkerObservation.Type;
 
@@ -81,6 +93,20 @@ export const channelWorkerObservationEquals = (
   const a = left ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
   const b = right ?? EMPTY_CHANNEL_WORKER_OBSERVATION;
   return (
+    a.result?.runId === b.result?.runId &&
+    a.result?.observedCheckPending === b.result?.observedCheckPending &&
+    a.result?.tests?.ok === b.result?.tests?.ok &&
+    a.result?.tests?.command === b.result?.tests?.command &&
+    a.result?.tests?.passed === b.result?.tests?.passed &&
+    a.result?.tests?.failed === b.result?.tests?.failed &&
+    a.result?.tests?.skipped === b.result?.tests?.skipped &&
+    a.result?.observedCheck?.status === b.result?.observedCheck?.status &&
+    a.result?.observedCheck?.command === b.result?.observedCheck?.command &&
+    a.result?.observedCheck?.exitCode === b.result?.observedCheck?.exitCode &&
+    a.result?.observedCheck?.durationMs === b.result?.observedCheck?.durationMs &&
+    a.result?.observedCheck?.at === b.result?.observedCheck?.at &&
+    a.result?.observedCheck?.outputTail === b.result?.observedCheck?.outputTail &&
+    a.result?.observedCheck?.skipReason === b.result?.observedCheck?.skipReason &&
     a.usageLimitResetAt === b.usageLimitResetAt &&
     a.needsYou.length === b.needsYou.length &&
     a.needsYou.every(

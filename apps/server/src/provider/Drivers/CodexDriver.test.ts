@@ -1,5 +1,6 @@
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -16,6 +17,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -41,6 +43,12 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+import {
+  deriveProviderInstanceEntries,
+  isProviderInstancePickerReady,
+} from "../../../../web/src/providerInstances.ts";
+import { getProviderSummary } from "../../../../web/src/components/settings/providerStatus.ts";
+import { mergeProviderSnapshot } from "../ProviderRegistry.ts";
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-codex-driver-maintenance-",
@@ -59,6 +67,12 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
     }),
   ),
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
+  Layer.provideMerge(
+    Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+      endpoint: Effect.succeed("unused-private-pipe"),
+      awaitIdle: Effect.void,
+    }),
+  ),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
@@ -98,10 +112,173 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
-  it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
+  it.effect.each(["ready", "initialize-error", "signed-out"] as const)(
+    "retains startup diagnostics without changing %s availability or guidance",
+    (scenario) =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("startup-diagnostic");
+        const credentials = new Map<string, Uint8Array>();
+        const secrets = ServerSecretStore.ServerSecretStore.of({
+          get: (key) => Effect.sync(() => Option.fromUndefinedOr(credentials.get(key))),
+          set: (key, value) =>
+            Effect.sync(() => {
+              credentials.set(key, value);
+            }),
+          remove: (key) =>
+            Effect.sync(() => {
+              credentials.delete(key);
+            }),
+          create: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        });
+        yield* Effect.gen(function* () {
+          const store = yield* ProviderCredentialStore.make("codex-chatgpt", instanceId);
+          if (scenario !== "signed-out") {
+            const json = yield* encodeCredentials({
+              clientId: "oaiapp_test",
+              accessToken: "dummy-access",
+              refreshToken: "dummy-refresh",
+              expiresAt: Number.MAX_SAFE_INTEGER,
+              earliestRefreshAt: null,
+              scopes: ["chatgpt.tokens.use.direct"],
+              subject: "test-user",
+              email: null,
+            });
+            yield* store.set(new TextEncoder().encode(json));
+          }
+          const executable: CodexInstallation.CodexExecutable = {
+            executablePath: "/fixture/codex",
+            managedVersionDirectory: null,
+            source: "local",
+            version: "0.164.0",
+            startupWarning: "Codex startup check warning: the diagnostic timed out.",
+          };
+          let resolvedExecutable = executable;
+          const installation = yield* CodexInstallation.CodexInstallation;
+          const serverConfig = yield* ServerConfig.ServerConfig;
+          const home = NodePath.join(serverConfig.stateDir, "startup-home");
+          const methods: string[] = [];
+          const spawner = ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const output = yield* Queue.unbounded<Uint8Array>();
+              yield* Effect.addFinalizer(() => Queue.shutdown(output));
+              return ChildProcessSpawner.makeHandle({
+                pid: ChildProcessSpawner.ProcessId(4242),
+                exitCode: Effect.never,
+                isRunning: Effect.succeed(true),
+                kill: () => Effect.void,
+                unref: Effect.succeed(Effect.void),
+                stdin: Sink.forEach((chunk: Uint8Array) =>
+                  Effect.gen(function* () {
+                    for (const line of new TextDecoder().decode(chunk).trim().split("\n")) {
+                      const request = JSON.parse(line) as { id?: number; method: string };
+                      if (request.id === undefined) continue;
+                      methods.push(request.method);
+                      const result =
+                        request.method === "initialize"
+                          ? {
+                              userAgent: "codex/0.164.0",
+                              codexHome: home,
+                              platformFamily: "unix",
+                              platformOs: "macos",
+                            }
+                          : request.method === "config/read"
+                            ? { config: {}, origins: {} }
+                            : request.method === "account/read"
+                              ? { account: null, requiresOpenaiAuth: false }
+                              : { data: [], nextCursor: null };
+                      const response =
+                        scenario === "initialize-error" && request.method === "initialize"
+                          ? {
+                              id: request.id,
+                              error: { code: -32603, message: "Fixture initialize failure" },
+                            }
+                          : { id: request.id, result };
+                      yield* Queue.offer(
+                        output,
+                        new TextEncoder().encode(JSON.stringify(response) + "\n"),
+                      );
+                    }
+                  }),
+                ),
+                stdout: Stream.fromQueue(output),
+                stderr: Stream.empty,
+                all: Stream.empty,
+                getInputFd: () => Sink.drain,
+                getOutputFd: () => Stream.empty,
+              });
+            }),
+          );
+          const instance = yield* CodexDriver.create({
+            instanceId,
+            displayName: "Startup diagnostic",
+            enabled: true,
+            environment: [],
+            config: { ...CodexDriver.defaultConfig(), setupMode: "managed", homePath: home },
+          }).pipe(
+            Effect.provideService(CodexInstallation.CodexInstallation, {
+              ...installation,
+              resolve: () => Effect.succeed(resolvedExecutable),
+              acquire: () => Effect.succeed(executable),
+            }),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+          const snapshot = yield* instance.snapshot.refresh;
+          expect(snapshot.installed).toBe(true);
+          if (scenario === "ready") {
+            expect(snapshot.status).toBe("ready");
+            expect(snapshot.message).toBe(executable.startupWarning);
+            const retained = mergeProviderSnapshot(snapshot, snapshot);
+            const [entry] = deriveProviderInstanceEntries([retained]);
+            expect(entry && isProviderInstancePickerReady(entry)).toBe(true);
+            expect(entry).toMatchObject({ enabled: true, isAvailable: true, status: "ready" });
+            expect(getProviderSummary(retained).detail).toBe(executable.startupWarning);
+            expect(retained.models.map((model) => model.slug)).toEqual(["gpt-fixture"]);
+            expect(methods).toContain("initialize");
+            const { startupWarning: _warning, ...healthyExecutable } = executable;
+            resolvedExecutable = healthyExecutable;
+            const refreshed = yield* instance.snapshot.refresh;
+            expect(refreshed.status).toBe("ready");
+            expect(refreshed.message).toBeUndefined();
+            expect(
+              getProviderSummary(mergeProviderSnapshot(snapshot, refreshed)).detail,
+            ).toBeNull();
+          } else {
+            expect(snapshot.message).not.toBe(executable.startupWarning);
+            if (scenario === "initialize-error") expect(snapshot.status).toBe("error");
+            else {
+              expect(snapshot.auth.status).toBe("unauthenticated");
+              expect(snapshot.message).toBe("Sign in with ChatGPT to use Codex.");
+              expect(methods).toEqual([]);
+            }
+          }
+        }).pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              expect(request.url).toBe("https://api.openai.com/v1/models");
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    models: [{ slug: "gpt-fixture", display_name: "Fixture", visibility: "list" }],
+                  }),
+                ),
+              );
+            }),
+          ),
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  const checkManagedAccount = (replacementTiming: "unchanged" | "during-probe") =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
       const credentials = new Map<string, Uint8Array>();
+      const catalogTokens: Array<string | undefined> = [];
+      const probeEntered = yield* Deferred.make<void>();
+      const resumeProbe = yield* Deferred.make<void>();
       const secrets = ServerSecretStore.ServerSecretStore.of({
         get: (key) => Effect.sync(() => Option.fromUndefinedOr(credentials.get(key))),
         set: (key, value) =>
@@ -128,6 +305,17 @@ it.layer(layerTest)("CodexDriver", (it) => {
           email: "account@example.test",
         });
         yield* store.set(new TextEncoder().encode(json));
+        const replacement = yield* encodeCredentials({
+          clientId: "oaiapp_replacement",
+          subject: "replacement-user",
+          email: "replacement@example.test",
+          accessToken: "replacement-access",
+          refreshToken: "replacement-refresh",
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          earliestRefreshAt: null,
+          scopes: ["chatgpt.tokens.use.direct"],
+        });
+        const replaceAccount = store.set(new TextEncoder().encode(replacement)).pipe(Effect.orDie);
         const executable = {
           executablePath: "/user/bin/codex",
           managedVersionDirectory: null,
@@ -189,13 +377,17 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.provideService(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.fail(
-                PlatformError.badArgument({
+              Effect.gen(function* () {
+                if (replacementTiming === "during-probe") {
+                  yield* Deferred.succeed(probeEntered, undefined);
+                  yield* Deferred.await(resumeProbe);
+                }
+                return yield* PlatformError.badArgument({
                   module: "ChildProcessSpawner",
                   method: "spawn",
                   description: "The fixture app-server is unavailable",
-                }),
-              ),
+                });
+              }),
             ),
           ),
         );
@@ -211,7 +403,21 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.forkScoped,
         );
         yield* Deferred.await(startupChecksInterrupted);
-        const restored = yield* instance.snapshot.refresh;
+        const refresh = yield* instance.snapshot.refresh.pipe(Effect.forkChild);
+        if (replacementTiming === "during-probe") {
+          yield* Deferred.await(probeEntered);
+          yield* replaceAccount;
+          yield* Deferred.succeed(resumeProbe, undefined);
+        }
+        const restored = yield* Fiber.join(refresh);
+        if (replacementTiming === "during-probe") {
+          expect(catalogTokens).toEqual([]);
+          expect(restored.models).toEqual([]);
+          expect(restored.auth.email).toBe("replacement@example.test");
+          expect(restored.auth.profileId).toBe("oaiapp_replacement");
+          return;
+        }
+        expect(catalogTokens).toEqual(["Bearer dummy-owned-access"]);
         expect(restored.auth.email).toBe("account@example.test");
         expect(restored.runtimePaths?.homePath).toBe(sharedHome);
         expect(restored.runtimePaths?.shadowHomePath).toContain(
@@ -248,7 +454,9 @@ it.layer(layerTest)("CodexDriver", (it) => {
         const launch = launches[0]!;
         expect(launch.settings.binaryPath).toBe(executable.executablePath);
         expect(launch.settings.launchArgs).toContain("openai_token_sharing");
-        expect(launch.environment.ACCESS_TOKEN).toBe("dummy-owned-access");
+        expect(launch.environment.ACCESS_TOKEN).toBeUndefined();
+        expect(launch.settings.launchArgs).toContain("__managed-chatgpt-token");
+        expect(launch.settings.launchArgs).not.toContain("dummy-owned-access");
         expect(launch.environment.OPENAI_API_KEY).toBeUndefined();
         expect(launch.environment.CODEX_HOME).toBe(launch.settings.homePath);
         const before = yield* instance.auth!.subscribe("test-owner").pipe(Stream.runHead);
@@ -275,8 +483,10 @@ it.layer(layerTest)("CodexDriver", (it) => {
                 "https://auth.openai.com/revoke",
                 "https://api.openai.com/v1/models",
               ]).toContain(request.url);
-              if (request.url.endsWith("/models"))
+              if (request.url.endsWith("/models")) {
+                catalogTokens.push(request.headers.authorization);
                 return HttpClientResponse.fromWeb(request, Response.json({ models: [] }));
+              }
               return HttpClientResponse.fromWeb(
                 request,
                 request.url.endsWith("/revoke")
@@ -293,7 +503,12 @@ it.layer(layerTest)("CodexDriver", (it) => {
           ),
         ),
       );
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped);
+  // regression: a sign-in that replaces the account mid-probe must not label the old
+  // account's catalog with the new identity.
+  it.effect.each(["unchanged", "during-probe"] as const)(
+    "managed catalog keeps its account label and token together: %s",
+    checkManagedAccount,
   );
 
   it.effect.skipIf(windowsHost)(

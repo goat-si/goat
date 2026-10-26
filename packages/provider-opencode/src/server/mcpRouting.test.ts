@@ -23,7 +23,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import { OPENCODE_PROVIDER, goatMcpServerName } from "../testing.ts";
+import { OPENCODE_PROVIDER, cuaMcpServerName, goatMcpServerName } from "../testing.ts";
 import { openCode2ReplayRuntime } from "../../../../apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.testkit.ts";
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 const WORK = "/work/opencode2";
@@ -55,11 +55,15 @@ const event = (
 });
 const durable = { durable: { aggregateID: SESSION, seq: 1, version: 1 } };
 
-/** The rules T3 gives every session it runs, with only this thread's own T3 MCP server allowed. */
+/**
+ * The rules GOAT gives every session it runs: only this thread's own GOAT server is allowed,
+ * and every managed Cua Driver is denied whether or not this thread has one.
+ */
 const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
   { action: "goat-*", resource: "*", effect: "deny" },
   { action: "goat-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
+  { action: "cua-driver-*", resource: "*", effect: "deny" },
 ];
 const goatRules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 /** The thread's title, which the recorded session already carries. */
@@ -284,5 +288,111 @@ it.layer(McpProviderSessions.layer)("OpenCode v2 MCP routing", (it) => {
         }
         yield* runtime.unloadThread!({ providerThread: thread });
       }).pipe(Effect.scoped),
+  );
+  it.effect("registers the thread's Cua Driver per directory and removes it when detached", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* Effect.addFinalizer(() => sessions.clear(threadId));
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      const config = {
+        environmentId: EnvironmentId.make("fixture"),
+        threadId,
+        providerSessionId: "provider-session:opencode2-adapter",
+        providerInstanceId: instanceId,
+        endpoint: "http://fixture.invalid/a",
+        authorizationHeader: "Bearer synthetic-routing",
+        browserToolsAvailable: false,
+      };
+      const name = yield* goatMcpServerName(threadId).pipe(Effect.provide(NodeCrypto.layer));
+      const cuaName = yield* cuaMcpServerName(threadId).pipe(Effect.provide(NodeCrypto.layer));
+      assert.equal(cuaName, "cua-driver-c26f2f1fb6fbbcc2");
+      const addGoat = [
+        out("mcp.add", {
+          server: name,
+          config: {
+            type: "remote",
+            url: config.endpoint,
+            headers: { Authorization: config.authorizationHeader },
+            oauth: false,
+          },
+        }),
+        reply("mcp.add", null),
+      ];
+      const instructions = [
+        out("session.instructions.entry.put", { sessionID: SESSION, key: "goat", value: "<any>" }),
+        reply("session.instructions.entry.put", null),
+      ];
+      const prompt = [
+        out("session.prompt", { sessionID: SESSION, text: "hi" }),
+        promptAccepted,
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ];
+      // Every turn denies all managed drivers; only a turn with the driver allows its own, so an
+      // excluded turn (Plan, read-only) cannot reach a driver another thread registered here.
+      const rules = (computerUse: boolean) => [
+        out("session.update", {
+          sessionID: SESSION,
+          permissions: computerUse
+            ? [...goatRules, { action: `${cuaName}_*`, resource: "*", effect: "allow" }]
+            : goatRules,
+        }),
+        reply("session.update", null),
+      ];
+      const entries = [
+        ...opening,
+        out("session.get", { sessionID: SESSION }),
+        replyData("session.get", sessionInfo()),
+        ...noOpenRequests,
+        ...rules(true),
+        ...addGoat,
+        out("mcp.add", {
+          server: cuaName,
+          config: {
+            type: "local",
+            command: ["/resources/cua-driver", "mcp"],
+            environment: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+          },
+        }),
+        reply("mcp.add", null),
+        ...instructions,
+        ...prompt,
+        ...rules(false),
+        ...addGoat,
+        out("mcp.remove", { server: cuaName, "location[directory]": WORK }),
+        reply("mcp.remove", null),
+        ...instructions,
+        ...prompt,
+        out("mcp.remove", { server: name, "location[directory]": WORK }),
+        reply("mcp.remove", null),
+      ];
+      const systems: string[] = [];
+      const runtime = yield* openCode2ReplayRuntime(entries, {
+        onInstructions: (key, value) => {
+          if (key === "goat") systems.push(value);
+        },
+      });
+      const thread = yield* runtime.resumeThread({
+        providerThread: providerThread(yield* DateTime.now),
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: policy(),
+      });
+      for (const [index, attachment] of [{ ...config, cuaDriver }, config].entries()) {
+        yield* sessions.set(attachment);
+        const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        yield* runtime.startTurn({
+          ...turnInput(thread),
+          providerTurnOrdinal: index + 1,
+          runOrdinal: index + 1,
+        });
+        assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        assert.equal((systems.at(-1) ?? "").includes("<computer_use>"), index === 0);
+      }
+      yield* runtime.unloadThread!({ providerThread: thread });
+    }).pipe(Effect.scoped),
   );
 });

@@ -24,7 +24,9 @@ import {
   formatSessionList,
 } from "../cliAuthFormat.ts";
 import * as ServerConfig from "../config.ts";
+import { MCP_CLIENT_SUBJECT } from "../auth/mcpClientSubject.ts";
 import { authScopesFlag } from "./authScopes.ts";
+import { refuseInThread } from "./cliCredential.ts";
 import {
   authLocationFlags,
   type CliAuthLocationFlags,
@@ -103,25 +105,29 @@ const pairingCreateCommand = Command.make("create", {
 }).pipe(
   Command.withDescription("Issue a new client pairing token."),
   Command.withHandler((flags) =>
-    runWithEnvironmentAuth(
-      flags,
-      (environmentAuth) =>
-        Effect.gen(function* () {
-          const issued = yield* environmentAuth.createPairingLink({
-            scopes: flags.scopes,
-            subject: "one-time-token",
-            ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
-            ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
-          });
-          const output = formatIssuedPairingCredential(issued, {
-            json: flags.json,
-            ...(Option.isSome(flags.baseUrl) ? { baseUrl: flags.baseUrl.value } : {}),
-          });
-          yield* Console.log(output);
-        }),
-      {
-        quietLogs: flags.json,
-      },
+    refuseInThread("goat auth pairing create").pipe(
+      Effect.andThen(
+        runWithEnvironmentAuth(
+          flags,
+          (environmentAuth) =>
+            Effect.gen(function* () {
+              const issued = yield* environmentAuth.createPairingLink({
+                scopes: flags.scopes,
+                subject: "one-time-token",
+                ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
+                ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+              });
+              const output = formatIssuedPairingCredential(issued, {
+                json: flags.json,
+                ...(Option.isSome(flags.baseUrl) ? { baseUrl: flags.baseUrl.value } : {}),
+              });
+              yield* Console.log(output);
+            }),
+          {
+            quietLogs: flags.json,
+          },
+        ),
+      ),
     ),
   ),
 );
@@ -184,29 +190,33 @@ const sessionIssueCommand = Command.make("issue", {
 }).pipe(
   Command.withDescription("Issue a scoped bearer access token for headless or remote clients."),
   Command.withHandler((flags) =>
-    runWithEnvironmentAuth(
-      flags,
-      (environmentAuth) =>
-        Effect.gen(function* () {
-          const issued = yield* environmentAuth.issueSession({
-            scopes: flags.scopes,
-            ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
-            ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
-            ...(Option.isSome(flags.subject) ? { subject: flags.subject.value } : {}),
-            ...(Option.isSome(flags.runtimeModeCeiling)
-              ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
-              : {}),
-          });
-          yield* Console.log(
-            formatIssuedSession(issued, {
-              json: flags.json,
-              tokenOnly: flags.tokenOnly,
+    refuseInThread("goat auth session issue").pipe(
+      Effect.andThen(
+        runWithEnvironmentAuth(
+          flags,
+          (environmentAuth) =>
+            Effect.gen(function* () {
+              const issued = yield* environmentAuth.issueSession({
+                scopes: flags.scopes,
+                ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
+                ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+                ...(Option.isSome(flags.subject) ? { subject: flags.subject.value } : {}),
+                ...(Option.isSome(flags.runtimeModeCeiling)
+                  ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
+                  : {}),
+              });
+              yield* Console.log(
+                formatIssuedSession(issued, {
+                  json: flags.json,
+                  tokenOnly: flags.tokenOnly,
+                }),
+              );
             }),
-          );
-        }),
-      {
-        quietLogs: flags.json || flags.tokenOnly,
-      },
+          {
+            quietLogs: flags.json || flags.tokenOnly,
+          },
+        ),
+      ),
     ),
   ),
 );
@@ -258,8 +268,6 @@ const sessionCommand = Command.make("session").pipe(
   Command.withSubcommands([sessionIssueCommand, sessionListCommand, sessionRevokeCommand]),
 );
 
-/** The subject `/mcp` admits from outside a thread; see EnvironmentAuth. */
-const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_TOKEN_TTL = Duration.days(90);
 
 const clientCreateCommand = Command.make("create", {
@@ -295,36 +303,40 @@ const clientCreateCommand = Command.make("create", {
     "Issue a long-lived, revocable MCP client token for an outside orchestrator.",
   ),
   Command.withHandler((flags) =>
-    Effect.gen(function* () {
-      if (
-        flags.scopes.includes(AuthOrchestrationApproveScope) &&
-        !flags.scopes.includes(AuthOrchestrationOperateScope)
-      ) {
-        return yield* new CliError.UserError({
-          cause: flags.scopes,
-          userMessage: `${AuthOrchestrationApproveScope} needs ${AuthOrchestrationOperateScope}.`,
-        });
-      }
-      return yield* runWithEnvironmentAuth(
-        flags,
-        (environmentAuth) =>
-          Effect.gen(function* () {
-            const issued = yield* environmentAuth.issueSession({
-              subject: MCP_CLIENT_SUBJECT,
-              scopes: flags.scopes,
-              label: flags.name,
-              ttl: Option.getOrElse(flags.ttl, () => MCP_CLIENT_TOKEN_TTL),
-              ...(Option.isSome(flags.runtimeModeCeiling)
-                ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
-                : {}),
+    refuseInThread("goat auth client create").pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          if (
+            flags.scopes.includes(AuthOrchestrationApproveScope) &&
+            !flags.scopes.includes(AuthOrchestrationOperateScope)
+          ) {
+            return yield* new CliError.UserError({
+              cause: flags.scopes,
+              userMessage: `${AuthOrchestrationApproveScope} needs ${AuthOrchestrationOperateScope}.`,
             });
-            yield* Console.log(
-              formatIssuedSession(issued, { json: flags.json, tokenOnly: flags.tokenOnly }),
-            );
-          }),
-        { quietLogs: flags.json || flags.tokenOnly },
-      );
-    }),
+          }
+          return yield* runWithEnvironmentAuth(
+            flags,
+            (environmentAuth) =>
+              Effect.gen(function* () {
+                const issued = yield* environmentAuth.issueSession({
+                  subject: MCP_CLIENT_SUBJECT,
+                  scopes: flags.scopes,
+                  label: flags.name,
+                  ttl: Option.getOrElse(flags.ttl, () => MCP_CLIENT_TOKEN_TTL),
+                  ...(Option.isSome(flags.runtimeModeCeiling)
+                    ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
+                    : {}),
+                });
+                yield* Console.log(
+                  formatIssuedSession(issued, { json: flags.json, tokenOnly: flags.tokenOnly }),
+                );
+              }),
+            { quietLogs: flags.json || flags.tokenOnly },
+          );
+        }),
+      ),
+    ),
   ),
 );
 

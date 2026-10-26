@@ -65,6 +65,8 @@ interface BaseTraceRecord {
 
 export interface EffectTraceRecord extends BaseTraceRecord {
   readonly type: "effect-span";
+  /** Set by writers whose trace file can hold runs of several app versions (desktop). */
+  readonly resourceAttributes?: Readonly<Record<string, unknown>>;
   readonly exit:
     | {
         readonly _tag: "Success";
@@ -152,6 +154,11 @@ export interface TraceSink {
 export interface LocalFileTracerOptions extends TraceSinkOptions {
   readonly delegate?: Tracer.Tracer;
   readonly sink?: TraceSink;
+  /**
+   * Rewrites a failed span's cause before any tracer sees it: the trace record renders it, and an
+   * OTLP delegate builds exception messages and stacks from it. Without one, causes pass as-is.
+   */
+  readonly redactCause?: (cause: Cause.Cause<unknown>) => Cause.Cause<unknown>;
 }
 
 type OtlpSpan = OtlpTracer.ScopeSpan["spans"][number];
@@ -253,6 +260,25 @@ export function compactTraceAttributes(
     }
   }
   return Object.fromEntries(entries);
+}
+
+/**
+ * The exit every tracer of a span sees. Success drops its value: cached lookup fibers retain
+ * parent spans, and traces need the status, not the payload. A failure is redacted once into a
+ * new exit shared by the trace record and the delegate; the program's own exit is never changed.
+ */
+function traceExitOf(
+  exit: Exit.Exit<unknown, unknown>,
+  redactCause: LocalFileTracerOptions["redactCause"],
+): Exit.Exit<unknown, unknown> {
+  if (ExitRuntime.isSuccess(exit)) return ExitRuntime.void;
+  if (redactCause === undefined) return exit;
+  try {
+    return ExitRuntime.failCause(redactCause(exit.cause));
+  } catch {
+    // A redactor that fails must not let the unredacted cause through.
+    return ExitRuntime.die(new Error("span cause could not be redacted"));
+  }
 }
 
 function formatTraceExit(exit: Exit.Exit<unknown, unknown>): EffectTraceRecord["exit"] {
@@ -511,14 +537,17 @@ class LocalFileSpan implements Tracer.Span {
   events: Array<[name: string, startTime: bigint, attributes: Record<string, unknown>]>;
   private readonly delegate: Tracer.Span;
   private readonly push: (record: EffectTraceRecord) => void;
+  private readonly redactCause: LocalFileTracerOptions["redactCause"];
 
   constructor(
     options: Parameters<Tracer.Tracer["span"]>[0],
     delegate: Tracer.Span,
     push: (record: EffectTraceRecord) => void,
+    redactCause: LocalFileTracerOptions["redactCause"],
   ) {
     this.delegate = delegate;
     this.push = push;
+    this.redactCause = redactCause;
     this.name = delegate.name;
     this.spanId = delegate.spanId;
     this.traceId = delegate.traceId;
@@ -536,8 +565,7 @@ class LocalFileSpan implements Tracer.Span {
   }
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
-    // Cached lookup fibers retain parent spans. Traces need success status, not result payloads.
-    const traceExit = ExitRuntime.isSuccess(exit) ? ExitRuntime.void : exit;
+    const traceExit = traceExitOf(exit, this.redactCause);
     this.status = {
       _tag: "Ended",
       startTime: this.status.startTime,
@@ -589,7 +617,12 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
 
   return Tracer.make({
     span(spanOptions) {
-      return new LocalFileSpan(spanOptions, delegate.span(spanOptions), sink.push);
+      return new LocalFileSpan(
+        spanOptions,
+        delegate.span(spanOptions),
+        sink.push,
+        options.redactCause,
+      );
     },
     ...(delegate.context ? { context: delegate.context } : {}),
   });

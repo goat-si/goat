@@ -36,6 +36,11 @@ import {
   type ChannelOutboundKind,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import {
+  channelEvidenceLabels,
+  channelEvidenceSentence,
+  splitChannelResultText,
+} from "@goat/shared/channelEvidence";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   classifyTextGenerationFailure,
@@ -108,6 +113,7 @@ import {
   singleQuestionChoice,
   type DeliveredChoices,
 } from "./channelDecisionChoices.ts";
+import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import {
@@ -118,6 +124,9 @@ import {
   turnSteerIdsFor,
 } from "./channelIds.ts";
 import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
+
+const movedNarration = (payload: { fromHost: string; host: string; replicaCapturedAt: string }) =>
+  `${payload.fromHost} stopped answering, so this continues on ${payload.host} from the copy of its work taken at ${payload.replicaCapturedAt}. Whatever it does on ${payload.fromHost} after that stays there.`;
 
 /** How long a reception pass may take before the sender gets a failure note instead. */
 const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
@@ -229,7 +238,7 @@ const boundTail = (
  * The GOAT Bot turn a follow-up in this conversation steers: the newest turn whose coding thread
  * is running here. Messages in other conversations, or when no turn runs, start their own.
  */
-export const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
+const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
   tasks
     .filter(
       (task) =>
@@ -1253,6 +1262,9 @@ const make = Effect.gen(function* () {
                       questionId: question.questionId,
                       text: question.text,
                     })),
+                    ...(task.observed?.result === undefined
+                      ? {}
+                      : { evidence: channelEvidenceLabels(task.observed.result) }),
                   })),
                   allowedTargets: targets,
                   ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
@@ -1626,14 +1638,10 @@ const make = Effect.gen(function* () {
 
       if (action.type === "answer_question") {
         const answerer = yield* judgedNow;
-        const stored = yield* ledger.getTask(action.taskId);
-        const open =
-          stored !== undefined &&
-          stored.task.conversationId === conversationId &&
-          stored.task.openQuestions.some((question) => question.questionId === action.questionId);
-        if (stored === undefined || !open) {
-          replyText = "I couldn't match that to an open question. Which task do you mean?";
-          finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+        const { stored, refused } = yield* openQuestionTask(ledger, { ...action, conversationId });
+        if (refused !== undefined) {
+          finalDecision = refused;
+          replyText = finalDecision.replyText;
         } else if (answerer === undefined || !mayAnswerFor(answerer, stored.task.requester)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };
@@ -1732,6 +1740,13 @@ const make = Effect.gen(function* () {
 
   const narrationFor = (task: ChannelTask, event: ChannelLedger.ChannelPendingEvent["event"]) => {
     switch (event.type) {
+      case "task.dispatch.claimed":
+        return event.payload.target.placementReason === undefined
+          ? undefined
+          : {
+              kind: "receipt" as const,
+              text: task.title + " → " + event.payload.target.placementReason,
+            };
       case "task.completed":
         // A turn's summary is GOAT Bot's own answer, written for the person on the bot's model.
         if (task.kind === "turn") {
@@ -1753,22 +1768,15 @@ const make = Effect.gen(function* () {
           text:
             "Couldn't finish: " +
             task.title +
-            " — " +
+            ": " +
             (event.payload.summary ?? event.payload.reason),
         };
+      case "task.progress":
+        return event.payload.milestone === true
+          ? { kind: "receipt" as const, text: event.payload.summary }
+          : undefined;
       case "task.moved":
-        return {
-          kind: "receipt" as const,
-          text:
-            event.payload.fromHost +
-            " stopped answering, so this continues on " +
-            event.payload.host +
-            " from the copy of its work taken at " +
-            event.payload.replicaCapturedAt +
-            ". Whatever it does on " +
-            event.payload.fromHost +
-            " after that stays there.",
-        };
+        return { kind: "receipt" as const, text: movedNarration(event.payload) };
       case "task.cancelled":
         return { kind: "failure" as const, text: "Stopped: " + task.title };
       case "task.question.opened":
@@ -1791,6 +1799,23 @@ const make = Effect.gen(function* () {
           stored.task,
           pending.event.payload.observed.needsYou,
         );
+        const result = pending.event.payload.observed.result;
+        const evidence =
+          result?.observedCheck !== undefined && result.observedCheck.status !== "running"
+            ? channelEvidenceSentence(result, stored.task.title)
+            : null;
+        // GOAT Bot's card shows the check as it lands; text channels get one sentence.
+        if (evidence !== null && stored.task.originAddress.kind !== "goat") {
+          deliveries.push(
+            replyDelivery({
+              causeKey: "narration:" + pending.event.eventId + ":evidence",
+              destination: stored.task.originAddress,
+              kind: "receipt",
+              text: evidence,
+              task: stored.task,
+            }),
+          );
+        }
         yield* ledger.completeNarration({ owner, sequence: pending.sequence, deliveries, now });
         yield* wake.wake;
         return;
@@ -1801,45 +1826,82 @@ const make = Effect.gen(function* () {
         return;
       }
       const task = stored.task;
+      const origin = task.originAddress;
+      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      // In GOAT Bot a task's card is its result: it already shows the outcome, the summary and
+      // the checks, so a message repeating them would say everything twice. A turn is GOAT Bot's
+      // own answer and stays a message.
+      const cardIsResult =
+        bot !== undefined &&
+        task.kind !== "turn" &&
+        (base.kind === "result" || base.kind === "failure");
+      if (cardIsResult && origin.kind === "goat") {
+        // The outcome is delivered as the card itself, under the narration's key, so the work
+        // queue still sees the result reach the person. The timeline records each card version
+        // once, so this adds no second item.
+        yield* ledger.completeNarration({
+          owner,
+          sequence: pending.sequence,
+          deliveries: [chipDelivery(task, bot, "narration:" + pending.event.eventId + ":origin")],
+          now,
+        });
+        yield* wake.wake;
+        return;
+      }
+      const plain = splitChannelResultText(base.text).text;
+      const baseText = plain === "" ? base.text : plain;
       // The requester's own words set the reply's language; the worker's summary may use another.
       const request = yield* ledger.getInput(task.originInputId);
       const requestTail =
         request === undefined
           ? []
           : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
-      // Questions and a turn's answer keep their exact words; other results and failures may be
-      // phrased by the model.
+      // Milestones, questions and a turn's answer keep the words written for the person.
       const worded =
-        base.kind === "question" || (task.kind === "turn" && base.kind === "result")
-          ? base.text
+        pending.event.type === "task.progress" ||
+        base.kind === "question" ||
+        (task.kind === "turn" && base.kind === "result")
+          ? baseText
           : Option.match(
               yield* generate({
                 mode: "task_event",
                 conversationId: task.conversationId,
                 originKind: task.requester.originKind,
-                taskEvent: { taskId: task.taskId, type: pending.event.type, summary: base.text },
+                taskEvent: { taskId: task.taskId, type: pending.event.type, summary: baseText },
                 tail: requestTail,
                 tasks: [],
                 allowedTargets: [],
                 requester: task.requester,
               }),
-              { onNone: () => base.text, onSome: (result) => result.replyText },
+              {
+                onNone: () => baseText,
+                onSome: (result) => splitChannelResultText(result.replyText).text || baseText,
+              },
             );
-      const origin = task.originAddress;
+      // Text channels have no card, so meaningful verification rides along as one sentence.
+      const evidence =
+        origin.kind !== "goat" && (base.kind === "result" || base.kind === "failure")
+          ? channelEvidenceSentence(task.observed?.result)
+          : null;
       const deliveries = [
         replyDelivery({
           causeKey: "narration:" + pending.event.eventId + ":origin",
           destination: origin,
           kind: base.kind,
-          text: worded,
+          text: evidence === null ? worded : worded + "\n\n" + evidence,
           task,
           mentionActorId: mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
         }),
       ];
-      // Work started elsewhere shows up in the bot as its chip and its final result only.
-      const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
-      if (bot !== undefined && origin.kind !== "goat" && base.kind !== "question") {
+      // Work started elsewhere shows up in the bot as its card; its result is on the card, and
+      // only receipts and a turn's answer also arrive as messages.
+      if (
+        bot !== undefined &&
+        origin.kind !== "goat" &&
+        base.kind !== "question" &&
+        !cardIsResult
+      ) {
         deliveries.push(
           replyDelivery({
             causeKey: "narration:" + pending.event.eventId + ":bot",

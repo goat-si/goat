@@ -2,7 +2,19 @@ import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type ProviderReplayTranscript } from "@goat/contracts";
+import {
+  MessageId,
+  type ModelSelection,
+  NodeId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ProviderThread,
+  ProjectId,
+  type ProviderReplayTranscript,
+  type RunAttemptId,
+  RunId,
+  type ThreadId,
+} from "@goat/contracts";
+import type * as DateTime from "effect/DateTime";
 import * as CodexClient from "effect-codex-app-server/client";
 import type * as CodexError from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
@@ -192,28 +204,42 @@ export function layer(input: {
     input.driver === undefined
       ? CodexReplay.layerReplay(input.transcript)
       : CodexReplay.layerReplayWithDriver(input.driver);
-  const layerReplayClientFactory = Layer.succeed(CodexAdapterV2.CodexAppServerClientFactory, {
-    open: (openInput) =>
-      Effect.gen(function* () {
-        const context = yield* Layer.build(layerReplay).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapter.ProviderAdapterOpenSessionError({
-                driver: CodexAdapterV2.CODEX_DRIVER_KIND,
-                providerSessionId: openInput.providerSessionId,
-                cause,
-              }),
-          ),
-        );
-        return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-          Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
-          Effect.provide(context),
-        );
-      }),
+  return layerWithClientFactory({
+    scenario: input.transcript.scenario,
+    clientFactory: {
+      open: (openInput) =>
+        Effect.gen(function* () {
+          const context = yield* Layer.build(layerReplay).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                  providerSessionId: openInput.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.map((client) => withCodexReplayChildMetadata(client, input.transcript)),
+            Effect.provide(context),
+          );
+        }),
+    },
   });
+}
+
+/** The real Codex adapter registry over a caller-owned app-server client factory. */
+export function layerWithClientFactory(input: {
+  readonly scenario: string;
+  readonly clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape;
+}) {
+  const layerReplayClientFactory = Layer.succeed(
+    CodexAdapterV2.CodexAppServerClientFactory,
+    input.clientFactory,
+  );
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
-    makeReplayServerConfig(input.transcript.scenario).pipe(Effect.orDie),
+    makeReplayServerConfig(input.scenario).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
   const layerRegistry = ProviderAdapterRegistry.layerFromDrivers({
     drivers: [CodexAdapterV2.CodexAdapterV2Driver],
@@ -280,3 +306,84 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
     );
   },
 };
+
+export const CODEX_TEST_MODEL_SELECTION = {
+  instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+  model: "gpt-5.4",
+} satisfies ModelSelection;
+export const CODEX_TEST_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  cwd: "/workspace",
+});
+
+function makeCodexTestAppThread(input: {
+  readonly threadId: ThreadId;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly now: DateTime.Utc;
+}): OrchestrationV2AppThread {
+  return {
+    createdBy: "user",
+    creationSource: "web",
+    id: input.threadId,
+    projectId: ProjectId.make(`project-${input.threadId}`),
+    title: "Codex continuation test",
+    providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+    modelSelection: CODEX_TEST_MODEL_SELECTION,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: input.providerThread.id,
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: input.threadId,
+    },
+    forkedFrom: null,
+    createdAt: input.now,
+    updatedAt: input.now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  };
+}
+
+export function makeCodexTestTurnInput(input: {
+  readonly threadId: ThreadId;
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly now: DateTime.Utc;
+  readonly attemptId: RunAttemptId;
+  readonly text: string;
+}): ProviderAdapter.ProviderAdapterV2TurnInput {
+  return {
+    appThread: makeCodexTestAppThread(input),
+    threadId: input.threadId,
+    runId: RunId.make(`run-${input.attemptId}`),
+    runOrdinal: 1,
+    providerTurnOrdinal: 1,
+    attemptId: input.attemptId,
+    rootNodeId: NodeId.make(`node-${input.attemptId}`),
+    providerThread: input.providerThread,
+    message: {
+      createdBy: "user",
+      creationSource: "web",
+      messageId: MessageId.make(`message-${input.attemptId}`),
+      text: input.text,
+      attachments: [],
+    },
+    modelSelection: CODEX_TEST_MODEL_SELECTION,
+    runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+  };
+}
+
+export function withReplayRequestId(
+  entry: CodexReplay.CodexAppServerReplayEntry,
+  id: number,
+): CodexReplay.CodexAppServerReplayEntry {
+  return entry.type !== "runtime_exit" && Predicate.isObject(entry.frame)
+    ? { ...entry, frame: { ...entry.frame, id } }
+    : entry;
+}

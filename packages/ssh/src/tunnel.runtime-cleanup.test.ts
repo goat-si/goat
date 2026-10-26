@@ -11,7 +11,8 @@ import * as Effect from "effect/Effect";
 import { ChildProcessSpawner } from "effect/process";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { REMOTE_RUNTIME_CLEANUP_SCRIPT, launchOrReuseRemoteServer } from "./tunnel.ts";
+import { REMOTE_RUNTIME_CLEANUP_SCRIPT } from "./runtimeMaintenanceScripts.ts";
+import { launchOrReuseRemoteServer } from "./tunnel.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { remoteShell, uploadTarget } from "./tunnel.fixture.ts";
 
@@ -41,10 +42,14 @@ function fixture() {
   NodeFS.symlinkSync("/bin/unrelated", NodePath.join(home, "proc/42/exe"));
   NodeFS.symlinkSync("/tmp", NodePath.join(home, "proc/42/cwd"));
   const semver = new URL("../../shared/src/semver.ts", import.meta.url).href;
-  const add = (v: string) => {
+  // Install times decide which older build is the rollback build; each add is installed later
+  // than the previous one unless a test names its time.
+  let installedAt = 1_700_000_000;
+  const add = (v: string, at = (installedAt += 10)) => {
     const dir = NodePath.join(versions, v);
     NodeFS.mkdirSync(dir);
     NodeFS.writeFileSync(NodePath.join(dir, ".install-complete"), v + "\n");
+    NodeFS.utimesSync(NodePath.join(dir, ".install-complete"), at, at);
     executable(
       NodePath.join(dir, "goat"),
       `#!${process.execPath}
@@ -64,7 +69,7 @@ console.log(order === undefined ? 'unknown' : order > 0 ? 'newer' : order < 0 ? 
 })().catch(() => process.exit(1));\n`,
     );
   };
-  for (const v of ["2.0.0", "1.9.0", "1.8.0", "1.7.0", "1.6.0", "1.5.0", "2.0.0-dev.abc", "3.0.0"])
+  for (const v of ["1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.9.0", "2.0.0", "2.0.0-dev.abc", "3.0.0"])
     add(v);
   const lock = NodePath.join(home, "replacement.lock");
   NodeFS.symlinkSync("our-owner", lock);
@@ -136,9 +141,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime cl
     assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, "1.5.0")));
   });
 
-  it("uses verified commit stamps for dev builds and keeps unordered rollback candidates", () => {
+  it("uses verified commit stamps for dev builds to choose the rollback build", () => {
     const f = fixture();
-    f.add("2.0.0-dev.old");
+    f.add("2.0.0-dev.old", 1);
     for (const [version, time] of [
       ["2.0.0", 3000],
       ["2.0.0-dev.abc", 2000],
@@ -160,14 +165,56 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime cl
     assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, "2.0.0-dev.old")), r.stderr);
   });
 
-  it("keeps every rollback candidate whose order against the other candidates is unknown", () => {
+  it("keeps only the rollback build installed last when older builds cannot be ordered", () => {
     const f = fixture();
     f.add("1.9.0-dev.aaa");
     f.add("1.9.0-dev.bbb");
     const r = f.run();
     assert.equal(r.status, 0, r.stderr);
-    for (const v of ["1.9.0", "1.9.0-dev.aaa", "1.9.0-dev.bbb"])
-      assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, v)));
+    assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, "1.9.0-dev.bbb")));
+    for (const v of ["1.9.0", "1.9.0-dev.aaa"])
+      assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, v)), v);
+  });
+
+  it("runs without /proc or flock (macOS): lsof protects builds in use and the mutex is released", () => {
+    const f = fixture();
+    NodeFS.rmSync(NodePath.join(f.home, "proc"), { recursive: true });
+    NodeFS.rmSync(NodePath.join(f.bin, "flock"));
+    f.executable(
+      NodePath.join(f.bin, "lsof"),
+      `#!/bin/sh\ncase "$*" in *"-d cwd,txt"*) ;; *) exit 1 ;; esac\nprintf 'p42\\nfcwd\\nn%s\\nftxt\\nn/bin/unrelated\\n' ${quote(NodePath.join(f.versions, "1.6.0"))}\n`,
+    );
+    const r = f.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, "1.5.0")), r.stderr);
+    for (const v of ["1.6.0", "1.7.0", "1.8.0", "1.9.0", "2.0.0"])
+      assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, v)), v);
+    assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, ".maintenance.lock.d")));
+  });
+
+  it("a failing lsof keeps every build", () => {
+    const f = fixture();
+    NodeFS.rmSync(NodePath.join(f.home, "proc"), { recursive: true });
+    f.executable(NodePath.join(f.bin, "lsof"), "#!/bin/sh\nexit 1\n");
+    const r = f.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, "1.5.0")));
+  });
+
+  it("removes staging and trash left over an hour ago and keeps fresh ones", () => {
+    const f = fixture();
+    // Long before this run; the fresh directory keeps the time it is created with.
+    const longAgo = 1_700_000_000;
+    for (const name of [".staging-old", ".trash-old", ".staging-new"]) {
+      NodeFS.mkdirSync(NodePath.join(f.versions, name, "goat"), { recursive: true });
+      if (name.endsWith("-old"))
+        NodeFS.utimesSync(NodePath.join(f.versions, name), longAgo, longAgo);
+    }
+    const r = f.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, ".staging-old")), r.stderr);
+    assert.isFalse(NodeFS.existsSync(NodePath.join(f.versions, ".trash-old")));
+    assert.isTrue(NodeFS.existsSync(NodePath.join(f.versions, ".staging-new")));
   });
 
   it.each([

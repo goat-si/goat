@@ -374,10 +374,10 @@ it.each(["light", "dark"] as const)(
       import.meta.env.VITE_U3_CAPTURE_DIRECTORY.startsWith("/");
     if (!baselineCapture) {
       expect(status.textContent).toContain(
-        "Installing GOAT runtime — first setup can take a few minutes",
+        "Installing GOAT runtime. First setup can take a few minutes",
       );
       expect(fixture.snapshot().tooltip).toBe(
-        "Installing GOAT runtime — first setup can take a few minutes",
+        "Installing GOAT runtime. First setup can take a few minutes",
       );
       expect(status.textContent).not.toMatch(/did not respond|Runtime unknown/);
       expect(container.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);

@@ -2,7 +2,11 @@
 import { makeAcpRegistryAdapterV2 } from "@goat/provider-acp-registry/testing";
 import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import { AcpRegistryCatalog } from "@goat/provider-acp-registry/server/AcpRegistrySupport";
-import { decodeAcpReplayTranscript, makeAcpReplayRuntime } from "./AcpAdapterV2.testkit.ts";
+import {
+  decodeAcpReplayTranscript,
+  makeAcpReplayRuntime,
+  makeTurnInput,
+} from "./AcpAdapterV2.testkit.ts";
 import { type OrchestrationV2TurnItem, type ProviderUserInputAnswers } from "@goat/contracts";
 import { deriveBlockedOnThreadWait } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { appendUserInputAttachmentPaths } from "../../provider/userInputAttachments.ts";
@@ -23,15 +27,10 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CheckpointId,
   EnvironmentId,
-  MessageId,
   type ModelSelection,
-  NodeId,
-  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
-  RunAttemptId,
-  RunId,
   ThreadId,
   type OrchestrationV2ProviderThread,
   type ProviderOptionDescriptor,
@@ -73,6 +72,8 @@ import {
 } from "@goat/provider-acp/server/sessionConfig";
 import {
   extractXAiAcpSubagentUpdate,
+  makeGrokAdapterV2,
+  makeXAiPromptCompletionRuntime,
   normalizeXAiAcpToolCallState,
   registerXAiBackgroundTaskTracking,
 } from "@goat/provider-grok/testing";
@@ -307,69 +308,6 @@ const pollProtocolMethods = (events: Queue.Queue<EffectAcpProtocol.AcpProtocolLo
     return methods;
   });
 
-function makeTurnInput(input: {
-  readonly threadId: ThreadId;
-  readonly providerThread: OrchestrationV2ProviderThread;
-  readonly instanceId: ProviderInstanceId;
-  readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-  readonly now: DateTime.Utc;
-  readonly ordinal?: number;
-  readonly modelSelection?: ModelSelection;
-  readonly messageCreatedBy?: "user" | "agent";
-  readonly messageCreationSource?: "web" | "mobile" | "mcp" | "provider" | "server";
-  readonly messageText?: string;
-}): ProviderAdapter.ProviderAdapterV2TurnInput {
-  const ordinal = input.ordinal ?? 1;
-  const suffix = `${input.threadId}:${ordinal}`;
-  const modelSelection =
-    input.modelSelection ?? ({ instanceId: input.instanceId, model: "default" } as const);
-  return {
-    appThread: {
-      createdBy: "user",
-      creationSource: "web",
-      id: input.threadId,
-      projectId: ProjectId.make(`project:${input.threadId}`),
-      title: "ACP adapter test",
-      providerInstanceId: input.instanceId,
-      modelSelection,
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: input.providerThread.id,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: input.threadId,
-      },
-      forkedFrom: null,
-      createdAt: input.now,
-      updatedAt: input.now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    },
-    threadId: input.threadId,
-    runId: RunId.make(`run:${suffix}`),
-    runOrdinal: ordinal,
-    providerTurnOrdinal: ordinal,
-    attemptId: RunAttemptId.make(`attempt:${suffix}`),
-    rootNodeId: NodeId.make(`node:${suffix}`),
-    providerThread: input.providerThread,
-    message: {
-      createdBy: input.messageCreatedBy ?? "user",
-      creationSource: input.messageCreationSource ?? "web",
-      messageId: MessageId.make(`message:${suffix}`),
-      text: input.messageText ?? "test prompt",
-      attachments: [],
-    },
-    modelSelection,
-    runtimePolicy: input.runtimePolicy,
-  };
-}
-
 describe("AcpAdapterV2", () => {
   it.live.each(["failed", "recovered", "completed", "cancelled"] as const)(
     "projects Mistral retry notices and their %s outcome",
@@ -458,7 +396,112 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
+  it.live.each(["attached", "detached", "skill-off"] as const)(
+    "lists the managed Cua Driver in both server forms and loads the skill only when attached and not switched off (%s)",
+    (mode) =>
+      Effect.gen(function* () {
+        const [attached, skill] = [mode !== "detached", mode !== "skill-off"];
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make(`acp-test-cua-${mode}`);
+        const threadId = ThreadId.make(`thread-acp-cua-${mode}`);
+        const cuaDriver = {
+          command: "/resources/cua-driver",
+          args: ["mcp"],
+          environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+        };
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("environment-acp-cua"),
+          threadId,
+          providerSessionId: "mcp-session-acp-cua",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer acp-cua-token",
+          browserToolsAvailable: false,
+          ...(attached ? { cuaDriver } : {}),
+          ...(skill ? {} : { builtInSkills: [] }),
+        });
+        let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
+        const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents });
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: (input) =>
+              Effect.sync(() => {
+                runtimeInput = input;
+              }).pipe(Effect.andThen(makeRuntime(input))),
+          },
+          selfInvocation,
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`provider-session-acp-cua-${mode}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        const expected = {
+          name: "cua-driver",
+          command: "/resources/cua-driver",
+          args: ["mcp"],
+          env: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+        };
+        const find = (servers: ReadonlyArray<unknown> | undefined) =>
+          servers?.find(
+            (server) =>
+              typeof server === "object" &&
+              server !== null &&
+              "name" in server &&
+              server.name === "cua-driver",
+          );
+        assert.deepEqual(find(runtimeInput?.mcpServers), attached ? expected : undefined);
+        assert.deepEqual(find(runtimeInput?.acpMcpServers), attached ? expected : undefined);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 0,
+            messageText: "Open the settings window.",
+          }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+        while (true) {
+          const event = yield* Queue.take(protocolEvents);
+          if (event.direction !== "outgoing" || rawProtocolMethod(event) !== "session/prompt")
+            continue;
+          const prompt = rawProtocolPromptTextBlocks(event)
+            .map((block) => block.text)
+            .join("\n");
+          assert.equal(prompt.includes("<computer_use>"), attached && skill);
+          break;
+        }
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live("restarts the agent without the driver when a session switches to Plan", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
@@ -467,23 +510,33 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
-      const instanceId = ProviderInstanceId.make("acp-test-instruction-transitions");
-      const threadId = ThreadId.make("thread-acp-instruction-transitions");
-      yield* (yield* McpProviderSessions.McpProviderSessions).set({
-        environmentId: EnvironmentId.make("environment-acp-instruction-transitions"),
+      const instanceId = ProviderInstanceId.make("acp-test-cua-plan");
+      const threadId = ThreadId.make("thread-acp-cua-plan");
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const attachment = {
+        environmentId: EnvironmentId.make("environment-acp-cua"),
         threadId,
-        providerSessionId: "mcp-session-acp-instruction-transitions",
+        providerSessionId: "mcp-session-acp-cua-plan",
         providerInstanceId: instanceId,
         endpoint: "http://127.0.0.1:43123/mcp",
-        authorizationHeader: "Bearer instruction-transition-token",
+        authorizationHeader: "Bearer acp-cua-token",
         browserToolsAvailable: false,
+      };
+      yield* sessions.set({
+        ...attachment,
+        cuaDriver: { command: "/resources/cua-driver", args: ["mcp"], environment: [] },
       });
+      const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+      const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents });
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
-          makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
+          makeRuntime: (input) =>
+            Effect.sync(() => {
+              runtimeInputs.push(input);
+            }).pipe(Effect.andThen(makeRuntime(input))),
         },
         selfInvocation,
       });
@@ -493,97 +546,200 @@ describe("AcpAdapterV2", () => {
           interactionMode,
           cwd: process.cwd(),
         });
-      const defaultPolicy = policy("default");
       const modelSelection = { instanceId, model: "default" } as const;
       const runtime = yield* adapter.openSession({
         threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-instruction-transitions"),
+        providerSessionId: ProviderSessionId.make("provider-session-acp-cua-plan"),
         modelSelection,
-        runtimePolicy: defaultPolicy,
+        runtimePolicy: policy("default"),
       });
       const providerThread = yield* runtime.ensureThread({
         threadId,
         modelSelection,
-        runtimePolicy: defaultPolicy,
+        runtimePolicy: policy("default"),
       });
-      const now = yield* DateTime.now;
-      const runTurn = Effect.fnUntraced(function* (
-        ordinal: number,
-        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-        messageText: string,
-      ) {
-        yield* runtime.startTurn(
-          makeTurnInput({
-            threadId,
-            providerThread,
-            instanceId,
-            runtimePolicy,
-            now,
-            ordinal,
-            messageText,
-          }),
+      const hasDriver = (input: AcpAdapterV2RuntimeInput | undefined) =>
+        [...(input?.mcpServers ?? []), ...(input?.acpMcpServers ?? [])].some(
+          (server) => "name" in server && server.name === "cua-driver",
         );
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runDrain,
-        );
-        const methods: Array<string> = [];
+      const nextPrompt = Effect.gen(function* () {
         while (true) {
           const event = yield* Queue.take(protocolEvents);
-          if (event.direction !== "outgoing") continue;
-          const method = rawProtocolMethod(event);
-          if (method === undefined) continue;
-          methods.push(method);
-          if (method === "session/prompt") {
-            const promptBlocks = rawProtocolPromptTextBlocks(event);
-            return {
-              methods,
-              prompt: promptBlocks.map((block) => block.text).join("\n"),
-              textBlockCount: promptBlocks.length,
-            };
-          }
+          if (event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt")
+            return rawProtocolPromptTextBlocks(event)
+              .map((block) => block.text)
+              .join("\n");
         }
       });
+      const turn = (ordinal: number, interactionMode: "default" | "plan") =>
+        runtime
+          .startTurn(
+            makeTurnInput({
+              threadId,
+              providerThread,
+              instanceId,
+              runtimePolicy: policy(interactionMode),
+              now: DateTime.nowUnsafe(),
+              ordinal,
+              messageText: "Look at the settings window.",
+            }),
+          )
+          .pipe(
+            Effect.andThen(
+              runtime.events.pipe(
+                Stream.takeUntil((event) => event.type === "turn.terminal"),
+                Stream.runDrain,
+              ),
+            ),
+          );
 
-      const command = yield* runTurn(0, defaultPolicy, "/compact");
-      assert.isTrue(command.prompt.startsWith("/compact"));
-      assert.notInclude(command.prompt, "<t3_code_instructions>");
-      assert.equal(command.textBlockCount, 1);
-      const whitespaceCommand = yield* runTurn(1, defaultPolicy, "  /repro-skill");
-      assert.equal(whitespaceCommand.prompt, "  /repro-skill");
-      assert.equal(whitespaceCommand.textBlockCount, 1);
-      assert.notInclude(whitespaceCommand.prompt, "<t3_code_instructions>");
-      const firstDefault = yield* runTurn(2, defaultPolicy, "First default request.");
-      assert.equal(firstDefault.textBlockCount, 2);
-      assert.include(firstDefault.prompt, "GOAT interaction mode: Default");
-      assert.include(firstDefault.prompt, "GOAT collaborative browser");
-      assert.include(firstDefault.prompt, "GOAT orchestration");
-      assert.notInclude(
-        firstDefault.methods,
-        "session/set_config_option",
-        "Build should preserve the agent's advertised mode default",
-      );
-      assert.include(
-        (yield* runTurn(3, defaultPolicy, "Second default request.")).prompt,
-        "Second default request.",
-      );
+      yield* turn(0, "default");
+      assert.include(yield* nextPrompt, "<computer_use>");
+      assert.isTrue(hasDriver(runtimeInputs.at(-1)));
+      const runtimesBeforePlan = runtimeInputs.length;
 
-      const planPolicy = policy("plan");
-      const firstPlan = yield* runTurn(4, planPolicy, "Plan this change.");
-      assert.include(firstPlan.prompt, "GOAT interaction mode: Plan");
-      assert.include(firstPlan.methods, "session/set_config_option");
-      assert.include(
-        (yield* runTurn(5, planPolicy, "Continue planning.")).prompt,
-        "Continue planning.",
-      );
-      const restoredBuild = yield* runTurn(6, defaultPolicy, "Implement the change.");
-      assert.include(restoredBuild.prompt, "GOAT interaction mode: Default");
-      assert.include(
-        restoredBuild.methods,
-        "session/set_config_option",
-        "Build should restore the native mode that T3 temporarily replaced for Plan",
-      );
+      // Plan turns get no attachment, so the agent process holding the driver must be replaced.
+      yield* sessions.set(attachment);
+      yield* turn(1, "plan");
+      assert.notInclude(yield* nextPrompt, "<computer_use>");
+      assert.equal(runtimeInputs.length, runtimesBeforePlan + 1);
+      assert.isFalse(hasDriver(runtimeInputs.at(-1)));
     }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live.each([true, false])(
+    "keeps unchanged ACP attachments across turns (credential=%s, #934)",
+    (attached) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make("acp-test-instruction-transitions");
+        const threadId = ThreadId.make("thread-acp-instruction-transitions");
+        if (attached)
+          yield* (yield* McpProviderSessions.McpProviderSessions).set({
+            environmentId: EnvironmentId.make("environment-acp-instruction-transitions"),
+            threadId,
+            providerSessionId: "mcp-session-acp-instruction-transitions",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer instruction-transition-token",
+            browserToolsAvailable: false,
+          });
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
+          },
+          selfInvocation,
+        });
+        const policy = (interactionMode: "default" | "plan") =>
+          ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode,
+            cwd: process.cwd(),
+          });
+        const defaultPolicy = policy("default");
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-instruction-transitions"),
+          modelSelection,
+          runtimePolicy: defaultPolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy: defaultPolicy,
+        });
+        const now = yield* DateTime.now;
+        const runTurn = Effect.fnUntraced(function* (
+          ordinal: number,
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+          messageText: string,
+        ) {
+          yield* runtime.startTurn(
+            makeTurnInput({
+              threadId,
+              providerThread,
+              instanceId,
+              runtimePolicy,
+              now,
+              ordinal,
+              messageText,
+            }),
+          );
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runDrain,
+          );
+          const methods: Array<string> = [];
+          while (true) {
+            const event = yield* Queue.take(protocolEvents);
+            if (event.direction !== "outgoing") continue;
+            const method = rawProtocolMethod(event);
+            if (method === undefined) continue;
+            methods.push(method);
+            if (method === "session/prompt") {
+              const promptBlocks = rawProtocolPromptTextBlocks(event);
+              return {
+                methods,
+                prompt: promptBlocks.map((block) => block.text).join("\n"),
+                textBlockCount: promptBlocks.length,
+              };
+            }
+          }
+        });
+
+        const command = yield* runTurn(0, defaultPolicy, "/compact");
+        assert.isTrue(command.prompt.startsWith("/compact"));
+        assert.notInclude(command.prompt, "<t3_code_instructions>");
+        assert.equal(command.textBlockCount, 1);
+        const whitespaceCommand = yield* runTurn(1, defaultPolicy, "  /repro-skill");
+        assert.equal(whitespaceCommand.prompt, "  /repro-skill");
+        assert.equal(whitespaceCommand.textBlockCount, 1);
+        assert.notInclude(whitespaceCommand.prompt, "<t3_code_instructions>");
+        const firstDefault = yield* runTurn(2, defaultPolicy, "First default request.");
+        assert.notInclude(firstDefault.methods, "session/load");
+        assert.notInclude(firstDefault.methods, "session/resume");
+        assert.equal(firstDefault.textBlockCount, 2);
+        assert.include(firstDefault.prompt, "GOAT interaction mode: Default");
+        if (attached) {
+          assert.include(firstDefault.prompt, "GOAT collaborative browser");
+          assert.include(firstDefault.prompt, "GOAT orchestration");
+        }
+        assert.notInclude(
+          firstDefault.methods,
+          "session/set_config_option",
+          "Build should preserve the agent's advertised mode default",
+        );
+        assert.include(
+          (yield* runTurn(3, defaultPolicy, "Second default request.")).prompt,
+          "Second default request.",
+        );
+
+        const planPolicy = policy("plan");
+        const firstPlan = yield* runTurn(4, planPolicy, "Plan this change.");
+        assert.include(firstPlan.prompt, "GOAT interaction mode: Plan");
+        assert.include(firstPlan.methods, "session/set_config_option");
+        assert.include(
+          (yield* runTurn(5, planPolicy, "Continue planning.")).prompt,
+          "Continue planning.",
+        );
+        const restoredBuild = yield* runTurn(6, defaultPolicy, "Implement the change.");
+        assert.include(restoredBuild.prompt, "GOAT interaction mode: Default");
+        assert.include(
+          restoredBuild.methods,
+          "session/set_config_option",
+          "Build should restore the native mode that T3 temporarily replaced for Plan",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("reapplies a selection after a switch away from it failed partway", () =>
@@ -1046,6 +1202,26 @@ describe("AcpAdapterV2", () => {
                     },
                     {
                       sessionUpdate: "tool_call",
+                      toolCallId: "child-screenshot",
+                      title: "Screenshot",
+                      status: "completed",
+                      rawInput: { server: "cua-driver", tool: "screenshot" },
+                      rawOutput: {
+                        result: {
+                          content: [
+                            { type: "text", text: "Captured the screen" },
+                            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+                          ],
+                          structuredContent: { width: 1440, height: 900 },
+                        },
+                      },
+                      _meta: {
+                        is_mcp_tool_call: true,
+                        "cognition.ai/subagent_context": { parentAgentId: "child-a" },
+                      },
+                    },
+                    {
+                      sessionUpdate: "tool_call",
                       toolCallId: "child-mcp-fallback",
                       title: "Ran command",
                       kind: "execute",
@@ -1226,6 +1402,26 @@ describe("AcpAdapterV2", () => {
         });
         assert.deepEqual(item?.toolIcon, item?.toolSource?.icon);
       }
+      // Child MCP results drop the ACP `result` envelope like root ones, keeping image blocks.
+      assert.deepEqual(childMcp?.type === "dynamic_tool" ? childMcp.output : undefined, [
+        { type: "text", text: "Sunny" },
+      ]);
+      const childScreenshot = items.findLast(
+        (item) =>
+          item.threadId === task?.childThreadId &&
+          item.type === "dynamic_tool" &&
+          item.toolName === "cua-driver.screenshot",
+      );
+      assert.deepEqual(
+        childScreenshot?.type === "dynamic_tool" ? childScreenshot.output : undefined,
+        {
+          content: [
+            { type: "text", text: "Captured the screen" },
+            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+          ],
+          structuredContent: { width: 1440, height: 900 },
+        },
+      );
       assert.isTrue(
         items.some(
           (item) =>
@@ -1895,7 +2091,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("negotiates and executes optional native session forks through the ACP runtime", () =>
+  it.effect("forks ACP sessions with the target thread process credential (#934)", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
@@ -1910,6 +2106,7 @@ describe("AcpAdapterV2", () => {
       let waitForTerminalExit:
         | Parameters<RuntimeService["handleTerminalWaitForExit"]>[0]
         | undefined;
+      const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
       const makeRuntime = makeMockRuntime({
         childProcessSpawner,
         mockAgentPath,
@@ -1937,7 +2134,10 @@ describe("AcpAdapterV2", () => {
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
-          makeRuntime,
+          makeRuntime: (input) => {
+            runtimeInputs.push(input);
+            return makeRuntime(input);
+          },
         },
         selfInvocation,
         clientTerminals: {},
@@ -1991,6 +2191,10 @@ describe("AcpAdapterV2", () => {
         sourceProviderThread,
         targetThreadId,
       });
+      assert.equal(
+        runtimeInputs.at(-1)?.processEnvironment?.GOAT_ACP_MCP_AUTHORIZATION,
+        "Bearer target-thread-token",
+      );
       const forkRequestEvent = Option.getOrThrow(
         yield* Stream.fromQueue(protocolEvents).pipe(
           Stream.filter(
@@ -2540,6 +2744,7 @@ describe("AcpAdapterV2", () => {
           message?: Parameters<Runtime["handleMcpMessage"]>[0];
         }
       >();
+      let runtimeOrdinal = 1;
       const prompts: ReadonlyArray<{ type: string; text?: string }>[] = [];
       const makeRuntime = makeMockRuntime({
         childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
@@ -2547,6 +2752,9 @@ describe("AcpAdapterV2", () => {
         wrapRuntime: (runtime, ordinal) => {
           const captured: NonNullable<ReturnType<typeof handlers.get>> = {};
           handlers.set(ordinal, captured);
+          const observed = Effect.sync(() => {
+            runtimeOrdinal = ordinal;
+          });
           return {
             ...runtime,
             start:
@@ -2558,7 +2766,11 @@ describe("AcpAdapterV2", () => {
                         cause: new Error("Fixture candidate rejected"),
                       }),
                     )
-                : runtime.start,
+                : () => runtime.start().pipe(Effect.tap(() => observed)),
+            loadSession: (...args) => runtime.loadSession(...args).pipe(Effect.tap(() => observed)),
+            resumeSession: (...args) =>
+              runtime.resumeSession(...args).pipe(Effect.tap(() => observed)),
+            forkSession: (...args) => runtime.forkSession(...args).pipe(Effect.tap(() => observed)),
             prompt: (input) =>
               Effect.sync(() => prompts.push(input.prompt)).pipe(
                 Effect.andThen(runtime.prompt(input)),
@@ -2593,7 +2805,6 @@ describe("AcpAdapterV2", () => {
       });
       let thread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
       let currentThreadId = threadId;
-      let runtimeOrdinal = 1;
       const callTools = Effect.fnUntraced(function* () {
         const active = handlers.get(runtimeOrdinal)!;
         const connection = yield* active.connect!({ serverId: "goat" }, undefined as never);
@@ -2640,7 +2851,6 @@ describe("AcpAdapterV2", () => {
           } else {
             if (Exit.isFailure(rolledBack)) return yield* Effect.failCause(rolledBack.cause);
             thread = rolledBack.value.providerThread;
-            runtimeOrdinal = 2;
           }
         }
       }
@@ -2855,6 +3065,193 @@ describe("AcpAdapterV2", () => {
       });
       assert.isFalse(yield* hasPendingBackgroundWork);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // Oracle: Grok incident frames. Command completion must release the turn even
+  // when the CLI keeps the prompt RPC and process alive. Command polls stay visible.
+  it.live(
+    "completes a structured Grok background command from poll with an unanswered prompt RPC",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const instanceId = ProviderInstanceId.make("grok-background-completion");
+        const adapter = yield* makeGrokAdapterV2({
+          instanceId,
+          settings: DEFAULT_GROK_SETTINGS,
+          environment: {},
+          hostPlatform: yield* HostProcess.Platform,
+          selfInvocation: yield* resolveSelfInvocation(),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION: "poll" },
+            })(input).pipe(Effect.flatMap(makeXAiPromptCompletionRuntime)),
+        });
+        const threadId = ThreadId.make("grok-background-completion");
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("grok-background-completion"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const observed = yield* Stream.fromQueue(events).pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const allEvents = [...observed];
+        let next = yield* Queue.poll(events);
+        while (Option.isSome(next)) {
+          allEvents.push(next.value);
+          next = yield* Queue.poll(events);
+        }
+        const terminals = allEvents.filter((event) => event.type === "turn.terminal");
+        assert.deepEqual(
+          terminals.map((event) => event.status),
+          ["completed"],
+        );
+        const items = allEvents.flatMap((event) =>
+          event.type === "turn_item.updated" ? [event.turnItem] : [],
+        );
+        assert.isFalse(items.some((item) => item.type === "subagent"));
+        const command = items.findLast(
+          (item) => item.nativeItemRef?.nativeId === "call-fb9d0000-0000-0000-0000-000000000026-29",
+        );
+        assert.equal(command?.type, "command_execution");
+        assert.equal(command?.status, "completed");
+        assert.isTrue(
+          items.some((item) => item.nativeItemRef?.nativeId === "call-background-poll"),
+          "command TaskOutput must retain its normal tool frame",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // Oracle: #15888 KillTask reports. Command completion must release the turn even
+  // when the CLI keeps the prompt RPC and process alive. Kill calls stay visible.
+  it.live.each([
+    { shape: "output_only", expectedCommand: { type: "command_execution", status: "completed" } },
+    { shape: "variant_only", expectedCommand: { type: "command_execution", status: "completed" } },
+    { shape: "killed", expectedCommand: { type: "command_execution", status: "completed" } },
+    {
+      shape: "already_exited",
+      expectedCommand: { type: "command_execution", status: "completed" },
+    },
+    {
+      shape: "known_failure",
+      expectedCommand: { type: "command_execution", status: "failed", output: "known failure\n" },
+    },
+  ] as const)(
+    "completes a Grok KillTask command ($shape) and preserves any known result",
+    ({ shape, expectedCommand }) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const instanceId = ProviderInstanceId.make("grok-kill-completion");
+        const adapter = yield* makeGrokAdapterV2({
+          instanceId,
+          settings: DEFAULT_GROK_SETTINGS,
+          environment: {},
+          hostPlatform: yield* HostProcess.Platform,
+          selfInvocation: yield* resolveSelfInvocation(),
+          makeRuntime: (input) =>
+            makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { GOAT_ACP_GROK_KILL_TASK_SHAPE: shape },
+            })(input).pipe(Effect.flatMap(makeXAiPromptCompletionRuntime)),
+        });
+        const threadId = ThreadId.make("grok-kill-completion");
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("grok-kill-completion"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const observed = yield* Stream.fromQueue(events).pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const allEvents = [...observed];
+        let next = yield* Queue.poll(events);
+        while (Option.isSome(next)) {
+          allEvents.push(next.value);
+          next = yield* Queue.poll(events);
+        }
+        const terminals = allEvents.filter((event) => event.type === "turn.terminal");
+        assert.deepEqual(
+          terminals.map((event) => event.status),
+          ["completed"],
+        );
+        const items = allEvents.flatMap((event) =>
+          event.type === "turn_item.updated" ? [event.turnItem] : [],
+        );
+        assert.isFalse(items.some((item) => item.type === "subagent"));
+        const command = items.findLast(
+          (item) => item.nativeItemRef?.nativeId === "kill-target-command",
+        );
+        assert.deepInclude(command, expectedCommand);
+        assert.isTrue(
+          items.some((item) => item.nativeItemRef?.nativeId === "kill-command"),
+          "KillTask must retain its normal tool frame",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("keeps an agent's empty-valued default choice selectable", () =>

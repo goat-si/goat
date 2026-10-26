@@ -3,16 +3,16 @@
 The environment server owns simulators and emulators the way it owns
 terminals: discovery, streaming, and agent access all run there, and every
 client reaches them through the environment connection. This is what makes the
-Device panel work over Tailscale and T3 Connect, including when an SSH host runs the devices.
+Device panel work over Tailscale and GOAT Connect, including when an SSH host runs the devices.
 
 ## Two external tools, one seam
 
 [expo-device-hub](../../apps/server/src/device/LocalDeviceHost.ts) streams and
 [agent-device](../../apps/server/src/device/AgentDeviceShim.ts) drives. Each is
-npm-installed at a pinned version into the T3 home after its matching Device
+npm-installed at a pinned version into the GOAT home after its matching Device
 panel consent step. Manual setup installs and starts only expo-device-hub;
 agent-device remains absent and stopped until agent access is granted. Both run
-with the server's Node; `npx` would make the first `device_open` after a reboot
+with the server's Node; `npx` would make the first `goat_device_open` after a reboot
 depend on the registry. The hub is a supervised child rather than an imported
 middleware because serve-sim loads private CoreSimulator frameworks through a
 native addon, and a crash there must not take the server down.
@@ -40,7 +40,7 @@ Each session brings its own serve-sim preview host and agent-device daemon,
 with their own tokens. The proxy asks the host to route each request
 (`DeviceHostReady.upstream`) and adds the session token server-side, so
 clients never hold it. Agent config files are written per device
-(`DeviceOperations.agentEndpoint`), which is why `device_open` opens the
+(`DeviceOperations.agentEndpoint`), which is why `goat_device_open` opens the
 device before targeting it. Device settings run `simctl` on the simulator's
 machine, which EAS does not expose, so they are unavailable there.
 
@@ -88,10 +88,10 @@ That environment is fixed when the provider subprocess spawns, so
 [`prepareMcpSession`](../../apps/server/src/orchestration-v2/ProviderSessionManager.ts)
 starts agent-device only when device support and agent access have both been
 enabled, the session has the `device` capability, and the machine can run at
-least one platform. Starting it later from `device_open` would leave the
+least one platform. Starting it later from `goat_device_open` would leave the
 already-running agent without the CLI.
 
-How to drive a device is returned from `device_open`, not kept in an
+How to drive a device is returned from `goat_device_open`, not kept in an
 always-loaded prompt or skill: it costs nothing in threads that never open a
 device and cannot drift from the pinned CLI version. The always-on prompt block
 is a few lines that point at the tools and prefer them over raw `simctl` and
@@ -105,10 +105,14 @@ binary WebSocket; Android multiplexes SEMU-framed H.264 and JSON gestures over
 one WebSocket. [`deviceStream.ts`](../../apps/web/src/components/device/deviceStream.ts)
 speaks both so one panel covers both platforms.
 
-Simulators encode H.264 High 5.1. Hardware decoders on some machines and all
-headless browsers reject that profile, and WebCodecs is secure-context only, so
-the viewer probes `isConfigSupported` and falls back to the MJPEG endpoint on
-iOS. Android has no MJPEG; there the panel reports that it cannot decode.
+Simulators encode H.264 High 5.1 without frame reordering, but the hub's fallback
+encoder can omit the SPS VUI that declares its reorder limits. Chromium's hardware
+decoder then retains frames for seconds despite `optimizeForLatency` and an empty
+`decodeQueueSize`. The iOS AVCC viewer restores the missing metadata before
+configuring the decoder so hardware decoding can remain enabled. WebCodecs is
+secure-context only, so the viewer probes `isConfigSupported` and falls back to
+MJPEG on iOS when decoding is unavailable. Android has no MJPEG; there the panel
+reports that it cannot decode.
 
 serve-sim can also be locked to WebRTC, as on EAS Simulator, and then refuses
 AVCC with a 409 naming the transport. The viewer still asks for AVCC first, so

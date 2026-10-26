@@ -13,6 +13,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotModeButton } from "./GoatBotModeButton";
+import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import {
   canSendToGoatBot,
@@ -87,7 +88,9 @@ export function GoatBotChatView({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <WorkspacePageHeader electron={isElectron} className="surface-glass relative">
-        <div className="absolute left-1/2 flex max-w-[60%] min-w-0 -translate-x-1/2 items-center gap-2">
+        {/* Equal sides center the title until the controls, which never shrink, need its space. */}
+        <div aria-hidden className="flex-1 basis-0" />
+        <div className="flex max-w-[60%] min-w-0 items-center gap-2">
           <GoatBotAvatar size="md" />
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="goat-name-capsule truncate text-foreground">
@@ -98,7 +101,8 @@ export function GoatBotChatView({
             ) : null}
           </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center">
+        <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
+          <GoatBotModelPicker />
           <GoatBotModeButton to="thread" />
         </div>
       </WorkspacePageHeader>

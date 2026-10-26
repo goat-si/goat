@@ -1,5 +1,14 @@
 import * as Schema from "effect/Schema";
 
+export class ServerCliRegistryPublishingDisabledError extends Schema.TaggedError<ServerCliRegistryPublishingDisabledError>()(
+  "ServerCliRegistryPublishingDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "Registry publishing is disabled. Distribute goat-npm.tgz through GOAT GitHub Releases. An npm owner must approve any future registry identity and publisher.";
+  }
+}
+
 export class ServerCliCommandExitError extends Schema.TaggedError<ServerCliCommandExitError>()(
   "ServerCliCommandExitError",
   {
@@ -33,17 +42,6 @@ export class ServerCliDevelopmentIconTargetMissingError extends Schema.TaggedErr
 ) {
   override get message(): string {
     return `Missing development icon target: ${this.targetPath}. Build web first.`;
-  }
-}
-
-export class ServerCliBuildAssetMissingError extends Schema.TaggedError<ServerCliBuildAssetMissingError>()(
-  "ServerCliBuildAssetMissingError",
-  {
-    assetPath: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Missing build asset: ${this.assetPath}. Run the build subcommand first.`;
   }
 }
 

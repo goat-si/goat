@@ -102,6 +102,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.cloudMachinesForget,
       WS_METHODS.cloudMachinesDismissUnconfirmed,
       WS_METHODS.cloudMachinesEnsureReady,
+      WS_METHODS.cloudAgentsAcceptFolderTrust,
     ])
       expect(requiredScopeForRpcMethod(method), method).toBe(AuthSettingsWriteScope);
   });
@@ -202,6 +203,39 @@ describe("RPC scope middleware", () => {
       ).toMatchObject({
         _tag: "EnvironmentAuthorizationError",
         requiredPermission: missing,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  // Turning a host's Child setup on is a person's standing consent to join it to the hub.
+  it.effect("rejects an SSH host's Child setup switch without settings:write", () =>
+    Effect.gen(function* () {
+      const child = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, "hub.deviceChildOptIn"> =>
+            tag !== WS_METHODS.hubDeviceChildOptIn,
+        ),
+      );
+      const handled: Array<string> = [];
+      const client = yield* RpcTest.makeClient(child).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            child.toLayerHandler(WS_METHODS.hubDeviceChildOptIn, (input) =>
+              Effect.sync(() => handled.push(input.deviceAlias)).pipe(Effect.as(input)),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          ),
+        ),
+      );
+      expect(
+        yield* client[WS_METHODS.hubDeviceChildOptIn]({
+          deviceAlias: "lidge-ts",
+          enabled: true,
+        }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthSettingsWriteScope,
       });
       expect(handled).toEqual([]);
     }).pipe(Effect.scoped),
@@ -663,6 +697,7 @@ describe("notes permissions", () => {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
       WS_METHODS.notesWrite,
+      WS_METHODS.notesUpdate,
       WS_METHODS.notesMove,
       WS_METHODS.notesDelete,
       WS_METHODS.notesStartWork,
@@ -687,6 +722,7 @@ describe("notes permissions", () => {
           Layer.mergeAll(
             group.toLayer({
               [WS_METHODS.notesWrite]: () => invoked,
+              [WS_METHODS.notesUpdate]: () => invoked,
               [WS_METHODS.notesMove]: () => invoked,
               [WS_METHODS.notesDelete]: () => invoked,
               [WS_METHODS.notesStartWork]: () => invoked,
@@ -702,6 +738,7 @@ describe("notes permissions", () => {
         client[WS_METHODS.notesWrite]({ path: "a.md", body: "changed", baseRevision: null }).pipe(
           Effect.asVoid,
         ),
+        client[WS_METHODS.notesUpdate]({ path: "a.md", pinned: true }).pipe(Effect.asVoid),
         client[WS_METHODS.notesMove]({ from: "a.md", to: "b.md", baseRevision: revision }).pipe(
           Effect.asVoid,
         ),

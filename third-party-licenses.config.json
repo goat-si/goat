@@ -37,6 +37,28 @@
     },
     {
       "bundles": ["desktop", "web"],
+      "license": "LicenseRef-Boat-Trademark",
+      "name": "Boat logomark",
+      "sourceUrl": "https://boat.dev/brand/logomark-ocean.svg",
+      "noticeFile": "apps/web/src/components/BOAT-LOGO-NOTICE"
+    },
+    {
+      "bundles": ["ios", "android", "mobile", "web", "desktop"],
+      "license": "MIT",
+      "name": "Devin mark from Lobe Icons",
+      "sourceUrl": "https://github.com/lobehub/lobe-icons",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2023 LobeHub"],
+          "preamble": [
+            "The Devin Cloud provider mark is the devin-color glyph from @lobehub/icons-static-svg 1.98.0, unchanged. Devin is a trademark of Cognition AI."
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop", "web"],
       "license": "MIT",
       "name": "Ionic keyboard assist",
       "sourceUrl": "https://github.com/ionic-team/ionic-framework/blob/main/core/src/utils/keyboard/keyboard.ts",
@@ -238,9 +260,34 @@
           ]
         }
       ]
+    },
+    {
+      "bundles": ["desktop"],
+      "license": "MIT AND MPL-2.0",
+      "name": "Cua Driver",
+      "version": "0.37.0-goat.3",
+      "sourceUrl": "https://github.com/goat-si/cua-driver/tree/cua-driver-rs-v0.37.0-goat.3",
+      "noticeFiles": [
+        "apps/desktop/src/cua/notices/LICENSE.md",
+        "apps/desktop/src/cua/notices/THIRD_PARTY_NOTICES.md",
+        "apps/desktop/src/cua/notices/node-runtime-NOTICE.md"
+      ]
     }
   ],
   "packageOverrides": [
+    {
+      "repositoryUrl": "https://github.com/trycua/cua",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2025 Cua AI, Inc."]
+      }
+    },
+    {
+      "repositoryUrl": "https://github.com/jhugman/uniffi-bindgen-react-native",
+      "generatedNotice": {
+        "licenseId": "MPL-2.0"
+      }
+    },
     {
       "name": "remark-math",
       "version": "6.0.0",

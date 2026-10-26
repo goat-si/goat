@@ -35,14 +35,14 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `channels` 채널 원장, GOAT 봇, Slack
 
 - 커밋: #32 #56 #55 #54
-- 경로: `apps/server/src/channels`, `apps/server/src/mcp/toolkits/channel`, `apps/server/src/persistence/Migrations/*_ChannelLedger*`, `apps/server/src/orchestration-v2/{Orchestrator,ThreadMessageIntake,runtimeLayer}.ts`, `apps/server/src/textGeneration`, `apps/server/src/{server,ws}.ts`, `packages/contracts/src/{channelGateway,channelLedger,channelReception,orchestrationV2,rpc,clientRpcPermissions}.ts`, `packages/provider-core/src/server/channelReceptionPrompt.ts`, `packages/client-runtime/src/state/channels.ts`, `apps/web/src/state/channels.ts`, `apps/web/src/components/goatBot`, `apps/web/src/routes/_chat.bot.tsx`, `apps/web/src/AppRoot.tsx`, `apps/web/src/components/{ThreadRouteView,Sidebar,LegacySidebar}.tsx`, `apps/web/src/components/sidebar/{SidebarChrome,SidebarViewToggles}.tsx`, `apps/web/src/components/sidebar/SidebarViewToggles.logic.ts`, `apps/web/src/state/entities.ts`, `apps/web/src/components/settings/{SlackChannelSettings*,IntegrationsSettings.tsx,settingsSearch.ts}`, `apps/server/package.json`
+- 경로: `apps/server/src/channels`, `apps/server/src/mcp/toolkits/channel`, `apps/server/src/persistence/Migrations/*_ChannelLedger*`, `apps/server/src/orchestration-v2/{Orchestrator,ThreadMessageIntake,runtimeLayer,goat/TimelineRecords}.ts`, `apps/server/src/textGeneration`, `apps/server/src/{server,ws}.ts`, `packages/contracts/src/{channelGateway,channelLedger,channelReception,orchestrationV2,rpc,clientRpcPermissions}.ts`, `packages/provider-core/src/server/channelReceptionPrompt.ts`, `packages/client-runtime/src/state/channels.ts`, `apps/web/src/state/channels.ts`, `apps/web/src/components/goatBot`, `apps/web/src/routes/_chat.bot.tsx`, `apps/web/src/AppRoot.tsx`, `apps/web/src/components/{ThreadRouteView,Sidebar,LegacySidebar}.tsx`, `apps/web/src/components/sidebar/{SidebarChrome,SidebarViewToggles}.tsx`, `apps/web/src/components/sidebar/SidebarViewToggles.logic.ts`, `apps/web/src/state/entities.ts`, `apps/web/src/components/settings/{SlackChannelSettings*,IntegrationsSettings.tsx,settingsSearch.ts}`, `apps/server/package.json`
 - 정책: GOAT 전용. ChannelLedger 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 orchestrator, intake, text generation, RPC 변경은 받고 봇 스레드의 provider run 거부, 봇 입력의 채널 접수, 채널 RPC·MCP 도구, reception 생성을 다시 얹는다. 다른 기기 작업자(`ChannelRemoteWorkers`)는 `remote-reports` 영역의 SSH launch와 출발지 보고 도구 위에 서므로, 그 영역의 upstream 충돌을 풀 때 함께 확인한다. 웹에서는 봇 스레드가 `ThreadRouteView`에서 메신저 화면(`components/goatBot`)으로 갈라지고 작업자 `ChatView`는 그대로다. 두 사이드바의 봇 행과 봇 스레드 제외, 로고의 봇 경로, `AppRoot`의 채널 포트 공급은 upstream 사이드바 변경을 받은 뒤 다시 얹는다. 채널·Slack RPC는 `WsChannelRpcGroup`에 따로 두고 서버는 그 handler를 별도 layer로 등록한다. 모든 RPC를 한 handler layer에 두면 타입 검사기의 instantiation 한도를 넘는다 (사이클 261013에서 209개). Slack 어댑터(`apps/server/src/channels/slack`)는 GOAT 전용이고 `@slack/socket-mode`, `@slack/web-api`, `undici`를 apps/server 직접 의존성으로 유지한다. Integrations 설정의 Slack 섹션 한 줄과 설정 검색 항목은 upstream 변경 위에 다시 얹는다.
 
 ### `ci` CI
 
 - 커밋: `bfce4301d` `cc5003979` `095115376`
 - 경로: `.github/workflows/goat-ci.yml`, `.vite-hooks/`, `packages/ssh/src/tunnel.*.test.ts`, `.github/scripts/pr-screenshot-gate.*`, `.github/pull_request_template.md`
-- 정책: GOAT CI는 goat-ci 하나이고(신뢰 실행은 EPYC, fork PR은 hosted ubuntu-24.04), upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다. 사이클 261020: upstream `goat/no-dom-test-environment`(#21937)가 per-file jsdom pragma를 거부한다. GOAT 자체 jsdom 테스트는 루트 `vite.config.ts`의 `DOM_TEST_ENVIRONMENT_ALLOWLIST`에 두고 하나씩 browser 테스트나 Vitest project로 옮긴다 (#514). 새 GOAT 테스트는 목록에 더하지 않는다. 사이클 261021: upstream lint 규칙(#22000 `prefer-effect-fn`, #22187 `require-disposable-render`, 테스트 시간 규칙)은 `goat/*` 이름으로 받고 `goat-rename`의 `LINT_RULE_IDS`에 더한다. 그 전부터 있던 GOAT 위반 파일은 `vite.config.ts`의 `PREFER_EFFECT_FN_BACKLOG`·`DISPOSABLE_RENDER_BACKLOG`에 두고 하나씩 옮기며 뺀다. 새 파일은 더하지 않는다.
+- 정책: GOAT CI는 goat-ci 하나이고(신뢰 실행은 EPYC, fork PR은 hosted ubuntu-24.04), upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다. 사이클 261021: upstream lint 규칙(#22000 `prefer-effect-fn`, #22187 `require-disposable-render`, 테스트 시간 규칙)은 `goat/*` 이름으로 받고 `goat-rename`의 `LINT_RULE_IDS`에 더한다. 그 전부터 있던 GOAT 위반 파일은 `vite.config.ts`의 `PREFER_EFFECT_FN_BACKLOG`·`DISPOSABLE_RENDER_BACKLOG`에 두고 하나씩 옮기며 뺀다. 새 파일은 더하지 않는다.
 
 ### `cli-home` CLI `goat`와 `~/.goat`
 
@@ -50,16 +50,39 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/cli`, `apps/server/src/cloud`, `apps/desktop/src/wsl`, `scripts/install.sh`, `scripts/build-npm-launcher.ts`, `scripts/npm-launcher`
 - 정책: upstream 로직을 받고 실행 파일 `goat`, `runtime/goat/versions`, SSH 호스트 `~/.goat`를 유지한다. npm 배포는 upstream 단일 launcher(`scripts/build-npm-launcher.ts`, `scripts/npm-launcher/goat.mjs`) 위에 패키지 `goat`, bin `goat`·`t3`, 릴리스 저장소 `goat-si/goat-releases`를 얹는다 (사이클 261019).
 
+### `code-budgets` 파일 크기와 단언 ratchet
+
+- 커밋: #812
+- 경로: `oxlint-plugin-goat/{codeBudget.ts,code-budgets.json,update-code-budgets.ts,index.ts}`, `oxlint-plugin-goat/rules/code-budget.ts`, `vite.config.ts`, `docs/operations/{testing,code-quality}.md`, `AGENTS.md`
+- 정책: GOAT 전용. `goat/code-budget`은 1000줄 넘는 파일, baseline보다 커진 파일, 테스트 밖의 새 non-null 단언, 새 `any` 캐스트를 막는다. upstream의 플러그인 index와 lint 설정 변경은 받고 규칙 등록 한 줄씩을 다시 얹는다. upstream 머지가 baseline 파일을 키우면 `node oxlint-plugin-goat/update-code-budgets.ts`는 1로 끝난다. 머지 커밋에서 `--init`으로 baseline을 다시 쓰고, 올라간 항목이 upstream 줄에서 온 것인지 확인한다. GOAT 변경으로는 올리지 않는다.
+
 ### `composer-footer` 컴포저 푸터
 
 - 커밋: `bb13f89b5` `a122f433a` `f4b6c14e5`
 - 경로: `apps/web/src/components/chat`, `apps/web/src/index.css`
 - 정책: 레이아웃은 GOAT, 컴포저 동작은 upstream.
 
+### `contracts-rpc-leaves` GOAT RPC 그룹 모듈
+
+- 커밋: #860 #882 #896
+- 경로: `packages/contracts/src/{rpc,notesRpc,memoryRpc,hubNodesRpc,channelRpc,decisionRpc}.ts`
+- 정책: GOAT 전용 RPC 그룹은 leaf 모듈에 둔다. leaf는 자기 method 이름 상수(`NOTES_WS_METHODS`, `MEMORY_WS_METHODS`, `HUB_NODES_WS_METHODS`, `DECISION_WS_METHODS`)와 middleware 없는 `RpcGroup`을 정의하고 `rpc.ts`를 import하지 않는다. `rpc.ts`는 상수를 `WS_METHODS` 안에 펼치고 `RpcScopeAuthorization`을 붙여 기존 export 이름(`WsMemoryCoreRpcGroup`, `WsHubNodesRpcGroup`, `WsChannelRpcGroup`, `WsDecisionRpcGroup` 등)을 만들며 메모리 RPC 20개를 다시 export한다. upstream이 `rpc.ts`를 바꾸면 upstream을 받고 이 펼침, middleware 줄, re-export만 다시 얹는다. leaf가 `rpc.ts`를 import하면 모듈 평가 순서 때문에 `WS_METHODS`가 TDZ에 걸린다 (사이클 261023: `f054d1b` 대비 +869/−4 → +521/−4).
+
+### `cua-driver` Cua Driver 컴퓨터 사용 포트
+
+- 커밋: #665 #667
+- 경로: `apps/server/src/cua`, `packages/shared/src/cuaDriverRelease.ts`, `packages/shared/src/cuaDriverManifest.ts`, `apps/server/src/mcp/toolkits/computerUse`, `apps/server/src/handoffs/Handoffs.ts`, `apps/server/src/orchestration-v2/handoffState.ts`, `apps/server/src/channels/channelIds.ts`, `apps/server/src/orchestration-v2/ThreadManagementService.ts`, `apps/server/src/bin.ts`, `packages/contracts/src/handoff.ts`, `packages/contracts/src/agentSurface/registry.ts`, `packages/client-runtime/src/computerUseGrant.ts`, `apps/web/src/components/chat/HandoffCard.tsx`, `apps/mobile/src/features/threads/HumanHandoffCard.tsx`, `packages/contracts/src/{cua,resourceTelemetry,settings,index}.ts`, `apps/server/src/resourceTelemetry/DesktopTelemetryReceiver.ts`, `apps/desktop/src/telemetry/DesktopTelemetryPublisher.ts`, `apps/server/src/server.ts`, `apps/server/package.json`, `packages/shared/package.json`, `pnpm-workspace.yaml`, `third-party-licenses.config.json`, `apps/desktop/src/cua`, `apps/desktop/src/{main,preload}.ts`, `apps/desktop/src/ipc`, `apps/desktop/src/backend/DesktopBackendManager.ts`, `apps/desktop/package.json`, `packages/contracts/src/ipc.ts`, `scripts/build-desktop-artifact.ts`, `scripts/lib/{cli,desktop}-external-packages.ts`, `patches/@ubjs__node@0.31.0-3.patch`, `structure/decisions/ADR-0022-cua-driver-computer-use.md`, `apps/server/src/orchestration-v2/{ProviderSessionManager.ts,Adapters/ClaudeAdapterV2.ts,Adapters/CodexAdapterV2.ts}`, `apps/server/src/provider/CodexDeveloperInstructions.ts`, `packages/provider-core/src/server/{mcpSession,runtimeInstructions}.ts`, `packages/provider-acp/src/server/adapter.ts`, `packages/provider-cursor/src/server/adapter.ts`, `packages/provider-opencode/src/server/{adapter.ts,v2/adapter.ts}`, `packages/provider-pi/src/server/{mcpExtensionSource,mcpInjection}.ts`
+- 정책: upstream이 머지하지 않은 PR #21694-#21697(고정 head `b8569ac92` `dc307c8a7` `6b627499b` `25852df14`)을 포트한 것이다. 이미 검토된 upstream 스택이 아니라 0.37.0 고정과 합친 새 통합이다. upstream이 자기 버전을 머지하면 대체하지 말고 고정 head와 파일별로 대조해 upstream 로직을 받고 GOAT 델타만 다시 얹는다: 0.37.0 고정(아카이브 바이트·SHA-256, catalog SDK 버전), `cuaDriverHostOptions`의 텔레메트리·업데이트 확인 끄기와 MCP 설명자의 `withCuaDriverPrivacyEnvironment`, 독립 서버 호스트 id `si.goat.server`, `GOAT_CUA_DRIVER_PATH`, `server.ts` layer 병합(`pipe` 20단계 한도). 데스크톱 쪽 델타: Electron 호스트도 `cuaDriverHostOptions`로 시작, 빌드 캐시 `node_modules/.cache/goat/cua-driver`, `apps/desktop/src/cua/notices`에 둔 0.37.0 고지 파일과 `third-party-licenses.config.json`의 `Cua Driver` 항목. provider 부착은 upstream PR #16528(고정 head `7418a6084`)의 포트다. upstream이 머지하면 같은 방식으로 대조하고 GOAT 델타만 다시 얹는다: 모든 세션의 부착 여부를 정하는 단일 함수 `apps/server/src/cua/ComputerUseAttachment.ts`(Plan·읽기 전용·클라우드·Muse 제외, 이후 lease 분기 자리), Claude는 쿼리를 다시 열지 않고 `setMcpServers`로 붙이고 `mcp__cua-driver__*` 사전 승인과 `canUseTool` 판정을 둔다, Codex는 upstream의 `mcp_servers.goat` 점 경로 옆에 `mcp_servers.cua-driver`로 넣고 `thread/resume` 재구성 키에 드라이버를 넣으며 떼어 낸 드라이버를 `enabled: false`로 보내며 `cuaDriverOverridesUserConfig`로 사용자 설정을 덮을 수 있다, Codex `<computer_use>`는 별도 추가 컨텍스트 키, Cursor는 드라이버가 바뀌면 에이전트를 다시 연다, ACP는 세션 활성화 기준으로 안내를 붙인다, OpenCode 2 서버 이름은 항상 digest인 `cua-driver-<16 hex>`(64자 제한). 첫 실행 안내와 원격 호스트 판정도 같은 영역에 더한다. 안전(lane 4)은 upstream에 없는 GOAT 델타다: 두 호스트 모두 standard 모드와 GOAT capability manifest(`cuaDriverManifest.ts`, 시작 때 드라이버 자신의 `list_apps`로 앱을 허용)로 데몬을 띄우고 exit 64를 manifest 거부로 표시한다, 무인 출처(`ComputerUseOrigin.ts`)는 `computer_use.grant` 승인 handoff(시계 만료, 승인 뒤 cancelled로 조기 종료, 호스트당 하나, `settings:write`)가 있을 때만 `cua-lease-proxy` 하위 명령을 받는다, Codex·Claude는 lease 없는 무인 턴에서 사용자 `cua-driver`를 끈다. upstream이 부착 경로를 바꾸면 `ComputerUseAttachment.ts`의 `leased`·`cuaDriverBlocked` 분기를 다시 얹는다.
+
+### `cua-human-input` 사람 입력과 무인 컴퓨터 사용
+
+- 경로: `apps/server/src/cua/ComputerUseAttachment.ts`, `apps/server/src/cua/ComputerUseRequests.ts`, `apps/server/src/cua/ComputerUseLeases.ts`, `packages/client-runtime/src/computerUse/readinessSteps.ts`, `docs/user/computer-use.md`, `structure/decisions/ADR-0022-cua-driver-computer-use.md`
+- 정책: 사람이 키보드·마우스를 사용핮에 따라 승인된 에이전트를 자동으로 일시정지하지 않는다. 무인 작업은 기존 grant 또는 full-access 자동 승인과 private-mode 감지를 요구하고, 사람 입력과 무관하게 Stop·Stop all·Hand back·승인 만료로 끝낼 수 있다. 비밀번호·OTP·passkey 필드는 계속 자동 일시정지한다. upstream 동작을 받을 때 이 GOAT 정책 차이를 유지하고, 사람 입력 차단이나 승인 없는 실행으로 되돌리지 않는다.
+
 ### `delegated-tasks` 사이드바 위임 작업, 승격, launch 계보
 
 - 커밋: #33
-- 경로: `apps/web/src/components/{Sidebar.tsx,Sidebar.logic.ts,Sidebar.drag.ts,promoteThread.ts,CommandPalette.tsx,threadActionMenu.logic.ts}`, `apps/web/src/components/sidebar/{SidebarOpenSubagent.tsx,subagentIndex.ts}`, `apps/web/src/components/chat/{ChatHeader.tsx,ThreadRelationshipsControl.tsx,threadLauncher.logic.ts}`, `apps/server/src/orchestration-v2/{Orchestrator.ts,ThreadManagementService.ts,ThreadLaunchService.ts,ThreadForkService.ts,ProjectionStore.ts}`, `apps/server/src/mcp/{OrchestratorMcpService.ts,AcpMcpStdioBridge.ts,toolkits/{project,ssh,orchestrator}}`, `apps/server/src/sshRemote/SshRemoteDispatch.ts`, `packages/contracts/src/{orchestrationV2.ts,environment.ts}`, `packages/client-runtime/src/{operations/commands.ts,state/threadCommands.ts,state/threadRelationships.ts}`, `packages/provider-core/src/server/subagentProjection.ts`
+- 경로: `apps/web/src/components/{Sidebar.tsx,Sidebar.logic.ts,Sidebar.drag.ts,promoteThread.ts,CommandPalette.tsx,threadActionMenu.logic.ts}`, `apps/web/src/components/sidebar/{SidebarOpenSubagent.tsx,subagentIndex.ts}`, `apps/web/src/components/chat/{ChatHeader.tsx,ThreadRelationshipsControl.tsx,threadLauncher.logic.ts}`, `apps/server/src/orchestration-v2/{Orchestrator.ts,goat/ThreadPromotion.ts,ThreadManagementService.ts,ThreadLaunchService.ts,ThreadForkService.ts,ProjectionStore.ts}`, `apps/server/src/mcp/{OrchestratorMcpService.ts,AcpMcpStdioBridge.ts,toolkits/{project,ssh,orchestrator}}`, `apps/server/src/sshRemote/SshRemoteDispatch.ts`, `packages/contracts/src/{orchestrationV2.ts,environment.ts}`, `packages/client-runtime/src/{operations/commands.ts,state/threadCommands.ts,state/threadRelationships.ts}`, `packages/provider-core/src/server/subagentProjection.ts`
 - 정책: GOAT 전용 계약 필드(`launchedBy`, subagent `promotedAt`, `thread.stop.stopCascadeFrom`), 명령 `thread.promote`, capability `threadPromotion`. 마이그레이션 없음(`payload_json`). upstream이 같은 이름이나 계보 변경 명령을 들이면 카드로 결정한다. upstream의 사이드바, Orchestrator, fork/subagent builder 변경은 받고 이 동작을 다시 얹는다. 머지 때 확인할 것: Orchestrator의 "계보는 분리만 일어난다" 가정(`appOwnedSubagentParentThreadId`), 연쇄 Stop의 조상 확인, fork·subagent builder의 `launchedBy` 제거. 다른 스레드 agent의 send는 요청 mode와 상관없이 `steer_when_ready`다(`threadSendMode`). upstream 테스트가 agent의 `mode: "queue"` send로 대기 turn을 만들면 GOAT에서는 steer가 되므로 그 테스트는 다른 경로로 옮긴다 (사이클 261020, #555; 사이클 261021 #19759 "reports $label child results"도 같음).
 
 ### `desktop-identity` 데스크톱 정체성
@@ -104,11 +127,34 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/mcp/toolkits/*/tools.ts`, `orchestration-v2`, `packages/provider-*/src/server`, `t3McpToolPresentation.ts`
 - 정책: upstream 로직을 받고 도구 이름은 `goat_*`, 서버 이름은 GOAT로 다시 쓴다. 새 `t3_*` 도구는 이름을 바꾸고 표시용 legacy alias를 둔다. 텔레메트리(`telemetry/ProviderDimensions.ts`, `McpHttpServer`의 HANDOFF_TOOLS)도 `goat_*` 이름으로 세고, 들어온 `t3_*`는 `goat_*`로 정규화한다 (사이클 261020). 새 Prometheus 메트릭도 `goat_*`(`goat_process_group_*`, 사이클 261021). 도구 설명은 toolkit 파일이 아니라 `packages/contracts/src/agentSurface/registry.ts`에 있으므로 upstream 설명 변경은 거기로 옮긴다.
 
+### `memory-app-layers` 메모리 애플리케이션 조립
+
+- 커밋: #888
+- 경로: `apps/server/src/memory/MemoryApplicationLayers.ts`, `apps/server/src/server.ts`
+- 정책: 메모리 layer 조립(source read 바인딩, generation hold, worker, hub, sync, import, snapshot, toolkit)은 `makeMemoryApplicationLayers`에 있다. `server.ts`는 같은 자리에서 한 번 호출하고 `layerPersistence`, `layerRepositoryIdentityResolver`, `layerServerSettings`, `layerTextGeneration`을 넘긴 뒤 결과를 구조 분해해 기존 이름으로 export한다. 한 번만 호출해야 sync와 source read가 한 core를, worker와 sync가 한 hold를 공유한다. 이 네 layer는 모듈이 type으로 참조하도록 `export`가 붙어 있다. upstream이 `server.ts`를 바꾸면 upstream을 받고 호출, 구조 분해, `export` 네 개, `MemorySourceReadBinding` re-export를 다시 얹는다 (사이클 261023: `server.ts` +1005/−373 → +593/−376).
+
 ### `no-t3-import` T3 불러오기 제거
 
 - 커밋: `59d7fe1a6`
 - 경로: `ProjectScriptsControl.tsx`, `settings/ProjectActionsSettings.tsx`, `chat/ThreadDetailsPanel.tsx`, `hooks/useT3ProjectFileScripts.ts`
 - 정책: t3.json 액션 가져오기 메뉴("Import scripts", "From t3.json")는 다시 들이지 않는다. 같은 파일의 다른 upstream 변경은 받는다. upstream이 `ThreadDetailsPanel.test.tsx`를 고치면 삭제를 유지한다. t3.json 기본값, iconPath, 깨진 파일 경고, V1→V2 스레드 마이그레이션은 upstream 그대로다.
+
+### `node-pin` Node 고정과 서버 Node 범위
+
+- 커밋: #1587
+- 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
+- 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.0에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
+
+### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
+
+- 커밋: #808 #809 #811 #813 #814 #815 #870 #874 #892
+- 경로: `apps/server/src/orchestration-v2/goat/`, `apps/server/src/orchestration-v2/Orchestrator.ts`
+- 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함), 질문 이미 답함 오류(`goat/QuestionAnswers.ts`, Orchestrator가 다시 export한다). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +959/−230으로 줄었다.
+
+### `owner-security` 패키지 소유자, 보안 신고, 기여 정책
+
+- 경로: `scripts/build-desktop-artifact.ts`의 Linux `maintainer`와 staged `author`, `.github/SECURITY.md`, `CONTRIBUTING.md`, `scripts/lib/goat-rename/rules-owner.ts`
+- 정책: maintainer·author는 `GOAT <jun@lidgeai.com>`, 보안 신고는 goat-si/goat의 GitHub private vulnerability reporting이다. `.github/SECURITY.md`는 GOAT 파일이라 충돌에서 GOAT 쪽을 둔다. CONTRIBUTING은 upstream 변경을 받고 GOAT 주인 문단, Ideas 링크, maintainer 문장, triage 신뢰 기준 문단을 다시 얹는다. upstream 쪽을 받은 줄은 머지 뒤 `--apply`가 `rules-owner.ts` 규칙으로 GOAT 값으로 바꾼다. triage 스킬과 `TRIAGE_EXEMPTIONS.td`는 아직 upstream 기준이다 ([10.015](./_fin/10/10.015_t3_chase_owner_and_security.md)).
 
 ### `pdf-viewer` PDF.js 파일 뷰어
 
@@ -119,8 +165,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6
-- 경로: `apps/server/src/remoteReports`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
-- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다.
+- 경로: `apps/server/src/remoteReports`, `apps/server/src/orchestration-v2/goat/RemoteDelegatedTasks.ts`, `apps/server/src/mcp/goat/RemoteTaskTargets.ts`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
+- 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다. `OrchestratorMcpService`의 원격·클라우드 위임 판정(`authorizeRemoteWrite`, `preflightCloudLaunch`, `resolveRemoteTarget` 등)은 `mcp/goat/RemoteTaskTargets.ts`의 factory에 있고 서비스는 호출 한 번만 둔다(#915).
 
 ### `repo-hygiene` 저장소 루트 정리
 
@@ -137,8 +183,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `ssh-runtime` SSH 런타임 공급과 원격 디스패치
 
 - 커밋: `aa2eaf2ff` `480ed90da` `b32fe81d1` `b6a829960` `716f27dac`
-- 경로: `packages/ssh/src/tunnel.ts`, `apps/server/src/sshRemote`, `apps/server/src/mcp/toolkits/ssh`, `apps/desktop/src/ssh`
-- 정책: GOAT가 `tunnel.ts`를 크게 다시 썼다. upstream ssh 변경은 의도를 GOAT 코드에 손으로 옮긴다. 충돌 위험이 가장 높다. upstream의 설치 lock 수정(#20059, uutils mkdir)은 GOAT lock이 rename으로 게시해 해당 없으므로 받지 않았다 (사이클 261020).
+- 경로: `packages/ssh/src/tunnel.ts`, `apps/server/src/sshRemote`, `apps/server/src/cli/{sshHelper,sshRuntimeHelperCommands,sshRuntimeProbes,sshRuntimeSupervisor}.ts`, `apps/server/src/mcp/toolkits/ssh`, `apps/desktop/src/ssh`
+- 정책: GOAT가 `tunnel.ts`를 크게 다시 썼다. upstream ssh 변경은 의도를 GOAT 코드에 손으로 옮긴다. 충돌 위험이 가장 높다. upstream의 설치 lock 수정(#20059, uutils mkdir)은 GOAT lock이 rename으로 게시해 해당 없으므로 받지 않았다 (사이클 261020). `__ssh-helper`의 GOAT 하위 명령은 `cli/sshRuntimeProbes.ts`(protocol, activity, compat, drain 등)와 `cli/sshRuntimeSupervisor.ts`(supervise)에 있고 `cli/sshRuntimeHelperCommands.ts`가 목록과 export를 모은다. `cli/sshHelper.ts`는 upstream에 import, 하위 명령 spread, re-export만 더한다(#827). re-export는 tunnel fixture가 `sshHelper.ts`를 URL로 불러오거나 묶기 때문에 남긴다. upstream이 `sshHelper.ts`를 바꾸면 upstream을 받고 이 세 줄을 다시 얹는다.
 
 ## 깨끗하게 머지되고도 깨지는 것
 

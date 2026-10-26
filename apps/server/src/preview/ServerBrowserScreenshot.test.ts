@@ -67,6 +67,7 @@ const fixture = ({ width = 1500, height = 4000, deviceScale = 1 } = {}) => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
   return { page, send, take };
 };
@@ -114,7 +115,7 @@ describe("bounded full-page snapshots", () => {
 
   it("bounds actual Retina image pixels and reports clipped document content", async () => {
     const { take } = fixture({ width: 5000, height: 20000, deviceScale: 2 });
-    const screenshot = (await take(true)).screenshot;
+    const screenshot = (await take(true)).screenshot!;
     const image = Buffer.from(screenshot.data, "base64");
     expect(screenshot).toMatchObject({
       width: 3840,

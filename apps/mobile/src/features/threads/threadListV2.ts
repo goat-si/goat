@@ -14,6 +14,7 @@ import { resolveThreadProviderStack } from "@goat/client-runtime/state/models";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import {
   createInboxReturnTracker,
+  isActiveThreadWork,
   isThreadWorking,
   sortInboxThreadsByReturn,
   sortWorkingThreadsBySend,
@@ -629,7 +630,14 @@ export function buildThreadListV2Items(input: {
       continue;
     // The server stamps settledOverride for the tail.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
+    const hasQueuedMessages =
+      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
+    if (
+      projectKeys !== null &&
+      !projectKeys.has(`${thread.environmentId}:${thread.projectId}`) &&
+      !isActiveThreadWork(thread) &&
+      !hasQueuedMessages
+    ) {
       continue;
     }
     if (
@@ -660,8 +668,6 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
-    const hasQueuedMessages =
-      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (supportsSettlement && thread.settledOverride === "settled" && !hasQueuedMessages) {
       settled.push(thread);
     } else if (thread.pinnedAt != null) {

@@ -2,7 +2,9 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { extractFile } from "@electron/asar";
+import { createPackageWithOptions, extractFile, listPackage, statFile } from "@electron/asar";
+import { vi } from "vite-plus/test";
+import * as CuaRelease from "@goat/shared/cuaDriverRelease";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
@@ -14,8 +16,8 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Sink from "effect/Sink";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
@@ -33,6 +35,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
+  stageWindowsServerSidecar,
   preflightWindowsDesktopBuild,
   renderMacPasskeyEntitlements,
   resolveMacWebAuthnEntitlements,
@@ -40,7 +43,6 @@ import {
   resolveMergedStageDependencies,
   resolveBuildOptions,
   stageWslRuntimeArchive,
-  ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
   stageBrowserSecret,
@@ -79,12 +81,13 @@ import {
   SSH_RUNTIME_RESOURCE_SOURCE_DIR,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_EXTRA_RESOURCES,
-  WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
   WSL_RUNTIME_EXTRA_RESOURCES,
   parseServerVersionOutput,
   resolveDesktopBuildVersion,
+  sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
+import { stageCuaDriverExecutable } from "./desktop-artifact-computer-use.ts";
 import {
   ReleasePackageManifestError,
   releasePackageFiles,
@@ -178,6 +181,87 @@ function mockProcess(exitCode: number, stdout = "") {
   });
 }
 
+// USTAR/gzip and DEFLATE/ZIP archives; each file contains its own name.
+const cuaArchives = {
+  mac: "H4sIAAAAAAAC/+3YwWqDMBwGcB+lL1D5GzNzHluhheGK9bJTcCYwWW0h6qBv37RljOWyk2nIvt8lGoQcvnxKbKdmqUz3pU0yG7IKzq+j5Y5EGfu5vs4LwViyoMSDaRgbY5dM/qfWQ/4Qdv7tZIajWY4futd36T+j3/3PMuI5+h9L/hCuffdut4C8fQLkoD5TdbJznvsvnP4zbh9H/yPJH4J+/3+HfzgqLc10GLtep5cbb/3PudP//IHQ/2jyh3C9bJ5W5W416xp/9p+c7z8Vggv0P5b8IVz1elM9y+1jVb/J8rW2u2GX9sr3+b9wz/854f9fNPkDAAAAAAAAAMD9nAFB4t6zACgAAA==",
+  linux:
+    "H4sIAAAAAAAC/+3az06DMAAGcB5lLzBWKC1XF0fiEp1m28UT6UYTUP4YCk7f3k7jYTVxF2FQv9+Fcerh69dSxkG856JMpqnMX2Q9c7pAtJCxz6tmXn/+9gjnnjNhTg9a1YhaD+/8T4fT/A9ZWct9o672rZhdLn9KPYL8+6BzniZ19irr7sY4m7/nG3MhDH3mTAjytyJ/GHb++7ZWVT1tUlnIi/TfN9d/jwQc/bclfxiuPNvpKRB/bQGxSp5dVfXf/8Dsf8h99N+W/GHQ6/93+GWVyLhuyyYrpHu86a3/1Ow/ZSRE/23JH0aRv9hlbjqY53/035r8YbiM979ZqeuQ565K++w/9Yz++5wT9N+W/GE0+Z/8/1PIRiSiEe6Tqsou+8/M/jOc/y3KH8aZv3xrZKmyqtQToNP9n5nP/wz7v0X5w2jyX0fzxV3kFkmv539q9t/3aID+25I/DNft8jpabaJOxziWmgfBL99/hcb3PzzE+z978ofh2t4s14v4Yb7ePsar+62eDZs/X/3P9t/n5vt/SnD+tyZ/AAAAAAAAAAAAAAAAAAAAAOjOB0iDKKUAUAAA",
+  win: "UEsDBBQAAAAIAAAAIVxkdYIxEAAAAA4AAAAOAAAAY3VhLWRyaXZlci5leGVLLk3UTSnKLEst0kutSAUAUEsDBBQAAAAIAAAAIVw8tMWfFAAAABIAAAASAAAAY3VhLWRyaXZlci11aWEuZXhlSy5N1E0pyixLLdItzUzUS61IBQBQSwMEFAAAAAgAAAAhXJdWRtQWAAAAFAAAABQAAABjdWEtY3Vyc29yLXRoZW1lLmV4ZUsuTdRNLi0qzi/SLclIzU3VS61IBQBQSwMEFAAAAAgAAAAhXG9yJBwUAAAAEgAAABIAAABjdWFfZHJpdmVyX3Nkay5kbGxLLk2MTynKLEstii9OydZLyckBAFBLAwQUAAAACAAAACFcx8Y50BsAAAAcAAAAHAAAAGN1YV9kcml2ZXJfbm9kZV9ydW50aW1lLm5vZGVLLk2MTynKLEstis/LT0mNLyrNK8nMTdUDcQBQSwMEFAAAAAAAAAAhXAMKLWgHAAAABwAAAAcAAABMSUNFTlNFTElDRU5TRVBLAwQUAAAAAAAAACFcFmosixYAAAAWAAAAFgAAAFRISVJEX1BBUlRZX05PVElDRVMubWRUSElSRF9QQVJUWV9OT1RJQ0VTLm1kUEsBAhQDFAAAAAgAAAAhXGR1gjEQAAAADgAAAA4AAAAAAAAAAAAAAO2BAAAAAGN1YS1kcml2ZXIuZXhlUEsBAhQDFAAAAAgAAAAhXDy0xZ8UAAAAEgAAABIAAAAAAAAAAAAAAO2BPAAAAGN1YS1kcml2ZXItdWlhLmV4ZVBLAQIUAxQAAAAIAAAAIVyXVkbUFgAAABQAAAAUAAAAAAAAAAAAAADtgYAAAABjdWEtY3Vyc29yLXRoZW1lLmV4ZVBLAQIUAxQAAAAIAAAAIVxvciQcFAAAABIAAAASAAAAAAAAAAAAAADtgcgAAABjdWFfZHJpdmVyX3Nkay5kbGxQSwECFAMUAAAACAAAACFcx8Y50BsAAAAcAAAAHAAAAAAAAAAAAAAA7YEMAQAAY3VhX2RyaXZlcl9ub2RlX3J1bnRpbWUubm9kZVBLAQIUAxQAAAAAAAAAIVwDCi1oBwAAAAcAAAAHAAAAAAAAAAAAAACkgWEBAABMSUNFTlNFUEsBAhQDFAAAAAAAAAAhXBZqLIsWAAAAFgAAABYAAAAAAAAAAAAAAKSBjQEAAFRISVJEX1BBUlRZX05PVElDRVMubWRQSwUGAAAAAAcABwDBAQAA1wEAAAAA",
+};
+const makeCuaStageFixture = Effect.fn("test.makeCuaStageFixture")(function* (
+  platform: "mac" | "linux" | "win",
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-package-" });
+  const resolveRelease = CuaRelease.cuaDriverRelease;
+  const pinned = resolveRelease(
+    platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux",
+    "x64",
+  );
+  assert.isNotNull(pinned);
+  const archive = Buffer.from(cuaArchives[platform], "base64");
+  const release = {
+    ...pinned!,
+    bytes: archive.byteLength,
+    sha256: NodeCrypto.createHash("sha256").update(archive).digest("hex"),
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      vi.spyOn(CuaRelease, "cuaDriverRelease").mockImplementation((target, arch) => {
+        const asset = resolveRelease(target, arch);
+        assert.isNotNull(asset);
+        assert.equal(asset!.archiveName, release.archiveName);
+        return release;
+      }),
+    ),
+    (spy) => Effect.sync(() => spy.mockRestore()),
+  );
+  const cacheDir = path.join(root, "node_modules/.cache/goat/cua-driver");
+  const archivePath = path.join(cacheDir, release.archiveName);
+  yield* fs.makeDirectory(cacheDir, { recursive: true });
+  let download = archive;
+  let requests = 0;
+  const downloadSpawner = ChildProcessSpawner.make((command) => {
+    if (command._tag !== "StandardCommand" || command.command !== "curl") {
+      return spawner.spawn(command);
+    }
+    const output = command.args[command.args.indexOf("--output") + 1];
+    assert.isString(output);
+    requests++;
+    return fs.writeFile(output!, download).pipe(Effect.as(mockProcess(0)));
+  });
+  const stage = (name: string) => {
+    const stageRoot = path.join(root, name);
+    const stageResourcesDir = path.join(stageRoot, "resources");
+    return stageCuaDriverExecutable({
+      platform,
+      arch: platform === "mac" ? "universal" : "x64",
+      repoRoot: root,
+      stageRoot,
+      stageResourcesDir,
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, downloadSpawner),
+      Effect.as(stageResourcesDir),
+    );
+  };
+  return {
+    fs,
+    path,
+    root,
+    archive,
+    archivePath,
+    cacheDir,
+    stage,
+    requests: () => requests,
+    respondWith: (bytes: Buffer, expectedBytes = archive.byteLength) => {
+      download = Buffer.from(bytes);
+      release.bytes = expectedBytes;
+    },
+  };
+});
+
 const WINDOWS_PAYLOAD_FIXTURE_VERSION = "1.2.3";
 
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
@@ -264,6 +348,153 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect(
+    "Cua release cache rejects bad bytes and hashes, redownloads corruption, and reuses verified bytes",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeCuaStageFixture("linux");
+        const wrongHash = Buffer.from(h.archive);
+        wrongHash.writeUInt8(wrongHash.readUInt8(wrongHash.length - 1) ^ 1, wrongHash.length - 1);
+        for (const [index, [bytes, expectedBytes]] of (
+          [
+            [h.archive, h.archive.length + 1],
+            [h.archive, h.archive.length - 1],
+            [wrongHash, h.archive.length],
+          ] as const
+        ).entries()) {
+          h.respondWith(bytes, expectedBytes);
+          yield* Effect.flip(h.stage(`rejected-${index}`));
+          assert.deepStrictEqual(yield* h.fs.readDirectory(h.cacheDir), []);
+          assert.isFalse(
+            yield* h.fs.exists(h.path.join(h.root, `rejected-${index}/resources/cua-driver`)),
+          );
+        }
+        h.respondWith(h.archive);
+        yield* h.fs.writeFile(h.archivePath, wrongHash);
+        const resources = yield* h.stage("repaired");
+        assert.equal(h.requests(), 4);
+        assert.deepStrictEqual(Buffer.from(yield* h.fs.readFile(h.archivePath)), h.archive);
+        assert.equal(
+          yield* h.fs.readFileString(h.path.join(resources, "cua-driver/cua-driver")),
+          "cua-driver",
+        );
+        yield* h.stage("cached");
+        assert.equal(h.requests(), 4);
+        assert.deepStrictEqual(yield* h.fs.readDirectory(h.cacheDir), [
+          h.path.basename(h.archivePath),
+        ]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("mac staging omits the in-process Cua executable (#1202)", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("mac");
+      const resources = yield* h.stage("release");
+      assert.isFalse(yield* h.fs.exists(h.path.join(resources, "cua-driver")));
+      assert.equal(h.requests(), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["linux", "win"] as const)(
+    "stages the Cua %s compressed release at the desktop host path",
+    (platform) =>
+      Effect.gen(function* () {
+        const h = yield* makeCuaStageFixture(platform);
+        yield* h.fs.writeFile(h.archivePath, h.archive);
+        const resources = yield* h.stage("release");
+        const destination = h.path.join(resources, "cua-driver");
+        assert.equal(h.requests(), 0);
+        const companions =
+          platform === "win"
+            ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
+            : [
+                "cua-driver",
+                "cua-cursor-theme",
+                "wayland-helper/README.md",
+                "wayland-helper/install.sh",
+                "wayland-helper/winrects@cua/metadata.json",
+                "wayland-helper/winrects@cua/extension.js",
+              ];
+        assert.deepStrictEqual(
+          (yield* h.fs.readDirectory(destination)).sort(),
+          platform === "win"
+            ? [...companions].sort()
+            : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
+        );
+        for (const member of companions) {
+          assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
+        }
+        if ((yield* HostProcess.Platform) !== "win32" && platform !== "win") {
+          const executables = [
+            h.path.join(destination, "cua-driver"),
+            h.path.join(destination, "cua-cursor-theme"),
+          ];
+          for (const executable of executables) {
+            assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
+          }
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("Cua Windows SDK and driver fit the packaged 80 loose-file budget", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("win");
+      const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
+      const resources = h.path.join(fixture.packagedAppDir, "resources");
+      const natives = [
+        "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll",
+        "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_node_runtime.node",
+        "node_modules/@ubjs/node-win32-x64-msvc/uniffi-runtime-napi.win32-x64-msvc.node",
+      ];
+      const javascript = Array.from(
+        { length: 81 },
+        (_, index) => `node_modules/@trycua/cua-driver/dist/native/module-${index}.js`,
+      );
+      for (const file of [...natives, ...javascript]) {
+        const target = h.path.join(fixture.sourceDir, file);
+        yield* h.fs.makeDirectory(h.path.dirname(target), { recursive: true });
+        yield* h.fs.writeFileString(
+          target,
+          file.endsWith(".js") ? "export {};" : "MZ native fixture",
+        );
+      }
+      const asarPath = h.path.join(resources, WINDOWS_SERVER_ASAR_RESOURCE);
+      yield* packWindowsServerAsar({ sourceDir: fixture.sourceDir, asarPath, arch: "x64" });
+      const config = yield* createBuildConfig(
+        "win",
+        "dir",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      assert.deepStrictEqual(config.asar, { smartUnpack: false });
+      const globs = config.asarUnpack as string[];
+      yield* Effect.promise(() =>
+        createPackageWithOptions(fixture.sourceDir, h.path.join(resources, "app.asar"), {
+          unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
+        }),
+      );
+      yield* h.fs.writeFile(h.archivePath, h.archive);
+      const staged = yield* h.stage("driver");
+      yield* h.fs.copy(h.path.join(staged, "cua-driver"), h.path.join(resources, "cua-driver"));
+      const result = yield* validateWindowsPackagedPayload({
+        stageDistDir: fixture.stageDistDir,
+        appExecutableName: fixture.appExecutableName,
+        targetArch: "x64",
+        appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+      }).pipe(Effect.provideService(HostProcess.Platform, "linux"));
+      assert.equal(WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT, 80);
+      assert.isAtMost(result.fileCount, 80);
+      assert.includeMembers(result.unpackedFiles, natives);
+      for (const file of javascript) {
+        assert.equal(extractFile(asarPath, h.path.normalize(file)).toString(), "export {};");
+        assert.isNotTrue(statFile(asarPath, h.path.normalize(file)).unpacked);
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("rejects overlapping builds from another process until restoration finishes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -696,7 +927,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("unpacks target Windows natives while excluding the other architecture", () =>
+  it.effect("stages Windows sidecar externals and unpacks target natives", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -714,15 +945,61 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "node_modules/node-pty/prebuilds/linux-x64/pty.node",
         ];
 
-        for (const nativeFile of nativeFiles) {
-          const nativePath = path.join(sourceDir, nativeFile);
-          yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
-          yield* fs.writeFileString(nativePath, nativeFile.includes("linux") ? "\x7fELF" : "MZ");
-        }
-
+        const decodeDependencies = Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({ dependencies: Schema.Record(Schema.String, Schema.String) }),
+          ),
+        );
+        const installSpawner = ChildProcessSpawner.make(() =>
+          Effect.gen(function* () {
+            const { dependencies } = yield* decodeDependencies(
+              yield* fs.readFileString(path.join(sourceDir, "package.json")),
+            ).pipe(Effect.orDie);
+            const installedFiles = Object.keys(dependencies).map(
+              (name) => `node_modules/${name}/package.json`,
+            );
+            if (Object.hasOwn(dependencies, "node-pty")) installedFiles.push(...nativeFiles);
+            if (Object.hasOwn(dependencies, "@trycua/cua-driver")) {
+              installedFiles.push(
+                "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll",
+              );
+            }
+            for (const file of installedFiles) {
+              const filePath = path.join(sourceDir, file);
+              yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+              yield* fs.writeFileString(filePath, file.includes("linux") ? "\x7fELF" : "MZ");
+            }
+            return mockProcess(0);
+          }),
+        );
+        const serverDistDir = path.join(tempDir, "dist");
+        yield* fs.makeDirectory(serverDistDir);
+        yield* fs.writeFileString(path.join(serverDistDir, "bin.mjs"), "console.log('server');");
         const asarPath = path.join(tempDir, "server.asar");
-        yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
+        yield* stageWindowsServerSidecar({
+          stageRoot: tempDir,
+          repoRoot: tempDir,
+          serverDistDir,
+          arch: "x64",
+          appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          runtimeExternalDependencies: { "node-pty": "1.1.0", "@trycua/cua-driver": "0.34.1" },
+          fffNodeVersion: "0.9.4",
+          allowBuilds: {},
+          patchedDependencies: {},
+          overrides: {},
+          asarPath,
+          verbose: false,
+          vp: "vp",
+        }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, installSpawner));
         const unpackedRoot = `${asarPath}.unpacked`;
+        assert.deepStrictEqual(
+          (yield* decodeDependencies(extractFile(asarPath, "package.json").toString()))
+            .dependencies,
+          { "node-pty": "1.1.0", "@ff-labs/fff-bin-win32-x64": "0.9.4" },
+        );
+        assert.isFalse(
+          listPackage(asarPath, { isPack: false }).some((file) => file.includes("@trycua")),
+        );
 
         assert.isTrue(
           yield* fs.exists(
@@ -774,13 +1051,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             const fails =
               childProcess.command === "rustc" ||
               childProcess.command === "powershell.exe" ||
+              childProcess.command === "tar.exe" ||
               childProcess.command === pythonPath;
             return Effect.succeed(mockProcess(fails ? 1 : 0));
           }),
         );
         const error = yield* preflightWindowsDesktopBuild({
           arch: "x64",
-          bundlesWslRuntime: true,
         }).pipe(
           Effect.provide(
             Layer.merge(
@@ -794,7 +1071,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
 
         assert.instanceOf(error, WindowsDesktopBuildPrerequisitesMissingError);
-        assert.deepStrictEqual(error.missing, ["rust", "python", "msvc"]);
+        assert.deepStrictEqual(error.missing, ["rust", "python", "msvc", "tar"]);
         assert.equal(error.rustTarget, "x86_64-pc-windows-msvc");
         assert.include(error.message, "Visual Studio Build Tools components");
       }),
@@ -821,7 +1098,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         yield* preflightWindowsDesktopBuild({
           arch: "x64",
-          bundlesWslRuntime: true,
         }).pipe(
           Effect.provide(
             Layer.merge(
@@ -869,7 +1145,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
         const error = yield* preflightWindowsDesktopBuild({
           arch: "x64",
-          bundlesWslRuntime: false,
         }).pipe(
           Effect.provide(
             Layer.merge(
@@ -1365,7 +1640,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({
           copyUnpackedNatives: true,
-          serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
+          serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
         const error = yield* verifyPackagedBundleIsSelfContained({
           asarPath: path.join(fixture.packagedAppDir, "resources", WINDOWS_SERVER_ASAR_RESOURCE),
@@ -1373,7 +1648,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
-        assert.include(error.output, "t3code-deliberately-missing-package");
+        assert.include(error.output, "goat-deliberately-missing-package");
       }),
     ),
   );
@@ -1383,7 +1658,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({
           copyUnpackedNatives: true,
-          serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
+          serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
@@ -1770,6 +2045,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("names GOAT as the maintainer of the Linux packages", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const linux = config.linux as Record<string, unknown>;
+      assert.equal(linux.maintainer, "GOAT <jun@lidgeai.com>");
+    }),
+  );
+
   it.effect("configures only an opted-in canonical nightly feed and keeps previews off", () =>
     Effect.gen(function* () {
       const feed = yield* createBuildConfig(
@@ -1885,38 +2176,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         `${resource.from} ships via extraResources and must be excluded from app.asar`,
       );
     }
-
-    assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
-      "!**/node_modules/@cursor/sdk-*/**/*",
-      "!apps/desktop/prod-resources/cursor-sdk",
-      "!apps/desktop/prod-resources/cursor-sdk/**/*",
-      "!apps/desktop/prod-resources/resource-monitor",
-      "!apps/desktop/prod-resources/resource-monitor/**/*",
-      "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-      "!**/*.map",
-      "!**/*.d.cts",
-      "!apps/desktop/resources/browser-secret",
-      "!apps/desktop/resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/browser-secret",
-      "!apps/desktop/prod-resources/browser-secret/**/*",
-      "!apps/desktop/prod-resources/windows-server",
-      "!apps/desktop/prod-resources/windows-server/**/*",
-      "!apps/desktop/prod-resources/ssh-runtime",
-      "!apps/desktop/prod-resources/ssh-runtime/**/*",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
-      "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
-      "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-      "!apps/desktop/gnome-extension",
-      "!apps/desktop/gnome-extension/**/*",
-    ]);
-    assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
-    assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
-      {
-        from: "apps/desktop/prod-resources/windows-server",
-        to: ".",
-        filter: ["server.asar", "server.asar.unpacked/**/*"],
-      },
-    ]);
   });
 
   it.effect("applies platform-specific packaging to the build config", () =>
@@ -1962,13 +2221,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.notProperty(mac, "asar");
       assert.notProperty(linux, "asar");
-      assert.notProperty(mac, "asarUnpack");
-      assert.notProperty(linux, "asarUnpack");
+      // macOS keeps only the helper's driver; Linux still uses the native SDK.
+      const cuaNativeUnpack = [
+        "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
+        "**/node_modules/@ubjs/node-*/**/*.node",
+      ];
+      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/@ubjs/node-*/**/*.node"]);
+      assert.deepStrictEqual(linux.asarUnpack, cuaNativeUnpack);
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
       assert.deepStrictEqual(winWithoutWslRuntime.asarUnpack, win.asarUnpack);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(
+        mac.extraResources,
+        DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+      );
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -2029,6 +2296,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "toolsets");
       assert.notProperty(win, "toolsets");
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      for (const file of [
+        "node_modules/@trycua/cua-driver-darwin-arm64/libcua_driver_sdk.dylib",
+        "node_modules/@trycua/cua-driver-darwin-x64/cua_driver_node_runtime.node",
+        "node_modules/@trycua/cua-driver-linux-x64-gnu/libcua_driver_sdk.so",
+        "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll",
+        "node_modules/@trycua/cua-driver/dist/embedded.js",
+      ]) {
+        const excluded = (config: Record<string, unknown>) =>
+          (config.files as string[]).some((glob) => NodePath.matchesGlob(file, glob.slice(1)));
+        assert.isTrue(excluded(mac), file);
+        assert.isFalse(excluded(linux), file);
+        assert.isFalse(excluded(win), file);
+      }
       assert.deepStrictEqual(linux.files, [...DESKTOP_FILE_EXCLUSIONS, ...LINUX_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);
       assert.deepStrictEqual(winWithoutWslRuntime.files, win.files);
@@ -2149,21 +2429,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
-    assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
-      {
-        from: "apps/desktop/prod-resources/cursor-sdk",
-        to: "node_modules/@cursor",
-      },
-      {
-        from: "apps/desktop/prod-resources/resource-monitor",
-        to: "resource-monitor",
-      },
-      {
-        from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
-        to: "LICENSE-T3CODE.txt",
-      },
-    ]);
+  it("maps resource monitor build targets and executable names", () => {
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
       "aarch64-apple-darwin",
       "x86_64-apple-darwin",
@@ -2235,12 +2501,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   );
 });
 
-it("keeps the prefix of a UNC path instead of going relative", () => {
-  const paths = ancestorNodeModulesPaths("\\\\server\\share\\tmp\\app", "\\");
-  for (const candidate of paths) {
-    assert.ok(candidate.startsWith("\\\\server\\share"), candidate);
-  }
-  assert.deepStrictEqual(paths[0], "\\\\server\\share\\tmp\\node_modules");
+it("refuses a preload that Electron's sandbox wrapper cannot parse", () => {
+  // Effect's scheduler declared this at the top level of the 0.1.1 nightly preload.
+  const effectScheduler = "const setImmediate = (f) => f();\nsetImmediate(() => {});";
+  assert.include(sandboxedPreloadSyntaxError(effectScheduler) ?? "", "setImmediate");
+  assert.strictEqual(
+    sandboxedPreloadSyntaxError("(() => {\n" + effectScheduler + "\n})();"),
+    undefined,
+  );
 });
 
 it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated tree", () =>

@@ -8,6 +8,10 @@ import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
+import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
+import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
+import { HUB_SETTINGS_SEARCH_ITEMS } from "./settingsSearchHubItems";
 import {
   validateSettingsScopeSearch,
   type ResolvedSettingsScope,
@@ -25,6 +29,8 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/goat-bot"
+  | "/settings/decision-inbox"
+  | "/settings/hub"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
@@ -61,6 +67,7 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresMemory?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresDesktopWindowMaterial?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -87,11 +94,13 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/memory": "Memory",
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
+  "/settings/decision-inbox": "Decision Inbox",
+  "/settings/hub": "Hub",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
-  "/settings/archived": "Archive",
+  "/settings/archived": "Archived Threads",
 };
 
 export function keybindingSearchAnchorId<Command extends KeybindingCommand>(command: Command) {
@@ -136,6 +145,13 @@ const SOURCE_CONTROL_HOST_SEARCH_ITEMS = sourceControlClients.definitions.flatMa
 );
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "decision-inbox",
+    title: "Decision inbox",
+    to: "/settings/decision-inbox",
+    searchTerms: ["decisions approvals questions pending answers"],
+  },
+  ...HUB_SETTINGS_SEARCH_ITEMS,
   {
     id: "memory-records",
     title: "Memory",
@@ -236,14 +252,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Color scheme",
     to: "/settings/appearance",
     searchTerms: ["appearance light dark system mode"],
-    targetId: "appearance",
   },
   {
     id: "theme",
-    title: "Themes",
+    title: "Theme",
     to: "/settings/appearance",
-    searchTerms: ["appearance colors palette custom import"],
-    targetId: "appearance",
+    searchTerms: ["themes appearance colors palette custom create import duplicate export"],
   },
   {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
@@ -252,13 +266,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["colors borders interface"],
   },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: "Glass opacity",
-    to: "/settings/appearance",
-    searchTerms: ["transparent transparency solid menus dialogs composer"],
-  },
+  ...GLASS_SETTINGS_SEARCH_ITEMS,
   {
     id: "diff-color-scheme",
     title: "Diff colors",
@@ -365,10 +373,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "compact-idle-threads",
-    title: "Compact idle Claude threads (beta)",
+    title: "Compact idle threads",
     to: "/settings/general",
     scope: "environment-defaults",
-    searchTerms: ["context compaction idle cache tokens usage summary beta experimental"],
+    searchTerms: ["claude context compaction idle cache tokens usage summary resume"],
   },
   {
     id: "auto-settle-merged-threads",
@@ -568,7 +576,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Submodules",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["git submodule init recursive top-level none worktree t3.json"],
+    searchTerms: ["git submodule init recursive top-level none worktree goat.json t3.json"],
   },
   {
     id: "start-from-origin",
@@ -617,6 +625,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles source control content default provider"],
   },
   {
+    id: "thread-title-instructions",
+    title: "Thread title instructions",
+    to: "/settings/general",
+    scope: "project-defaults",
+    searchTerms: ["generated thread titles prompt custom style naming rename regenerate"],
+  },
+  {
     id: "app-version",
     title: "Version",
     to: "/settings/general",
@@ -653,7 +668,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "mobile-app",
     title: "Mobile app",
     to: "/settings/general",
-    searchTerms: ["phone tablet iPhone iPad iOS Android App Store Google Play QR"],
+    searchTerms: ["phone tablet iPhone iPad iOS Android App Store Google Play TestFlight"],
   },
   {
     id: "privacy-policy",
@@ -750,6 +765,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/providers",
     searchTerms: [
       "agents cli codex claude cursor grok opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "opencodex home model route connect to home",
     ],
   },
   {
@@ -784,6 +800,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "agent-tool-listing",
+    title: "GOAT tools agents see",
+    to: "/settings/integrations",
+    scope: "environment-defaults",
+    searchTerms: [
+      "agent tool listing core all full mcp tools list describe call prompt context size",
+    ],
+  },
+  {
+    id: "goat-discipline-skill",
+    title: "Development discipline",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["goat discipline skill built in code changes guidance inherit on off"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
@@ -798,10 +830,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "device-hub",
-    title: "Device hub",
+    title: "Simulators and emulators",
     to: "/settings/integrations",
     targetId: "devices",
-    searchTerms: ["simulator emulator ios android install start"],
+    searchTerms: ["device hub simulator emulator ios android install start"],
   },
   {
     id: "device-platform-support",
@@ -811,11 +843,43 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "computer-use",
+    title: "Computer use",
+    to: "/settings/integrations",
+    targetId: "computer",
+    searchTerms: [
+      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions setup set up retry full access approval without asking every app",
+    ],
+  },
+  {
+    id: "computer-use-move-pointer",
+    title: "Let agents move my pointer",
+    to: "/settings/integrations",
+    searchTerms: [
+      "computer use pointer mouse cursor move foreground background click steal focus advanced",
+    ],
+  },
+  {
+    id: "computer-use-skill",
+    title: "Computer Use skill",
+    to: "/settings/integrations",
+    searchTerms: [
+      "built in builtin skill computer use instructions agents observe verify advanced readiness",
+    ],
+  },
+  {
     id: "goat-bot-home",
     title: "Runs on",
     to: "/settings/goat-bot",
     targetId: "goat-bot",
     searchTerms: ["goat bot home computer environment cluster"],
+  },
+  {
+    id: "channel-auto-placement",
+    title: "Automatically choose a worker computer",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["channel placement quota ssh host worker automatic"],
   },
   {
     id: "goat-bot-model",
@@ -838,77 +902,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/goat-bot",
     searchTerms: ["goat bot imessage messages text sms phone mac link code"],
   },
-  {
-    id: "browser-profiles",
-    title: "Browser profiles",
-    to: "/settings/integrations",
-    targetId: "browser",
-  },
-  {
-    id: "browser-default-profile",
-    title: "Default browser profile",
-    to: "/settings/integrations",
-    targetId: "browser-profiles",
-  },
-  {
-    id: "browser-default-viewport",
-    title: "Default browser viewport",
-    to: "/settings/integrations",
-    searchTerms: ["preview size width height device desktop mobile rotate"],
-  },
-  {
-    id: "browser-default-zoom",
-    title: "Default browser zoom",
-    to: "/settings/integrations",
-    searchTerms: ["preview page scale tabs percent"],
-  },
-  {
-    id: "browser-default-appearance",
-    title: "Default browser appearance",
-    to: "/settings/integrations",
-    searchTerms: ["preview color scheme light dark system os"],
-  },
-  {
-    id: "browser-recording-frame-rate",
-    title: "Browser recording frame rate",
-    to: "/settings/integrations",
-  },
-  {
-    id: "browser-recording-key-presses",
-    title: "Show key presses in recordings",
-    to: "/settings/integrations",
-    searchTerms: ["browser preview keyboard shortcuts keystrokes overlay capture"],
-  },
-  {
-    id: "browser-recording-mouse-presses",
-    title: "Show mouse presses in recordings",
-    to: "/settings/integrations",
-    searchTerms: ["browser preview clicks buttons drag overlay capture"],
-  },
-  {
-    id: "browser-link-target",
-    title: "Open links in",
-    to: "/settings/integrations",
-    searchTerms: ["links default browser in-app browser external open"],
-  },
-  {
-    id: "browser-search-engine",
-    title: "Search engine",
-    to: "/settings/integrations",
-    searchTerms: ["address bar duckduckgo google bing brave kagi ecosia custom"],
-  },
-  {
-    id: "pull-request-links-open-in-app",
-    title: "Open pull requests in GOAT",
-    to: "/settings/integrations",
-    searchTerms: ["pr links github browser external click default pull request view panel"],
-  },
-  {
-    id: "browser-auto-show-floating-preview",
-    title: "Auto-show floating preview",
-    to: "/settings/integrations",
-    searchTerms: ["agent opens browser device simulator pop into view hide"],
-  },
+  ...BROWSER_SETTINGS_SEARCH_ITEMS,
   {
     id: "automatic-pull",
     title: "Automatically pull",
@@ -1024,7 +1018,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "project-actions",
     title: "Actions",
     to: "/settings/projects",
-    searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
+    searchTerms: [
+      "commands scripts setup run dev server checkout worktree goat.json t3.json import",
+    ],
   },
   {
     id: "environment-icon",
@@ -1042,6 +1038,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "headless-server",
+    title: "Headless server on this Mac",
+    to: "/settings/connections",
+    targetId: "connections-environment",
+    searchTerms: [
+      "hide show headless server ssh goat serve ~/.goat background environment restart",
+    ],
+    desktopOnly: true,
+  },
+  {
     id: "network-access",
     title: "Network access",
     to: "/settings/connections",
@@ -1051,9 +1057,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-device",
-    title: "Use this device as a hub",
+    title: "Connect your phone",
     to: "/settings/connections",
-    searchTerms: ["hub phone qr pair pairing tailscale https share device"],
+    searchTerms: [
+      "use this device as a hub",
+      "hub phone qr pair pairing tailscale https share device",
+    ],
   },
   {
     id: "tailscale-https",
@@ -1083,9 +1092,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["Tailscale guide"],
   },
   {
-    id: "t3-connect",
+    id: "goat-connect",
     localEnvironmentOnly: true,
-    title: "T3 Connect",
+    title: "GOAT Connect",
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["managed tunnel cloud other devices remote"],
@@ -1193,6 +1202,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/decision-inbox": null,
+  "/settings/hub": "environment",
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };
@@ -1336,6 +1347,7 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
+      if (item.requiresDesktopWindowMaterial && !hasDesktopWindowMaterialApi()) return [];
       if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];

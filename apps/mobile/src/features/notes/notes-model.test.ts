@@ -53,6 +53,32 @@ describe("notes screen state", () => {
       ["project/idea.md", "Draft", "conflict", "doing"],
     ]);
   });
+  it("lists pinned notes first, then each folder most recently updated first", () => {
+    const note = (path: string, updatedAt: string, pinned = false) => ({
+      ...document(),
+      path,
+      folder: path.includes("/") ? path.split("/")[0]! : null,
+      title: path,
+      updatedAt,
+      pinned,
+    });
+    const rows = noteListRows(
+      "hub",
+      [
+        note("b/old.md", "2026-10-01T00:00:00.000Z"),
+        note("b/new.md", "2026-10-20T00:00:00.000Z"),
+        note("a/one.md", "2026-10-02T00:00:00.000Z"),
+        note("z/pinned.md", "2026-09-01T00:00:00.000Z", true),
+      ],
+      [],
+    );
+    expect(rows.map((row) => [row.group, row.path])).toEqual([
+      ["Pinned", "z/pinned.md"],
+      ["a", "a/one.md"],
+      ["b", "b/new.md"],
+      ["b", "b/old.md"],
+    ]);
+  });
   it("freezes request id and full launch payload on retry, even if form choices change", () => {
     const attempt = captureNoteWorkAttempt(beginNoteWorkAttempt("attempt-1"), {
       path: "note.md",

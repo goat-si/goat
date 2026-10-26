@@ -5,7 +5,20 @@ import {
   Handoff,
   HandoffError,
 } from "./handoff.ts";
-import * as Memory from "./memory.ts";
+import {
+  ComputerUseStopAllResult,
+  ComputerUseApp,
+  ComputerUseStopInput,
+  ComputerUseStopResult,
+  CuaHostStatus,
+} from "./cua.ts";
+import {
+  PreviewSessionControlInput,
+  PreviewSessionControlResult,
+  PreviewSessionFrameEvent,
+  PreviewSessionFramesInput,
+  PreviewSessionsSnapshot,
+} from "./previewSession.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -97,56 +110,17 @@ import {
   AcpRegistrySetProviderInput,
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
-import {
-  CHANNEL_GATEWAY_WS_METHODS,
-  ChannelEnsureBotInput,
-  ChannelEnsureBotResult,
-  ChannelGetBotStatusInput,
-  ChannelGetBotStatusResult,
-  ChannelGatewayError,
-  ChannelGetInputInput,
-  ChannelGetTaskInput,
-  ChannelIdentityLinkCreateInput,
-  ChannelIdentityLinkCreateResult,
-  ChannelIdentityUnlinkInput,
-  ChannelIngestInput,
-  ChannelIngestResult,
-  ChannelInputSnapshot,
-  ChannelListTasksInput,
-  ChannelListTasksResult,
-} from "./channelGateway.ts";
-import { ChannelTask } from "./channelLedger.ts";
-import {
-  SLACK_CHANNEL_WS_METHODS,
-  SlackChannelConfigureInput,
-  SlackChannelDisconnectInput,
-  SlackChannelGetSettingsInput,
-  SlackChannelSettings,
-  SlackChannelSettingsError,
-  SlackChannelStatusEvent,
-  SlackChannelSubscribeStatusInput,
-} from "./slackChannel.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
+import { ChannelRpcs } from "./channelRpc.ts";
+import { DECISION_WS_METHODS, DecisionRpcs } from "./decisionRpc.ts";
 import {
-  NoteConflictError,
-  NoteDocument,
-  NoteError,
-  NotesDeleteInput,
-  NotesDeleteResult,
-  NotesEvent,
-  NotesListInput,
-  NotesListResult,
-  NotesMoveInput,
-  NotesReadInput,
-  NotesStartWorkInput,
-  NotesStartWorkResult,
-  NotesSubscribeInput,
-  NotesWorkTargetProjectsInput,
-  NotesWorkTargetProjectsResult,
-  NotesWorkTargetsInput,
-  NotesWorkTargetsResult,
-  NotesWriteInput,
-} from "./notes.ts";
+  MEMORY_WS_METHODS,
+  MemoryAdministrationRpcs,
+  MemoryCoreRpcs,
+  MemoryImportRpcs,
+} from "./memoryRpc.ts";
+import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -261,6 +235,8 @@ import {
   PullRequestListResult,
   PullRequestListStatsInput,
   PullRequestListStatsResult,
+  PullRequestFilterOptions,
+  PullRequestFilterOptionsInput,
   PullRequestOperationError,
   PullRequestReactionInput,
   PullRequestRef,
@@ -410,8 +386,21 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { GoatHostStatusResult, ServerGetHostStatusInput } from "./hostStatus.ts";
-import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
+import {
+  GoatHostStatusResult,
+  HostMaintenanceError,
+  HostStorageHealth,
+  HostStrayCleanupResult,
+  ServerGetHostStatusInput,
+} from "./hostStatus.ts";
+import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
+import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
+import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
+import {
+  HubDeviceChildOptIn,
+  HubDeviceOperationInput,
+  HubDeviceOperationResult,
+} from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -493,21 +482,13 @@ import {
   CloudMachinesListResult,
 } from "./cloudMachines.ts";
 import {
-  HubNodesAddInput,
-  HubNodesAddResult,
-  HubNodesCheckInput,
-  HubNodesDismissNoticeInput,
-  HubNodesDismissNoticeResult,
-  HubNodesError,
-  HubNodesImportInput,
-  HubNodesImportResult,
-  HubNodesListInput,
-  HubNodesRemoveInput,
-  HubNodesRemoveResult,
-  HubNodesSnapshot,
-  HubNodesSubscribeInput,
-} from "./hubNodes.ts";
-import { CloudRunListInput, CloudRunListResult } from "./cloudAgents.ts";
+  CloudFolderTrust,
+  CloudFolderTrustAcceptInput,
+  CloudFolderTrustListInput,
+  CloudFolderTrustListResult,
+  CloudRunListInput,
+  CloudRunListResult,
+} from "./cloudAgents.ts";
 import {
   HubProxyEnrollInput,
   HubProxyEnrollResult,
@@ -517,26 +498,7 @@ import {
 } from "./hubProxy.ts";
 
 export const WS_METHODS = {
-  memoryProjectBindingGet: "memory.projectBinding.get",
-  memoryProjectBindingUpdate: "memory.projectBinding.update",
-  memoryChanges: "memory.changes",
-  memorySearch: "memory.search",
-  memoryList: "memory.list",
-  memoryRead: "memory.read",
-  memoryHistory: "memory.history",
-  memoryHubDiagnostics: "memory.hub.diagnostics",
-  memoryHubReconcile: "memory.hub.reconcile",
-  memoryResetReportAttempts: "memory.resetReportAttempts",
-  memorySyncStatus: "memory.syncStatus",
-  memoryOwnerSourceReadPolicyGet: "memory.ownerSourceReadPolicy.get",
-  memoryOwnerSourceReadPolicyUpdate: "memory.ownerSourceReadPolicy.update",
-  memoryUpsert: "memory.upsert",
-  memoryForget: "memory.forget",
-  memoryRevertResolution: "memory.revertResolution",
-  memoryReadSource: "memory.readSource",
-  memoryHubSettingsGet: "memory.hubSettings.get",
-  memoryHubSettingsUpdate: "memory.hubSettings.update",
-  memoryImportProvider: "memory.importProvider",
+  ...MEMORY_WS_METHODS,
 
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -644,6 +606,15 @@ export const WS_METHODS = {
   deviceAction: "device.action",
 
   serverProbe: "server.probe",
+  serverCheckComputerUse: "server.checkComputerUse",
+  computerUseStatusChanges: "computerUse.statusChanges",
+  computerUseStop: "computerUse.stop",
+  computerUseStopAll: "computerUse.stopAll",
+  computerUseResume: "computerUse.resume",
+  computerUseApps: "computerUse.apps",
+  previewSessionsSubscribe: "previewSessions.subscribe",
+  previewSessionsControl: "previewSessions.control",
+  previewSessionsFrames: "previewSessions.frames",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -656,6 +627,8 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  serverCompactStorage: "server.compactStorage",
+  serverCleanUpStrayProcesses: "server.cleanUpStrayProcesses",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -674,6 +647,15 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
+  hubDeviceVerify: "hub.deviceVerify",
+  hubDeviceJoin: "hub.deviceJoin",
+  hubDeviceLeave: "hub.deviceLeave",
+  hubDeviceRepair: "hub.deviceRepair",
+  hubDeviceChildOptIn: "hub.deviceChildOptIn",
+  serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
+  serverPlanOpenCodexSync: "server.planOpenCodexSync",
+  serverSyncOpenCodex: "server.syncOpenCodex",
+  serverSubscribeOpenCodexSync: "server.subscribeOpenCodexSync",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -699,15 +681,8 @@ export const WS_METHODS = {
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
   // Markdown notes on this environment
-  notesList: "notes.list",
-  notesRead: "notes.read",
-  notesWrite: "notes.write",
-  notesMove: "notes.move",
-  notesDelete: "notes.delete",
-  notesSubscribe: "notes.subscribe",
-  notesStartWork: "notes.startWork",
-  notesWorkTargets: "notes.workTargets",
-  notesWorkTargetProjects: "notes.workTargetProjects",
+  ...DECISION_WS_METHODS,
+  ...NOTES_WS_METHODS,
 
   // Threads this environment launched or watches on other machines
   remoteLaunchesList: "remoteLaunches.list",
@@ -715,6 +690,9 @@ export const WS_METHODS = {
   // Boat cloud machines this environment manages as SSH hosts
   cloudMachinesList: "cloudMachines.list",
   cloudAgentsListRuns: "cloudAgents.listRuns",
+  // Deprecated since GOAT 0.1.2; only older clients call these. Remove in GOAT 0.2.0.
+  cloudAgentsListFolderTrust: "cloudAgents.listFolderTrust",
+  cloudAgentsAcceptFolderTrust: "cloudAgents.acceptFolderTrust",
   cloudMachinesConfigure: "cloudMachines.configure",
   cloudMachinesDisconnect: "cloudMachines.disconnect",
   cloudMachinesCreate: "cloudMachines.create",
@@ -724,13 +702,7 @@ export const WS_METHODS = {
   cloudMachinesForget: "cloudMachines.forget",
   cloudMachinesDismissUnconfirmed: "cloudMachines.dismissUnconfirmed",
   cloudMachinesEnsureReady: "cloudMachines.ensureReady",
-  hubNodesList: "hub.nodes.list",
-  hubNodesSubscribe: "hub.nodes.subscribe",
-  hubNodesAdd: "hub.nodes.add",
-  hubNodesRemove: "hub.nodes.remove",
-  hubNodesCheck: "hub.nodes.check",
-  hubNodesImport: "hub.nodes.import",
-  hubNodesDismissNotice: "hub.nodes.dismissNotice",
+  ...HUB_NODES_WS_METHODS,
   hubProxyPrepareNode: "hubProxy.prepareNode",
   hubProxyEnrollNode: "hubProxy.enrollNode",
   hubProxyUnenrollNode: "hubProxy.unenrollNode",
@@ -740,6 +712,7 @@ export const WS_METHODS = {
 
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
+  pullRequestsFilterOptions: "pullRequests.filterOptions",
   pullRequestsSummary: "pullRequests.summary",
   pullRequestsRouting: "pullRequests.routing",
   pullRequestsRoutingIdentity: "pullRequests.routingIdentity",
@@ -817,6 +790,74 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, {
+  payload: Schema.Struct({}),
+  success: CuaHostStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseStatusChangesRpc = Rpc.make(WS_METHODS.computerUseStatusChanges, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ revision: NonNegativeInt }),
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/**
+ * The apps running on this host that computer use could reach, with names and icons, for the
+ * composer's @ list and the icons beside an agent's calls. Empty when computer use is off or the
+ * host cannot list them; asking grants nothing.
+ */
+const WsComputerUseAppsRpc = Rpc.make(WS_METHODS.computerUseApps, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ apps: Schema.Array(ComputerUseApp) }),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Ends one thread's control of this host's screen, killing its driver transport. */
+const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: ComputerUseStopInput,
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The kill switch: every thread's control on this host ends, unattended admissions included. */
+const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopAllResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Hands the screen back to agents after a person's input or takeover paused them. */
+const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Every browser and desktop preview session on this host, again whenever one changes. */
+const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
+  payload: Schema.Struct({}),
+  success: PreviewSessionsSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/** A person's takeover, hand back, stop or kill switch on a preview session. */
+const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
+  payload: PreviewSessionControlInput,
+  success: PreviewSessionControlResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** A desktop session's live picture for one viewer, or why there is none (#1370). */
+const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
+  payload: PreviewSessionFramesInput,
+  success: PreviewSessionFrameEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -828,7 +869,7 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
     instanceId: Schema.optional(ProviderInstanceId),
     cwd: Schema.optional(TrimmedNonEmptyString),
     fresh: Schema.optional(Schema.Boolean),
-    /** Explicit user request: bypass T3-owned caches and rediscover models.
+    /** Explicit user request: bypass GOAT-owned caches and rediscover models.
      * Background status refreshes must not open agent sessions. */
     refreshModels: Schema.optional(Schema.Boolean),
   }),
@@ -1006,6 +1047,19 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   error: EnvironmentAuthorizationError,
 });
 
+/** Runs the scheduled history compaction now; a call during a run joins it. */
+const WsServerCompactStorageRpc = Rpc.make(WS_METHODS.serverCompactStorage, {
+  payload: Schema.Struct({}),
+  success: HostStorageHealth,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
+});
+
+const WsServerCleanUpStrayProcessesRpc = Rpc.make(WS_METHODS.serverCleanUpStrayProcesses, {
+  payload: Schema.Struct({}),
+  success: HostStrayCleanupResult,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
+});
+
 const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerSettings,
@@ -1124,6 +1178,67 @@ const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
+/** Read-only parity checks for one device, the same as goat_hub_device_verify. */
+const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
+  payload: GoatHubDeviceVerifyInput,
+  success: GoatHubDeviceVerifyResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Runs the managed OpenCodex update check now, Home first and then each Child. Null when this
+ * machine coordinates no managed update (hub or goatclaw off).
+ */
+const WsServerCheckOpenCodexUpdateRpc = Rpc.make(WS_METHODS.serverCheckOpenCodexUpdate, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(OpenCodexUpdateStatus),
+  error: EnvironmentAuthorizationError,
+});
+
+/** What `ocx sync` would do on this machine and, on a Home, each linked Child. Reads only. */
+const WsServerPlanOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverPlanOpenCodexSync, {
+  payload: Schema.Struct({}),
+  success: OpenCodexSyncReport,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Runs `ocx sync` on this machine, then each Child; progress streams on the subscription. */
+const WsServerSyncOpenCodexRpc = Rpc.make(WS_METHODS.serverSyncOpenCodex, {
+  payload: Schema.Struct({}),
+  success: OpenCodexSyncReport,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The latest sync report, then every change while a sync runs. Null before the first one. */
+const WsServerSubscribeOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverSubscribeOpenCodexSync, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(OpenCodexSyncReport),
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
+const hubDeviceOperation = (
+  tag:
+    | typeof WS_METHODS.hubDeviceJoin
+    | typeof WS_METHODS.hubDeviceLeave
+    | typeof WS_METHODS.hubDeviceRepair,
+) =>
+  Rpc.make(tag, {
+    payload: HubDeviceOperationInput,
+    success: HubDeviceOperationResult,
+    error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+  });
+const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
+const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
+const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
+/** A person turns an SSH host's OpenCodex Child setup on or off; agents have no equivalent. */
+const WsHubDeviceChildOptInRpc = Rpc.make(WS_METHODS.hubDeviceChildOptIn, {
+  payload: HubDeviceChildOptIn,
+  success: HubDeviceChildOptIn,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
   success: ServerProcessResourceHistoryResult,
@@ -1218,6 +1333,12 @@ const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
 const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
   payload: PullRequestListStatsInput,
   success: PullRequestListStatsResult,
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsFilterOptionsRpc = Rpc.make(WS_METHODS.pullRequestsFilterOptions, {
+  payload: PullRequestFilterOptionsInput,
+  success: PullRequestFilterOptions,
   error: PullRequestRpcError,
 });
 
@@ -2179,6 +2300,24 @@ const WsCloudAgentsListRunsRpc = Rpc.make(WS_METHODS.cloudAgentsListRuns, {
   success: CloudRunListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
+/**
+ * Claude Code folder trust for this environment's projects, for the cloud agents panel.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
+const WsCloudAgentsListFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsListFolderTrust, {
+  payload: CloudFolderTrustListInput,
+  success: CloudFolderTrustListResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+/**
+ * Answers a project folder's Claude Code trust prompt now, without starting a cloud session.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
+const WsCloudAgentsAcceptFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsAcceptFolderTrust, {
+  payload: CloudFolderTrustAcceptInput,
+  success: CloudFolderTrust,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
 
 const CloudMachineRpcError = Schema.Union([CloudMachineError, EnvironmentAuthorizationError]);
 const WsCloudMachinesListRpc = Rpc.make(WS_METHODS.cloudMachinesList, {
@@ -2251,46 +2390,6 @@ const WsHubProxyUnenrollNodeRpc = Rpc.make(WS_METHODS.hubProxyUnenrollNode, {
   error: HubProxyRpcErrors,
 });
 
-const HubNodesRpcError = Schema.Union([HubNodesError, EnvironmentAuthorizationError]);
-const WsHubNodesListRpc = Rpc.make(WS_METHODS.hubNodesList, {
-  payload: HubNodesListInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-});
-/** The current node list, then a new one after every change. */
-const WsHubNodesSubscribeRpc = Rpc.make(WS_METHODS.hubNodesSubscribe, {
-  payload: HubNodesSubscribeInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-  stream: true,
-});
-const WsHubNodesAddRpc = Rpc.make(WS_METHODS.hubNodesAdd, {
-  payload: HubNodesAddInput,
-  success: HubNodesAddResult,
-  error: HubNodesRpcError,
-});
-const WsHubNodesRemoveRpc = Rpc.make(WS_METHODS.hubNodesRemove, {
-  payload: HubNodesRemoveInput,
-  success: HubNodesRemoveResult,
-  error: HubNodesRpcError,
-});
-/** Never wakes or extends a cloud machine. */
-const WsHubNodesCheckRpc = Rpc.make(WS_METHODS.hubNodesCheck, {
-  payload: HubNodesCheckInput,
-  success: HubNodesSnapshot,
-  error: HubNodesRpcError,
-});
-const WsHubNodesImportRpc = Rpc.make(WS_METHODS.hubNodesImport, {
-  payload: HubNodesImportInput,
-  success: HubNodesImportResult,
-  error: HubNodesRpcError,
-});
-const WsHubNodesDismissNoticeRpc = Rpc.make(WS_METHODS.hubNodesDismissNotice, {
-  payload: HubNodesDismissNoticeInput,
-  success: HubNodesDismissNoticeResult,
-  error: HubNodesRpcError,
-});
-
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2330,88 +2429,6 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
-const ChannelRpcError = Schema.Union([ChannelGatewayError, EnvironmentAuthorizationError]);
-
-/** Channel gateway and Slack settings RPCs. */
-export const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
-  payload: ChannelEnsureBotInput,
-  success: ChannelEnsureBotResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus, {
-  payload: ChannelGetBotStatusInput,
-  success: ChannelGetBotStatusResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelIngestRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ingest, {
-  payload: ChannelIngestInput,
-  success: ChannelIngestResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
-  payload: ChannelGetTaskInput,
-  success: ChannelTask,
-  error: ChannelRpcError,
-});
-
-export const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
-  payload: ChannelListTasksInput,
-  success: ChannelListTasksResult,
-  error: ChannelRpcError,
-});
-
-export const ChannelGetInputRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getInput, {
-  payload: ChannelGetInputInput,
-  success: ChannelInputSnapshot,
-  error: ChannelRpcError,
-});
-
-export const ChannelCreateIdentityLinkRpc = Rpc.make(
-  CHANNEL_GATEWAY_WS_METHODS.createIdentityLink,
-  {
-    payload: ChannelIdentityLinkCreateInput,
-    success: ChannelIdentityLinkCreateResult,
-    error: ChannelRpcError,
-  },
-);
-
-export const ChannelUnlinkIdentityRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity, {
-  payload: ChannelIdentityUnlinkInput,
-  error: ChannelRpcError,
-});
-
-const SlackChannelRpcError = Schema.Union([
-  SlackChannelSettingsError,
-  EnvironmentAuthorizationError,
-]);
-
-export const SlackChannelGetSettingsRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.getSettings, {
-  payload: SlackChannelGetSettingsInput,
-  success: Schema.Array(SlackChannelSettings),
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelConfigureRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.configure, {
-  payload: SlackChannelConfigureInput,
-  success: SlackChannelSettings,
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelDisconnectRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.disconnect, {
-  payload: SlackChannelDisconnectInput,
-  error: SlackChannelRpcError,
-});
-
-export const SlackChannelSubscribeStatusRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.subscribeStatus, {
-  payload: SlackChannelSubscribeStatusInput,
-  success: SlackChannelStatusEvent,
-  error: SlackChannelRpcError,
-  stream: true,
-});
-
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "goat/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2420,6 +2437,15 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 // Register core handlers in smaller layers to stay below TypeScript's instantiation-depth limit.
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsServerCheckComputerUseRpc,
+  WsComputerUseStatusChangesRpc,
+  WsComputerUseStopRpc,
+  WsComputerUseStopAllRpc,
+  WsComputerUseResumeRpc,
+  WsComputerUseAppsRpc,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
+  WsPreviewSessionsFramesRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
@@ -2451,6 +2477,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,
+  WsServerCompactStorageRpc,
+  WsServerCleanUpStrayProcessesRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
@@ -2469,6 +2497,15 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetHostStatusRpc,
+  WsHubDeviceVerifyRpc,
+  WsServerCheckOpenCodexUpdateRpc,
+  WsServerPlanOpenCodexSyncRpc,
+  WsServerSyncOpenCodexRpc,
+  WsServerSubscribeOpenCodexSyncRpc,
+  WsHubDeviceJoinRpc,
+  WsHubDeviceLeaveRpc,
+  WsHubDeviceRepairRpc,
+  WsHubDeviceChildOptInRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
@@ -2491,6 +2528,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsRemoteLaunchesListRpc,
   WsCloudMachinesListRpc,
   WsCloudAgentsListRunsRpc,
+  WsCloudAgentsListFolderTrustRpc,
+  WsCloudAgentsAcceptFolderTrustRpc,
   WsCloudMachinesConfigureRpc,
   WsCloudMachinesDisconnectRpc,
   WsCloudMachinesCreateRpc,
@@ -2510,6 +2549,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
+  WsPullRequestsFilterOptionsRpc,
   WsPullRequestsSummaryRpc,
   WsPullRequestsRoutingRpc,
   WsPullRequestsRoutingIdentityRpc,
@@ -2662,205 +2702,17 @@ export const WsCoreRpcGroup = WsCoreServerRpcGroup.merge(WsCoreWorkspaceRpcGroup
  * GOAT Bot and Slack channel RPCs. The server registers their handlers in a layer of their own:
  * one handler layer for every RPC exceeds the type checker's instantiation budget.
  */
-export const WsChannelRpcGroup = RpcGroup.make(
-  ChannelEnsureBotRpc,
-  ChannelGetBotStatusRpc,
-  ChannelIngestRpc,
-  ChannelGetTaskRpc,
-  ChannelListTasksRpc,
-  ChannelGetInputRpc,
-  ChannelCreateIdentityLinkRpc,
-  ChannelUnlinkIdentityRpc,
-  SlackChannelGetSettingsRpc,
-  SlackChannelConfigureRpc,
-  SlackChannelDisconnectRpc,
-  SlackChannelSubscribeStatusRpc,
-).middleware(RpcScopeAuthorization);
-
-const NoteRpcErrors = Schema.Union([NoteError, NoteConflictError, EnvironmentAuthorizationError]);
-
-const WsNotesListRpc = Rpc.make(WS_METHODS.notesList, {
-  payload: NotesListInput,
-  success: NotesListResult,
-  error: NoteRpcErrors,
-});
-const WsNotesReadRpc = Rpc.make(WS_METHODS.notesRead, {
-  payload: NotesReadInput,
-  success: NoteDocument,
-  error: NoteRpcErrors,
-});
-const WsNotesWriteRpc = Rpc.make(WS_METHODS.notesWrite, {
-  payload: NotesWriteInput,
-  success: NoteDocument,
-  error: NoteRpcErrors,
-});
-const WsNotesMoveRpc = Rpc.make(WS_METHODS.notesMove, {
-  payload: NotesMoveInput,
-  success: NoteDocument,
-  error: NoteRpcErrors,
-});
-const WsNotesDeleteRpc = Rpc.make(WS_METHODS.notesDelete, {
-  payload: NotesDeleteInput,
-  success: NotesDeleteResult,
-  error: NoteRpcErrors,
-});
-const WsNotesSubscribeRpc = Rpc.make(WS_METHODS.notesSubscribe, {
-  payload: NotesSubscribeInput,
-  success: NotesEvent,
-  error: NoteRpcErrors,
-  stream: true,
-});
-const WsNotesStartWorkRpc = Rpc.make(WS_METHODS.notesStartWork, {
-  payload: NotesStartWorkInput,
-  success: NotesStartWorkResult,
-  error: NoteRpcErrors,
-});
-const WsNotesWorkTargetsRpc = Rpc.make(WS_METHODS.notesWorkTargets, {
-  payload: NotesWorkTargetsInput,
-  success: NotesWorkTargetsResult,
-  error: NoteRpcErrors,
-});
-const WsNotesWorkTargetProjectsRpc = Rpc.make(WS_METHODS.notesWorkTargetProjects, {
-  payload: NotesWorkTargetProjectsInput,
-  success: NotesWorkTargetProjectsResult,
-  error: NoteRpcErrors,
-});
+export const WsChannelRpcGroup = ChannelRpcs.middleware(RpcScopeAuthorization);
 
 /** Notes RPCs, registered by the server in a handler layer of their own like the channel group. */
-export const WsNotesRpcGroup = RpcGroup.make(
-  WsNotesListRpc,
-  WsNotesReadRpc,
-  WsNotesWriteRpc,
-  WsNotesMoveRpc,
-  WsNotesDeleteRpc,
-  WsNotesSubscribeRpc,
-  WsNotesStartWorkRpc,
-  WsNotesWorkTargetsRpc,
-  WsNotesWorkTargetProjectsRpc,
-).middleware(RpcScopeAuthorization);
+export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 
-export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup).merge(WsNotesRpcGroup);
+export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
+export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
+  .merge(WsNotesRpcGroup)
+  .merge(WsDecisionRpcGroup);
 
-const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
-const MemoryImportRpcErrors = Schema.Union([
-  Memory.MemoryRpcError,
-  Memory.MemoryImportRpcError,
-  EnvironmentAuthorizationError,
-]);
-export const WsMemoryProjectBindingGetRpc = Rpc.make(WS_METHODS.memoryProjectBindingGet, {
-  payload: Memory.MemoryProjectBindingGetInput,
-  success: Memory.MemoryProjectBinding,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryProjectBindingUpdateRpc = Rpc.make(WS_METHODS.memoryProjectBindingUpdate, {
-  payload: Memory.MemoryProjectBindingUpdateInput,
-  success: Memory.MemoryProjectBindingUpdateResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryChangesRpc = Rpc.make(WS_METHODS.memoryChanges, {
-  payload: Memory.MemoryChangesInput,
-  success: Memory.MemoryChangeSignal,
-  error: MemoryRpcErrors,
-  stream: true,
-});
-export const WsMemorySearchRpc = Rpc.make(WS_METHODS.memorySearch, {
-  payload: Memory.MemorySearchInput,
-  success: Memory.MemoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryListRpc = Rpc.make(WS_METHODS.memoryList, {
-  payload: Memory.MemoryListInput,
-  success: Memory.MemoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryReadRpc = Rpc.make(WS_METHODS.memoryRead, {
-  payload: Memory.MemoryReadInput,
-  success: Memory.MemoryItem,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHistoryRpc = Rpc.make(WS_METHODS.memoryHistory, {
-  payload: Memory.MemoryHistoryInput,
-  success: Memory.MemoryHistoryPage,
-  error: MemoryRpcErrors,
-});
-export const WsMemorySyncStatusRpc = Rpc.make(WS_METHODS.memorySyncStatus, {
-  payload: Memory.MemorySyncStatusInput,
-  success: Memory.MemorySyncStatus,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubDiagnosticsRpc = Rpc.make(WS_METHODS.memoryHubDiagnostics, {
-  payload: Memory.MemorySyncStatusInput,
-  success: Memory.MemoryHubDiagnostics,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryUpsertRpc = Rpc.make(WS_METHODS.memoryUpsert, {
-  payload: Memory.MemoryUpsertInput,
-  success: Memory.MemoryMutationReceipt,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryForgetRpc = Rpc.make(WS_METHODS.memoryForget, {
-  payload: Memory.MemoryForgetInput,
-  success: Memory.MemoryMutationReceipt,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryRevertResolutionRpc = Rpc.make(WS_METHODS.memoryRevertResolution, {
-  payload: Memory.MemoryRevertResolutionInput,
-  success: Memory.MemoryRevertResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryReadSourceRpc = Rpc.make(WS_METHODS.memoryReadSource, {
-  payload: Memory.MemoryReadSourceInput,
-  success: Memory.MemorySourcePage,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubSettingsGetRpc = Rpc.make(WS_METHODS.memoryHubSettingsGet, {
-  payload: Memory.MemoryHubSettingsGetInput,
-  success: Memory.MemoryHubSettingsView,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubSettingsUpdateRpc = Rpc.make(WS_METHODS.memoryHubSettingsUpdate, {
-  payload: Memory.MemoryHubSettingsUpdateInput,
-  success: Memory.MemoryHubSettingsUpdateResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryOwnerSourceReadPolicyGetRpc = Rpc.make(
-  WS_METHODS.memoryOwnerSourceReadPolicyGet,
-  {
-    payload: Memory.MemoryOwnerSourceReadPolicyGetInput,
-    success: Memory.MemoryOwnerSourceReadPolicyView,
-    error: MemoryRpcErrors,
-  },
-);
-export const WsMemoryOwnerSourceReadPolicyUpdateRpc = Rpc.make(
-  WS_METHODS.memoryOwnerSourceReadPolicyUpdate,
-  {
-    payload: Memory.MemoryOwnerSourceReadPolicyUpdateInput,
-    success: Memory.MemoryOwnerSourceReadPolicyView,
-    error: MemoryRpcErrors,
-  },
-);
-export const WsMemoryResetReportAttemptsRpc = Rpc.make(WS_METHODS.memoryResetReportAttempts, {
-  payload: Memory.MemoryResetReportAttemptsInput,
-  success: Memory.MemoryResetReportAttemptsResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryHubReconcileRpc = Rpc.make(WS_METHODS.memoryHubReconcile, {
-  payload: Memory.MemoryHubReconcileInput,
-  success: Memory.MemoryHubReconcileResult,
-  error: MemoryRpcErrors,
-});
-export const WsMemoryAdministrationRpcGroup = RpcGroup.make(
-  WsMemoryHubReconcileRpc,
-  WsMemoryResetReportAttemptsRpc,
-  WsMemoryOwnerSourceReadPolicyGetRpc,
-  WsMemoryOwnerSourceReadPolicyUpdateRpc,
-).middleware(RpcScopeAuthorization);
-export const WsMemoryImportProviderRpc = Rpc.make(WS_METHODS.memoryImportProvider, {
-  payload: Memory.MemoryImportProviderInput,
-  success: Memory.MemoryImportProviderResult,
-  error: MemoryImportRpcErrors,
-});
-export const WsMemoryCoreRpcGroup = RpcGroup.make(
+export {
   WsMemoryProjectBindingGetRpc,
   WsMemoryProjectBindingUpdateRpc,
   WsMemoryChangesRpc,
@@ -2876,20 +2728,19 @@ export const WsMemoryCoreRpcGroup = RpcGroup.make(
   WsMemoryReadSourceRpc,
   WsMemoryHubSettingsGetRpc,
   WsMemoryHubSettingsUpdateRpc,
-).middleware(RpcScopeAuthorization);
-export const WsMemoryImportRpcGroup =
-  RpcGroup.make(WsMemoryImportProviderRpc).middleware(RpcScopeAuthorization);
+  WsMemoryOwnerSourceReadPolicyGetRpc,
+  WsMemoryOwnerSourceReadPolicyUpdateRpc,
+  WsMemoryResetReportAttemptsRpc,
+  WsMemoryHubReconcileRpc,
+  WsMemoryImportProviderRpc,
+} from "./memoryRpc.ts";
+export const WsMemoryAdministrationRpcGroup =
+  MemoryAdministrationRpcs.middleware(RpcScopeAuthorization);
+export const WsMemoryCoreRpcGroup = MemoryCoreRpcs.middleware(RpcScopeAuthorization);
+export const WsMemoryImportRpcGroup = MemoryImportRpcs.middleware(RpcScopeAuthorization);
 export const WsMemoryRpcGroup = WsMemoryCoreRpcGroup.merge(WsMemoryImportRpcGroup).merge(
   WsMemoryAdministrationRpcGroup,
 );
 
 /** The hub's node list. A group of its own so servers and clients install it together. */
-export const WsHubNodesRpcGroup = RpcGroup.make(
-  WsHubNodesListRpc,
-  WsHubNodesSubscribeRpc,
-  WsHubNodesAddRpc,
-  WsHubNodesRemoveRpc,
-  WsHubNodesCheckRpc,
-  WsHubNodesImportRpc,
-  WsHubNodesDismissNoticeRpc,
-).middleware(RpcScopeAuthorization);
+export const WsHubNodesRpcGroup = HubNodesRpcs.middleware(RpcScopeAuthorization);

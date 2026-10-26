@@ -18,6 +18,13 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
+export const CHATGPT_USAGE_LIMIT_CODE = "subscription_sharing_usage_limit_exceeded";
+/** A ChatGPT Business admin caps plan use in other apps; only the admin can raise it. */
+export const CHATGPT_WORKSPACE_USAGE_LIMIT_CODE =
+  "subscription_sharing_workplace_individual_usage_limit_exceeded";
+/** OpenAI's partner guidelines fix this wording; the user sends it to their admin themselves. */
+export const CHATGPT_WORKSPACE_ADMIN_REQUEST =
+  "I've reached the limit for using my ChatGPT plan in T3 Code. Could you increase our workspace's usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!";
 
 export function usesChatGptSharing(provider: ServerProvider | null | undefined): boolean {
   return provider?.auth.status === "authenticated" && provider.auth.subscriptionSharing === true;
@@ -672,7 +679,10 @@ export function collectProviderUsageLimits(
   for (const provider of providersWithLimits(providers)) {
     if (provider.driver !== selected.driver || !provider.usageLimits) continue;
     const snapshot = { provider, limits: provider.usageLimits };
-    const key = resolveKey(nativeReport(provider)) ?? `instance:${provider.instanceId}`;
+    const key =
+      provider.usageLimits.quotaPool !== undefined
+        ? `instance:${provider.instanceId}`
+        : (resolveKey(nativeReport(provider)) ?? `instance:${provider.instanceId}`);
     const previous = nativeByAccount.get(key);
     const previousUsable = previous ? limitsNotice(previous.usage.limits) === null : false;
     const usable = limitsNotice(snapshot.limits) === null;
@@ -706,6 +716,7 @@ export function collectProviderUsageLimits(
     usage: { provider, limits },
     credits,
   } of native) {
+    const routed = limits.quotaPool !== undefined;
     const key = resolveKey(nativeReport(provider));
     const hubCredits = sources
       .flatMap((source) => source.accounts.map((account) => ({ source, account })))
@@ -733,20 +744,28 @@ export function collectProviderUsageLimits(
       id: provider.instanceId,
       driver: provider.driver,
       label: `${provider.displayName?.trim() || String(provider.driver)} [${provider.instanceId}]`,
-      ...(provider.auth.label ? { plan: provider.auth.label } : {}),
+      ...(routed
+        ? { sourceLabel: `via OpenCodex Home ${limits.quotaPool!.homeId}` }
+        : provider.auth.label
+          ? { plan: provider.auth.label }
+          : {}),
       instanceId: provider.instanceId,
-      resetCreditInput:
-        hubCreditId && hubCredits
-          ? {
-              sourceId: hubCredits.source.id,
-              accountId: hubCredits.account.id,
-              creditId: hubCreditId,
-            }
-          : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
+      ...(routed
+        ? {}
+        : {
+            resetCreditInput:
+              hubCreditId && hubCredits
+                ? {
+                    sourceId: hubCredits.source.id,
+                    accountId: hubCredits.account.id,
+                    creditId: hubCreditId,
+                  }
+                : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
+          }),
       ...(provider.displayName ? { displayName: provider.displayName } : {}),
       ...(provider.accentColor ? { accentColor: provider.accentColor } : {}),
-      ...(provider.auth.email ? { email: provider.auth.email } : {}),
-      limits: shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
+      ...(!routed && provider.auth.email ? { email: provider.auth.email } : {}),
+      limits: !routed && shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
   }
   for (const source of sources) {
@@ -758,7 +777,7 @@ export function collectProviderUsageLimits(
         id: `${source.id}:${account.id}`,
         driver: account.driver,
         label: `${source.label} · ${account.id}`,
-        sourceLabel: "CLI Proxy",
+        sourceLabel: source.kind === "opencodex" ? source.label : "CLI Proxy",
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {
               resetCreditInput: {

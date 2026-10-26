@@ -1,9 +1,12 @@
 import * as NodeAssert from "node:assert/strict";
 
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
   GOAT_ORCHESTRATION_SECTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
+import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -13,7 +16,6 @@ import {
 
 describe("buildCodexAdditionalContext", () => {
   describe.each([
-    { model: "gpt-5.3-codex", reasoningEffort: "high" },
     { model: "custom-model", modelName: "Custom 🦊 Model", reasoningEffort: "xhigh" },
   ])("with runtime $model", (runtime) => {
     it.each([
@@ -24,6 +26,7 @@ describe("buildCodexAdditionalContext", () => {
       { browser: true, device: false },
       { browser: false, device: true },
       { browser: true, device: true },
+      { browser: true, device: true, computerUse: true },
     ])("keeps every entry within Codex's per-entry cap with tools %j", (availability) => {
       const context = buildCodexAdditionalContext(runtime, availability);
 
@@ -44,8 +47,9 @@ describe("buildCodexAdditionalContext", () => {
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
     });
+    NodeAssert.ok(Object.keys(context).every((key) => key.startsWith("goat_code_")));
     const sections = Object.keys(context)
-      .filter((key) => key.startsWith("t3_code_orchestration_"))
+      .filter((key) => key.startsWith("goat_code_orchestration_"))
       .sort()
       .map((key) => context[key]!);
 
@@ -57,6 +61,34 @@ describe("buildCodexAdditionalContext", () => {
       sections.map((entry) => entry.value).join("\n\n"),
       GOAT_ORCHESTRATION_INSTRUCTIONS.trim(),
     );
+  });
+
+  it("delivers the development discipline even when GOAT tools are unavailable", () => {
+    const context = buildCodexAdditionalContext({ model: "gpt-5.3-codex" }, false);
+    NodeAssert.deepEqual(context.goat_code_development, {
+      kind: "application",
+      value: GOAT_DEVELOPMENT_INSTRUCTIONS,
+    });
+  });
+
+  it("names only tools and paths the GOAT registry has", () => {
+    const entries = Object.values(agentSurfaceRegistry);
+    const listed = new Set(entries.map(listedToolName));
+    const paths = new Set<string>(entries.map((entry) => entry.path));
+    const context = buildCodexAdditionalContext(
+      { model: "gpt-5.3-codex", reasoningEffort: "high" },
+      { browser: true, device: true, computerUse: true },
+    );
+    for (const [key, entry] of Object.entries(context)) {
+      for (const name of entry.value.match(/\bgoat_[a-z_]+\b/g) ?? []) {
+        NodeAssert.ok(listed.has(name), `${key} names ${name}, which no GOAT tool is listed as`);
+      }
+      // Any quoted resource.verb is meant as a path, so a misspelled resource fails too.
+      // `tools.<name>` is Codex code mode's tool namespace, not a GOAT path.
+      for (const [, path] of entry.value.matchAll(/`((?!tools\.)[a-z_]+\.[a-z_]+)`/g)) {
+        NodeAssert.ok(paths.has(path!), `${key} names ${path}, which is not a GOAT path`);
+      }
+    }
   });
 });
 
@@ -73,5 +105,5 @@ describe("buildCodexDeveloperInstructions", () => {
 });
 
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
-  return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
+  return buildCodexAdditionalContext(runtime).goat_code_runtime!.value;
 }

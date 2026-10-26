@@ -22,6 +22,7 @@ import {
   type ThreadId,
   type EnvironmentId,
 } from "@goat/contracts";
+import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,7 +41,7 @@ import { botFullAccessCommandIdFor, botLaunchIdsFor } from "./channelIds.ts";
 
 const GOAT_BOT_TITLE = "GOAT bot";
 
-export const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
+const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
@@ -143,7 +144,7 @@ const make = Effect.gen(function* () {
           threadId: ids.threadId,
           projectId: project.projectId,
           title: GOAT_BOT_TITLE,
-          modelSelection: settings.textGenerationModelSelection,
+          modelSelection: resolveGoatBotModelSelection(settings),
           runtimeMode: GOAT_BOT_RUNTIME_MODE,
           interactionMode: "default",
           workspaceStrategy: { type: "root" },

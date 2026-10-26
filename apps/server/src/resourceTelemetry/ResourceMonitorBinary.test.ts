@@ -146,6 +146,51 @@ describe("ResourceMonitorBinary", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect.each(["release", "debug"])(
+    "resolves a cargo %s binary from the built server layout",
+    (profile) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-resource-monitor-binary-",
+        });
+        const projectDirectory = path.join(baseDir, "repo");
+        const distDirectory = path.join(projectDirectory, "apps", "server", "dist");
+        const binaryDirectory = path.join(
+          projectDirectory,
+          "native",
+          "resource-monitor",
+          "target",
+          profile,
+        );
+        const binaryPath = path.join(binaryDirectory, "goat-resource-monitor.exe");
+        yield* fileSystem.makeDirectory(distDirectory, { recursive: true });
+        yield* fileSystem.makeDirectory(binaryDirectory, { recursive: true });
+        yield* fileSystem.writeFileString(binaryPath, "binary");
+        yield* fileSystem.chmod(binaryPath, 0o755);
+
+        const service = yield* ResourceMonitorBinary.make().pipe(
+          // The bundled module lives in dist rather than src/resourceTelemetry.
+          Effect.provideService(Path.Path, {
+            ...path,
+            resolve: (...segments) =>
+              path.resolve(
+                ...segments.map((segment) =>
+                  segment === import.meta.dirname ? distDirectory : segment,
+                ),
+              ),
+          }),
+          Effect.provide(ServerConfig.layerTest(projectDirectory, baseDir)),
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(HostProcess.Architecture, "arm64"),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+
+        assert.equal(yield* service.resolve, binaryPath);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects bundled glibc binaries on musl Linux hosts", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

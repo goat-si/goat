@@ -28,6 +28,8 @@ const asLastKnown = (hosts: ReadonlyArray<HostStatusEntry>): ReadonlyArray<HostS
 export interface FleetHostStatusSource {
   readonly environmentId: EnvironmentId;
   readonly atom: ReturnType<typeof hostStatusAtom>;
+  /** Reads only that machine, so how long it takes is that machine's own responsiveness. */
+  readonly local: boolean;
 }
 
 /**
@@ -50,7 +52,7 @@ export const fleetHostReportsAtom = Atom.make((get) => {
     options?: { readonly local: boolean },
   ): ReadonlyArray<HostStatusEntry> | null => {
     const atom = hostStatusAtom(environmentId, options);
-    sources.push({ environmentId, atom });
+    sources.push({ environmentId, atom, local: options?.local === true });
     const result = get(atom);
     const hosts = Option.getOrNull(AsyncResult.value(result))?.hosts ?? null;
     if (hosts === null) return AsyncResult.isFailure(result) ? [] : null;

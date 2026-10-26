@@ -22,7 +22,7 @@ import {
   retryManagedTunnelRegistration,
 } from "./managedTunnelStartup.ts";
 
-export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
+const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const cloudLink = yield* CloudLink.CloudLink;
@@ -70,12 +70,12 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
           const recoverManagedTunnel = (config: RelayManagedEndpointRuntimeConfig) =>
             runManagedTunnelRecovery(config).pipe(
               Effect.tap((recovered) =>
-                recovered ? Effect.logInfo("T3 Connect managed tunnel recovered") : Effect.void,
+                recovered ? Effect.logInfo("GOAT Connect managed tunnel recovered") : Effect.void,
               ),
               Effect.catchCause((cause) =>
                 Cause.hasInterrupts(cause)
                   ? Effect.interrupt
-                  : Effect.logWarning("Failed to recover the T3 Connect managed tunnel", {
+                  : Effect.logWarning("Failed to recover the GOAT Connect managed tunnel", {
                       cause,
                     }),
               ),
@@ -87,7 +87,7 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
           const wantsCliLink = hasCloudPublicConfig
             ? yield* CloudCliState.readCliDesiredCloudLink.pipe(
                 Effect.catch((cause) =>
-                  Effect.logWarning("Failed to read the desired T3 Connect link", { cause }).pipe(
+                  Effect.logWarning("Failed to read the desired GOAT Connect link", { cause }).pipe(
                     Effect.as(false),
                   ),
                 ),
@@ -98,7 +98,7 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
           const desiredCliLinkMode = wantsCliLink
             ? yield* CloudCliState.readCliDesiredLinkMode.pipe(
                 Effect.catch((cause) =>
-                  Effect.logWarning("Failed to read the desired T3 Connect link mode", {
+                  Effect.logWarning("Failed to read the desired GOAT Connect link mode", {
                     cause,
                   }).pipe(Effect.as("managed" as const)),
                 ),
@@ -111,7 +111,7 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
               ? false
               : yield* cloudLink.startManagedTunnelIfOriginConfirmed(localOrigin).pipe(
                   Effect.catch((cause) =>
-                    Effect.logWarning("Failed to start the confirmed T3 Connect tunnel", {
+                    Effect.logWarning("Failed to start the confirmed GOAT Connect tunnel", {
                       cause,
                     }).pipe(Effect.as(false)),
                   ),
@@ -124,12 +124,12 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
               Effect.tap((started) =>
                 started
                   ? Effect.logWarning(
-                      "T3 Connect started the stored tunnel without relay confirmation",
+                      "GOAT Connect started the stored tunnel without relay confirmation",
                     )
                   : Effect.void,
               ),
               Effect.catch((cause) =>
-                Effect.logWarning("Failed to start the stored T3 Connect tunnel", { cause }),
+                Effect.logWarning("Failed to start the stored GOAT Connect tunnel", { cause }),
               ),
               Effect.asVoid,
             );
@@ -144,13 +144,13 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
           ).pipe(
             Effect.tap((result) =>
               result.status === "ready"
-                ? Effect.logInfo("T3 Connect managed tunnel recovery registered")
+                ? Effect.logInfo("GOAT Connect managed tunnel recovery registered")
                 : Effect.void,
             ),
             Effect.catchCause((cause) =>
               Cause.hasInterrupts(cause)
                 ? Effect.interrupt
-                : Effect.logWarning("Failed to register T3 Connect managed tunnel recovery", {
+                : Effect.logWarning("Failed to register GOAT Connect managed tunnel recovery", {
                     cause,
                   }).pipe(Effect.as({ status: "unavailable" as const })),
             ),
@@ -182,17 +182,17 @@ export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<voi
                 (reconcile) =>
                   retryDesiredLinkReconcile(reconcile, CloudLink.shouldRetryCloudLink, (cause) =>
                     Effect.logWarning(
-                      "T3 Connect relay is still unavailable; retrying the desired link in the background",
+                      "GOAT Connect relay is still unavailable; retrying the desired link in the background",
                       { cause },
                     ),
                   ),
                 Effect.tap((mode) =>
                   mode === null
                     ? Effect.void
-                    : Effect.logInfo("T3 Connect desired link reconciled on startup"),
+                    : Effect.logInfo("GOAT Connect desired link reconciled on startup"),
                 ),
                 Effect.catch((cause) =>
-                  Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+                  Effect.logWarning("Failed to reconcile GOAT Connect desired link on startup", {
                     cause,
                   }).pipe(Effect.as(null)),
                 ),

@@ -65,9 +65,6 @@ export const LEGACY_BOOT_SERVICE_NAMES: BootServiceNames = {
 
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
-export const BOOT_SERVICE_UNIT_FILE = BOOT_SERVICE_NAMES.unitFile;
-export const BOOT_SERVICE_LAUNCHD_LABEL = BOOT_SERVICE_NAMES.launchdLabel;
-export const BOOT_SERVICE_PLIST_FILE = plistFileOf(BOOT_SERVICE_NAMES);
 const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
 const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 /**
@@ -409,10 +406,10 @@ function launchdManager(input: {
   );
   const domainTarget = `gui/${input.uid}`;
   const serviceTarget = `${domainTarget}/${input.names.launchdLabel}`;
-  // bootout/enable are optional: they fail on not-loaded states that are fine
-  // to proceed from. The strict `bootstrap` runs last and is also the start:
-  // loading a RunAtLoad/KeepAlive plist starts the job, so a separate kickstart
-  // would kill and restart a server it just booted.
+  // bootout/enable are optional: they fail on not-loaded states that are fine to proceed from.
+  // From a Background (SSH) session, bootstrap loads a RunAtLoad job without starting it (#624);
+  // kickstart without -k starts it there and leaves a job that already started alone.
+  const kickstart = { step: "starting the service", command: "launchctl", optional: true };
   return {
     kind: "launchd",
     unitPath,
@@ -448,6 +445,7 @@ function launchdManager(input: {
         command: "launchctl",
         args: ["bootstrap", domainTarget, unitPath],
       },
+      { ...kickstart, args: ["kickstart", serviceTarget] },
     ],
     restart: [
       {
@@ -455,9 +453,9 @@ function launchdManager(input: {
         command: "launchctl",
         args: ["bootstrap", domainTarget, unitPath],
       },
+      { ...kickstart, args: ["kickstart", serviceTarget] },
     ],
-    // No `launchctl disable` here: a persisted override would sabotage a later
-    // reinstall.
+    // No `launchctl disable` here: a persisted override would sabotage a later reinstall.
     deactivate: [
       {
         step: "stopping the service",
@@ -900,8 +898,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       if (/^\s*pid = [1-9]\d*/m.test(stdout)) return "running";
       const lastExit = /last exit code = (\d+)/.exec(stdout);
       if (lastExit !== null && lastExit[1] !== "0") return "dead";
-      // Loaded, not started yet. RunAtLoad can lag a GUI login; an SSH
-      // Background session may stay here until the next login.
+      // Loaded, not started yet: the kickstart after bootstrap has not taken effect.
       return "pending";
     });
 

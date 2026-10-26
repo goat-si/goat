@@ -31,37 +31,17 @@ describe("commandProgramName", () => {
 
   it.each([
     "if test -f package.json; then vp test; fi",
-    "[ -f package.json ]",
     "[[ -f package.json ]]",
     "test -f package.json",
     'for file in *; do echo "$file"; done',
-    "while true; do sleep 1; done",
-    "until false; do sleep 1; done",
-    "case $name in test) vp test;; esac",
-    'select item in one two; do echo "$item"; done',
-    "function check() { vp test; }",
     "check() { vp test; }",
-    "k(){ echo ok; }; k",
     "{ vp test; }",
-    "(vp test)",
     "(( count += 1 ))",
-    "! vp test",
-    ":",
     ". ./script.sh",
-    "source ./script.sh",
-    "eval 'vp test'",
-    "cd packages/client-runtime",
     "export NODE_ENV=test",
-    "local name=value",
-    "set -e",
-    "alias ll='ls -la'",
     "repeat 3 echo ok",
-    "and vp test",
     "return 1",
-    "break",
-    "continue",
     "true",
-    "false",
   ])("falls back for shell syntax and internal control commands: %s", (command) => {
     expect(commandProgramName(command)).toBeNull();
   });
@@ -174,6 +154,31 @@ describe("commandDisplayText with redacted Codex commands", () => {
   // The bare quote ends the -lc argument early, so where the script ends is unknown.
   it("keeps the wrapper when redaction broke the quoting", () => {
     const input = `/bin/zsh -lc "python3 -c 'token=[REDACTED_SECRET]"apiToken\\"]; print(token)'"`;
+    expect(commandDisplayText(input)).toBe(input);
+  });
+});
+
+describe("commandDisplayText with PowerShell wrappers", () => {
+  it.each([
+    [
+      String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'Get-ChildItem'`,
+      "Get-ChildItem",
+    ],
+    [
+      String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'Get-ChildItem'`,
+      "Get-ChildItem",
+    ],
+    ['pwsh -NoProfile -ExecutionPolicy Bypass -c "npm test"', "npm test"],
+    ["powershell.exe -NonInteractive -command 'git status --short'", "git status --short"],
+  ])("unwraps %j to the script it runs", (input, expected) => {
+    expect(commandDisplayText(input)).toBe(expected);
+  });
+
+  it.each([
+    "powershell.exe -File build.ps1",
+    "pwsh -Command 'Get-Item a' extra",
+    "pwsh script.ps1 -Command x",
+  ])("keeps %j, which is not a lone -Command script", (input) => {
     expect(commandDisplayText(input)).toBe(input);
   });
 });

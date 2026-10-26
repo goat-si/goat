@@ -14,6 +14,10 @@ import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HostProcess from "@goat/shared/HostProcess";
+import {
+  ANALYTICS_COMMON_PROPERTIES,
+  ANALYTICS_EVENT_PROPERTIES,
+} from "@goat/shared/analyticsAllowlist";
 
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
@@ -70,6 +74,16 @@ const SentBatch = Schema.fromJsonString(
   }),
 );
 const decodeSentBatch = Schema.decodeEffect(SentBatch);
+const decodeDeliveredBatch = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      api_key: Schema.String,
+      batch: Schema.Array(
+        Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Unknown) }),
+      ),
+    }),
+  ),
+);
 type SentEvent = (typeof SentBatch.Type)["batch"][number];
 type Respond = (
   request: HttpClientRequest.HttpClientRequest,
@@ -313,5 +327,78 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
 
       assert.deepEqual(capturedPaths, []);
     }),
+  );
+
+  it.effect(
+    "sends to GOAT's ingest with GOAT's key by default, on every attempt, and never upstream",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<{ readonly url: string; readonly body: string }> = [];
+        const client = HttpClient.make((request) =>
+          Effect.sync(() => {
+            if (request.body._tag === "Uint8Array") {
+              requests.push({
+                url: request.url,
+                body: new TextDecoder().decode(request.body.body),
+              });
+            }
+            // The first send fails, so the retry path is covered too.
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(null, { status: requests.length === 1 ? 503 : 200 }),
+            );
+          }),
+        );
+        const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provideMerge(
+            ServerConfig.ServerConfig.layerTest(process.cwd(), {
+              prefix: "goat-telemetry-default-",
+            }),
+          ),
+          Layer.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GOAT_TELEMETRY_ENABLED: true })),
+          ),
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(HostProcess.Platform, "linux"),
+              Layer.succeed(HostProcess.Architecture, "x64"),
+              Layer.succeed(HttpClient.HttpClient, client),
+            ),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+          for (let second = 0; second < 120; second += 1) {
+            yield* TestClock.adjust("1 second");
+          }
+        }).pipe(Effect.provide(runtimeLayer));
+
+        assert.deepEqual(
+          requests.map((request) => request.url),
+          ["https://ingest.trygoat.ai/batch/", "https://ingest.trygoat.ai/batch/"],
+        );
+        const bodies = yield* Effect.forEach(requests, (request) =>
+          decodeDeliveredBatch(request.body),
+        );
+        assert.deepEqual(
+          bodies.map((body) => body.api_key),
+          ["goat_public_ingest_v1", "goat_public_ingest_v1"],
+        );
+        // The ingest keeps only allowlisted properties; the PostHog flag is dropped there on purpose.
+        const allowed = new Set([
+          ...ANALYTICS_COMMON_PROPERTIES,
+          ...(ANALYTICS_EVENT_PROPERTIES["server.boot.heartbeat"] ?? []),
+          "$process_person_profile",
+        ]);
+        const sentKeys = bodies.flatMap((body) =>
+          body.batch.flatMap((event) => Object.keys(event.properties)),
+        );
+        assert.deepEqual(
+          sentKeys.filter((key) => !allowed.has(key)),
+          [],
+        );
+      }),
   );
 });

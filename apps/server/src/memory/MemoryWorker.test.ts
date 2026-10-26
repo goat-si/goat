@@ -9,20 +9,22 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
-import migration from "../persistence/Migrations/076_Memory.ts";
-import hubMigration from "../persistence/Migrations/077_MemoryHubSync.ts";
-import lineageMigration from "../persistence/Migrations/080_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/081_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
+import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
+import threadIndexMigration from "../persistence/Migrations/096_MemorySummaryWorkThreadIndex.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation } from "./MemoryDecider.ts";
@@ -53,6 +55,7 @@ const setup = Layer.effectDiscard(
     yield* reportMigration;
     yield* usageMigration;
     yield* revertMigration;
+    yield* threadIndexMigration;
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY,event_id TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT,occurred_at TEXT,application_event_version INTEGER,aggregate_kind TEXT)`;
     yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,deleted_at TEXT)`;
@@ -159,6 +162,14 @@ const decodeMessage = Schema.decodeUnknownEffect(
 const decodeOperation = Schema.decodeUnknownEffect(M.MemoryOperation);
 const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(M.OrchestrationV2RunJson));
 const encodeRun = Schema.encodeSync(Schema.fromJsonString(M.OrchestrationV2RunJson));
+// Counts finished spans by name, so a test can tell repeated work from settled work.
+const countingTracer = (counts: Map<string, number>) =>
+  Tracer.make({
+    span: (options) => {
+      counts.set(options.name, (counts.get(options.name) ?? 0) + 1);
+      return new Tracer.NativeSpan(options);
+    },
+  });
 const seed = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${threadId},NULL)`;
@@ -343,32 +354,16 @@ describe("MemoryWorker", () => {
       [5000, 30000, 120000, 600000, 600000],
     );
   });
-  it.effect("refuses generic claim execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("claim")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic resolution execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("resolve")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
-  );
-  it.effect("refuses generic pending revert execution", () =>
-    Effect.gen(function* () {
-      const worker = yield* Worker.MemoryWorker;
-      assert.strictEqual(
-        (yield* worker.execute(work("revert_intent")).pipe(Effect.flip)).code,
-        "unsupported_operation",
-      );
-    }).pipe(Effect.provide(live())),
+  it.effect.each(["claim", "resolve", "revert_intent"] as const)(
+    "refuses generic %s execution",
+    (kind) =>
+      Effect.gen(function* () {
+        const worker = yield* Worker.MemoryWorker;
+        assert.strictEqual(
+          (yield* worker.execute(work(kind)).pipe(Effect.flip)).code,
+          "unsupported_operation",
+        );
+      }).pipe(Effect.provide(live())),
   );
   it.effect("refuses a foreign runtime owner", () =>
     Effect.gen(function* () {
@@ -979,7 +974,7 @@ describe("MemoryWorker", () => {
       }).pipe(Effect.provide(live(false, (input) => inputs.push(input), local, 400000)));
     },
   );
-  it.effect("revisits consolidation at exactly 24 hours after extracting turns", () =>
+  it.effect("revisits consolidation on the first recovery scan from 24 hours on", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       yield* seed;
@@ -996,6 +991,15 @@ describe("MemoryWorker", () => {
         0,
       );
       yield* TestClock.adjust(1);
+      yield* worker.sweepDue();
+      // The scan just before the boundary found nothing; the next scheduled one consolidates.
+      assert.strictEqual(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE kind='consolidate'`)[0]!.count,
+        0,
+      );
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
       yield* worker.sweepDue();
       assert.strictEqual(
         (yield* sql<{
@@ -1189,6 +1193,71 @@ describe("MemoryWorker", () => {
       );
     }).pipe(Effect.provide(live())),
   );
+  it.effect("drains a summary work history far above the store budget to its live threads", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const worker = yield* Worker.MemoryWorker;
+      const threads = 2000;
+      const runs = 45;
+      // Half the threads are live; the rest were deleted or dropped by history compaction.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads - 1})
+        INSERT INTO orchestration_v2_projection_threads SELECT 'synthetic-'||i,CASE WHEN i%4=1 THEN ${now} END FROM n WHERE i%4!=3`;
+      // Every run left a row the size of a real one; only the newest per thread completed.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads * runs - 1})
+        INSERT INTO memory_outbox (id,space,memory_id,kind,status,metadata_json,attempt,next_attempt_at)
+        SELECT 'synthetic:'||i,${space},${memoryId},'summary',CASE WHEN i%${runs}=${runs - 1} THEN 'completed' ELSE 'cancelled' END,
+        json_object('kind','summary','sourceThread',json_object('environmentId',${environmentId},'threadId','synthetic-'||CAST(i/${runs} AS INTEGER)),
+          'observedThroughSequence',i%${runs},'sourceWatermark',json_object('fromEventId',${id(10)},'toEventId',${id(11)},'throughSequence',i%${runs}),
+          'memoryId',${memoryId},'operationId',${id(4)},'revisionId',${id(5)},'modelSelection',json_object('instanceId','codex','model','fixture'),
+          'evidence',printf('%.1100c','x')),1,0
+        FROM n`;
+      assert.isAbove((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_BUDGET_BYTES);
+      const rows = () =>
+        sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE id LIKE 'synthetic:%'`.pipe(
+          Effect.map((result) => result[0]!.count),
+        );
+      // One sweep runs the whole paged pass: the one-time compaction of an old store.
+      yield* worker.sweepDue();
+      assert.strictEqual(yield* rows(), threads / 2);
+      assert.isBelow((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_TARGET_BYTES);
+    }).pipe(Effect.provide(live())),
+  );
+  it.effect("settles a run that later messages invalidated instead of rereading it", () => {
+    const spans = new Map<string, number>();
+    const reads = () => spans.get("MemoryWorker.readSource") ?? 0;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      const worker = yield* Worker.MemoryWorker;
+      const original = (yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
+      const message = yield* decodeMessage(original.payload_json);
+      // A follow-up message whose run never reports, so the completed run's source stays stale.
+      yield* sql`INSERT INTO orchestration_events VALUES (3,${id(30)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make("follow-up"), runId: M.RunId.make("run-queued") })},${now},2,'thread')`;
+      const sweep = worker.sweepDue().pipe(Effect.withTracer(countingTracer(spans)));
+      yield* sweep;
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+      yield* sweep;
+      assert.deepStrictEqual(
+        yield* sql`SELECT kind,status FROM memory_outbox WHERE kind IN ('summary','consolidate')`,
+        [{ kind: "summary", status: "cancelled" }],
+      );
+      const settled = reads();
+      for (let pass = 0; pass < 3; pass++) {
+        yield* sweep;
+        yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+        yield* sweep;
+      }
+      assert.strictEqual(reads(), settled);
+      // Eight sweeps over one hour sample storage at its start and at its end.
+      assert.strictEqual(spans.get("MemoryStore.measureAllocation"), 2);
+    }).pipe(Effect.provide(live()));
+  });
 });
 
 it.effect.each(

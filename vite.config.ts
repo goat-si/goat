@@ -2,80 +2,7 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
-// GOAT tests that still select jsdom per file. Move each to a *.browser.test file or a Vitest
-// project environment, then drop it here.
-const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [
-  "apps/mobile/src/components/MediaVideoPlayer.test.tsx",
-  "apps/mobile/src/features/cloud/CloudAuthProvider.disabled.test.tsx",
-  "apps/mobile/src/features/cloud/CloudAuthProvider.test.ts",
-  "apps/mobile/src/features/decisions/useDecisionInbox.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotBubble.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotDayStamp.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotScreen.memory.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotTimelineRow.test.tsx",
-  "apps/mobile/src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
-  "apps/mobile/src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
-  "apps/mobile/src/features/goat-bot/useMobileGoatBotSession.test.tsx",
-  "apps/mobile/src/features/goat-bot/useReplying.test.tsx",
-  "apps/mobile/src/features/settings/MemorySyncDiagnostics.test.tsx",
-  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx",
-  "apps/mobile/src/features/threads/HumanHandoffCard.test.tsx",
-  "apps/mobile/src/features/threads/SubagentRow.memory.test.tsx",
-  "apps/mobile/src/features/threads/ThreadHeader.memory.test.tsx",
-  "apps/mobile/src/features/threads/ThreadMarkdownImage.test.tsx",
-  "apps/mobile/src/lib/visible-animations.test.tsx",
-  "apps/web/src/components/ChatView.ssh.test.tsx",
-  "apps/web/src/components/ComposerPromptEditorTiptap.mount.test.tsx",
-  "apps/web/src/components/RelativeTimeLabel.test.tsx",
-  "apps/web/src/components/ThreadRouteView.test.tsx",
-  "apps/web/src/components/chat/ChatComposer.ssh.test.tsx",
-  "apps/web/src/components/chat/ChatHeader.memory.test.tsx",
-  "apps/web/src/components/chat/HandoffCard.test.tsx",
-  "apps/web/src/components/chat/V2ItemInspector.test.tsx",
-  "apps/web/src/components/chat/useAssistantCitationTarget.test.tsx",
-  "apps/web/src/components/decisions/DecisionInbox.test.tsx",
-  "apps/web/src/components/decisions/DecisionUserInputForm.test.tsx",
-  "apps/web/src/components/files/AttachmentFilePreview.media.test.tsx",
-  "apps/web/src/components/files/FileMarkdownSelectionToolbar.test.tsx",
-  "apps/web/src/components/files/FilePreviewPanel.test.ts",
-  "apps/web/src/components/files/ProjectFilePicker.test.tsx",
-  "apps/web/src/components/files/pdf/PdfFilePreview.test.tsx",
-  "apps/web/src/components/files/pdf/pdfSearch.test.ts",
-  "apps/web/src/components/goatBot/GoatBotChatView.empty.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotComposer.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotSidebarRow.preview.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotThreadView.visit.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.arrive.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.memory.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.receipt.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.replying.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.time.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotHome.strictMode.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotHome.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotReadMenu.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotSession.test.tsx",
-  "apps/web/src/components/media/MediaImagePreview.test.tsx",
-  "apps/web/src/components/media/MediaVideoPlayer.test.tsx",
-  "apps/web/src/components/preview/PreviewAddressBar.test.tsx",
-  "apps/web/src/components/settings/CodexHomeRouteSection.test.tsx",
-  "apps/web/src/components/settings/ConnectionEnvironmentsSection.test.tsx",
-  "apps/web/src/components/settings/HubDeviceCard.test.tsx",
-  "apps/web/src/components/settings/MemoryScopePicker.test.tsx",
-  "apps/web/src/components/settings/MemoryScopeSettings.subscriptions.test.tsx",
-  "apps/web/src/components/settings/MemorySettings.test.tsx",
-  "apps/web/src/components/settings/SshRuntimeSettingsRow.test.tsx",
-  "apps/web/src/components/settings/settingsDrafts.test.tsx",
-  "apps/web/src/components/sidebar/SidebarChrome.test.tsx",
-  "apps/web/src/components/sidebar/SidebarEnvironmentConnection.test.tsx",
-  "apps/web/src/components/sidebar/useThreadContextDrag.test.ts",
-  "apps/web/src/fileContextMenu.test.ts",
-  "apps/web/src/filePathCopy.test.ts",
-  "apps/web/src/hooks/settingsPersistence.hook.test.tsx",
-  "apps/web/src/hooks/useCopyConnectionDiagnostic.test.tsx",
-  "apps/web/src/lib/memoryImportRecoveryStorage.test.ts",
-  "apps/web/src/lib/storageMigration.integration.test.ts",
-];
+const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [];
 
 // GOAT code that predates upstream's goat/prefer-effect-fn rule (cycle 261021). Convert a file
 // to Effect.fn and drop it here; do not add new entries.
@@ -182,7 +109,7 @@ const PREFER_EFFECT_FN_BACKLOG: Array<string> = [
   "apps/server/src/orchestration-v2/QuestionEscalationService.ts",
   "apps/server/src/orchestration-v2/RunExecutionService.ts",
   "apps/server/src/orchestration-v2/ThreadManagementService.ts",
-  "apps/server/src/persistence/Migrations/077_MemoryHubSync.ts",
+  "apps/server/src/persistence/Migrations/078_MemoryHubSync.ts",
   "apps/server/src/project/ManagedProjectFolders.ts",
   "apps/server/src/provider/CodexHomeRequests.ts",
   "apps/server/src/provider/CodexRouteService.ts",
@@ -233,72 +160,96 @@ const PREFER_EFFECT_FN_BACKLOG: Array<string> = [
 // GOAT web tests that predate upstream's disposable render helper (apps/web/test/render.tsx,
 // cycle 261021). Move each to `await using screen = await render(...)` and drop it here.
 const DISPOSABLE_RENDER_BACKLOG: Array<string> = [
-  "apps/web/src/components/ChatView.ssh.test.tsx",
-  "apps/web/src/components/ComposerPromptEditorTiptap.mount.test.tsx",
-  "apps/web/src/components/RelativeTimeLabel.test.tsx",
-  "apps/web/src/components/ThreadRouteView.test.tsx",
+  "apps/web/src/components/ChatView.ssh.browser.test.tsx",
+  "apps/web/src/components/ComposerPromptEditorTiptap.mount.browser.test.tsx",
+  "apps/web/src/components/RelativeTimeLabel.browser.test.tsx",
+  "apps/web/src/components/ThreadRouteView.browser.test.tsx",
   "apps/web/src/components/auth/ConnectAgentSurface.browser.test.tsx",
-  "apps/web/src/components/chat/ChatComposer.ssh.test.tsx",
-  "apps/web/src/components/chat/ChatHeader.memory.test.tsx",
-  "apps/web/src/components/chat/HandoffCard.test.tsx",
-  "apps/web/src/components/chat/V2ItemInspector.test.tsx",
-  "apps/web/src/components/chat/useAssistantCitationTarget.test.tsx",
-  "apps/web/src/components/decisions/DecisionInbox.test.tsx",
-  "apps/web/src/components/decisions/DecisionUserInputForm.test.tsx",
+  "apps/web/src/components/chat/ChatComposer.ssh.browser.test.tsx",
+  "apps/web/src/components/chat/ChatHeader.memory.browser.test.tsx",
+  "apps/web/src/components/chat/HandoffCard.browser.test.tsx",
+  "apps/web/src/components/chat/V2ItemInspector.browser.test.tsx",
+  "apps/web/src/components/chat/useAssistantCitationTarget.browser.test.tsx",
+  "apps/web/src/components/decisions/DecisionInbox.browser.test.tsx",
+  "apps/web/src/components/decisions/DecisionUserInputForm.browser.test.tsx",
   "apps/web/src/components/decisions/useDecisionInbox.browser.test.tsx",
   "apps/web/src/components/desktop/HubNodesImportCoordinator.browser.test.tsx",
-  "apps/web/src/components/files/AttachmentFilePreview.media.test.tsx",
-  "apps/web/src/components/files/FileMarkdownSelectionToolbar.test.tsx",
-  "apps/web/src/components/files/FilePreviewPanel.test.ts",
-  "apps/web/src/components/files/ProjectFilePicker.test.tsx",
-  "apps/web/src/components/files/pdf/PdfFilePreview.test.tsx",
+  "apps/web/src/components/files/AttachmentFilePreview.media.browser.test.tsx",
+  "apps/web/src/components/files/FileMarkdownSelectionToolbar.browser.test.tsx",
+  "apps/web/src/components/files/FilePreviewPanel.browser.test.ts",
+  "apps/web/src/components/files/ProjectFilePicker.browser.test.tsx",
+  "apps/web/src/components/files/pdf/PdfFilePreview.browser.test.tsx",
   "apps/web/src/components/files/pdf/usePdfDocument.browser.test.tsx",
   "apps/web/src/components/fleet/FleetConsole.browser.test.tsx",
   "apps/web/src/components/fleet/FleetGraph.browser.test.tsx",
   "apps/web/src/components/fleet/FleetThreadList.browser.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotChatView.empty.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotComposer.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotSidebarRow.preview.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotThreadView.visit.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.arrive.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.memory.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.receipt.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.replying.test.tsx",
-  "apps/web/src/components/goatBot/GoatBotTimeline.time.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotHome.strictMode.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotHome.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotReadMenu.test.tsx",
-  "apps/web/src/components/goatBot/useGoatBotSession.test.tsx",
-  "apps/web/src/components/media/MediaImagePreview.test.tsx",
-  "apps/web/src/components/media/MediaVideoPlayer.test.tsx",
-  "apps/web/src/components/preview/PreviewAddressBar.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotChatView.empty.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotComposer.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotSidebarRow.preview.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotThreadView.visit.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotTimeline.arrive.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotTimeline.memory.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotTimeline.receipt.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotTimeline.replying.browser.test.tsx",
+  "apps/web/src/components/goatBot/GoatBotTimeline.time.browser.test.tsx",
+  "apps/web/src/components/goatBot/useGoatBotHome.strictMode.browser.test.tsx",
+  "apps/web/src/components/goatBot/useGoatBotHome.browser.test.tsx",
+  "apps/web/src/components/goatBot/useGoatBotReadMenu.browser.test.tsx",
+  "apps/web/src/components/goatBot/useGoatBotSession.browser.test.tsx",
+  "apps/web/src/components/media/MediaImagePreview.browser.test.tsx",
+  "apps/web/src/components/media/MediaVideoPlayer.browser.test.tsx",
+  "apps/web/src/components/preview/PreviewAddressBar.browser.test.tsx",
   "apps/web/src/components/settings/CloudMachinesSettings.browser.test.tsx",
-  "apps/web/src/components/settings/CodexHomeRouteSection.test.tsx",
-  "apps/web/src/components/settings/ConnectionEnvironmentsSection.test.tsx",
+  "apps/web/src/components/settings/CodexHomeRouteSection.browser.test.tsx",
+  "apps/web/src/components/settings/ConnectionEnvironmentsSection.browser.test.tsx",
   "apps/web/src/components/settings/ConnectionEnvironmentsSection.u3.browser.test.tsx",
   "apps/web/src/components/settings/GoatBotSettingsPage.browser.test.tsx",
-  "apps/web/src/components/settings/HubDeviceCard.test.tsx",
-  "apps/web/src/components/settings/MemoryScopePicker.test.tsx",
-  "apps/web/src/components/settings/MemoryScopeSettings.subscriptions.test.tsx",
-  "apps/web/src/components/settings/MemorySettings.test.tsx",
+  "apps/web/src/components/settings/HubDeviceCard.browser.test.tsx",
+  "apps/web/src/components/settings/MemoryScopePicker.browser.test.tsx",
+  "apps/web/src/components/settings/MemoryScopeSettings.subscriptions.browser.test.tsx",
+  "apps/web/src/components/settings/MemorySettings.browser.test.tsx",
   "apps/web/src/components/settings/ProviderHostSyncDialog.browser.test.tsx",
   "apps/web/src/components/settings/ProviderWizardAuthenticationStep.browser.test.tsx",
   "apps/web/src/components/settings/RemoteLaunchesSettings.browser.test.tsx",
-  "apps/web/src/components/settings/SshRuntimeSettingsRow.test.tsx",
-  "apps/web/src/components/settings/settingsDrafts.test.tsx",
-  "apps/web/src/components/sidebar/SidebarChrome.test.tsx",
-  "apps/web/src/components/sidebar/SidebarEnvironmentConnection.test.tsx",
-  "apps/web/src/components/sidebar/useThreadContextDrag.test.ts",
+  "apps/web/src/components/settings/SshRuntimeSettingsRow.browser.test.tsx",
+  "apps/web/src/components/settings/settingsDrafts.browser.test.tsx",
+  "apps/web/src/components/sidebar/SidebarChrome.browser.test.tsx",
+  "apps/web/src/components/sidebar/SidebarEnvironmentConnection.browser.test.tsx",
+  "apps/web/src/components/sidebar/useThreadContextDrag.browser.test.ts",
   "apps/web/src/darkModeContrast.browser.test.ts",
-  "apps/web/src/fileContextMenu.test.ts",
-  "apps/web/src/hooks/settingsPersistence.hook.test.tsx",
+  "apps/web/src/fileContextMenu.browser.test.ts",
+  "apps/web/src/hooks/settingsPersistence.hook.browser.test.tsx",
   "apps/web/src/hooks/useBrowserHistoryProject.browser.test.tsx",
-  "apps/web/src/hooks/useCopyConnectionDiagnostic.test.tsx",
+  "apps/web/src/hooks/useCopyConnectionDiagnostic.browser.test.tsx",
   "apps/web/src/hooks/useSshWorkspaceFetchBack.browser.test.tsx",
   "apps/web/src/notes/NoteConflictDialog.browser.test.tsx",
   "apps/web/src/notes/NoteEditor.browser.test.tsx",
   "apps/web/src/notes/NoteLinkedThread.browser.test.tsx",
 ];
+
+const TEST_EXCLUDE = [
+  "**/.repos/**",
+  "**/.t3/**",
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/dist-electron/**",
+  "**/.{idea,git,cache,output,temp}/**",
+];
+
+// Directories whose tests belong to a package's own test config. desktop also
+// owns the kde-snap-shot tests through its `include`.
+const TEST_CONFIG_PACKAGES = [
+  "apps/desktop",
+  "apps/mobile",
+  "apps/server",
+  "apps/web",
+  "packages/client-runtime",
+];
+
+// `vp test run <file>` from the repo root hands each file to its package's
+// config. Packages that borrow this config (`--config ../../vite.config.ts`) run
+// from their own directory, as CI does, so they keep one plain project.
+const isRepoRootTestRun = process.cwd() === import.meta.dirname;
 
 const RESTRICTED_IMPORT_PATHS = [
   {
@@ -348,14 +299,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    exclude: [
-      "**/.repos/**",
-      "**/.t3/**",
-      "**/node_modules/**",
-      "**/dist/**",
-      "**/dist-electron/**",
-      "**/.{idea,git,cache,output,temp}/**",
-    ],
+    exclude: TEST_EXCLUDE,
     hookTimeout: 60_000,
     testTimeout: 60_000,
     allowOnly: !process.env.CI,
@@ -381,7 +325,37 @@ export default defineConfig({
       NodeURL.fileURLToPath(
         new URL("./packages/shared/src/testing/longTempDir.ts", import.meta.url),
       ),
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/providerEnv.ts", import.meta.url),
+      ),
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/gitEnv.setup.ts", import.meta.url),
+      ),
     ],
+    globalSetup: [
+      NodeURL.fileURLToPath(new URL("./scripts/lib/node-runtime.ts", import.meta.url)),
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/gitConfigGuard.ts", import.meta.url),
+      ),
+    ],
+    ...(isRepoRootTestRun
+      ? {
+          projects: [
+            ...TEST_CONFIG_PACKAGES,
+            {
+              extends: true,
+              test: {
+                name: "root",
+                exclude: [
+                  ...TEST_EXCLUDE,
+                  ...TEST_CONFIG_PACKAGES.map((dir) => `${dir}/**`),
+                  "native/kde-snap-shot/**",
+                ],
+              },
+            },
+          ],
+        }
+      : {}),
   },
   staged: {
     "*": "vp fmt --no-error-on-unmatched-pattern",
@@ -477,12 +451,15 @@ export default defineConfig({
         { paths: [...RESTRICTED_IMPORT_PATHS, RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS] },
       ],
       "goat/no-global-process-runtime": "error",
+      // Files over 1000 lines, non-null assertions, and casts to any only shrink;
+      // oxlint-plugin-goat/code-budgets.json records what exists. docs/operations/code-quality.md
+      "goat/code-budget": "error",
       "goat/no-inline-schema-compile": "warn",
       "goat/no-low-value-comments": "error",
       "goat/no-manual-effect-runtime-in-tests": "error",
       "goat/no-native-title-tooltip": "error",
-      // Test files only (the rule checks the filename). Becomes an error once existing polls are converted.
-      "goat/no-polling-loop-in-tests": "warn",
+      // Test files only (the rule checks the filename).
+      "goat/no-polling-loop-in-tests": "error",
       "goat/no-raw-mcp-registration": "error",
       "goat/no-real-time-wait-in-tests": "error",
       "goat/no-test-in-loop": "error",
@@ -519,8 +496,26 @@ export default defineConfig({
         rules: { "goat/no-frame-waits-in-browser-tests": "error" },
       },
       {
-        files: ["**/*.browser.test.*"],
-        rules: { "goat/no-real-time-wait-in-tests": "off" },
+        // Burn-down list: these files still have polling loops, so they stay at "warn".
+        // Remove a file when you convert its loops. New polling loops in all other
+        // test files fail lint. Do not add new files to this list.
+        files: [
+          "apps/mobile/src/features/agent-awareness/remoteRegistration.test.ts",
+          "apps/server/src/background/HostPowerMonitor.test.ts",
+          "apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts",
+          "apps/server/src/orchestration-v2/FoundationPersistence.test.ts",
+          "apps/server/src/project/ProjectEnrichmentService.test.ts",
+          "apps/server/src/project/ProjectService.test.ts",
+          "apps/server/src/scheduledTasks/ScheduledTaskService.webhook.test.ts",
+          "apps/server/src/usage/UsageService.test.ts",
+          "packages/client-runtime/src/connection/supervisor.test.ts",
+          "packages/client-runtime/src/rpc/client.test.ts",
+          "packages/client-runtime/src/rpc/session.test.ts",
+          "packages/client-runtime/src/state/shell-sync.test.ts",
+          "packages/client-runtime/src/state/threads-sync.test.ts",
+          "packages/shared/src/atomicWrite.test.ts",
+        ],
+        rules: { "goat/no-polling-loop-in-tests": "warn" },
       },
       {
         files: ["apps/**/src/**", "packages/**/src/**"],
@@ -545,6 +540,7 @@ export default defineConfig({
       },
       {
         files: [
+          "apps/web/src/components/settings/AuthorizedClientsSettings.tsx",
           "apps/web/src/components/settings/ConnectionsSettings.tsx",
           "apps/mobile/src/features/updates/app-updates.ts",
           "apps/web/src/components/device/DevicePhoneViewport.tsx",
@@ -637,6 +633,15 @@ export default defineConfig({
         rules: { "goat/no-outset-state-indicators": "error" },
       },
       {
+        files: ["apps/*/src/**", "packages/*/src/**"],
+        excludeFiles: [
+          "**/*.{test,spec}.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",
+          "**/testkit/**",
+          "**/_generated/**",
+        ],
+        rules: { "goat/no-em-dash-copy": "error" },
+      },
+      {
         files: ["apps/web/src/**"],
         rules: { "shadcn/no-raw-colors": "error" },
       },
@@ -667,6 +672,8 @@ export default defineConfig({
                 "bg-[Highlight]",
                 "fill-[#26251E]",
                 "fill-[#EDECEC]",
+                "fill-[#263FA9]",
+                "fill-[#FEFEFE]",
                 "fill-[#0F0F0F]",
                 "fill-[#F5F5F5]",
                 "fill-[#d97757]",
@@ -705,7 +712,10 @@ export default defineConfig({
           "react/jsx-no-constructed-context-values": "off",
           "react/memo-dependencies": "error",
           "react/preserve-manual-memoization": "error",
-          "react/purity": "error",
+          // oxlint 1.88 treats `new Date()` as impure (oxc#26894) and also flags it inside event
+          // handlers (oxc#27309). The compiler we ship (oxc-transform-react) still compiles
+          // those files, and reactCompilerCoverage.test.ts fails on real bailouts.
+          "react/purity": "warn",
           "react/refs": "error",
           "react/set-state-in-effect": "error",
           "react/set-state-in-render": "error",
@@ -715,7 +725,7 @@ export default defineConfig({
         },
       },
       {
-        // The sign-in masthead is T3 brand artwork: fixed gradients, not theme surfaces.
+        // The sign-in masthead is GOAT brand artwork: fixed gradients, not theme surfaces.
         files: ["apps/web/src/components/auth/AuthSurfaceShell.tsx"],
         rules: { "shadcn/no-arbitrary-values": "off" },
       },
@@ -774,6 +784,7 @@ export default defineConfig({
           "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
           "apps/mobile/src/native/T3ComposerEditor.native.tsx",
           "apps/mobile/src/native/SelectableMarkdownText.tsx",
+          "apps/mobile/src/native/useEnrichedLinkVariants.ts",
         ],
         rules: {
           "goat/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],

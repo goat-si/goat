@@ -4,8 +4,11 @@ import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/ins
 import * as CloudPty from "@goat/shared/PtyAdapter";
 import * as CloudPullRequests from "../pullRequest/PullRequestService.ts";
 import * as CloudProjection from "../orchestration-v2/ProjectionStore.ts";
+import * as CloudProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert, expect } from "@effect/vitest";
@@ -307,6 +310,8 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      checkpointReplicationPermit: () =>
+        Effect.die("checkpoint replication is not used by this fixture"),
       withSettingsSnapshot: (use) => Ref.get(settingsRef).pipe(Effect.flatMap(use)),
       get streamChanges() {
         return Stream.fromPubSub(changes);
@@ -336,11 +341,16 @@ const layerCloudServices = Layer.mergeAll(
   Layer.mock(CloudPty.PtyAdapter)({}),
   Layer.mock(CloudPullRequests.PullRequestService)({}),
   Layer.mock(CloudProjection.ProjectionStoreV2)({}),
+  Layer.mock(CloudProjectStore.ProjectStoreV2)({}),
+  SqlitePersistence.layerMemory,
 );
 
 const layerTestNodeServices = Layer.mergeAll(
   ProviderLatestVersions.layer,
   NodeServices.layer,
+  Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+    endpoint: Effect.succeed("unused-private-pipe"),
+  }),
   Layer.mock(CodexInstallation.CodexInstallation)({
     managedDirectory: "unused-managed-installation",
   }),
@@ -376,7 +386,7 @@ it.layer(
         assert.strictEqual(status.version, "1.0.0");
         assert.strictEqual(status.auth.status, "authenticated");
         assert.strictEqual(status.auth.type, "chatgpt");
-        assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
+        assert.strictEqual(status.auth.label, "ChatGPT Pro 200 Subscription");
         assert.strictEqual(status.auth.email, "test@example.com");
         assert.deepStrictEqual(status.models, [
           {
@@ -429,6 +439,10 @@ it.layer(
           status.message,
           "Codex CLI is not authenticated. Run `codex login` and try again.",
         );
+        assert.deepStrictEqual(status.usageLimits?.unavailable, {
+          reason: "probeFailed",
+          message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+        });
       }),
     );
 
@@ -2215,6 +2229,8 @@ it.layer(
       const serverSettings = {
         ...settings,
         getSettings: readHydrationSettings,
+        checkpointReplicationPermit: () =>
+          Effect.die("checkpoint replication is not used by this fixture"),
         withSettingsSnapshot: (use) => readHydrationSettings.pipe(Effect.flatMap(use)),
         streamChanges: Stream.empty,
         subscribeChanges: Effect.gen(function* () {

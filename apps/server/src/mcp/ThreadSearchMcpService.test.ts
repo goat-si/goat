@@ -1,3 +1,5 @@
+import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -124,13 +126,18 @@ const runSearch = (
       }),
   });
   const hostLayer = HostThreads.layer.pipe(
+    Layer.provide(layerNoFleetSync),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
         forRun: () => Effect.succeed(null),
       }),
     ),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-    Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(transport),
     Layer.provide(threadLayer),

@@ -60,9 +60,47 @@ of a forward that remains alive but stops carrying bytes. `ssh.reconnect.cost`
 counts all SSH spawns and reports `mastersStarted` and `controlCommands` separately
 from authentication milestones, so local mux requests do not imply new handshakes.
 
+### App server
+
+A host user has one GOAT server that remote hubs and desktops reach. When the packaged GOAT app
+runs there, that is the app's own server on `~/.goat/desktop`, which holds the threads the person
+starts in the app. For runners with `attachAppServer` (the desktop app and the server's SSH
+dispatch set it), `launchOrReuseRemoteServer` asks `probeAppServer`
+(`packages/ssh/src/appServer.ts`) first: it reads `~/.goat/desktop/userdata/server-runtime.json`,
+requires a live PID, a loopback answer on the recorded port, and the control token beside the
+record, then reads the descriptor. A server that advertises `capabilities.runtimeSessions` and
+whose protocol ranges are compatible is attached as `remoteServerKind: "app"`. GOAT never starts,
+stops, drains, updates or adopts it, and writes none of its launch records for it. Only when no
+app server runs, or it cannot serve this client (an older app, incompatible protocols, no `curl`,
+unreachable on loopback), does the launch start or reuse the managed server below, and that
+selection carries `appServerDeclined`. Windows hosts are not probed.
+
+Credentials for an app attachment come from the app server itself:
+`POST /.well-known/goat/runtime/session` (`apps/server/src/runtimeSessionRoute.ts`) takes the same
+loopback peer and `runtime-control.token` as a drain and answers what
+`goat auth session issue --json` and `goat auth pairing create --json` print. The token reaches
+`curl` through its config on stdin. Running `goat auth session issue --base-dir ~/.goat/desktop`
+with an installed runtime instead would open the app's live database with another build's
+migrations.
+
+The managed server sets `appServerLive` in its descriptor while an app server's record names a
+live PID (`apps/server/src/environment/hostAppServer.ts`). A client reusing a managed forward
+reconnects, and so lands on the app server, only once the managed server's activity probe answers
+`idle` (`shouldMoveToAppServer`). Threads already running there finish where they started. Only an
+ensure that reconnects at once drops the forward; background revalidation and the check right after
+a launch leave it alone. A probe that cannot run counts as declined. If the app server refuses a
+credential, that target uses the managed server for ten minutes and then probes the app again;
+a ready-only request reports the refusal instead of switching servers. The two
+homes keep separate databases; nothing is merged. While the managed server still runs, the app
+lists its threads as **Headless server** (`apps/desktop/src/backend/DesktopHeadlessServer.ts`).
+When the app quits, its forward fails and the next ensure starts or reuses the managed server.
+
+> Decision record: [ADR-0024](decisions/ADR-0024-one-host-server.md)
+
 ### Shared runtime
 
-One host user runs one SSH-managed server, and every client shares it. The launch, pairing, MCP
+When no [app server](#app-server) serves the host, one host user runs one SSH-managed server, and
+every client shares it. The launch, pairing, MCP
 session, stop, and log scripts keep their ownership records (`pid`, `port`, `managed`, `identity`,
 `run-t3.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
 `packages/ssh/src/command.ts`), whatever alias, hostname, or port the client dialled. A client that
@@ -114,6 +152,29 @@ The live `~/.goat/userdata/server-runtime.json` record and the server's descript
 Remembered launch files whose PID has exited are stale and do not block attaching
 (`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
 authority either, because the launch script requires its PID file to name the live PID.
+
+Ownership follows the server, not the client that started it. A live server this host user runs
+as `~/.goat/runtime/goat/versions/<v>/goat serve --host 127.0.0.1 --port <p> --base-dir ~/.goat`
+is GOAT's managed runtime even when its launch records are gone, for example after a manual
+restart or a moved `ssh-launch` directory. The probe reports it as `liveAdoptable`, and an
+owning launch holding the replacement lock writes identity, port, PID and `managed` for it
+(`managed_orphan` and `adopt_managed_orphan` in `packages/ssh/src/tunnel.ts`). From then on it
+updates through its own drain like any owned runtime; a rollback without a retained runner
+restarts it through this client's runner pinned to its version. Records that name another live
+process, a drain in progress, Windows hosts, and any other command line (a developer's own
+server, another base directory, another user) stay foreign: attach-only, never replaced.
+Records that do name the live PID and port but carry an identity in another format, such as a
+Windows CommandLine written by hand after a manual restart, are repaired the same way, on Windows
+too: under the replacement lock, when the process is exactly that archive serve for this user, the
+canonical identity replaces the file (the old one stays as `identity.unverified`). Any other
+mismatch is refused and the error names the identity file and the next step.
+
+A reused forward is checked against the live descriptor's `serverVersion`. A server replaced on
+the same port by another client, a self-update or a person no longer matches the attachment, so
+the client reconnects and reads the live server again instead of reporting, or acting on, the
+version it first attached to. A host that already runs the requested build drops any refresh
+intent kept from its older server. Callers that only reuse a forward that still answers, as
+agents do before every remote tool, never publish `preparing`.
 
 Desktop and agent dispatch both leave the server running when they disconnect
 (`leaveRemoteServerRunning`). Removing a saved connection also leaves the remote runtime running.
@@ -215,12 +276,16 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
 After a launch that installed a runtime, cleanup runs under the host replacement lock, never
 on a drain/replacement or rollback connection, and excludes concurrent installs. It uses the
 live binary's `__ssh-helper compare-version` to remove only proven older, unused directories,
-keeping the live, retained and requested versions and the newest older rollback build (all
-unordered rollback candidates are preserved). It checks process commands, executable paths and
-cwd, renames victims into sibling `.trash-*` directories before deleting, and never follows
-symlinks. Errors only log `ssh.runtime.cleanup.*`. Windows is skipped because its process and
-shell utilities differ; hosts without readable `/proc` executable/cwd links or `flock`, including
-macOS, conservatively keep everything.
+keeping the live, retained and requested versions and one rollback build: the proven-older
+build installed most recently, which is the one the host ran before. Versions whose order
+against the live build is unknown, or that are newer, stay. It checks process commands,
+executable paths and cwd (`/proc` on Linux, `lsof` on macOS), renames victims into sibling
+`.trash-*` directories before deleting, and never follows symlinks. Each ordering check starts
+`goat`, so a long backlog shrinks over several connections, oldest installs first, within the
+cleanup deadline. Staging and trash directories over an hour old are removed too, since no
+install holds a lock then. The mutex is `flock`, or an atomic directory where `flock` is
+missing. Errors only log `ssh.runtime.cleanup.*`; a failed inspection keeps everything.
+Windows is skipped because its process and shell utilities differ.
 
 Runtime supply targets the owning process's exact release and platform, not the
 latest published build. The acquisition order in
@@ -237,9 +302,19 @@ A manually published nightly is evidence only for that exact version and platfor
 Older cached archives are not selected automatically when no compatible installation exists:
 archive integrity does not prove protocol support or authorize a userdata downgrade.
 
+A runtime on a stable or nightly build also updates itself when idle, following its own channel
+(see [Server: Updates](server.md#updates)). It runs the owning launch script locally, so it takes
+the same replacement lock, idle check, drain and supervisor as a client. A new client passes
+`GOAT_RUNTIME_DRAIN_AUTOMATIC=1` to `__ssh-helper drain` for an automatic refresh of an older
+runtime, never for a manual or confirmed update or an incompatible runtime. The runtime answers
+such a request `cancelled` without draining when its target is not the newest same-channel,
+strictly newer, never-failed candidate, or while its `automaticServerUpdates` is off; the
+client keeps its attachment. The supervisor
+records every outcome in `last-replacement.json` next to `run-t3.sh`.
+
 Manual updates target the owning manager's version too. An idle update waits for running work;
 a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
-runtime whose version cannot be ordered, or an externally started server blocks replacement
+runtime whose version cannot be ordered, or a foreign server (see [Shared runtime](#shared-runtime)) blocks replacement
 without changing whether a compatible server can be used.
 
 "Older" and "newer" come from `compareRuntimeBuilds` in `packages/shared/src/semver.ts`, used by
@@ -380,6 +455,20 @@ SSH toolkit asks `RemoteDispatchCoordinator` to persist the dispatch first. That
 Workspace sync for a remote checkout is `apps/server/src/sshRemote/SshWorkspaceSync.ts`. Remote
 repo paths it prints sit under `$HOME/.goat/repos/`.
 
+[`RepositoryInventory`](../apps/server/src/project/RepositoryInventory.ts) reads only registered
+projects and their Git worktrees, with bounded snapshots exposed by host status on request.
+[`RepositoryLaunchMcpService`](../apps/server/src/mcp/RepositoryLaunchMcpService.ts) checks an
+explicit origin-key selection before SSH dispatch, preserving the caller's host-read ceiling.
+These are local-ref diagnostics, not proof that work is pushed or a placement policy.
+
+[`RepositoryReferences`](../apps/server/src/project/RepositoryReferences.ts) reads exact requested
+regular blobs from a pinned commit without a fetch or working-tree mount. The MCP reference
+service rechecks caller authority and remote content bounds, then copies snapshots into the
+worker brief; no source credential or write capability travels with them. Ambient provider
+filesystem permissions are unchanged. Runtime root grants must remain unsupported unless a
+provider can enforce them. Raw nested reference arguments are validated before MCP's lenient
+codec can discard unsupported authority fields.
+
 ## Linked hosts
 
 A linked host is another GOAT server this environment reaches over HTTPS instead of SSH, such as
@@ -448,7 +537,9 @@ A node is one GOAT environment with one or more routes. Routes come from three s
 
 Routes with the same environment ID are one node. The ID comes from the link for linked hosts
 and, for SSH and running cloud machines, from `SshRemoteDispatch.identifyTarget`, which reads
-`$HOME/.goat/userdata/environment-id` over SSH without starting a runtime. A route whose ID is
+`environment-id` over SSH without starting a runtime, from the server this hub's connection to the
+host uses. With no connection it is the [app server](#app-server)'s while that server could be
+attached, otherwise `$HOME/.goat/userdata/environment-id`. A route whose ID is
 unknown is its own node with ID `route:<routeId>` until a check learns it; `get` still resolves
 that ID afterwards. The hub's own ID is refused at add and dropped at merge.
 

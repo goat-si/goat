@@ -67,8 +67,8 @@ describe("classifyReachability", () => {
   });
 });
 
-describe("T3 Connect troubleshooting links", () => {
-  it("each section names a heading in the user guide", () => {
+describe("GOAT Connect troubleshooting links", () => {
+  it("each section resolves to a heading or a legacy anchor in the user guide", () => {
     const guide = NodeFS.readFileSync(
       new URL("../../../../docs/user/t3-connect-troubleshooting.md", import.meta.url),
       "utf8",
@@ -82,6 +82,9 @@ describe("T3 Connect troubleshooting links", () => {
           .replace(/ /g, "-"),
       ),
     );
+    for (const [, id] of guide.matchAll(/<a id="([^"]+)"><\/a>/g)) {
+      anchors.add(id!);
+    }
     for (const section of GOAT_CONNECT_TROUBLESHOOTING_SECTIONS) {
       expect(anchors, section).toContain(section);
     }

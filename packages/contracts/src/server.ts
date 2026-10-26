@@ -9,6 +9,7 @@ import {
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -48,6 +49,35 @@ export const ServerConfigIssue = Schema.Union([
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 const ServerConfigIssues = ForwardCompatibleArray(ServerConfigIssue);
+
+/**
+ * How Microsoft Defender treats the folder GOAT creates thread worktrees in. Real-time
+ * scanning of every new file is what makes Windows checkouts slow. `unverified` means
+ * scanning is on and this process cannot read the exclusion list (that needs an
+ * administrator); `off` includes another antivirus being in charge; `unknown` covers
+ * an unreadable Defender and ReFS volumes, which may be Dev Drives Defender scans after
+ * the write.
+ */
+export const ServerWorktreeScanStatus = Schema.Literals([
+  "scanning",
+  "unverified",
+  "excluded",
+  "off",
+  "unknown",
+]);
+export type ServerWorktreeScanStatus = typeof ServerWorktreeScanStatus.Type;
+
+/** Only Windows servers send it. GOAT reads Defender's state and never changes it. */
+export const ServerWorktreeCheckoutHealth = Schema.Struct({
+  worktreesDirectory: TrimmedNonEmptyString,
+  defender: ServerWorktreeScanStatus,
+});
+export type ServerWorktreeCheckoutHealth = typeof ServerWorktreeCheckoutHealth.Type;
+
+/** The elevated PowerShell command that excludes the worktree folder from Defender scans. */
+export function defenderExclusionCommand(directory: string): string {
+  return `Add-MpPreference -ExclusionPath '${directory.replaceAll("'", "''")}'`;
+}
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -299,14 +329,23 @@ export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
 
+export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
+export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
+
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,
   localTracingEnabled: Schema.Boolean,
   otlpTracesUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpTracesSource: Schema.optional(OtlpEndpointSource),
+  otlpTracesVariable: Schema.optional(TrimmedNonEmptyString),
   otlpTracesEnabled: Schema.Boolean,
   otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpMetricsSource: Schema.optional(OtlpEndpointSource),
+  otlpMetricsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpMetricsEnabled: Schema.Boolean,
   otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpLogsSource: Schema.optional(OtlpEndpointSource),
+  otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type ServerObservability = typeof ServerObservability.Type;
@@ -640,6 +679,10 @@ export const ServerConfig = Schema.Struct({
    */
   lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
   /**
+   * Windows only, and only once the server has checked; absent means nothing to report.
+   */
+  worktreeCheckoutHealth: ForwardCompatibleOptional(ServerWorktreeCheckoutHealth),
+  /**
    * Never sent in a config snapshot: the theme stream emits the current set
    * before any change, so a snapshot carrying it too would hand every
    * subscriber the same array twice per connect.
@@ -898,7 +941,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 }
 
 export const ServerSelfUpdateInput = Schema.Struct({
-  /** Exact npm version of the `t3` package to install (never a dist-tag, so
+  /** Exact GOAT release version to install (never a channel, so
       the server and the acknowledging client agree on what was requested). */
   targetVersion: TrimmedNonEmptyString,
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),
@@ -907,6 +950,10 @@ export const ServerSelfUpdateInput = Schema.Struct({
   confirmReplacement: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
+
+/** A self-update without `confirmReplacement` refuses with this reason while turns run. */
+export const SERVER_UPDATE_BUSY_REASON =
+  "GOAT is running threads on this server, so the update waits. Try again when they finish, or update from a GOAT app that can confirm interrupting them.";
 
 export const ServerSelfUpdateResult = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,

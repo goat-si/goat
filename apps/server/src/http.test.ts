@@ -1192,6 +1192,7 @@ describe("SSH activity HTTP", () => {
           }
           expect(await response.json()).toEqual({
             activity: "idle",
+            blockers: [],
             serverVersion: (await import("../package.json", { with: { type: "json" } })).default
               .version,
             pid: process.pid,

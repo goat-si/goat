@@ -11,7 +11,6 @@ import {
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  IsoDateTime,
   RemoteDispatchState,
   RemoteReportDeliveryMode,
   RemoteReportKind,
@@ -50,6 +49,8 @@ import {
   requestRemoteTaskCancel,
   recoverUnknownRemoteTaskLaunch,
 } from "./recordRemoteTaskResult.ts";
+import * as RemoteDispatchRow from "./remoteDispatchRow.ts";
+import { resolveLostThreadLaunches } from "./remoteDispatchRecovery.ts";
 import {
   REPORTING_NOTE,
   frameLiteral,
@@ -57,6 +58,7 @@ import {
   frameRemoteReport,
   remoteTaskQuestionNotice,
 } from "./reportFrame.ts";
+import { storeInboxReport } from "./RemoteReportInbox.ts";
 
 export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>()(
   "RemoteDispatchError",
@@ -68,6 +70,7 @@ export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>
       "unsupported_task",
       "not_found",
       "launch",
+      "authorize",
     ]),
     reason: Schema.optional(Schema.Literal("duplicate_task")),
     cause: Schema.optional(Schema.Defect()),
@@ -77,42 +80,10 @@ export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>
     return "Remote dispatch operation failed.";
   }
 }
-const Row = Schema.Struct({
-  memory_grant_ceiling: Schema.optional(MemoryTaskGrantCeiling),
-  correlation_id: Schema.String,
-  kind: Schema.Literals(["thread", "task"]),
-  origin_thread_id: ThreadId,
-  host: Schema.String,
-  remote_thread_id: Schema.NullOr(Schema.String),
-  launched_run_id: Schema.NullOr(RunId),
-  read_key: Schema.String,
-  delivery: RemoteReportDeliveryMode,
-  reports_supported: Schema.Number,
-  state: RemoteDispatchState,
-  report_cursor: Schema.Number,
-  known_run_id: Schema.NullOr(RunId),
-  known_run_status: Schema.NullOr(OrchestrationV2RunStatus),
-  latest_kind: Schema.NullOr(RemoteReportKind),
-  latest_summary: Schema.NullOr(Schema.String),
-  latest_at: Schema.NullOr(IsoDateTime),
-  cancel_requested_at: Schema.NullOr(IsoDateTime),
-  cancel_ceiling: Schema.NullOr(RuntimeMode),
-  task_id: Schema.NullOr(NodeId),
-  parent_run_id: Schema.NullOr(RunId),
-  pending_request_ids: Schema.NullOr(Schema.fromJsonString(Schema.Array(RuntimeRequestId))),
-  observation: Schema.optional(Schema.NullOr(Schema.fromJsonString(ChannelWorkerObservation))),
-  relay_send: Schema.Number,
-  relay_attempted: Schema.Number,
-  last_error: Schema.NullOr(Schema.String),
-  created_at: IsoDateTime,
-  updated_at: IsoDateTime,
-}).check(
-  Schema.makeFilter((r) => r.kind !== "task" || (r.task_id !== null && r.parent_run_id !== null)),
-);
-type Row = typeof Row.Type;
+type Row = RemoteDispatchRow.RemoteDispatchRow;
 
 const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
-const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
+const decodeRows = RemoteDispatchRow.decodeRemoteDispatchRows;
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
 const encodeObservation = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerObservation));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
@@ -202,6 +173,8 @@ export interface RemoteLaunchInput {
   readonly delivery: typeof RemoteReportDeliveryMode.Type;
   readonly launch: SshRemoteDispatch.SshLaunchInput;
   readonly task?: { readonly taskId: NodeId; readonly parentRunId: RunId };
+  /** A durable caller identity (a channel child-work record) keys the row for launch retries. */
+  readonly correlationId?: string | undefined;
 }
 export class RemoteDispatchCoordinator extends Context.Service<
   RemoteDispatchCoordinator,
@@ -245,6 +218,12 @@ export class RemoteDispatchCoordinator extends Context.Service<
       threadId: string,
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
+    /**
+     * One pass settling lost thread launches with their destinations: a row lost long enough
+     * for an in-flight launch to have bound is rebound (running) or fenced (cancelled). The
+     * coordinator runs it on its own schedule; an inconclusive row is asked again after a backoff.
+     */
+    readonly resolveLostLaunches: Effect.Effect<void>;
   }
 >()("goat/remoteReports/RemoteDispatchCoordinator") {}
 
@@ -258,6 +237,7 @@ const make = Effect.gen(function* () {
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
   const inFlight = new Map<string, Deferred.Deferred<void, RemoteDispatchError>>();
   const drains = yield* FiberMap.make<string, void, RemoteDispatchError>();
+  const resolveRetryAt = new Map<string, number>();
   const hosts = new Map<string, Semaphore.Semaphore>();
   const taskHosts = new Map<string, Semaphore.Semaphore>();
   // Relayed sends must not wait behind report long-polls to the same host.
@@ -294,6 +274,34 @@ const make = Effect.gen(function* () {
         Effect.succeed("approval-required"),
       ),
     );
+  /** The newest needs_input report wakes the origin on its own, so it carries the data notice. */
+  const wakeWithReport = (r: Row, key: string, report: RemoteReport, source: "agent" | "runtime") =>
+    threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`server:remote-report:${r.correlation_id}:${key}`),
+        threadId: r.origin_thread_id,
+        messageId: MessageId.make(`message:remote-report:${r.correlation_id}:${key}`),
+        text: frameRemoteReport({
+          host: r.host,
+          correlationId: r.correlation_id,
+          ...(source === "agent" ? { sequence: report.sequence } : {}),
+          kind: report.kind,
+          summary: report.summary,
+          source,
+          standalone: true,
+        }),
+        attachments: [],
+        createdBy: "agent",
+        creationSource: "server",
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: `${r.host}: ${report.kind}`,
+        },
+        dispatchMode: { type: "queue_after_active" },
+      })
+      .pipe(Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })));
   const taskEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
@@ -333,38 +341,14 @@ const make = Effect.gen(function* () {
               frameRemoteReport({
                 host: r.host,
                 correlationId: id,
+                sequence: report.sequence,
                 kind: report.kind,
                 summary: report.summary,
                 source: "agent",
               }),
             );
           if (needsInput && r.delivery === "wake" && report === latestNeedsInput)
-            yield* threads
-              .dispatch({
-                type: "message.dispatch",
-                commandId: CommandId.make(`server:remote-report:${id}:seq:${report.sequence}`),
-                threadId: r.origin_thread_id,
-                messageId: MessageId.make(`message:remote-report:${id}:seq:${report.sequence}`),
-                text: frameRemoteReport({
-                  host: r.host,
-                  correlationId: id,
-                  kind: report.kind,
-                  summary: report.summary,
-                  source: "agent",
-                }),
-                attachments: [],
-                createdBy: "agent",
-                creationSource: "server",
-                notification: {
-                  source: { kind: "monitor" },
-                  outcome: "updated",
-                  summary: `${r.host}: needs_input`,
-                },
-                dispatchMode: { type: "queue_after_active" },
-              })
-              .pipe(
-                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
-              );
+            yield* wakeWithReport(r, `seq:${report.sequence}`, report, "agent");
         }
         // The launched run's open questions, when the host reports them; a finished run has none.
         const questions =
@@ -510,7 +494,7 @@ const make = Effect.gen(function* () {
       });
     const uncertain = (reason: string) =>
       outcome(
-        "It may have been delivered. Check the target with goat_thread_read before sending it again.",
+        'It may have been delivered. Check the target with goat_call {path: "thread.read"} before sending it again.',
         true,
         { reason, message: send.message },
       );
@@ -580,6 +564,7 @@ const make = Effect.gen(function* () {
                 ...(send.mode === undefined
                   ? {}
                   : { mode: send.mode === "restart" ? "restart" : "auto" }),
+                ...(send.capabilities?.length ? { capabilities: send.capabilities } : {}),
                 clientRequestId: `relay:${r.correlation_id}:${requestKey}`,
               },
               writes: true,
@@ -597,9 +582,9 @@ const make = Effect.gen(function* () {
         // Refused before anything was sent, or by the target with a reason of its own.
         // A lost answer, or a target that failed after accepting it, may still have it.
         const refusedBeforeSending =
-          error.reason === "host_unknown" ||
-          error.reason === "invalid_request" ||
-          error.reason === "caller_changed" ||
+          ["host_unknown", "invalid_request", "caller_changed", "remote_outdated"].includes(
+            error.reason,
+          ) ||
           (error.reason === "remote_refused" &&
             error.remoteCode !== undefined &&
             error.remoteCode !== "orchestration_error");
@@ -661,38 +646,25 @@ const make = Effect.gen(function* () {
           .filter((entry) => entry.report.relay === undefined);
         const ended = observed !== null && terminal(observed.status) && !hasMore;
         // The launch watch owns run-end wakes. Observation only settles this ledger.
-        const inbox: Array<{ kind: typeof RemoteReportKind.Type | "relay"; text: string }> = [];
+        const inbox: Array<{
+          kind: typeof RemoteReportKind.Type | "relay";
+          text: string;
+          runId: string | null;
+        }> = [];
         const latestNeedsInput = entries.findLast((entry) => entry.report.kind === "needs_input");
         for (const entry of entries) {
           const text = frameRemoteReport({
             host: r.host,
             correlationId: id,
+            ...(entry.source === "agent" ? { sequence: entry.report.sequence } : {}),
             kind: entry.report.kind,
             summary: entry.report.summary,
             source: entry.source,
           });
-          if (r.delivery === "wake" && entry === latestNeedsInput) {
-            yield* threads
-              .dispatch({
-                type: "message.dispatch",
-                commandId: CommandId.make(`server:remote-report:${id}:${entry.key}`),
-                threadId: r.origin_thread_id,
-                messageId: MessageId.make(`message:remote-report:${id}:${entry.key}`),
-                text,
-                attachments: [],
-                createdBy: "agent",
-                creationSource: "server",
-                notification: {
-                  source: { kind: "monitor" },
-                  outcome: "updated",
-                  summary: `${r.host}: ${entry.report.kind}`,
-                },
-                dispatchMode: { type: "queue_after_active" },
-              })
-              .pipe(
-                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
-              );
-          } else if (r.delivery !== "notify_only") inbox.push({ kind: entry.report.kind, text });
+          if (r.delivery === "wake" && entry === latestNeedsInput)
+            yield* wakeWithReport(r, entry.key, entry.report, entry.source);
+          else if (r.delivery !== "notify_only")
+            inbox.push({ kind: entry.report.kind, text, runId: entry.report.runId });
         }
         // Only a binding this machine declared relaySend for carries relays.
         for (const report of forced === undefined ? fresh : []) {
@@ -720,21 +692,20 @@ const make = Effect.gen(function* () {
                 Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
               );
           } else if (r.delivery !== "notify_only")
-            inbox.push({ kind: "relay", text: outcome.text });
+            inbox.push({ kind: "relay", text: outcome.text, runId: null });
         }
         // No SQLite transaction encloses notification I/O. Its deterministic receipt
         // dedupes a crash here; SQL then atomically imports inbox + ledger + cursor.
         yield* db(
           sql.withTransaction(
             Effect.gen(function* () {
-              for (const entry of inbox) {
-                if (entry.kind === "progress")
-                  yield* sql`DELETE FROM remote_report_inbox
-            WHERE origin_thread_id = ${r.origin_thread_id} AND correlation_id = ${id} AND kind = 'progress'`;
-                yield* sql`INSERT INTO remote_report_inbox
-            (origin_thread_id, correlation_id, kind, text, created_at)
-            VALUES (${r.origin_thread_id}, ${id}, ${entry.kind}, ${entry.text}, ${at})`;
-              }
+              for (const entry of inbox)
+                yield* storeInboxReport(sql, {
+                  ...entry,
+                  originThreadId: r.origin_thread_id,
+                  correlationId: id,
+                  createdAt: at,
+                });
               const last = entries.at(-1)?.report;
               const cursor = fresh.at(-1)?.sequence ?? r.report_cursor;
               // Import every page before persisting a terminal known state.
@@ -880,7 +851,7 @@ const make = Effect.gen(function* () {
                   commandId: CommandId.make(`server:remote-task-outage:${id}`),
                   threadId: r.origin_thread_id,
                   messageId: MessageId.make(`message:remote-task-outage:${id}`),
-                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; use task_status to follow it.`,
+                  text: `GOAT cannot reach host ${r.host} to observe delegated task ${r.task_id}. The task remains running; follow it with goat_call {path: "task.read", args: {taskId: "${r.task_id}"}}.`,
                   attachments: [],
                   createdBy: "agent",
                   creationSource: "server",
@@ -1012,14 +983,16 @@ const make = Effect.gen(function* () {
     if ((input.kind === "task") !== (input.task !== undefined))
       return yield* new RemoteDispatchError({ stage: "unsupported_task" });
     const launchKey =
-      input.task === undefined ? null : `${input.originThreadId}:${input.task.taskId}`;
+      input.task === undefined
+        ? (input.correlationId ?? null)
+        : `${input.originThreadId}:${input.task.taskId}`;
     const pending = launchKey === null ? undefined : inFlight.get(launchKey);
     const owner =
       pending === undefined ? yield* Deferred.make<void, RemoteDispatchError>() : pending;
     const ownsEntry = launchKey !== null && pending === undefined;
     if (ownsEntry) inFlight.set(launchKey, owner);
     return yield* Effect.gen(function* () {
-      const id = `rr-${NodeCrypto.randomUUID()}`;
+      const id = input.correlationId ?? `rr-${NodeCrypto.randomUUID()}`;
       const readKey = NodeCrypto.randomBytes(32).toString("hex");
       const at = yield* now;
       const acquired = yield* db(sql`INSERT INTO remote_dispatches
@@ -1028,12 +1001,7 @@ const make = Effect.gen(function* () {
         Effect.result,
       );
       if (acquired._tag === "Failure") {
-        const duplicate =
-          input.task === undefined
-            ? []
-            : yield* rows(
-                sql`SELECT * FROM remote_dispatches WHERE kind = 'task' AND origin_thread_id = ${input.originThreadId} AND task_id = ${input.task.taskId}`,
-              );
+        const duplicate = yield* rows(RemoteDispatchRow.findLaunchConflict(sql, input));
         if (duplicate.length === 0) return yield* acquired.failure;
         if (pending === undefined && duplicate[0]?.state !== "launching")
           return yield* new RemoteDispatchError({ stage: "launch", reason: "duplicate_task" });
@@ -1061,7 +1029,7 @@ const make = Effect.gen(function* () {
               originThreadId: input.originThreadId,
               readKeyHash: NodeCrypto.createHash("sha256").update(readKey).digest("hex"),
               // Delegated tasks report to their parent task and do not relay.
-              ...(input.kind === "thread" ? { relaySend: true } : {}),
+              ...(input.kind === "thread" ? { relaySend: true, relayCapabilities: true } : {}),
             },
           },
           register,
@@ -1083,24 +1051,28 @@ const make = Effect.gen(function* () {
               .launchThread(legacyLaunch, register)
               .pipe(Effect.map((value) => ({ ...value, reportsSupported: false })));
           }),
-          Effect.tapError((error) =>
+          // No remote write can precede beforeLaunch. When the failure is proven to be from
+          // before any write, the row goes away so the request can retry, and the failure
+          // reaches the launcher wrapped as stage "authorize": its surfaces release the
+          // capacity they reserved, while its cause keeps the message the caller should see.
+          Effect.catch((error) =>
             Effect.gen(function* () {
-              // No remote write can precede beforeLaunch. Release the task key if
-              // registration never committed, so the same request can retry.
               const registered = yield* Deferred.isDone(owner);
               const refused =
                 (error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                  ["remote_refused", "invalid_request", "host_unknown", "caller_changed"].includes(
-                    error.reason,
-                  )) ||
+                  // Every reason except a transport failure, after which the send may have
+                  // landed; launchMayHaveStarted says even a refusal came too late to know.
+                  !["ssh_failed", "host_unavailable"].includes(error.reason) &&
+                  error.launchMayHaveStarted !== true) ||
                 (isOrchestratorMcpFailure(error) && !registered);
               if ((input.kind === "task" && !registered) || (input.kind === "thread" && refused)) {
                 yield* db(sql`DELETE FROM remote_dispatches WHERE correlation_id = ${id}`);
-                return;
+                return yield* new RemoteDispatchError({ stage: "authorize", cause: error });
               }
               yield* db(sql`UPDATE remote_dispatches SET state = 'lost',
       last_error = 'Launch outcome unknown or refused; check goat_thread_list with host before retrying.',
       updated_at = ${at} WHERE correlation_id = ${id}`);
+              return yield* Effect.fail(error);
             }),
           ),
         );
@@ -1232,10 +1204,22 @@ const make = Effect.gen(function* () {
     WHERE kind = 'thread' AND reports_supported = 0 AND state = 'running'`);
   const active = yield* rows(sql`SELECT * FROM remote_dispatches WHERE state = 'running'`);
   for (const r of active) yield* start(r.correlation_id, r.launched_run_id === null);
+  const resolveLostLaunches = resolveLostThreadLaunches({ retryAt: resolveRetryAt, start }).pipe(
+    Effect.provideService(SqlClient.SqlClient, sql),
+    Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+    Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+  );
+  // No pass at startup: a row the restart just marked lost is too young to ask about.
+  yield* Effect.sleep("1 minute").pipe(
+    Effect.andThen(resolveLostLaunches),
+    Effect.forever,
+    Effect.forkScoped,
+  );
   return RemoteDispatchCoordinator.of({
     launch,
     cancel,
     resume,
+    resolveLostLaunches,
     taskOrigin,
     isTaskThread: (host, threadId) =>
       db(

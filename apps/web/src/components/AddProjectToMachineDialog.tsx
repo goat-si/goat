@@ -11,6 +11,7 @@ import {
   type ScopedProjectRef,
   resolveEnvironmentMachineKind,
 } from "@goat/contracts";
+import { type CloneProtocol, cloneUrlForProtocol, cloneUrlProtocol } from "@goat/shared/cloneUrl";
 import { ArrowRightIcon } from "~/components/solar";
 import { useEffect, useId, useState } from "react";
 import { create } from "zustand";
@@ -21,10 +22,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import {
   COPYABLE_FILE_MAX_BYTES,
-  type CloneProtocol,
   addProjectToMachine,
-  cloneUrlForProtocol,
-  cloneUrlProtocol,
   isDefaultCopiedFile,
 } from "../lib/addProjectToMachine";
 import { formatBytes } from "../lib/formatBytes";
@@ -82,7 +80,10 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
   const [targetId, setTargetId] = useState(request.targetEnvironmentId);
   const target = targets.find((t) => t.environmentId === targetId) ?? targets[0] ?? null;
   const source = environments.find((env) => env.environmentId === request.projectRef.environmentId);
-  const sourceUrl = project?.repositoryIdentity?.locator.remoteUrl ?? "";
+  const sourceUrl =
+    project?.repositoryIdentity?.origin?.remoteUrl ??
+    project?.repositoryIdentity?.locator.remoteUrl ??
+    "";
   const [protocol, setProtocol] = useState<CloneProtocol | null>(() => cloneUrlProtocol(sourceUrl));
   const sshUrl = cloneUrlForProtocol(sourceUrl, "ssh");
   const httpsUrl = cloneUrlForProtocol(sourceUrl, "https");

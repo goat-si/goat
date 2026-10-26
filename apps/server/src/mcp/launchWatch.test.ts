@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
+  endReported,
   finishedWake,
   LaunchWatchDocument,
   launchWatchId,
@@ -12,8 +13,10 @@ import {
   normalizeHost,
   outageWake,
   questionWake,
+  rearmRetriedRun,
   recordContact,
   recordFailure,
+  settleEnd,
   settleRun,
 } from "./launchWatch.ts";
 
@@ -36,6 +39,55 @@ it("reads watches saved before completion webhooks with the webhook off", () => 
     watches: [saved],
   });
   expect(document.watches[0]?.notifyWebhook).toBe(false);
+});
+
+it("gives a retried run's end new ids when an earlier server reported its first end (#978)", () => {
+  const run = RunId.make("run-1");
+  const {
+    reportedEnds: _added,
+    followAgain: _alsoAdded,
+    ...saved
+  } = settleRun(addPendingRun(makeWatch(), run, 0), run, 0);
+  const [upgraded] = Schema.decodeUnknownSync(LaunchWatchDocument)({
+    version: 1,
+    watches: [saved],
+  }).watches;
+  const wake = (watch: typeof upgraded) =>
+    finishedWake({
+      watch: watch!,
+      runId: run,
+      status: "completed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: "2026-10-24T00:00:00.000Z",
+    });
+  const reported = wake(upgraded);
+  const retried = wake(rearmRetriedRun(upgraded!, run, 1));
+  expect(retried.commandId).not.toBe(reported.commandId);
+  expect(retried.messageId).not.toBe(reported.messageId);
+});
+
+it("reports each end it could not read, under ids of its own", () => {
+  const run = RunId.make("run-1");
+  const wake = (watch: ReturnType<typeof makeWatch>) =>
+    finishedWake({
+      watch,
+      runId: run,
+      status: "failed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: null,
+    });
+  const first = addPendingRun(makeWatch(), run, 0);
+  const second = rearmRetriedRun(settleEnd(first, run, null, 0), run, 1);
+  const third = rearmRetriedRun(settleEnd(second, run, null, 1), run, 2);
+  expect(endReported(second, run, null)).toBe(false);
+  const ids = [first, second, third].map((watch) => wake(watch).commandId);
+  expect(new Set(ids).size).toBe(3);
 });
 
 it.effect("notifies once on the third failure and caps contact backoff at fifteen minutes", () =>
@@ -132,11 +184,14 @@ it.effect("completion messages identify the environment and preserve rolled-back
 );
 
 it.effect(
-  "completion excerpts and summaries are bounded while wake ids remain stable per run",
+  "a run-end wake quotes the start of a long last message and points to the thread for the rest",
   () =>
     Effect.sync(() => {
-      const watch = makeWatch();
-      const excerpt = "x".repeat(1_600);
+      const watch = makeWatch("box");
+      const excerpt = Array.from(
+        { length: 30 },
+        (_, line) => `line ${line} ${"x".repeat(60)}`,
+      ).join("\n");
       const wake = finishedWake({
         watch,
         runId: RunId.make("run-1"),
@@ -146,14 +201,38 @@ it.effect(
         worktreePath: null,
         excerpt,
       });
-      expect(wake.notification.detail).toBe(`${"x".repeat(1_499)}…`);
-      expect(wake.text).toContain(wake.notification.detail!);
-      expect(wake.text).not.toContain(excerpt);
+      const quoted = wake.text.split("Last message:\n")[1]!.split("\nThe message continues")[0]!;
+      expect(quoted.split("\n").length).toBeLessThanOrEqual(4);
+      expect(quoted.length).toBeLessThanOrEqual(400);
+      expect(wake.text).not.toContain("line 5 ");
+      expect(wake.text).toContain(
+        'The message continues; read it with goat_call {path: "thread.read", args: {threadId: "target-thread", host: "box"}}.',
+      );
+      // The client shows a longer detail than the agent reads.
+      expect(wake.notification.detail!.length).toBeLessThanOrEqual(1_500);
+      expect(wake.notification.detail!.length).toBeGreaterThan(quoted.length);
       expect(wake.notification.summary.length).toBeLessThanOrEqual(120);
       expect(wake.commandId).toBe(finish(watch).commandId);
-      expect(finish(watch).commandId).toBe(finish(makeWatch()).commandId);
       expect(wake.commandId).not.toBe(finish(watch, RunId.make("run-2")).commandId);
     }),
+);
+
+it.effect("a short last message is quoted whole", () =>
+  Effect.sync(() => {
+    const wake = finishedWake({
+      watch: makeWatch(null),
+      runId: RunId.make("run-1"),
+      status: "completed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: "Fixed the flake; tests pass.",
+    });
+    expect(wake.text).toContain(
+      "Last message:\nFixed the flake; tests pass.\nRead the thread with",
+    );
+    expect(wake.text).not.toContain("continues");
+  }),
 );
 
 it.effect("question messages give concrete local and remote pending-tool arguments", () =>
@@ -167,13 +246,13 @@ it.effect("question messages give concrete local and remote pending-tool argumen
         title: null,
       });
     expect(question(null).text).toContain(
-      'goat_pending_request_read {threadId: "target-thread", requestId: "request-1"}',
+      'goat_call {path: "pending_request.read", args: {threadId: "target-thread", requestId: "request-1"}}',
     );
     expect(question("box").text).toContain(
-      'goat_pending_request_read {host: "box", threadId: "target-thread", requestId: "request-1"}',
+      'goat_call {path: "pending_request.read", args: {host: "box", threadId: "target-thread", requestId: "request-1"}}',
     );
     expect(question("box").text).toContain(
-      "goat_pending_request_respond using the same host, threadId, and requestId (reason required)",
+      'goat_call {path: "pending_request.respond", args: {host, threadId, requestId, reason}}',
     );
     expect(question("box").text).toContain("forward it to the user");
     for (const host of [null, "box"]) {
@@ -185,7 +264,7 @@ it.effect("question messages give concrete local and remote pending-tool argumen
           kind,
           title: null,
         });
-        expect(wake.text).not.toContain("goat_pending_request_respond");
+        expect(wake.text).not.toContain("pending_request.respond");
         expect(wake.text).toContain(kind === null ? "a request" : "a command request");
         if (host !== null) expect(wake.text).toContain("from a client connected to box");
       }

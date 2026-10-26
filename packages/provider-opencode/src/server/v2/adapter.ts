@@ -36,6 +36,7 @@ import {
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
+  ThreadId,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -86,7 +87,8 @@ import {
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
-import { openCodeToolTurnItem } from "../toolItems.ts";
+import { openCodeFileUris, openCodeToolTurnItem, type OpenCodeToolResult } from "../toolItems.ts";
+import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -281,7 +283,7 @@ interface ThreadState {
   /**
    * Set when a turn ended here while OpenCode may still be running it: a Stop
    * that timed out, a prompt whose request failed without a clear answer, or a
-   * request T3 could not answer. Execution events carry only the session id,
+   * request GOAT could not answer. Execution events carry only the session id,
    * so the next execution end belongs to that run; it clears this and ends no turn.
    */
   unsettled: boolean;
@@ -326,6 +328,8 @@ interface ThreadState {
         readonly endpoint: string;
       }
     | undefined;
+  /** The managed Cua Driver as registered for this thread; `key` names its daemon generation. */
+  cua: { readonly name: string; readonly directory: string; readonly key: string } | undefined;
   instructions: string | undefined;
   /** Digest of the last successfully installed value; memory bodies are never retained locally. */
   memoryDigest: string | undefined;
@@ -383,25 +387,45 @@ export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threa
 });
 
 /**
- * The rules that keep T3's MCP servers to their own thread, after the mode's:
- * the last matching rule wins, so every thread's T3 server is denied and then
- * this thread's own is allowed again, in every mode.
+ * The thread's managed Cua Driver, registered per directory beside its GOAT
+ * server. Always a digest: a readable id would exceed OpenCode's 64-character
+ * tool namespace with this longer prefix.
  */
-const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
-  mcpServerName === null
-    ? []
+export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadId: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(threadId))
+    .pipe(Effect.orDie);
+  return `${McpProviderSession.CUA_MCP_SERVER_NAME}-${Hex.encode(digest).slice(0, 16)}`;
+});
+
+/**
+ * The rules that keep GOAT's MCP servers to their own thread, after the mode's:
+ * the last matching rule wins, so every thread's GOAT server is denied and then
+ * this thread's own is allowed again, in every mode. Cua Drivers are registered
+ * per directory, so every turn denies all of them, including a turn excluded from
+ * computer use (Plan, read-only) that would otherwise inherit full access's
+ * `* allow`, and only a turn with the driver allows its own exact server.
+ */
+const mcpRules = (
+  names: { readonly goat: string; readonly cua: string | null } | null,
+): ReadonlyArray<Rule> =>
+  names === null
+    ? [rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny")]
     : [
         // A reused daemon can still carry registrations from before the rename.
         { action: "t3-code-*", resource: "*", effect: "deny" },
         { action: "goat-*", resource: "*", effect: "deny" },
-        { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
+        { action: `${names.goat}_*`, resource: "*", effect: "allow" },
+        rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny"),
+        ...(names.cua === null ? [] : [rule(`${names.cua}_*`, "allow")]),
       ];
 
 const sessionRules = (
   policy: RulesPolicy,
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
-  mcpServerName: string | null,
+  mcpServerNames: { readonly goat: string; readonly cua: string | null } | null,
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -415,7 +439,7 @@ const sessionRules = (
   // are never denied: the free tier refuses sessions whose rules deny them.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
-  ...mcpRules(mcpServerName),
+  ...mcpRules(mcpServerNames),
 ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
@@ -596,7 +620,7 @@ type ModelRef = ReturnType<typeof Model.Ref.make>;
  * session with the item it already has, so a retried request never queues a second message, and a
  * turn knows the message fork and rollback cut at before OpenCode answers. The id is unique across
  * the whole server, which refuses it in any other session (409), so it names the session: another
- * T3 database or environment on the same server repeats thread ids and run ordinals, never session
+ * GOAT database or environment on the same server repeats thread ids and run ordinals, never session
  * ids.
  */
 const turnPromptId = (sessionId: string, attemptId: string) =>
@@ -703,6 +727,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const driver = OPENCODE_PROVIDER;
   const mcpServerNameFor = (threadId: string) =>
     goatMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
+  const cuaServerNameFor = (threadId: string) =>
+    cuaMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
   const borrow = Effect.gen(function* () {
     const lent = yield* Deferred.make<
@@ -802,6 +828,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       stoppedChildren: new Set(),
       strandedSteers: new Set(),
       mcp: undefined,
+      cua: undefined,
       instructions: undefined,
       memoryDigest: undefined,
     });
@@ -1016,7 +1043,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
       id: string,
       status: "running" | "completed" | "failed" | "interrupted",
-      result?: { readonly output: string | undefined; readonly metadata: unknown },
+      result?: OpenCodeToolResult,
     ) {
       const tool = turn.tools.get(id);
       if (tool === undefined) return;
@@ -1034,6 +1061,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             name: tool.name,
             input: tool.input,
             output: result?.output,
+            fileUrls: result?.fileUrls,
             completedMetadata: status === "completed" ? result?.metadata : undefined,
           },
         ),
@@ -1657,7 +1685,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             }),
       });
       // A subagent's session is its call's to settle: a turn there is runless,
-      // and T3 has no terminal to wait on.
+      // and GOAT has no terminal to wait on.
       if (state.subagent !== undefined) {
         const call = state.subagent.call;
         if (!call.background && terminal.status !== "completed") {
@@ -1721,7 +1749,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     /**
-     * Ends the turn a request T3 could not answer would block, and stops the
+     * Ends the turn a request GOAT could not answer would block, and stops the
      * session: OpenCode waits on an unanswered request forever. The stopped
      * run's end is its own, not the next turn's.
      */
@@ -1752,7 +1780,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     /**
-     * T3's own answers are only forgotten: the orchestrator already recorded them.
+     * GOAT's own answers are only forgotten: the orchestrator already recorded them.
      */
     const settleRequest = Effect.fnUntraced(function* (
       entry: PendingRequest,
@@ -1805,7 +1833,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     /**
      * Stops what a session still waits on when this runtime first loads it:
-     * T3 shows none of those requests (a restart or a closed session expired
+     * GOAT shows none of those requests (a restart or a closed session expired
      * them), and OpenCode would wait on them forever.
      */
     const stopLeftoverRequests = Effect.fnUntraced(function* (state: ThreadState) {
@@ -2150,6 +2178,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const output = textOf(event.data.content);
           yield* emitTool(state, turn, event.data.id, "completed", {
             output,
+            fileUrls: openCodeFileUris(event.data.content),
             metadata: event.data.metadata,
           });
           turn.tools.delete(event.data.id);
@@ -2206,19 +2235,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           });
         case "session.execution.interrupted":
           return yield* endExecution(state, turn, { status: "interrupted" });
-        case "session.execution.failed":
+        case "session.execution.failed": {
+          const { type, message, status } = event.data.error;
+          // OpenCode types an empty balance as provider.quota too, but it answers
+          // that with HTTP 402 and it never resets. Usage windows and budgets are 429.
+          const usageLimit =
+            (type === "provider.quota" && status !== 402) || type === "provider.rate-limit";
           return yield* endExecution(state, turn, {
             status: "failed",
             failure: makeProviderFailure({
-              message: event.data.error.message,
-              code: event.data.error.type,
-              class:
-                event.data.error.type === "provider.quota" ||
-                event.data.error.type === "provider.rate-limit"
-                  ? "usage_limit"
-                  : "provider_error",
+              message,
+              code: type,
+              class: usageLimit ? "usage_limit" : "provider_error",
             }),
           });
+        }
         default:
           return;
       }
@@ -2602,6 +2633,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (part.state.status === "completed") {
             yield* emitTool(state, turn, part.id, "completed", {
               output: textOf(part.state.content),
+              fileUrls: openCodeFileUris(part.state.content),
               metadata: part.state.metadata,
             });
             turn.tools.delete(part.id);
@@ -2721,8 +2753,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       client = next.client;
       currentScope = scope;
       yield* Scope.close(previous, Exit.void);
-      // A restarted server forgot T3's MCP servers; the next turn adds them again.
-      for (const state of threads.values()) state.mcp = undefined;
+      // A restarted server forgot GOAT's MCP servers; the next turn adds them again.
+      for (const state of threads.values()) {
+        state.mcp = undefined;
+        state.cua = undefined;
+      }
       yield* lock.withPermit(reconcile).pipe(Effect.timeout(RECONCILE_TIMEOUT));
       return stream;
     }).pipe(
@@ -2767,7 +2802,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     // Subscribed before any session or prompt call, so no event of theirs is missed.
     yield* follow(yield* connection.events).pipe(Effect.forkScoped);
 
-    // A server T3 did not start keeps running after T3 stops, so stop the turns
+    // A server GOAT did not start keeps running after GOAT stops, so stop the turns
     // it would otherwise finish unseen. A spawned server stops with its owner.
     if (connection.external) {
       yield* Effect.addFinalizer(() =>
@@ -2856,7 +2891,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         policy,
         paths,
         policy.runtimeMode === "full-access" ? [] : thread.grants,
-        appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
+        appThreadId === null
+          ? null
+          : {
+              goat: yield* mcpServerNameFor(appThreadId),
+              cua:
+                (yield* mcpSessions.read(ThreadId.make(appThreadId)))?.cuaDriver === undefined
+                  ? null
+                  : yield* cuaServerNameFor(appThreadId),
+            },
       );
     });
 
@@ -2956,7 +2999,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     /**
      * Clears a staged revert and waits out the empty execution `clear` runs,
-     * which is no turn of T3's. 2.0.18 wakes the session after every clear,
+     * which is no turn of GOAT's. 2.0.18 wakes the session after every clear,
      * with or without a stage (seen live), so that execution always comes.
      */
     const clearRevert = Effect.fnUntraced(function* (sessionId: string) {
@@ -2975,7 +3018,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     /**
      * If either fails or is interrupted the stage is cleared, since OpenCode commits a staged
      * revert on the next prompt; a clear that fails too is tried again before that prompt. Files
-     * stay where they are: T3 restores its own checkpoint when the user asked for files, and a
+     * stay where they are: GOAT restores its own checkpoint when the user asked for files, and a
      * rewind without files must not touch them.
      */
     const rollBackTo = Effect.fnUntraced(function* (
@@ -3083,7 +3126,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const promptFiles = Effect.fnUntraced(function* (attachments: ReadonlyArray<ChatAttachment>) {
       const files: Array<{ uri: string; name: string }> = [];
-      // An external server may not share T3's attachment directory.
+      // An external server may not share GOAT's attachment directory.
       if (connection.external) return files;
       for (const attachment of attachments) {
         if (!isProviderNativeImageAttachment(attachment)) continue;
@@ -3103,7 +3146,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach(
-        [...threads.values()].flatMap((state) => (state.mcp === undefined ? [] : [state.mcp])),
+        [...threads.values()].flatMap((state) => [
+          ...(state.mcp === undefined ? [] : [state.mcp]),
+          ...(state.cua === undefined ? [] : [state.cua]),
+        ]),
         removeMcp,
         { concurrency: 8, discard: true },
       ),
@@ -3117,7 +3163,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const mcpSession = yield* mcpSessions.read(turnInput.threadId);
       const directory = turnInput.runtimePolicy.cwd ?? host.paths.cwd;
       const name = yield* mcpServerNameFor(turnInput.threadId);
-      // An external server may not reach T3's MCP endpoint, as with 1.x.
+      // An external server may not reach GOAT's MCP endpoint, as with 1.x.
       const wanted =
         mcpSession === undefined || connection.external
           ? undefined
@@ -3143,7 +3189,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           .pipe(Effect.timeout(INVENTORY_TIMEOUT));
         state.mcp = undefined;
       }
-      // Idle Location eviction drops runtime MCP servers without clearing T3's cache.
+      // Idle Location eviction drops runtime MCP servers without clearing GOAT's cache.
       // Re-adding an unchanged config keeps its existing connection.
       let mcpAvailable = false;
       if (wanted !== undefined) {
@@ -3151,12 +3197,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           .add({
             server: name,
             location: { directory },
-            config: new Mcp.RemoteConfig({
-              type: "remote",
-              url: wanted.endpoint,
-              headers: { Authorization: wanted.credential },
-              oauth: false,
-            }),
+            config: new Mcp.RemoteConfig(goatRemoteMcpConfig(wanted.endpoint, wanted.credential)),
           })
           .pipe(
             Effect.timeout(INVENTORY_TIMEOUT),
@@ -3169,6 +3210,50 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           );
         if (mcpAvailable) state.mcp = wanted;
       }
+      // The managed Cua Driver follows the same per-directory registration; a
+      // new daemon generation replaces the old entry, and a failed add only
+      // leaves computer use out of this turn.
+      const cuaDriver = mcpAvailable ? mcpSession?.cuaDriver : undefined;
+      const wantedCua =
+        cuaDriver === undefined
+          ? undefined
+          : {
+              name: yield* cuaServerNameFor(turnInput.threadId),
+              directory,
+              key: McpProviderSession.cuaDriverKey(cuaDriver),
+            };
+      if (
+        state.cua !== undefined &&
+        (wantedCua === undefined ||
+          state.cua.directory !== wantedCua.directory ||
+          state.cua.key !== wantedCua.key)
+      ) {
+        yield* removeMcp(state.cua);
+        state.cua = undefined;
+      }
+      if (cuaDriver !== undefined && wantedCua !== undefined && state.cua === undefined) {
+        const config = McpProviderSession.cuaOpenCodeMcpConfig(cuaDriver);
+        const added = yield* client.mcp
+          .add({
+            server: wantedCua.name,
+            location: { directory },
+            config: new Mcp.LocalConfig({
+              type: "local",
+              command: config.command,
+              environment: config.environment,
+            }),
+          })
+          .pipe(
+            Effect.timeout(INVENTORY_TIMEOUT),
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not add Cua Driver to OpenCode.", cause).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+        if (added) state.cua = wantedCua;
+      }
       const availability = McpProviderSession.memoryToolAvailability(
         mcpAvailable &&
           state.mcp !== undefined &&
@@ -3179,7 +3264,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           : undefined,
       );
       const instructions = [
-        buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
+        buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: turnInput.modelSelection.model,
+          computerUse:
+            state.cua !== undefined && McpProviderSession.carriesComputerUseSkill(mcpSession),
+        }),
         goatOrchestrationSystemPrompt(mcpAvailable),
         availability.read || availability.write || availability.source
           ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
@@ -3471,7 +3561,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           Effect.orElseSucceed(() => []),
         );
         if (commands.some((entry) => entry.name === command.name)) {
-          // `session.command` takes no id of T3's and its answer carries none,
+          // `session.command` takes no id of GOAT's and its answer carries none,
           // so the turn remembers where the history stood before it.
           const newest = yield* client.message.list({ sessionID, order: "desc", limit: 1 });
           yield* markBefore(sessionId, newest.data[0]?.id ?? null);
@@ -3766,7 +3856,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (started === undefined) return;
           const { state, sessionId, turn } = started;
           yield* submit(sessionId, turnInput, state, turn).pipe(
-            // Deleted outside T3: the thread is broken, and forgetting it makes
+            // Deleted outside GOAT: the thread is broken, and forgetting it makes
             // the next turn resume, fail, and recreate it with a handoff.
             Effect.catchTags({
               SessionNotFoundError: () =>
@@ -3969,6 +4059,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           threads.delete(child);
         }
         if (state.mcp !== undefined) yield* removeMcp(state.mcp);
+        if (state.cua !== undefined) yield* removeMcp(state.cua);
       }),
       respondToRuntimeRequest: Effect.fn("OpenCode2Adapter.respondToRuntimeRequest")(
         function* (requestInput) {

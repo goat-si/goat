@@ -10,6 +10,7 @@ import type {
 } from "@cursor/sdk";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { cursorToolOutput } from "./toolOutput.ts";
 import {
   isOrchestrationV2WorkActive,
   defaultInstanceIdForDriver,
@@ -222,6 +223,7 @@ export function cursorMcpServers(
         Authorization: session.authorizationHeader,
       },
     },
+    ...McpProviderSession.cuaStdioMcpServers(session),
   };
 }
 
@@ -318,7 +320,7 @@ export function makeCursorAgentOptions(input: {
   const mcpServers = cursorMcpServers(input.mcpSession);
   return {
     model: cursorSdkModelSelection(input.modelSelection),
-    name: `T3 Code ${input.threadId}`,
+    name: `GOAT ${input.threadId}`,
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
     local: {
@@ -392,14 +394,6 @@ function cursorToolFailed(toolCall: ToolCall): boolean {
   return toolCall.type === "mcp" && toolCall.result?.status === "success"
     ? toolCall.result.value.isError
     : false;
-}
-
-function cursorToolOutput(toolCall: ToolCall): unknown {
-  const result = toolCall.result;
-  if (result === undefined) {
-    return undefined;
-  }
-  return result.status === "success" ? result.value : result.error;
 }
 
 function cursorToolOutputText(toolCall: ToolCall): string {
@@ -868,7 +862,7 @@ interface ActiveCursorTurn {
   readonly tools: Map<string, ActiveCursorToolCall>;
   readonly subagents: Map<string, ActiveCursorSubagent>;
   readonly assistant: ActiveCursorTextStream;
-  readonly assistantReply: CursorTransportFailure;
+  assistantReply: CursorTransportFailure;
   readonly reasoning: ActiveCursorTextStream;
   interrupted: boolean;
   finalized: boolean;
@@ -878,6 +872,8 @@ interface CursorLiveAgent {
   readonly cwd: string | null;
   readonly mcpAuthorization: string | undefined;
   readonly mcpEndpoint: string | undefined;
+  /** The Cua Driver the agent was opened with (`cuaDriverKey`); empty when none. */
+  readonly cuaDriverKey: string;
   readonly nativeThreadId: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
@@ -1923,6 +1919,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
           switch (update.type) {
             case "text-delta":
+              // Classify each assistant message on its own, so earlier
+              // commentary does not hide a later standalone transport dump.
+              if (context.assistant.current === null) {
+                context.assistantReply = new CursorTransportFailure();
+              }
               context.assistantReply.push(update.text);
               yield* completeReasoning(context);
               yield* appendTextSegment({
@@ -2136,7 +2137,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing.nativeThreadId === openInput.agentId &&
             existing.cwd === openInput.runtimePolicy.cwd &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
-            existing.mcpEndpoint === mcpSession?.endpoint
+            existing.mcpEndpoint === mcpSession?.endpoint &&
+            // Servers are fixed when the agent opens; computer use changes reopen it.
+            existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver)
           ) {
             return existing;
           }
@@ -2179,6 +2182,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             session: sdkSession,
             mcpAuthorization: mcpSession?.authorizationHeader,
             mcpEndpoint: mcpSession?.endpoint,
+            cuaDriverKey: McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver),
           } satisfies CursorLiveAgent;
           yield* Ref.set(liveAgent, next);
           return next;
@@ -2288,7 +2292,14 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           } else memoryToolClaims.delete(nativeId);
           const text = [
             userText,
-            buildRuntimeInstructions({ harness: "Cursor", model: turnInput.modelSelection.model }),
+            buildRuntimeInstructions({
+              harness: "Cursor",
+              model: turnInput.modelSelection.model,
+              computerUse:
+                agent !== null &&
+                agent.cuaDriverKey !== "" &&
+                McpProviderSession.carriesComputerUseSkill(config),
+            }),
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
               : undefined,

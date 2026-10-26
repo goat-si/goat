@@ -47,6 +47,7 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import { isLocalServerConnection, loopbackBudgetMs } from "../connection/loopbackHost.ts";
 import { logSshConnectionTiming } from "../connection/sshTiming.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
@@ -129,7 +130,6 @@ function serverConfigReplayEvents(
 }
 
 const isSocketErrorReason = Schema.is(Socket.SocketErrorReason);
-const PING_TIMEOUT_SECONDS = Duration.toSeconds(PING_TIMEOUT);
 
 function mapSessionRpcError(
   error: InitialConfigError | ProbeError | ServerConfigSubscriptionError,
@@ -161,7 +161,7 @@ function mapSessionRpcError(
   }
 }
 
-/** Over T3 Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
+/** Over GOAT Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
 function socketFailureLocation(via: "relay" | "direct") {
   return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }
@@ -192,6 +192,12 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const openedAt = yield* Ref.make(openingStartedAt);
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
     const pingTimedOut = yield* Ref.make(false);
+    const silenceTimeout = Duration.millis(
+      loopbackBudgetMs(
+        isLocalServerConnection(connection.target, connection.httpBaseUrl),
+        Duration.toMillis(PING_TIMEOUT),
+      ),
+    );
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Effect.gen(function* () {
         yield* Ref.set(openedAt, yield* Clock.monotonicTimeNanos);
@@ -210,7 +216,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               detail: !wasConnected
                 ? `${connection.label} could not establish a WebSocket connection.${networkHint}`
                 : timedOut
-                  ? `${connection.label} stopped responding for ${PING_TIMEOUT_SECONDS}s. ${UNRESPONSIVE_HOST_HINT}`
+                  ? `${connection.label} stopped responding for ${Duration.toSeconds(silenceTimeout)}s. ${UNRESPONSIVE_HOST_HINT}`
                   : `${connection.label} disconnected.`,
               ...socketFailureLocation(via),
             }),
@@ -224,7 +230,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true)),
+      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout),
     ).pipe(
       Layer.provide(
         Layer.mergeAll(

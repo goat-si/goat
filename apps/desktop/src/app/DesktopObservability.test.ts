@@ -1,4 +1,5 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import desktopPackageJson from "../../package.json" with { type: "json" };
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -38,6 +39,15 @@ const TraceRecordLine = Schema.Struct({
 });
 
 const decodeTraceRecordLine = Schema.decodeUnknownSync(Schema.fromJsonString(TraceRecordLine));
+
+const decodeTraceResourceLine = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      name: Schema.String,
+      resourceAttributes: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+    }),
+  ),
+);
 
 const environmentInput = (baseDir: string) =>
   ({
@@ -196,6 +206,37 @@ describe("DesktopObservability", () => {
     ),
   );
 
+  // Stable and nightly apps can run together and share one desktop.trace.ndjson.
+  it.effect("regression: every desktop trace record names the app version that wrote it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-desktop-trace-version-test-",
+      });
+      const layerEnvironment = layerEnvironmentFor(baseDir, false);
+      const tracePath = yield* Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        return environment.path.join(environment.logDir, "desktop.trace.ndjson");
+      }).pipe(Effect.provide(layerEnvironment));
+
+      yield* Effect.void.pipe(
+        Effect.withSpan("desktop.test.quietSpan"),
+        Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))),
+      );
+
+      const record = (yield* fileSystem.readFileString(tracePath))
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => decodeTraceResourceLine(line))
+        .find((line) => line.name === "desktop.test.quietSpan");
+      assert.deepEqual(record?.resourceAttributes, { "service.version": "1.2.3" });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, layerEmptyEnv)),
+    ),
+  );
+
   it.effect("keeps buffering output after a non-terminal failure snapshot", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -310,6 +351,35 @@ describe("DesktopObservability", () => {
           ConfigProvider.layer(ConfigProvider.fromEnv({ env: { OTEL_SDK_DISABLED: "true" } })),
         ),
       ),
+    );
+  });
+
+  it.effect("reports the app's own version for an unpackaged desktop run", () => {
+    const requests: Array<ExportedRequest> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-desktop-observability-test-",
+      });
+      const layerEnvironment = layerEnvironmentFor(baseDir);
+      yield* writeObservabilitySettings(layerEnvironment, {
+        otlpLogsUrl: "https://settings.example.com/v1/logs",
+      });
+
+      yield* Effect.scoped(
+        Effect.logInfo("desktop resource under test").pipe(
+          Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))),
+        ),
+      );
+
+      const body = requests.map((request) => request.body).join("\n");
+      assert.include(
+        body,
+        `"key":"service.version","value":{"stringValue":"${desktopPackageJson.version}"}`,
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, layerCollector(requests), layerEmptyEnv)),
     );
   });
 });

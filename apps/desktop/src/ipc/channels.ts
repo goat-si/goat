@@ -37,6 +37,10 @@ export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:get-local-environment-enabled";
 export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environment-enabled";
+export const GET_HEADLESS_SERVER_ATTACH_ENABLED_CHANNEL =
+  "desktop:get-headless-server-attach-enabled";
+export const SET_HEADLESS_SERVER_ATTACH_ENABLED_CHANNEL =
+  "desktop:set-headless-server-attach-enabled";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
@@ -121,9 +125,17 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+export const PREVIEW_SERVER_TAB_CAPTURE_CHANNEL = "desktop:preview-server-tab-capture";
 export const PREVIEW_OPEN_LINK_CHANNEL = "desktop:preview-open-link";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
+
+export const RESTART_CUA_DRIVER_CHANNEL = "desktop:restart-cua-driver";
+export const VERIFY_CUA_DRIVER_CHANNEL = "desktop:verify-cua-driver";
+export const CHECK_CUA_GRANTS_CHANNEL = "desktop:check-cua-grants";
+export const OPEN_CUA_PERMISSION_GUIDE_CHANNEL = "desktop:open-cua-permission-guide";
+export const RELAUNCH_FOR_CUA_GRANTS_CHANNEL = "desktop:relaunch-for-cua-grants";
+export const REVEAL_CUA_GRANT_TARGET_CHANNEL = "desktop:reveal-cua-grant-target";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 
@@ -133,3 +145,7 @@ export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-
 export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
+export const PREVIEW_SESSION_STACK_CHANNEL = "desktop:preview-session-stack";
+
+export const GET_WINDOW_MATERIAL_STATE_CHANNEL = "desktop:get-window-material-state";
+export const WINDOW_MATERIAL_STATE_CHANNEL = "desktop:window-material-state-changed";

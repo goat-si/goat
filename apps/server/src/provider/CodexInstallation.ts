@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest.
 import { ProviderDriverKind, type ProviderInstallState } from "@goat/contracts";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
+import { satisfiesSemverRange } from "@goat/shared/semver";
+import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
@@ -22,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { V2ConfigRequirementsReadResponse } from "effect-codex-app-server/schema";
 import * as NodeCrypto from "node:crypto";
 import * as ServerConfig from "../config.ts";
 import * as ModelManifest from "./ModelManifest.ts";
@@ -45,6 +48,29 @@ const PackageManifest = Schema.Struct({
 const decodeVersion = Schema.decodeUnknownEffect(Version);
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(InstalledRelease));
 const encodeActive = Schema.encodeEffect(Schema.fromJsonString(ActiveRelease));
+// The one-shot envelope is not in the protocol bundle. Source: openai/codex
+// 1277bcfddc69800c5e3538dccf3f26bedbd80290, app-server/src/startup_config.rs.
+const decodeStartupConfig = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Union([
+      Schema.Struct({ error: Schema.Struct({ code: Schema.Int, message: Schema.String }) }),
+      Schema.Struct({
+        appServerVersion: Schema.NonEmptyString,
+        configRequirements: V2ConfigRequirementsReadResponse,
+        error: Schema.optionalKey(Schema.Never),
+      }),
+    ]),
+  ),
+);
+const STARTUP_WARNINGS = {
+  configuration: "Codex startup check warning: local configuration validation failed.",
+  invalid: "Codex startup check warning: the diagnostic returned an invalid response.",
+  unsupported: "Codex startup check warning: this executable does not support the diagnostic.",
+  unavailable: "Codex startup check warning: the diagnostic could not complete.",
+  timeout: "Codex startup check warning: the diagnostic timed out.",
+} as const;
+const STARTUP_STDOUT_MAX_BYTES = 64 * 1024;
+const STARTUP_STDERR_MAX_BYTES = 4 * 1024;
 export interface CodexReleaseAsset {
   readonly version: string;
   readonly target: string;
@@ -120,6 +146,7 @@ export interface CodexExecutable {
   readonly source: "managed" | "local";
   readonly version: string;
   readonly managedVersionDirectory: string | null;
+  readonly startupWarning?: (typeof STARTUP_WARNINGS)[keyof typeof STARTUP_WARNINGS];
 }
 interface CodexInstallationService {
   readonly managedDirectory: string;
@@ -290,7 +317,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const acquire = Effect.fn("CodexInstallation.acquire")(function* () {
     return yield* Effect.acquireRelease(
       gate.withPermit(
-        resolve().pipe(
+        resolve(false).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               leases += 1;
@@ -329,6 +356,44 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       );
     return output;
   }, Effect.scoped);
+  const probeStartupConfig = Effect.fn("CodexInstallation.probeStartupConfig")(
+    function* (executablePath: string) {
+      const resolved = yield* resolveSpawnCommand(executablePath, [
+        "app-server",
+        "--print-startup-config",
+      ]).pipe(Effect.provideService(HostProcess.Platform, platform));
+      const child = yield* spawner.spawn(
+        ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }),
+      );
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          collectUint8StreamText({ stream: child.stdout, maxBytes: STARTUP_STDOUT_MAX_BYTES }),
+          collectUint8StreamText({ stream: child.stderr, maxBytes: STARTUP_STDERR_MAX_BYTES }),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (stdout.truncated || stdout.invalidUtf8) return STARTUP_WARNINGS.invalid;
+      const response = decodeStartupConfig(stdout.text);
+      if (Option.isSome(response)) {
+        if ("error" in response.value)
+          return exitCode !== 0 ? STARTUP_WARNINGS.configuration : STARTUP_WARNINGS.invalid;
+        return exitCode === 0 ? undefined : STARTUP_WARNINGS.invalid;
+      }
+      if (
+        exitCode !== 0 &&
+        !stderr.truncated &&
+        !stderr.invalidUtf8 &&
+        /(?:unexpected argument|unrecognized (?:option|argument)) ['"]?--print-startup-config\b/iu.test(
+          stderr.text,
+        )
+      )
+        return STARTUP_WARNINGS.unsupported;
+      return STARTUP_WARNINGS.invalid;
+    },
+    Effect.scoped,
+    Effect.orElseSucceed(() => STARTUP_WARNINGS.unavailable),
+  );
   // Native Codex needs its adjacent host; launchers resolve their own payloads.
   const hasCodeModeHost = Effect.fn("CodexInstallation.hasCodeModeHost")(
     function* (realExecutablePath: string) {
@@ -370,9 +435,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => false),
   );
-  const localCache = new Map<string, { fingerprint: string; executable: CodexExecutable | null }>();
+  const localCache = new Map<
+    string,
+    { fingerprint: string; executable: Omit<CodexExecutable, "startupWarning"> | null }
+  >();
   const resolveLocal = Effect.fn("CodexInstallation.resolveLocal")(
-    function* () {
+    function* (diagnose: boolean) {
       const executablePath = yield* resolveCommandPath("codex", { env: environment }).pipe(
         Effect.provideService(HostProcess.Platform, platform),
         Effect.provideService(FileSystem.FileSystem, fs),
@@ -392,37 +460,55 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       const info = yield* fs.stat(executablePath);
       const fingerprint = `${realExecutablePath}:${info.size}:${Option.getOrUndefined(info.mtime)?.getTime()}:${Option.getOrUndefined(info.ino)}`;
       const cached = localCache.get(executablePath);
-      const executable =
-        cached?.fingerprint === fingerprint
-          ? cached.executable
-          : yield* Effect.gen(function* () {
-              const output = yield* runCommand(executablePath, ["--version"]);
-              const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
-              if (!version) return null;
-              yield* runCommand(executablePath, ["app-server", "--help"]);
-              return {
-                executablePath,
-                source: "local",
-                version,
-                managedVersionDirectory: null,
-              } satisfies CodexExecutable;
-            }).pipe(
-              Effect.timeout("5 seconds"),
-              Effect.orElseSucceed(() => null),
-            );
-      localCache.set(executablePath, { fingerprint, executable });
+      let candidate = cached?.fingerprint === fingerprint ? cached.executable : undefined;
+      let startupCandidate: CodexExecutable | null = null;
+      const executable = yield* Effect.gen(function* () {
+        if (candidate === undefined) {
+          const output = yield* runCommand(executablePath, ["--version"]);
+          const version = /^codex-cli (\d+\.\d+\.\d+)$/u.exec(output.trim())?.[1];
+          if (!version) return null;
+          // Prereleases retain the existing conservative version policy. The
+          // stable gate stays off until 0.164; 0.163 has no one-shot flag.
+          if (!satisfiesSemverRange(version, ">=0.164.0"))
+            yield* runCommand(executablePath, ["app-server", "--help"]);
+          candidate = { executablePath, source: "local", version, managedVersionDirectory: null };
+        }
+        if (!candidate || !diagnose || !satisfiesSemverRange(candidate.version, ">=0.164.0"))
+          return candidate ?? null;
+        startupCandidate = candidate;
+        const startupWarning = yield* probeStartupConfig(executablePath);
+        return { ...candidate, ...(startupWarning ? { startupWarning } : {}) };
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        // Keep the one overall budget, but a diagnostic timeout must not
+        // turn a version-confirmed executable into a missing installation.
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.succeed(
+              startupCandidate
+                ? { ...startupCandidate, startupWarning: STARTUP_WARNINGS.timeout }
+                : null,
+            ),
+        }),
+        Effect.orElseSucceed(() => null),
+      );
+      // Config and cloud requirements can change without touching the binary.
+      // Cache discovery only; every status resolution gets a fresh diagnostic.
+      localCache.set(executablePath, { fingerprint, executable: candidate ?? null });
       if (!executable) return null;
       const advisory = yield* compatibility(executable.version);
       return advisory?.status === "supported" ? executable : null;
     },
     Effect.orElseSucceed(() => null),
   );
-  const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
-    const local = yield* resolveLocal();
+  const resolve = Effect.fn("CodexInstallation.resolve")(function* (diagnose = true) {
+    // Runtime leases use initialize as their authority, without repeating the
+    // advisory config request already made by the status check.
+    const local = yield* resolveLocal(diagnose);
     return local ?? (yield* resolveManaged());
   });
   const reuseLocal = Effect.fn("CodexInstallation.reuseLocal")(function* () {
-    const local = yield* resolveLocal();
+    const local = yield* resolveLocal(true);
     if (!local) return false;
     yield* SubscriptionRef.update(
       state,

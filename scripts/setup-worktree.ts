@@ -12,9 +12,9 @@ export function selectWorktreeInstall(tools: { readonly vp: boolean; readonly pn
   readonly command: string;
   readonly tool: string;
 } {
-  if (tools.vp) return { command: "vp i --frozen-lockfile -- --yes", tool: "vp" };
+  if (tools.vp) return { command: "vp i --frozen-lockfile", tool: "vp" };
   if (tools.pnpm) return { command: "pnpm install --frozen-lockfile", tool: "pnpm" };
-  return { command: "npx --yes vite-plus i --frozen-lockfile -- --yes", tool: "npx vite-plus" };
+  return { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" };
 }
 
 function toolOnPath(name: string): boolean {
@@ -40,7 +40,49 @@ function isDirectRun(): boolean {
   }
 }
 
-function main(): void {
+/**
+ * Without group or other access even under umask 002: the dev server keeps the
+ * modes it finds here, and its memory import rejects writable state (#1648).
+ */
+export function createMarkerDirectory(directory: string): void {
+  NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
+}
+
+async function main(): Promise<void> {
+  // Setup can run in the background, so agents can start before it ends.
+  // `setup-running` holds this PID until setup ends with `setup-done` or
+  // `setup-failed`, so agents wait instead of racing it with their own `vp i`.
+  const markerDir = NodePath.join(worktree, ".goat");
+  const runningMarker = NodePath.join(markerDir, "setup-running");
+  const doneMarker = NodePath.join(markerDir, "setup-done");
+  const failedMarker = NodePath.join(markerDir, "setup-failed");
+  NodeFS.rmSync(doneMarker, { force: true });
+  NodeFS.rmSync(failedMarker, { force: true });
+  createMarkerDirectory(markerDir);
+  NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
+  let failureDetail = "";
+  process.on("uncaughtExceptionMonitor", (error) => {
+    failureDetail = error.stack ?? String(error);
+  });
+  process.on("exit", (code) => {
+    if (code === 0) NodeFS.writeFileSync(doneMarker, "");
+    else NodeFS.writeFileSync(failedMarker, `Setup exited with code ${code}.\n${failureDetail}\n`);
+    NodeFS.rmSync(runningMarker, { force: true });
+  });
+  // A cancelled setup must still leave a marker, or agents would wait forever.
+  // During install, the signal goes on to the installer and setup exits when the
+  // install output closes. Any child the shell leaves behind holds that output
+  // open, so no marker appears while the installer can still write node_modules.
+  let cancelSignal: NodeJS.Signals | undefined;
+  let activeInstall: NodeChildProcess.ChildProcess | undefined;
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      cancelSignal = signal;
+      if (activeInstall) activeInstall.kill(signal);
+      else process.exit(1);
+    });
+  }
+
   // GOAT passes the project root, older builds under its legacy T3 name. The git
   // hook passes neither; the main worktree is the first `git worktree list` entry.
   const projectRoot =
@@ -53,15 +95,38 @@ function main(): void {
   });
   process.stderr.write(`Worktree setup: installing dependencies with ${selected.tool}.\n`);
   // `shell` resolves the tool through PATH, including Windows command shims.
-  // Setup has no one answering install prompts. Pass pnpm's confirmation flag
-  // through vp and leave stdin closed so other prompts fail instead of hanging.
+  // Setup has no one answering install prompts, so stdin stays closed and a
+  // prompt fails instead of hanging. pnpm 12 never asks to purge node_modules,
+  // and some pnpm 12 builds reject the `--yes` that skipped that pnpm 11 prompt.
   // Install exactly the locked dependencies so setup never rewrites the lockfile.
-  const install = NodeChildProcess.spawnSync(selected.command, {
+  // Output is piped, not inherited, so a failure can keep its tail in the marker.
+  const install = NodeChildProcess.spawn(selected.command, {
     cwd: worktree,
     shell: true,
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  if (install.status !== 0) process.exit(install.status ?? 1);
+  activeInstall = install;
+  let installOutput = "";
+  for (const [source, target] of [
+    [install.stdout, process.stdout],
+    [install.stderr, process.stderr],
+  ] as const) {
+    source.setEncoding("utf8");
+    source.on("data", (chunk: string) => {
+      target.write(chunk);
+      installOutput = (installOutput + chunk).slice(-8_000);
+    });
+  }
+  const installStatus = await new Promise<number | null>((resolve) => install.on("close", resolve));
+  activeInstall = undefined;
+  if (installStatus !== 0 || cancelSignal) {
+    failureDetail = cancelSignal
+      ? `Cancelled by ${cancelSignal}.`
+      : installOutput.trimEnd().split("\n").slice(-30).join("\n");
+    process.exit(installStatus || 1);
+  }
+
+  warnOnCrossDeviceStore();
 
   // Env files live as real files in the main checkout; worktrees only get
   // symlinks to them. Only a symlink is ever replaced, so a real env file is
@@ -80,13 +145,32 @@ function main(): void {
     if (existing) NodeFS.rmSync(target);
     NodeFS.symlinkSync(source, target);
   }
+}
 
-  const warm = NodeChildProcess.spawnSync(
-    process.execPath,
-    [NodePath.join(worktree, "apps", "web", "scripts", "warm-dep-cache.ts")],
-    { cwd: worktree, stdio: "inherit" },
+// pnpm cannot clone or hardlink across filesystems, so a store on another
+// device silently turns every worktree install into a full copy.
+function warnOnCrossDeviceStore(): void {
+  const modulesYaml = NodePath.join(worktree, "node_modules", ".modules.yaml");
+  if (!NodeFS.existsSync(modulesYaml)) return;
+  const storeDir: unknown = JSON.parse(NodeFS.readFileSync(modulesYaml, "utf8")).storeDir;
+  if (
+    typeof storeDir !== "string" ||
+    NodeFS.statSync(storeDir).dev === NodeFS.statSync(NodePath.join(worktree, "node_modules")).dev
+  )
+    return;
+  process.stderr.write(
+    [
+      "",
+      "WARNING: the pnpm store is on a different filesystem than this worktree.",
+      `  store:    ${storeDir}`,
+      `  worktree: ${worktree}`,
+      "pnpm cannot hardlink or clone across filesystems, so it copied every package into node_modules.",
+      "Fix: put the store on the worktree's filesystem, for example:",
+      `  pnpm config set store-dir ${JSON.stringify(NodePath.join(NodePath.dirname(worktree), ".pnpm-store"))} --global`,
+      "",
+      "",
+    ].join("\n"),
   );
-  process.exit(warm.status ?? 1);
 }
 
 function mainWorktree(): string {
@@ -101,4 +185,4 @@ function mainWorktree(): string {
   return first.slice("worktree ".length);
 }
 
-if (isDirectRun()) main();
+if (isDirectRun()) await main();

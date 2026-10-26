@@ -12,7 +12,18 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+
+/**
+ * goatclaw off, so the MCP capability gate admits every call; for fixtures that do not test
+ * profiles. It brings its own settings: a test that turns goatclaw on through its own
+ * ServerSettingsService must provide Profiles.layer over those instead.
+ */
+export const layerPermissionProfilesOff = Profiles.layer.pipe(
+  Layer.provide(ServerSettings.layerTest()),
+);
 
 const EPOCH = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
 

@@ -302,6 +302,9 @@ const makeTestPreviewWebContents = (
     getURL: () => "https://example.com",
     getTitle: () => "Example",
     isLoadingMainFrame: () => false,
+    isDevToolsOpened: () => false,
+    reload: vi.fn(),
+    loadURL: vi.fn(async () => undefined),
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
     setAudioMuted: vi.fn(),
@@ -323,6 +326,10 @@ const makeTestPreviewWebContents = (
     },
     capturePage,
   } as unknown as TestPreviewWebContents;
+};
+
+const unusedCapture = async (): Promise<TestCapturedPreviewImage> => {
+  throw new Error("This test captures no page.");
 };
 
 const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
@@ -888,32 +895,17 @@ describe("PreviewManager", () => {
           on: vi.fn(),
           off: debuggerOff,
         };
-        fromId.mockReturnValue({
-          id: 42,
-          isDestroyed: () => destroyed,
-          getType: () => "webview",
-          getURL: () => "http://localhost:3200/",
-          getTitle: () => "Preview",
-          isLoadingMainFrame: () => false,
-          isDevToolsOpened: () => false,
-          getZoomFactor: () => 1,
-          setZoomFactor: vi.fn(),
-          setAudioMuted: vi.fn(),
-          isCurrentlyAudible: () => false,
-          reload: vi.fn(),
-          loadURL: vi.fn(async () => undefined),
-          on: vi.fn(),
-          off: vi.fn(),
-          ipc: { on: vi.fn(), off: vi.fn() },
-          send: webviewSend,
-          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-          setIgnoreMenuShortcuts: vi.fn(),
-          setWindowOpenHandler: vi.fn(),
-          get debugger() {
-            if (destroyed) throw new Error("Object has been destroyed");
-            return wcDebugger;
-          },
-        } as never);
+        fromId.mockReturnValue(
+          Object.defineProperties(makeTestPreviewWebContents(unusedCapture), {
+            isDestroyed: { value: () => destroyed },
+            debugger: {
+              get: () => {
+                if (destroyed) throw new Error("Object has been destroyed");
+                return wcDebugger;
+              },
+            },
+          }),
+        );
         yield* manager.createTab("tab_pinned_debugger");
         yield* manager.registerWebview("tab_pinned_debugger", 42);
         yield* manager.setColorScheme("tab_pinned_debugger", "dark");
@@ -924,6 +916,39 @@ describe("PreviewManager", () => {
 
         expect(debuggerOff).toHaveBeenCalledWith("message", expect.any(Function));
         expect(debuggerDetach).toHaveBeenCalledOnce();
+      }),
+    ),
+  );
+
+  effectIt.effect("leaves screencast frame acks to the relay viewers that asked for frames", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let onMessage: ((event: unknown, method: string, params: unknown) => void) | undefined;
+        const sendCommand = vi.fn(async () => undefined);
+        fromId.mockReturnValue(
+          Object.defineProperty(makeTestPreviewWebContents(unusedCapture), "debugger", {
+            value: {
+              isAttached: () => onMessage !== undefined,
+              attach: vi.fn(),
+              detach: vi.fn(),
+              sendCommand,
+              on: (event: string, listener: typeof onMessage) => {
+                if (event === "message") onMessage = listener;
+              },
+              off: vi.fn(),
+            },
+          }),
+        );
+        yield* manager.createTab("tab_screencast_acks");
+        yield* manager.registerWebview("tab_screencast_acks", 42);
+        yield* manager.setColorScheme("tab_screencast_acks", "dark");
+
+        // Chromium counts acks per screencast, so one from the desktop on top of each
+        // viewer's would let frames outrun the slowest viewer.
+        expect(onMessage).toBeDefined();
+        onMessage?.({}, "Page.screencastFrame", { sessionId: 3, data: "frame", metadata: {} });
+
+        expect(sendCommand).not.toHaveBeenCalledWith("Page.screencastFrameAck", expect.anything());
       }),
     ),
   );
@@ -1885,40 +1910,15 @@ describe("PreviewManager", () => {
           id: number,
           capturePage: typeof firstCapturePage,
           sendCommand: typeof firstSendCommand,
-        ) =>
-          ({
-            id,
-            mainFrame: { routingId: id },
-            hostWebContents: host,
+        ) => {
+          const contents = makeTestPreviewWebContents(capturePage, id, host);
+          return Object.assign(contents, {
             executeJavaScript: vi.fn(async () =>
               id === 41 ? { width: 800, height: 600 } : { width: 390, height: 844 },
             ),
-            isDestroyed: () => false,
-            getType: () => "webview",
-            getURL: () => `https://example.com/${id}`,
-            getTitle: () => `Example ${id}`,
-            isLoadingMainFrame: () => false,
-            getZoomFactor: () => 1,
-            setZoomFactor: vi.fn(),
-            setAudioMuted: vi.fn(),
-            setBackgroundThrottling: vi.fn(),
-            isCurrentlyAudible: () => false,
-            on: vi.fn(),
-            off: vi.fn(),
-            ipc: { on: vi.fn(), off: vi.fn() },
-            send: webviewSend,
-            navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-            setIgnoreMenuShortcuts: vi.fn(),
-            setWindowOpenHandler: vi.fn(),
-            debugger: {
-              isAttached: () => false,
-              attach: vi.fn(),
-              sendCommand,
-              on: vi.fn(),
-              off: vi.fn(),
-            },
-            capturePage,
-          }) as never;
+            debugger: { ...contents.debugger, sendCommand },
+          });
+        };
         const webContentsById = new Map([
           [41, makeWebContents(41, firstCapturePage, firstSendCommand)],
           [42, makeWebContents(42, secondCapturePage, secondSendCommand)],

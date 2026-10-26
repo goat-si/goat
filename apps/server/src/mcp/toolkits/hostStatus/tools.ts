@@ -1,11 +1,26 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
-import { GoatHostStatusInput, GoatHostStatusResult, OrchestratorMcpFailure } from "@goat/contracts";
+import {
+  GoatHostStatusInput,
+  GoatHostStatusResult,
+  GoatHubOpenCodexSyncInput,
+  GoatHubDeviceVerifyInput,
+  GoatHubDeviceVerifyResult,
+  HubDeviceOperationInput,
+  hubDeviceToolResult,
+  OpenCodexSyncReport,
+  OrchestratorMcpFailure,
+} from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as HubParity from "../../../hub/HubParity.ts";
+import * as HubMembership from "../../../hub/HubMembership.ts";
+import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -20,4 +35,56 @@ const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host.status"]));
 
-export const HostStatusToolkit = Toolkit.make(HostStatusTool);
+const VerifyTool = Tool.make(agentSurfaceRegistry["hub.device_verify"].name, {
+  description: agentSurfaceRegistry["hub.device_verify"].description,
+  parameters: GoatHubDeviceVerifyInput,
+  success: GoatHubDeviceVerifyResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HubParity.HubParity,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_verify"]));
+
+const membershipTool = <
+  const Path extends "hub.device_join" | "hub.device_leave" | "hub.device_repair",
+>(
+  path: Path,
+) =>
+  Tool.make(agentSurfaceRegistry[path].name, {
+    description: agentSurfaceRegistry[path].description,
+    parameters: withClientRequestId(HubDeviceOperationInput),
+    success: hubDeviceToolResult(agentSurfaceRegistry[path].name),
+    failure: OrchestratorMcpFailure,
+    failureMode: "return" as const,
+    dependencies: [
+      McpInvocationContext.McpInvocationContext,
+      ThreadManagementService.ThreadManagementService,
+      HubMembership.HubMembership,
+    ],
+  }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry[path]));
+
+const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].name, {
+  description: agentSurfaceRegistry["hub.opencodex_sync"].description,
+  parameters: GoatHubOpenCodexSyncInput,
+  success: OpenCodexSyncReport,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    OpenCodexSync.OpenCodexSync,
+    Profiles.PermissionProfiles,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.opencodex_sync"]));
+
+export const HostStatusToolkit = Toolkit.make(
+  HostStatusTool,
+  VerifyTool,
+  membershipTool("hub.device_join"),
+  membershipTool("hub.device_leave"),
+  membershipTool("hub.device_repair"),
+  OpenCodexSyncTool,
+);

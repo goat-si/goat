@@ -22,15 +22,23 @@ the environment's machine, using the same account and config as your selected
 Claude instance, and accept the trust prompt. Then try the cloud task again.
 GOAT does not accept trust prompts or change your trust settings.
 
-The thread keeps the session link and looks for a GitHub pull request linked to
-that session for up to two hours. **Result PR found** means a PR was located; it
-does not confirm that Claude stopped or that checks passed. If observation cannot
-confirm a result, open the session to inspect it before continuing.
+The thread keeps the session link and follows the session for up to two hours.
+When Claude ends its turn, its reply appears in the thread and the run completes.
+To check, GOAT loads the session into a private local copy, which runs one small
+Claude turn on your account. Checks start 30 seconds after your message and slow
+down to every 10 minutes, and the cloud card shows what they have cost. The copy
+never reaches the session on claude.ai, and GOAT deletes it after each check.
 
-Follow-up messages go to the same cloud session. An accepted follow-up confirms
-message delivery, not completed work. Stop the session on Claude's website;
-Claude Cloud has no supported CLI cancellation command. Your local files and
-checkpoints are not changed by cloud work.
+GOAT also looks for a GitHub pull request linked to the session. **Result PR found**
+means a PR was located; it does not confirm that checks passed. If GOAT cannot read
+the session, the cloud card says why and the run waits for that pull request
+instead. If neither confirms a result, open the session to inspect it before
+continuing.
+
+Follow-up messages go to the same cloud session, and each one completes when the
+session answers it. Stop the session on Claude's website; Claude Cloud has no
+supported CLI cancellation command. Your local files and checkpoints are not
+changed by cloud work.
 
 If Claude Cloud is not ready, run `goat provider diagnose --driver claudeCloud` on the
 environment's machine. It lists what blocks it, such as a missing claude.ai login or an
@@ -88,6 +96,16 @@ sends your message. Click the chip to switch it to **Full** and keep the full
 history for that message. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
+
+**Compact idle threads** in **Settings > General** controls this for threads
+over 200,000 tokens. Each Claude provider's settings can override it:
+
+- **When you return** shows the **Compact** chip described above. This is the default.
+- **Before the cache expires (beta)** compacts an idle thread shortly before its
+  prompt cache expires, so coming back does not reprocess the whole conversation.
+  The compaction appears in the thread as a `/compact` turn sent by GOAT.
+- **Never** skips idle compaction and Claude's resume prompt. **Auto-compact after**
+  still applies, and you can still compact by hand.
 
 ## Usage limits
 

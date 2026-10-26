@@ -1,4 +1,3 @@
-import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
   MessageId,
   type NodeId,
@@ -17,6 +16,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -91,6 +93,12 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+    // Optional so test assemblies without settings still build; then no built-in skill is sent.
+    const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    // Stop reaches the screen first: the driver transport dies before the provider is asked.
+    const stopComputerUse = (threadId: ThreadId) =>
+      Option.isSome(computerUse) ? computerUse.value.stop(threadId) : Effect.void;
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -192,6 +200,7 @@ export const layer: Layer.Layer<
     return ProviderTurnControlServiceV2.of({
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {
+          if (input.subagent === undefined) yield* stopComputerUse(input.threadId);
           const loaded = yield* load({ ...input, operation: "interrupt" });
           const session = Option.isSome(loaded.session)
             ? loaded.session
@@ -279,6 +288,7 @@ export const layer: Layer.Layer<
       ),
       interruptAndAwaitTerminal: Effect.fn("ProviderTurnControlService.interruptAndAwaitTerminal")(
         function* (input) {
+          yield* stopComputerUse(input.threadId);
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
             // No live adapter: nothing can emit a terminal provider-turn update
@@ -384,9 +394,12 @@ export const layer: Layer.Layer<
               providerTurnId: loaded.providerTurn.id,
               message: {
                 messageId: message.id,
-                text: projectComposerContextForProvider({
-                  text: message.text,
-                  records: message.context?.records ?? [],
+                text: yield* builtInSkillProviderText(settings, {
+                  message,
+                  driver: loaded.session.value.driver,
+                  project: projections
+                    .getThread(input.threadId)
+                    .pipe(Effect.map((thread) => thread.projectId)),
                 }),
                 attachments: message.attachments,
                 createdBy: message.createdBy,

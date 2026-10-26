@@ -14,7 +14,6 @@ import {
   RunId,
   RuntimeRequestId,
   ScheduledTaskId,
-  SecretRef,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
@@ -33,6 +32,10 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
+import { HostPressureAdvice } from "./hostPressure.ts";
+import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
+import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -40,6 +43,9 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+import { TurnCapability } from "./composerContext.ts";
+import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
@@ -47,7 +53,6 @@ import {
   OrchestrationV2TaskRole,
   ReviewLedgerEntry,
   ReviewLedgerEntryInput,
-  OrchestrationV2CloudTask,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
   OrchestrationV2CreationSource,
@@ -61,6 +66,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -71,7 +77,6 @@ const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512)
 const OrchestratorMcpClientRequestId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(256),
 ).annotate({ description: "Stable idempotency key to reuse when retrying this mutation." });
-
 /**
  * OpenCode 1.15 has been observed serializing nested MCP union objects as JSON
  * strings. Keep the structured object as the documented form while accepting
@@ -152,7 +157,7 @@ export type SshLaunchWorkspace = typeof SshLaunchWorkspace.Type;
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
     ProviderInstanceId.annotate({
-      description: "Configured provider instance id from orchestrator_capabilities.",
+      description: "Configured provider instance id from goat_provider_list.",
     }),
   ),
   driverKind: Schema.optional(
@@ -168,7 +173,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Model options from orchestrator_capabilities. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
+        "Model options from goat_provider_list. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
     }),
   ),
 });
@@ -248,22 +253,6 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
-export const OrchestratorMcpCloudTask = Schema.Struct({
-  taskId: Schema.String.check(Schema.isMaxLength(512)),
-  status: OrchestrationV2CloudTask.fields.status,
-  tracking: OrchestrationV2CloudTask.fields.tracking,
-  url: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  prUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  branch: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
-  progress: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  summary: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
-  localChangesExcluded: Schema.Boolean,
-  localChangesIncluded: OrchestrationV2CloudTask.fields.localChangesIncluded,
-  error: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  updatedAt: IsoDateTime,
-});
-export type OrchestratorMcpCloudTask = typeof OrchestratorMcpCloudTask.Type;
-
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   taskId: NodeId,
@@ -305,8 +294,12 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   }),
   waitTimedOut: Schema.Boolean.annotate({
     description:
-      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later goat_task_read reads return false and use status for liveness.",
   }),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
+  /** Set when the remote host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -596,7 +589,7 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   /** Null when several projects are listed. */
   projectId: Schema.NullOr(ProjectId),
   host: OrchestratorMcpResultHost,
-  /** The calling thread, or null when the caller is not a T3 thread. */
+  /** The calling thread, or null when the caller is not a GOAT thread. */
   currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
@@ -682,6 +675,19 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
+// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
+// 0 asks for nothing, and answering it with one item would be a different request.
+const clampedPositiveInt = (maximum: number) =>
+  PositiveInt.pipe(
+    Schema.decodeTo(
+      PositiveInt.check(Schema.isLessThanOrEqualTo(maximum)),
+      SchemaTransformation.transform({
+        decode: (value) => Math.min(value, maximum),
+        encode: (value) => value,
+      }),
+    ),
+  );
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,
@@ -690,9 +696,15 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
-  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
-  runLimit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
-  maxCharsPerItem: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50_000))),
+  limit: Schema.optional(clampedPositiveInt(100)).annotate({
+    description: "Maximum timeline items to return, from 1 to 100.",
+  }),
+  runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
+    description: "Maximum recent runs to return, from 1 to 50.",
+  }),
+  maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
+    description: "Maximum text characters per item, from 1 to 50000.",
+  }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
 
@@ -725,6 +737,7 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  ...OrchestratorMcpReconcileFields.thread,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -734,6 +747,7 @@ export const OrchestratorMcpThreadRun = Schema.Struct({
   runId: RunId,
   ordinal: PositiveInt,
   status: OrchestrationV2RunStatus,
+  terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
   requestedAt: IsoDateTime,
@@ -767,6 +781,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   thread: OrchestratorMcpThreadDetail,
@@ -787,7 +802,11 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   host: Schema.optional(OrchestratorMcpHost),
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  /** What the turn this message starts may use, as a person's `@computer` / `@browser` would. */
+  capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 
@@ -799,6 +818,8 @@ export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
   taskId: Schema.optional(NodeId),
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
+  /** Set when the host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpThreadSendDelivered = typeof OrchestratorMcpThreadSendDelivered.Type;
 /**
@@ -835,6 +856,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  /** When the waited run ended; absent while it runs, and from hosts that predate it. */
+  completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
 });
@@ -869,6 +892,8 @@ export const OrchestratorMcpThreadPhase = Schema.Literals([
 export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
 
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  remoteUnavailable: Schema.optional(Schema.Boolean),
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
@@ -881,6 +906,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
     Schema.Struct({
       runId: RunId,
       status: OrchestrationV2RunStatus,
+      terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
       requestedAt: IsoDateTime,
       startedAt: Schema.NullOr(IsoDateTime),
       completedAt: Schema.NullOr(IsoDateTime),
@@ -909,6 +935,8 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   lastError: Schema.NullOr(Schema.String),
   /** What kind of failure lastError was, when the provider classified it. Older hosts omit it. */
   lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
+  /** Why the described run failed before its agent's first message. Older hosts omit it. */
+  failure: Schema.optional(Schema.NullOr(OrchestratorMcpRunFailure)),
   /**
    * The caller's own launch watch on this thread: runs that will still be
    * reported, and whether its launch asked for completion webhook reports.
@@ -934,6 +962,7 @@ export type OrchestratorMcpThreadStatusResult = typeof OrchestratorMcpThreadStat
  * once when its host stays unreachable.
  */
 export const OrchestratorMcpThreadWatch = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   title: Schema.NullOr(Schema.String),
@@ -950,6 +979,7 @@ export type OrchestratorMcpThreadWatch = typeof OrchestratorMcpThreadWatch.Type;
 export const OrchestratorMcpThreadWatchInput = Schema.Struct({
   threadId: ThreadId,
   host: Schema.optional(OrchestratorMcpHost),
+  checkpointReplication: Schema.optional(Schema.Literals(["on", "off"])),
 });
 export type OrchestratorMcpThreadWatchInput = typeof OrchestratorMcpThreadWatchInput.Type;
 
@@ -995,6 +1025,41 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;
 
+export const OrchestratorMcpThreadRetryInput = Schema.Struct({
+  threadId: ThreadId,
+  host: Schema.optional(OrchestratorMcpHost),
+  /** The failed run; defaults to the thread's latest run. */
+  runId: Schema.optional(RunId),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+});
+export type OrchestratorMcpThreadRetryInput = typeof OrchestratorMcpThreadRetryInput.Type;
+
+export const OrchestratorMcpThreadRetryResult = Schema.Struct({
+  host: OrchestratorMcpResultHost,
+  threadId: ThreadId,
+  runId: RunId,
+  /** The run is preparing its workspace again; it starts its agent when that succeeds. */
+  status: Schema.Literal("preparing"),
+});
+export type OrchestratorMcpThreadRetryResult = typeof OrchestratorMcpThreadRetryResult.Type;
+
+export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
+  search: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(200)).annotate({
+      description:
+        "Words to match against model ids and labels. Lists matching models instead of the default short list.",
+    }),
+  ),
+});
+export type OrchestratorMcpCapabilitiesInput = typeof OrchestratorMcpCapabilitiesInput.Type;
+
+export const OrchestratorMcpModelOption = Schema.Struct({
+  id: Schema.String,
+  values: Schema.Array(ProviderOptionSelectionValue),
+  default: Schema.optional(ProviderOptionSelectionValue),
+});
+export type OrchestratorMcpModelOption = typeof OrchestratorMcpModelOption.Type;
+
 export const OrchestratorMcpProviderCapability = Schema.Struct({
   executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])),
   followUp: Schema.optional(
@@ -1009,10 +1074,17 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
   models: Schema.Array(
     Schema.Struct({
       id: Schema.String,
-      label: Schema.NullOr(Schema.String),
-      options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
+      /** Omitted when it only restates the id. A host on an older GOAT sends null. */
+      label: Schema.optional(Schema.NullOr(Schema.String)),
+      // A host on an older GOAT advertises full option descriptors. Remote delegation
+      // still reads its capabilities, so both shapes decode.
+      options: Schema.optional(
+        Schema.Array(Schema.Union([OrchestratorMcpModelOption, ProviderOptionDescriptor])),
+      ),
     }),
   ),
+  /** Models left out of `models`: unlisted visible models, or matches past the cap with `search`. */
+  omittedModels: Schema.optional(NonNegativeInt),
   runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,
@@ -1071,10 +1143,12 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
-  /** For webhook tasks: the public T3 Connect URL, shown only to a caller that may start the task's runs. */
+  runCount: Schema.optional(NonNegativeInt),
+  lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
-      "Public URL to give the sender. Absent when this environment has no T3 Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
+      "Public URL to give the sender. Absent when this environment has no GOAT Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
   }),
   webhookUrlUnavailableReason: Schema.optional(Schema.String).annotate({
     description:
@@ -1083,6 +1157,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   webhookSignature: Schema.optional(Schema.Literals(["none", "set"])).annotate({
     description: "Whether requests must carry a valid signature.",
   }),
+  ...OrchestratorMcpReconcileFields.scheduledTask,
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
 
@@ -1117,43 +1192,10 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;
 
-export const OrchestratorMcpRequestSecretInput = Schema.Struct({
-  label: TrimmedNonEmptyString.annotate({
-    description: "What you need, shown as the card's title, e.g. 'GitHub webhook secret'.",
-  }),
-  reason: TrimmedNonEmptyString.annotate({
-    description:
-      "One or two sentences on what it is for and where the user gets or also enters it.",
-  }),
-  placeholder: Schema.optional(TrimmedNonEmptyString).annotate({
-    description: "Hint inside the input, e.g. 'Paste your GitHub token'.",
-  }),
-  timeoutMs: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
-  ).annotate({ description: "How long to wait for the user. Default 10 minutes." }),
-  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
-    description:
-      "Reuse when retrying a call that lost its result, so the user sees one card and its answer is returned again. Use a new id to ask again after timed_out or cancelled.",
-  }),
-});
-export type OrchestratorMcpRequestSecretInput = typeof OrchestratorMcpRequestSecretInput.Type;
-
-export const OrchestratorMcpRequestSecretResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("saved").annotate({ description: "secretRef holds the value." }),
-    secretRef: SecretRef.annotate({
-      description:
-        "Pass it to a tool that accepts a secretRef; it works once, and you never see the value.",
-    }),
-  }),
-  Schema.Struct({
-    status: Schema.Literals(["declined", "cancelled", "timed_out"]).annotate({
-      description:
-        "declined: the user chose not to. cancelled: the request ended with the run. timed_out: the user did not answer in time; the card is closed, so ask again with a new clientRequestId if still needed.",
-    }),
-  }),
-]);
-export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
+export {
+  OrchestratorMcpRequestSecretInput,
+  OrchestratorMcpRequestSecretResult,
+} from "./secretRequestTool.ts";
 
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
@@ -1167,37 +1209,3 @@ export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
 });
 export type OrchestratorMcpDeleteScheduledTaskResult =
   typeof OrchestratorMcpDeleteScheduledTaskResult.Type;
-
-export const OrchestratorMcpFailureCode = Schema.Literals([
-  "capability_denied",
-  "parent_not_active",
-  "provider_unavailable",
-  "model_unavailable",
-  "runtime_mode_escalation_denied",
-  "interaction_mode_escalation_denied",
-  "task_not_found",
-  "task_not_cancellable",
-  "thread_not_found",
-  "run_not_found",
-  "thread_not_sendable",
-  "thread_not_interruptible",
-  "invalid_request",
-  "orchestration_error",
-  "thread_credential_required",
-  "target_required",
-  "host_unavailable",
-  // A fleet goal (or another named record) that does not exist, or a stale expectedGeneration.
-  "not_found",
-  "conflict",
-  // GOAT Bot runs on another environment in this cluster; the message names it.
-  "not_home",
-]);
-export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
-
-export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFailure>()(
-  "OrchestratorMcpFailure",
-  {
-    code: OrchestratorMcpFailureCode,
-    message: Schema.String,
-  },
-) {}
