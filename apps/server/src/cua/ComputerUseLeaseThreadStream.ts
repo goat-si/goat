@@ -1,4 +1,8 @@
-import type { ComputerUseLeaseThreadUpdate, ThreadId } from "@goat/contracts";
+import type {
+  ComputerUseLeaseThreadUpdate,
+  ComputerUsePrimitiveRequest,
+  ThreadId,
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -160,3 +164,71 @@ export const threadLeaseUpdates = (input: {
       }
     }),
   );
+
+/** Lease state owns the next slot; primitive traffic cannot delay Stop behind its burst. */
+export const withPrimitiveRequests = <A, R>(
+  states: Stream.Stream<A, never, R>,
+  primitives: Stream.Stream<ComputerUsePrimitiveRequest> | undefined,
+): Stream.Stream<A | ComputerUsePrimitiveRequest, never, R> =>
+  primitives === undefined
+    ? states
+    : Stream.callback<A | ComputerUsePrimitiveRequest, never, R>(
+        (output) =>
+          Effect.gen(function* () {
+            type State = { readonly kind: "state"; readonly value: A } | { readonly kind: "end" };
+            const stateQueue = yield* Queue.bounded<State>(16);
+            const primitiveQueue = yield* Queue.bounded<ComputerUsePrimitiveRequest>(16);
+            yield* states.pipe(
+              Stream.runForEach((value) => Queue.offer(stateQueue, { kind: "state", value })),
+              Effect.ensuring(Queue.offer(stateQueue, { kind: "end" })),
+              Effect.forkScoped,
+            );
+            yield* primitives.pipe(
+              Stream.runForEach((request) => Queue.offer(primitiveQueue, request)),
+              Effect.forkScoped,
+            );
+            let firstState = true;
+            let pendingPrimitive: ComputerUsePrimitiveRequest | undefined;
+            for (;;) {
+              const readyState = Option.getOrUndefined(yield* Queue.poll(stateQueue));
+              if (readyState !== undefined) {
+                if (readyState.kind === "end") return yield* Queue.end(output);
+                yield* Queue.offer(output, readyState.value);
+                firstState = false;
+                continue;
+              }
+              if (pendingPrimitive !== undefined) {
+                yield* Queue.offer(output, pendingPrimitive);
+                pendingPrimitive = undefined;
+                continue;
+              }
+              if (firstState) {
+                const first = yield* Queue.take(stateQueue);
+                if (first.kind === "end") return yield* Queue.end(output);
+                yield* Queue.offer(output, first.value);
+                firstState = false;
+                continue;
+              }
+              const selected = yield* Effect.raceFirst(
+                Queue.take(stateQueue).pipe(
+                  Effect.map((value) => ({ kind: "state" as const, value })),
+                ),
+                Queue.take(primitiveQueue).pipe(
+                  Effect.map((value) => ({ kind: "primitive" as const, value })),
+                ),
+              );
+              if (selected.kind === "state") {
+                if (selected.value.kind === "end") return yield* Queue.end(output);
+                yield* Queue.offer(output, selected.value.value);
+                continue;
+              }
+              const overtakingState = Option.getOrUndefined(yield* Queue.poll(stateQueue));
+              if (overtakingState !== undefined) {
+                pendingPrimitive = selected.value;
+                if (overtakingState.kind === "end") return yield* Queue.end(output);
+                yield* Queue.offer(output, overtakingState.value);
+              } else yield* Queue.offer(output, selected.value);
+            }
+          }),
+        { bufferSize: 1, strategy: "suspend" },
+      );

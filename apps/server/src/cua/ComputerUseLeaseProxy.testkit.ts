@@ -8,6 +8,8 @@ import {
   TurnItemId,
   type ComputerUseLeaseUpdate,
   type ComputerUseOverlayCommand,
+  type ComputerUsePrimitiveRequest,
+  type ComputerUsePrimitiveReply,
   computerUseRefusalReason,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
@@ -114,6 +116,7 @@ export const harness = Effect.fn(function* (
     readonly reportDelay?: number;
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
+    readonly driverCutoffGate?: Deferred.Deferred<void>;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
     readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
     /** Decorates each line for the provider, as the CLI's app guide does. */
@@ -121,6 +124,16 @@ export const harness = Effect.fn(function* (
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
+  const primitiveInput = yield* Queue.unbounded<ComputerUsePrimitiveRequest, Cause.Done>();
+  const primitiveOutput = yield* Queue.unbounded<ComputerUsePrimitiveReply>();
+  const driverStarted = yield* Queue.unbounded<{
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
+  const driverCutoff = yield* Queue.unbounded<{
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
   const output = yield* Queue.unbounded<string>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
   const drivers: Array<FakeDriver> = [];
@@ -167,6 +180,18 @@ export const harness = Effect.fn(function* (
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
+    primitiveRequests: Stream.fromQueue(primitiveInput),
+    primitiveReply: (reply) => Queue.offer(primitiveOutput, reply).pipe(Effect.asVoid),
+    onDriverStarted: (current) => Queue.offer(driverStarted, current).pipe(Effect.asVoid),
+    onDriverCutoff: (current) =>
+      Queue.offer(driverCutoff, current).pipe(
+        Effect.andThen(
+          options.driverCutoffGate === undefined
+            ? Effect.void
+            : Deferred.await(options.driverCutoffGate),
+        ),
+        Effect.asVoid,
+      ),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     ...(options.cursors
@@ -327,6 +352,10 @@ export const harness = Effect.fn(function* (
   const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
   return {
     send: (line: string) => Queue.offer(input, line),
+    sendPrimitive: (request: ComputerUsePrimitiveRequest) => Queue.offer(primitiveInput, request),
+    primitiveReply: Queue.take(primitiveOutput),
+    driverStarted: Queue.take(driverStarted),
+    driverCutoff: Queue.take(driverCutoff),
     close: Queue.end(input),
     push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
     failLeaseStream: Queue.fail(updates, "connection reset"),

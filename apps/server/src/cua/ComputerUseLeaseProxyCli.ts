@@ -5,7 +5,7 @@
  *
  * @module ComputerUseLeaseProxyCli
  */
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -17,9 +17,20 @@ import {
   type ComputerUseLeaseReport,
   ComputerUseCallAdmission,
   type ComputerUseCallReservation,
+  ComputerUseLeaseUpdate,
+  ComputerUseLeaseThreadUpdate,
+  type ComputerUsePrimitiveRequest,
+  type ComputerUsePrimitiveReply,
+  COMPUTER_USE_PRIMITIVE_REPLY_ROUTE,
+  COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE,
+  COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import type * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -28,9 +39,7 @@ import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
-import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { linuxScreenshotPolicy, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
-import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
@@ -106,12 +115,167 @@ async function reserveCall(
   return { status: "refused", detail: "unauthorized" };
 }
 
+type DriverReport = {
+  readonly kind: "ready" | "cutoff";
+  readonly controlId: string;
+  readonly connectionId: string;
+  readonly driverGeneration: number;
+};
+type ReportIdentity = Omit<DriverReport, "kind" | "controlId">;
+type PendingReports = { readonly cutoff?: ReportIdentity; readonly ready?: ReportIdentity };
+
+const postPrimitive = (url: string, authorization: string, token: string, body: object) =>
+  Effect.promise(async () => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization, "x-goat-proxy-channel": token, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
+    });
+    return response.status;
+  }).pipe(Effect.orElseSucceed(() => 0));
+
+export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporter")(
+  function* (input: {
+    readonly url: string;
+    readonly authorization: string;
+    readonly token: string;
+    readonly registration: Deferred.Deferred<string>;
+  }) {
+    const state = yield* Ref.make(new Map<string, PendingReports>());
+    const wake = yield* Queue.sliding<void>(1);
+    let failed = false;
+    let overflowWarned = false;
+    const enqueue = (report: DriverReport) =>
+      Ref.update(state, (current) => {
+        if (failed && (report.kind !== "cutoff" || !current.has(report.controlId))) return current;
+        if (!current.has(report.controlId) && current.size >= 8) {
+          failed = true;
+          return current;
+        }
+        const next = new Map(current);
+        const old = next.get(report.controlId) ?? {};
+        const identity = {
+          connectionId: report.connectionId,
+          driverGeneration: report.driverGeneration,
+        };
+        if (report.kind === "cutoff") {
+          const cutoff =
+            old.cutoff !== undefined && old.cutoff.driverGeneration > identity.driverGeneration
+              ? old.cutoff
+              : identity;
+          next.set(report.controlId, {
+            cutoff,
+            ...(old.ready !== undefined && old.ready.driverGeneration > cutoff.driverGeneration
+              ? { ready: old.ready }
+              : {}),
+          });
+        } else if (report.driverGeneration > (old.cutoff?.driverGeneration ?? -1)) {
+          next.set(report.controlId, {
+            ...old,
+            ready:
+              old.ready !== undefined && old.ready.driverGeneration > identity.driverGeneration
+                ? old.ready
+                : identity,
+          });
+        }
+        return next;
+      }).pipe(Effect.andThen(Effect.sync(() => void Queue.offerUnsafe(wake, undefined))));
+    const run = Effect.gen(function* () {
+      const registrationId = yield* Deferred.await(input.registration);
+      if (registrationId.length === 0) {
+        failed = true;
+        yield* Effect.logWarning("computer use primitive registration unavailable");
+        return;
+      }
+      let backoff = 250;
+      for (;;) {
+        if (failed && !overflowWarned) {
+          overflowWarned = true;
+          yield* Effect.logWarning("computer use primitive reporter exceeded eight controls");
+        }
+        const pending = yield* Ref.get(state);
+        let next:
+          | {
+              readonly controlId: string;
+              readonly kind: "cutoff" | "ready";
+              readonly item: ReportIdentity;
+            }
+          | undefined;
+        for (const [controlId, reports] of pending) {
+          if (reports.cutoff !== undefined)
+            next = { controlId, kind: "cutoff", item: reports.cutoff };
+          else if (reports.ready !== undefined)
+            next = { controlId, kind: "ready", item: reports.ready };
+          if (next !== undefined) break;
+        }
+        if (next === undefined) {
+          yield* Queue.take(wake);
+          continue;
+        }
+        const route =
+          next.kind === "cutoff"
+            ? COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE
+            : COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE;
+        const status = yield* postPrimitive(
+          new URL(route, input.url).toString(),
+          input.authorization,
+          input.token,
+          { registrationId, controlId: next.controlId, ...next.item },
+        );
+        if (status === 401) {
+          failed = true;
+          yield* Effect.logWarning("computer use primitive report authorization ended");
+          return;
+        }
+        if ((status >= 200 && status < 300) || status === 409) {
+          yield* Ref.update(state, (current) => {
+            const latest = current.get(next.controlId);
+            if (latest === undefined) return current;
+            const item = latest[next.kind];
+            if (
+              item?.driverGeneration !== next.item.driverGeneration ||
+              item.connectionId !== next.item.connectionId
+            )
+              return current;
+            const updated: PendingReports =
+              next.kind === "cutoff"
+                ? latest.ready === undefined
+                  ? {}
+                  : { ready: latest.ready }
+                : latest.cutoff === undefined
+                  ? {}
+                  : { cutoff: latest.cutoff };
+            const nextState = new Map(current);
+            if (updated.cutoff === undefined && updated.ready === undefined)
+              nextState.delete(next.controlId);
+            else nextState.set(next.controlId, updated);
+            return nextState;
+          });
+          backoff = 250;
+        } else {
+          yield* Effect.sleep(`${backoff} millis`);
+          backoff = Math.min(5_000, backoff * 2);
+        }
+      }
+    });
+    return {
+      enqueue,
+      run,
+      get failed() {
+        return failed;
+      },
+    };
+  },
+);
+
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
   const drivers = new Set<NodeChildProcess.ChildProcess>();
   endDriversWithProxy(platform, () => drivers);
   const url = process.env[LEASE_PROXY_ENV.url];
   const authorization = process.env[LEASE_PROXY_ENV.authorization];
+  const proxyChannelToken = process.env[LEASE_PROXY_ENV.proxyChannelToken];
   const driver = decodeDriver(process.env[LEASE_PROXY_ENV.driver] ?? "");
   const launch = parseLeaseProxyArguments(args);
   if (
@@ -134,8 +298,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     : undefined;
   // The driver child never sees the thread's GOAT credential.
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
   for (const variable of descriptor.environment) childEnvironment[variable.name] = variable.value;
+  for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
   // On Linux the agent's screenshots follow the helper's capture route (#1677).
   const screenshots =
     platform === "linux"
@@ -254,86 +418,250 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       agentInput: Parameters<NonNullable<LeaseProxyOptions<never, never>["onAgentInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, agentInput })),
   });
-  const lines = Stream.fromAsyncIterable(
-    (async function* () {
-      const response = await fetch(leaseUrl, { headers: { authorization }, signal: abort.signal });
-      yield* responseLines(response);
-    })(),
-    (cause) => cause,
-  );
-  const common = {
-    connectionId: NodeCrypto.randomUUID(),
-    reservation: (call: ComputerUseCallReservation) =>
-      Effect.promise(() => reserveCall(url, authorization, call)),
-    bundleIds: platform === "darwin",
-    input: Stream.fromAsyncIterable(
-      NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
-      () => undefined,
-    ).pipe(Stream.catchCause(() => Stream.empty)),
-    output: (line: string, context?: { readonly tool?: string | undefined }) =>
-      Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
-    startDriver: startDriver(drawsOverlay),
-    // A handshake child never draws or watches input (#1604): on macOS the helper starts its
-    // overlay and input feed only when the proxy opens their channel.
-    startHandshakeDriver: startDriver(false),
-    ...(screenshots === undefined ? {} : { screenshots }),
-    ...(placement === undefined
-      ? {}
-      : {
-          placement: (
-            windows: Parameters<NonNullable<LeaseProxyOptions<never, never>["placement"]>>[0],
-          ) => Effect.promise(() => placement(windows)),
-        }),
-    ...(manifestPath === undefined
-      ? {}
-      : {
-          manifestStamp: () => {
-            try {
-              const info = NodeFS.statSync(manifestPath);
-              return info.ino + ":" + info.size + ":" + info.mtimeMs;
-            } catch {
-              return undefined;
-            }
+  const program = Effect.gen(function* () {
+    const registration = yield* Deferred.make<string>();
+    const proxyInstanceId = NodeCrypto.randomUUID();
+    if (proxyChannelToken !== undefined) {
+      leaseUrl.searchParams.set("primitive", "1");
+      leaseUrl.searchParams.set("instance", proxyInstanceId);
+    }
+    const reporter =
+      proxyChannelToken === undefined
+        ? undefined
+        : yield* makePrimitiveReporter({
+            url,
+            authorization,
+            token: proxyChannelToken,
+            registration,
+          });
+    if (reporter !== undefined) yield* reporter.run.pipe(Effect.forkScoped);
+    const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>();
+    const threadUpdates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
+    const primitiveRequests = yield* Queue.dropping<ComputerUsePrimitiveRequest, Cause.Done>(16);
+    const decodeControl = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseLeaseUpdate));
+    const decodeThread = Schema.decodeUnknownOption(
+      Schema.fromJsonString(ComputerUseLeaseThreadUpdate),
+    );
+    const lines = Stream.fromAsyncIterable(
+      (async function* () {
+        const response = await fetch(leaseUrl, {
+          headers: {
+            authorization,
+            ...(proxyChannelToken === undefined
+              ? {}
+              : { "x-goat-proxy-channel": proxyChannelToken }),
           },
+          signal: abort.signal,
+        });
+        const header = response.headers.get("x-goat-primitive-registration");
+        if (proxyChannelToken !== undefined) {
+          if (response.ok && header !== null && header.length > 0 && header.length <= 200)
+            await Effect.runPromise(Deferred.succeed(registration, header));
+          else await Effect.runPromise(Deferred.succeed(registration, ""));
+        }
+        yield* responseLines(response);
+      })(),
+      () => new Error("Lease stream failed"),
+    );
+    yield* lines.pipe(
+      Stream.runForEach((line) =>
+        Effect.gen(function* () {
+          if (line.trim().length === 0) return;
+          const offerPrimitive = Effect.fn("ComputerUseLeaseProxyCli.offerPrimitive")(function* (
+            update: ComputerUsePrimitiveRequest,
+          ) {
+            if (
+              reporter !== undefined &&
+              !reporter.failed &&
+              (yield* Queue.offer(primitiveRequests, update))
+            )
+              return;
+            const {
+              requestId,
+              registrationId,
+              controlId,
+              connectionGeneration,
+              runId,
+              turnId,
+              callId,
+            } = update;
+            yield* postPrimitive(
+              new URL(COMPUTER_USE_PRIMITIVE_REPLY_ROUTE, url).toString(),
+              authorization,
+              proxyChannelToken ?? "",
+              {
+                requestId,
+                registrationId,
+                controlId,
+                connectionGeneration,
+                runId,
+                turnId,
+                callId,
+                status: "not_started",
+              },
+            );
+          });
+          if (launch.mode === "control") {
+            const decoded = decodeControl(line);
+            if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
+            if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+            else yield* Queue.offer(updates, decoded.value);
+          } else {
+            const decoded = decodeThread(line);
+            if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
+            if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+            else yield* Queue.offer(threadUpdates, decoded.value);
+          }
         }),
-    revokeSessions: (sessions: ReadonlyArray<string>) =>
-      // A driver without a socket is a direct child of this connection; killing it ends its
-      // sessions, and there is no daemon left to ask.
-      descriptor.socketPath === undefined
-        ? Effect.void
-        : Effect.promise(() =>
-            Promise.all(
-              sessions.map(
-                (session) =>
-                  new Promise<void>((resolve) => {
-                    NodeChildProcess.execFile(
-                      descriptor.command,
-                      [
-                        "revoke",
-                        "--session",
-                        session,
-                        ...(descriptor.socketPath === undefined
-                          ? []
-                          : ["--socket", descriptor.socketPath]),
-                      ],
-                      { env: childEnvironment, timeout: 5_000, windowsHide: true },
-                      () => resolve(),
-                    );
-                  }),
+      ),
+      Effect.catchCause(() => Effect.void),
+      Effect.ensuring(
+        Effect.gen(function* () {
+          yield* Queue.end(updates);
+          yield* Queue.end(threadUpdates);
+          yield* Queue.end(primitiveRequests);
+          if (!(yield* Deferred.isDone(registration))) yield* Deferred.succeed(registration, "");
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    const common = {
+      connectionId: proxyInstanceId,
+      ...(reporter === undefined
+        ? {}
+        : {
+            primitiveRequests: Stream.fromQueue(primitiveRequests),
+            primitiveReply: (reply: ComputerUsePrimitiveReply) =>
+              postPrimitive(
+                new URL(COMPUTER_USE_PRIMITIVE_REPLY_ROUTE, url).toString(),
+                authorization,
+                proxyChannelToken ?? "",
+                reply,
+              ).pipe(Effect.asVoid),
+          }),
+      reservation: (call: ComputerUseCallReservation) =>
+        Effect.promise(() => reserveCall(url, authorization, call)),
+      bundleIds: platform === "darwin",
+      input: Stream.fromAsyncIterable(
+        NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
+        () => undefined,
+      ).pipe(Stream.catchCause(() => Stream.empty)),
+      output: (line: string, context?: { readonly tool?: string | undefined }) =>
+        Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
+      startDriver: startDriver(drawsOverlay),
+      // A handshake child never draws or watches input (#1604): on macOS the helper starts its
+      // overlay and input feed only when the proxy opens their channel.
+      startHandshakeDriver: startDriver(false),
+      ...(screenshots === undefined ? {} : { screenshots }),
+      ...(placement === undefined
+        ? {}
+        : {
+            placement: (
+              windows: Parameters<NonNullable<LeaseProxyOptions<never, never>["placement"]>>[0],
+            ) => Effect.promise(() => placement(windows)),
+          }),
+      ...(manifestPath === undefined
+        ? {}
+        : {
+            manifestStamp: () => {
+              try {
+                const info = NodeFS.statSync(manifestPath);
+                return info.ino + ":" + info.size + ":" + info.mtimeMs;
+              } catch {
+                return undefined;
+              }
+            },
+          }),
+      revokeSessions: (sessions: ReadonlyArray<string>) =>
+        // A driver without a socket is a direct child of this connection; killing it ends its
+        // sessions, and there is no daemon left to ask.
+        descriptor.socketPath === undefined
+          ? Effect.void
+          : Effect.promise(() =>
+              Promise.all(
+                sessions.map(
+                  (session) =>
+                    new Promise<void>((resolve) => {
+                      NodeChildProcess.execFile(
+                        descriptor.command,
+                        [
+                          "revoke",
+                          "--session",
+                          session,
+                          ...(descriptor.socketPath === undefined
+                            ? []
+                            : ["--socket", descriptor.socketPath]),
+                        ],
+                        { env: childEnvironment, timeout: 5_000, windowsHide: true },
+                        () => resolve(),
+                      );
+                    }),
+                ),
               ),
-            ),
-          ).pipe(Effect.asVoid),
-  };
-  const program =
-    launch.mode === "control"
+            ).pipe(Effect.asVoid),
+    };
+    return yield* launch.mode === "control"
       ? runLeaseProxy({
           ...common,
           ...reports(launch.controlId),
           controlId: launch.controlId,
           expiresAt: launch.expiresAt,
-          leaseUpdates: leaseUpdateLines(lines),
+          leaseUpdates: Stream.fromQueue(updates),
+          ...(reporter === undefined
+            ? {}
+            : {
+                onDriverStarted: (current: {
+                  readonly connectionId: string;
+                  readonly generation: number;
+                }) =>
+                  reporter.enqueue({
+                    kind: "ready",
+                    controlId: launch.controlId,
+                    connectionId: current.connectionId,
+                    driverGeneration: current.generation,
+                  }),
+                onDriverCutoff: (current: {
+                  readonly connectionId: string;
+                  readonly generation: number;
+                }) =>
+                  reporter.enqueue({
+                    kind: "cutoff",
+                    controlId: launch.controlId,
+                    connectionId: current.connectionId,
+                    driverGeneration: current.generation,
+                  }),
+              }),
         })
-      : runThreadLeaseProxy({ ...common, reports, leaseUpdates: threadLeaseUpdateLines(lines) });
+      : runThreadLeaseProxy({
+          ...common,
+          reports,
+          leaseUpdates: Stream.fromQueue(threadUpdates),
+          ...(reporter === undefined
+            ? {}
+            : {
+                onControlDriverStarted: (
+                  controlId: string,
+                  current: { readonly connectionId: string; readonly generation: number },
+                ) =>
+                  reporter.enqueue({
+                    kind: "ready",
+                    controlId,
+                    connectionId: current.connectionId,
+                    driverGeneration: current.generation,
+                  }),
+                onControlDriverCutoff: (
+                  controlId: string,
+                  current: { readonly connectionId: string; readonly generation: number },
+                ) =>
+                  reporter.enqueue({
+                    kind: "cutoff",
+                    controlId,
+                    connectionId: current.connectionId,
+                    driverGeneration: current.generation,
+                  }),
+              }),
+        });
+  });
   await Effect.runPromise(
     program.pipe(Effect.scoped, Effect.ensuring(Effect.sync(() => abort.abort()))),
   );

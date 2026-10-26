@@ -4,6 +4,7 @@
  *
  * @module ComputerUseLeaseProxyOptions
  */
+// @effect-diagnostics preferSchemaOverJson:off -- Driver JSON-RPC responses remain opaque at this boundary.
 import type {
   ComputerUseAgentCursor,
   ComputerUseCallAdmission,
@@ -11,16 +12,86 @@ import type {
   ComputerUseHumanInputSource,
   ComputerUseLeaseUpdate,
   ComputerUseOverlayCommand,
+  ComputerUsePrimitiveReply,
+  ComputerUsePrimitiveRequest,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
-import type * as Stream from "effect/Stream";
+import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
+
+export const PRIMITIVE_ID = "goat:primitive:";
+
+export interface ReplySink {
+  readonly answer: (
+    line: string,
+    status?: ComputerUsePrimitiveReply["status"],
+    context?: { readonly tool?: string | undefined },
+  ) => Effect.Effect<unknown>;
+}
+
+const primitiveReplySink = (
+  request: ComputerUsePrimitiveRequest,
+  reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
+): ReplySink => ({
+  answer: (line, status = "not_started") => {
+    const envelope = parse(line);
+    const bounded = (value: unknown) => {
+      if (value === undefined) return undefined;
+      const encoded = JSON.stringify(value);
+      return encoded !== undefined && Buffer.byteLength(encoded) <= 64 * 1024
+        ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
+        : { message: "Driver reply exceeded the primitive channel limit." };
+    };
+    const result = bounded(envelope?.result);
+    const error = bounded(envelope?.error);
+    return (
+      reply?.({
+        requestId: request.requestId,
+        registrationId: request.registrationId,
+        controlId: request.controlId,
+        connectionGeneration: request.connectionGeneration,
+        runId: request.runId,
+        turnId: request.turnId,
+        callId: request.callId,
+        status,
+        ...(result === undefined ? {} : { result }),
+        ...(error === undefined ? {} : { error }),
+      }) ?? Effect.void
+    );
+  },
+});
+
+export const forwardPrimitiveRequests = <E>(
+  requests: Stream.Stream<ComputerUsePrimitiveRequest> | undefined,
+  reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
+  nextId: () => string,
+  forward: (line: string, sink: ReplySink, connectionId: string) => Effect.Effect<unknown, E>,
+) =>
+  requests === undefined
+    ? Effect.void
+    : requests.pipe(
+        Stream.runForEach((request) =>
+          forward(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: nextId(),
+              method: "tools/call",
+              params: { name: request.tool, arguments: request.args },
+            }),
+            primitiveReplySink(request, reply),
+            request.connectionGeneration,
+          ),
+        ),
+        Effect.forkScoped,
+        Effect.asVoid,
+      );
 
 export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
@@ -57,6 +128,17 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly bundleIds: boolean;
   /** Lines the provider writes. The proxy stops when this ends. */
   readonly input: Stream.Stream<string>;
+  /** Server-origin calls share the driver's admission path but answer on a separate channel. */
+  readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
+  readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
+  readonly onDriverStarted?: (current: {
+    readonly connectionId: string;
+    readonly generation: number;
+  }) => Effect.Effect<void>;
+  readonly onDriverCutoff?: (current: {
+    readonly connectionId: string;
+    readonly generation: number;
+  }) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
   readonly output: (
     line: string,

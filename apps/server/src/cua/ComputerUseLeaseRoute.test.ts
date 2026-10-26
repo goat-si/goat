@@ -8,9 +8,11 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Queue from "effect/Queue";
+import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
@@ -25,6 +27,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -157,71 +161,92 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       }
     | undefined
   >(undefined);
+  const leaseLayer = Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+    releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
+    streamOpened: () => Effect.void,
+    proxy: undefined,
+    currentControl: () =>
+      Ref.get(current).pipe(
+        Effect.map((value) =>
+          value === undefined
+            ? Option.none()
+            : Option.some({
+                threadId,
+                controlId: value.controlId,
+                expiresAt,
+                ...(value.state === "stopped" ? { ended: "stopped" as const } : {}),
+              }),
+        ),
+      ),
+    controlState: (_owner, id) =>
+      Effect.gen(function* () {
+        const value = yield* Ref.get(current);
+        const held = yield* Ref.getAndSet(heldRead, undefined);
+        if (held !== undefined) {
+          yield* Deferred.succeed(held.reading, undefined);
+          yield* Deferred.await(held.release);
+        }
+        if (value === undefined) return { _tag: "ended", reason: "revoked" } as const;
+        if (value.controlId !== id) return { _tag: "ended", reason: "replaced" } as const;
+        if (value.state === "stopped") return { _tag: "ended", reason: "stopped" } as const;
+        if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(expiresAt))
+          return { _tag: "ended", reason: "expired" } as const;
+        if (value.state === "paused") return { _tag: "paused", reason: "takeover" } as const;
+        return {
+          _tag: "active",
+          expiresAt,
+          apps: ["com.apple.calculator"],
+          interruptions: { count: 0, last: "human_input" },
+          wakeAt: DateTime.toEpochMillis(expiresAt),
+          ...(value.state === "idle" ? ({ idle: true } as const) : {}),
+        } as const;
+      }),
+    subscribe: PubSub.subscribe(signals).pipe(
+      Effect.tap(() => Deferred.succeed(subscribed, undefined)),
+    ),
+  });
   const context = yield* Layer.build(
     Layer.mergeAll(
       ServerSettings.layerTest({ enableCua: true }),
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
-      Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-        releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
-        streamOpened: () => Effect.void,
-        proxy: undefined,
-        currentControl: () =>
-          Ref.get(current).pipe(
-            Effect.map((value) =>
-              value === undefined
-                ? Option.none()
-                : Option.some({
-                    threadId,
-                    controlId: value.controlId,
-                    expiresAt,
-                    ...(value.state === "stopped" ? { ended: "stopped" as const } : {}),
-                  }),
-            ),
-          ),
-        controlState: (_owner, id) =>
-          Effect.gen(function* () {
-            const value = yield* Ref.get(current);
-            const held = yield* Ref.getAndSet(heldRead, undefined);
-            if (held !== undefined) {
-              yield* Deferred.succeed(held.reading, undefined);
-              yield* Deferred.await(held.release);
-            }
-            if (value === undefined) return { _tag: "ended", reason: "revoked" } as const;
-            if (value.controlId !== id) return { _tag: "ended", reason: "replaced" } as const;
-            if (value.state === "stopped") return { _tag: "ended", reason: "stopped" } as const;
-            if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(expiresAt))
-              return { _tag: "ended", reason: "expired" } as const;
-            if (value.state === "paused") return { _tag: "paused", reason: "takeover" } as const;
-            return {
-              _tag: "active",
-              expiresAt,
-              apps: ["com.apple.calculator"],
-              interruptions: { count: 0, last: "human_input" },
-              wakeAt: DateTime.toEpochMillis(expiresAt),
-              ...(value.state === "idle" ? ({ idle: true } as const) : {}),
-            } as const;
-          }),
-        subscribe: PubSub.subscribe(signals).pipe(
-          Effect.tap(() => Deferred.succeed(subscribed, undefined)),
-        ),
-      }),
+      leaseLayer,
+      ComputerUsePrimitiveChannel.layer.pipe(Layer.provide(leaseLayer)),
     ),
   );
   const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.layer);
   const request = (
     query: string,
     authorization: string | undefined = credential.config.authorizationHeader,
+    headers: Readonly<Record<string, string>> = {},
   ) =>
     handler.pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
         HttpServerRequest.fromWeb(
           new Request(`http://goat.test/api/computer-use/lease?${query}`, {
-            headers: authorization === undefined ? {} : { authorization },
+            headers: authorization === undefined ? headers : { authorization, ...headers },
           }),
         ),
       ),
       Effect.provideContext(context),
+    );
+  const postPrimitive = (path: string, body: object, token = "channel:secret") =>
+    handler.pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(`http://goat.test/api/computer-use/lease/${path}`, {
+            method: "POST",
+            headers: {
+              authorization: credential.config.authorizationHeader,
+              "x-goat-proxy-channel": token,
+            },
+            body: JSON.stringify(body),
+          }),
+        ),
+      ),
+      Effect.provideContext(context),
+      Effect.map((response) => response.status),
     );
   const open = Effect.fn("LeaseRouteTest.open")(function* (query = `thread=${threadId}`) {
     const response = yield* request(query);
@@ -240,7 +265,10 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   return {
     registry,
     credential,
+    context,
+    channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
+    postPrimitive,
     open,
     released,
     holdNextRead: Effect.gen(function* () {
@@ -270,6 +298,321 @@ describe("computer use lease route", () => {
       );
       assert.deepEqual(f.released, [[threadId, controlId]]);
     }),
+  );
+
+  it.effect("lease state overtakes a queued primitive burst", () =>
+    Effect.gen(function* () {
+      const states = yield* Queue.unbounded<{ state: "active" | "ended" }>();
+      const primitives =
+        yield* Queue.unbounded<import("@goat/contracts").ComputerUsePrimitiveRequest>();
+      yield* Queue.offer(states, { state: "active" });
+      yield* Queue.offer(states, { state: "ended" });
+      for (let callId = 0; callId < 16; callId++)
+        yield* Queue.offer(primitives, {
+          state: "primitive-request",
+          requestId: `request:${callId}`,
+          registrationId: "registration:one",
+          controlId,
+          connectionGeneration: "driver:zero",
+          runId: "run:one",
+          turnId: "cell:one",
+          callId,
+          deadlineMillis: 600_000,
+          tool: "click",
+          args: {},
+        });
+      const first = yield* withPrimitiveRequests(
+        Stream.fromQueue(states),
+        Stream.fromQueue(primitives),
+      ).pipe(Stream.take(2), Stream.runCollect);
+      assert.deepEqual([...first], [{ state: "active" }, { state: "ended" }]);
+    }),
+  );
+
+  it.effect(
+    "stale and duplicate control-ready reports return 409; cutoff-before-ready keeps the generation tombstone",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* threadFixture();
+        yield* f.set(controlId);
+        yield* f.channel.issue({
+          threadId,
+          attachmentGeneration: "attachment:one",
+          proxyChannelToken: "channel:secret",
+          expiresAt: 600_000,
+        });
+        const response = yield* f.request(
+          `control=${controlId}&primitive=1&instance=proxy:one`,
+          f.credential.config.authorizationHeader,
+          { "x-goat-proxy-channel": "channel:secret" },
+        );
+        assert.equal(response.status, 200);
+        const registrationId = response.headers["x-goat-primitive-registration"];
+        assert.isDefined(registrationId);
+        const report = (driverGeneration: number) => ({
+          registrationId,
+          controlId,
+          connectionId: `driver:${driverGeneration}`,
+          driverGeneration,
+        });
+        assert.equal(yield* f.postPrimitive("primitive-control-cutoff", report(0)), 204);
+        assert.equal(yield* f.postPrimitive("primitive-control-ready", report(0)), 409);
+        assert.equal(
+          (yield* Effect.flip(
+            f.channel.request({
+              threadId,
+              runId: "run:one",
+              turnId: "cell:one",
+              callId: 0,
+              deadlineMillis: 600_000,
+              tool: "click",
+              args: {},
+            }),
+          )).reason,
+          "desktop_not_ready",
+        );
+        assert.equal(yield* f.postPrimitive("primitive-control-ready", report(1)), 204);
+        assert.equal(yield* f.postPrimitive("primitive-control-ready", report(1)), 409);
+        assert.equal(yield* f.postPrimitive("primitive-control-cutoff", report(0)), 204);
+        assert.equal(yield* f.postPrimitive("primitive-control-ready", report(0)), 409);
+        assert.equal(
+          yield* f.postPrimitive("primitive-control-ready", report(2), "channel:old"),
+          401,
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("late and duplicate primitive replies return 409 without settling another waiter", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      yield* f.channel.issue({
+        threadId,
+        attachmentGeneration: "attachment:one",
+        proxyChannelToken: "channel:secret",
+        expiresAt: 600_000,
+      });
+      const response = yield* f.request(
+        `control=${controlId}&primitive=1&instance=proxy:one`,
+        f.credential.config.authorizationHeader,
+        { "x-goat-proxy-channel": "channel:secret" },
+      );
+      const registrationId = response.headers["x-goat-primitive-registration"];
+      assert.isDefined(registrationId);
+      assert.equal(
+        yield* f.postPrimitive("primitive-control-ready", {
+          registrationId,
+          controlId,
+          connectionId: "driver:zero",
+          driverGeneration: 0,
+        }),
+        204,
+      );
+      const waiter = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 600_000,
+          tool: "list_windows",
+          args: {},
+        })
+        .pipe(Effect.forkChild);
+      if (response.body._tag !== "Stream") throw new Error("expected stream response");
+      const lines = yield* response.body.stream.pipe(
+        Stream.orDie,
+        Stream.decodeText,
+        Stream.splitLines,
+        Stream.filter((line) => line.length > 0),
+        Stream.toQueue({ capacity: "unbounded" }),
+      );
+      yield* Queue.take(lines);
+      const published = JSON.parse(yield* Queue.take(lines)) as {
+        requestId: string;
+        registrationId: string;
+        controlId: string;
+        connectionGeneration: string;
+        runId: string;
+        turnId: string;
+        callId: number;
+      };
+      const reply = {
+        requestId: published.requestId,
+        registrationId: published.registrationId,
+        controlId: published.controlId,
+        connectionGeneration: published.connectionGeneration,
+        runId: published.runId,
+        turnId: published.turnId,
+        callId: published.callId,
+        status: "settled" as const,
+        result: { ok: true },
+      };
+      assert.equal(
+        yield* f.postPrimitive("primitive-replies", { ...reply, turnId: "cell:other" }),
+        409,
+      );
+      assert.equal(yield* f.postPrimitive("primitive-replies", reply), 204);
+      assert.equal((yield* Fiber.join(waiter)).status, "settled");
+      assert.equal(yield* f.postPrimitive("primitive-replies", reply), 409);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a primitive GET closes its registration when the control stream ends", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      yield* f.channel.issue({
+        threadId,
+        attachmentGeneration: "attachment:one",
+        proxyChannelToken: "channel:secret",
+        expiresAt: 600_000,
+      });
+      const query = `control=${controlId}&primitive=1&instance=proxy:one`;
+      const headers = { "x-goat-proxy-channel": "channel:secret" };
+      const first = yield* f.request(query, f.credential.config.authorizationHeader, headers);
+      assert.equal(first.status, 200);
+      assert.equal(
+        (yield* f.request(query, f.credential.config.authorizationHeader, headers)).status,
+        409,
+      );
+      if (first.body._tag !== "Stream") throw new Error("expected stream response");
+      const reader = yield* first.body.stream.pipe(Stream.orDie, Stream.runDrain, Effect.forkChild);
+      yield* f.set(controlId, "stopped");
+      yield* Fiber.join(reader);
+      const next = yield* f.request(query, f.credential.config.authorizationHeader, headers);
+      assert.equal(next.status, 409);
+      const thread = yield* f.request(
+        `thread=${threadId}&primitive=1&instance=proxy:two`,
+        f.credential.config.authorizationHeader,
+        headers,
+      );
+      assert.equal(thread.status, 200);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "thread-follow registration before a control refuses screen calls, then first ready delivers",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* threadFixture();
+        yield* f.channel.issue({
+          threadId,
+          attachmentGeneration: "attachment:one",
+          proxyChannelToken: "channel:secret",
+          expiresAt: 600_000,
+        });
+        const headers = { "x-goat-proxy-channel": "channel:secret" };
+        const response = yield* f.request(
+          `thread=${threadId}&primitive=1&instance=proxy:one`,
+          f.credential.config.authorizationHeader,
+          headers,
+        );
+        assert.equal(response.status, 200);
+        const registrationId = response.headers["x-goat-primitive-registration"];
+        assert.isDefined(registrationId);
+        const call = () =>
+          f.channel.request({
+            threadId,
+            runId: "run:one",
+            turnId: "cell:one",
+            callId: 0,
+            deadlineMillis: 600_000,
+            tool: "list_windows",
+            args: {},
+          });
+        assert.equal((yield* Effect.flip(call())).reason, "desktop_not_ready");
+        yield* f.set(controlId);
+        assert.isTrue(
+          yield* f.channel.reportControlReady({
+            threadId,
+            attachmentGeneration: "attachment:one",
+            proxyChannelToken: "channel:secret",
+            registrationId,
+            controlId,
+            connectionId: "driver:zero",
+            driverGeneration: 0,
+          }),
+        );
+        const waiter = yield* call().pipe(Effect.forkChild);
+        if (response.body._tag !== "Stream") throw new Error("expected stream response");
+        const lines = yield* response.body.stream.pipe(
+          Stream.orDie,
+          Stream.decodeText,
+          Stream.splitLines,
+          Stream.filter((line) => line.length > 0),
+          Stream.toQueue({ capacity: "unbounded" }),
+        );
+        const first = yield* Queue.take(lines);
+        assert.include(first, '"state":"active"');
+        const primitive = yield* Queue.take(lines);
+        assert.include(primitive, '"state":"primitive-request"');
+        const request = JSON.parse(primitive) as {
+          requestId: string;
+          registrationId: string;
+          controlId: string;
+          connectionGeneration: string;
+          runId: string;
+          turnId: string;
+          callId: number;
+        };
+        assert.isTrue(
+          yield* f.channel.reply({
+            threadId,
+            attachmentGeneration: "attachment:one",
+            proxyChannelToken: "channel:secret",
+            registrationId,
+            reply: { ...request, status: "settled", result: { ok: true } },
+          }),
+        );
+        assert.equal((yield* Fiber.join(waiter)).status, "settled");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a revoked thread credential cannot register or reply with a valid channel token", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      yield* f.channel.issue({
+        threadId,
+        attachmentGeneration: "attachment:one",
+        proxyChannelToken: "channel:secret",
+        expiresAt: 600_000,
+      });
+      const query = `control=${controlId}&primitive=1&instance=proxy:one`;
+      const headers = { "x-goat-proxy-channel": "channel:secret" };
+      const before = yield* f.request(query, f.credential.config.authorizationHeader, headers);
+      assert.equal(before.status, 200);
+      assert.isDefined(before.headers["x-goat-primitive-registration"]);
+      yield* f.registry.revokeThread(threadId);
+      assert.equal(
+        (yield* f.request(query, f.credential.config.authorizationHeader, headers)).status,
+        401,
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(LeaseRoute.layer, {
+        disableLogger: true,
+      });
+      yield* Effect.promise(async () => {
+        const response = await handler(
+          new Request("http://goat.test/api/computer-use/lease/primitive-replies", {
+            method: "POST",
+            headers: { authorization: f.credential.config.authorizationHeader, ...headers },
+            body: JSON.stringify({
+              requestId: "request:one",
+              registrationId: before.headers["x-goat-primitive-registration"],
+              controlId,
+              connectionGeneration: "driver:one",
+              runId: "run:one",
+              turnId: "cell:one",
+              callId: 0,
+              status: "settled",
+            }),
+          }),
+          f.context,
+        );
+        assert.equal(response.status, 401);
+      }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+    }).pipe(Effect.scoped),
   );
 
   it.effect.each(["stopped", "replaced", "revoked"] as const)(

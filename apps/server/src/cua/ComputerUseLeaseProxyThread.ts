@@ -4,6 +4,7 @@ import type {
   ComputerUseControlEnd,
   ComputerUseLeaseThreadUpdate,
   ComputerUseLeaseUpdate,
+  ComputerUsePrimitiveRequest,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +34,14 @@ type ThreadProxyOptions<EU, ED> = Omit<
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseThreadUpdate, EU>;
   /** Captured once, so even delayed reports belong to the control that produced them. */
   readonly reports: (controlId: string) => Reports<EU, ED>;
+  readonly onControlDriverStarted?: (
+    controlId: string,
+    current: { readonly connectionId: string; readonly generation: number },
+  ) => Effect.Effect<void>;
+  readonly onControlDriverCutoff?: (
+    controlId: string,
+    current: { readonly connectionId: string; readonly generation: number },
+  ) => Effect.Effect<void>;
   /** Runs after the supervisor has routed an update, without waiting for native teardown. */
   readonly onThreadUpdate?: (update: ComputerUseLeaseThreadUpdate) => Effect.Effect<void>;
 };
@@ -43,6 +52,7 @@ const WAITING = "Computer use is not available for this turn.";
 interface Context {
   readonly controlId: string;
   readonly input: Queue.Queue<string, Cause.Done>;
+  readonly primitiveInput: Queue.Queue<ComputerUsePrimitiveRequest>;
   readonly updates: Array<ComputerUseLeaseUpdate | undefined>;
   receive?: (update: ComputerUseLeaseUpdate | undefined) => void;
   ready: boolean;
@@ -146,6 +156,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     context.ended = reason;
     context.ready = false;
     if (current === context) current = undefined;
+    Queue.shutdownUnsafe(context.primitiveInput);
     waiting = reason;
     for (const [key, owner] of clientRequests)
       if (owner.context === context) clientRequests.delete(key);
@@ -178,6 +189,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     const context: Context = {
       controlId: update.controlId,
       input: yield* Queue.unbounded<string, Cause.Done>(),
+      primitiveInput: yield* Queue.dropping<ComputerUsePrimitiveRequest>(16),
       updates: [],
       ready: false,
       closed: yield* Deferred.make<void>(),
@@ -214,6 +226,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         controlId: context.controlId,
         expiresAt: expiresAt.value,
         input: Stream.fromQueue(context.input),
+        primitiveRequests: Stream.fromQueue(context.primitiveInput),
+        onDriverStarted: (driver) =>
+          options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void,
+        onDriverCutoff: (driver) =>
+          options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void,
         output: (line, reply) => output(context, line, reply),
         leaseUpdates: Stream.never,
         onLeaseUpdateReceiver: (take) => {
@@ -283,6 +300,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const take = Effect.fn("ComputerUseLeaseProxyThread.takeUpdate")(
     (update: ComputerUseLeaseThreadUpdate) =>
       Effect.suspend(() => {
+        if (update.state === "primitive-request") return Effect.void;
         if (terminal === undefined) {
           if (update.state === "ended") finishNow(update.reason);
           else if (update.state === "control-ended") {
@@ -311,6 +329,28 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     Effect.andThen(finish("lost")),
     Effect.forkScoped,
   );
+
+  if (options.primitiveRequests !== undefined)
+    yield* options.primitiveRequests.pipe(
+      Stream.runForEach((request) =>
+        Effect.gen(function* () {
+          const context = current;
+          if (
+            context !== undefined &&
+            context.ready &&
+            context.ended === undefined &&
+            context.controlId === request.controlId &&
+            terminal === undefined &&
+            (yield* Queue.offer(context.primitiveInput, request).pipe(
+              Effect.orElseSucceed(() => false),
+            ))
+          )
+            return;
+          yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
+        }),
+      ),
+      Effect.forkScoped,
+    );
 
   const handle = Effect.fn("ComputerUseLeaseProxyThread.routeMessage")(function* (line: string) {
     const message = parse(line);

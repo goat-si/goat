@@ -8,6 +8,7 @@ export interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
   readonly connectionId: string;
+  readonly generation: number;
   readonly manifest?: string | undefined;
 }
 
@@ -67,11 +68,13 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
             yield* driver.kill;
             return yield* Scope.close(child, Exit.void);
           }
+          const nextGeneration = generation++;
           const next = {
             driver,
             manifest,
             scope: child,
-            connectionId: `${options.connectionId}:${generation++}`,
+            connectionId: `${options.connectionId}:${nextGeneration}`,
+            generation: nextGeneration,
           };
           current = next;
           yield* options.onStarted(next);

@@ -4,6 +4,8 @@ import {
   type ComputerUseCallReservation,
   type ComputerUseLeaseThreadUpdate,
   type ComputerUseLeaseUpdate,
+  type ComputerUsePrimitiveRequest,
+  type ComputerUsePrimitiveReply,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -46,6 +48,18 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
+  const primitiveInput = yield* Queue.unbounded<ComputerUsePrimitiveRequest, Cause.Done>();
+  const primitiveOutput = yield* Queue.unbounded<ComputerUsePrimitiveReply>();
+  const driverStarted = yield* Queue.unbounded<{
+    readonly controlId: string;
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
+  const driverCutoff = yield* Queue.unbounded<{
+    readonly controlId: string;
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done | string>();
   const output = yield* Queue.unbounded<string>();
   const taken = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate>();
@@ -105,6 +119,12 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     ...(options.screenshots === undefined ? {} : { screenshots: options.screenshots }),
     bundleIds: true,
     input: Stream.fromQueue(input),
+    primitiveRequests: Stream.fromQueue(primitiveInput),
+    primitiveReply: (reply) => Queue.offer(primitiveOutput, reply).pipe(Effect.asVoid),
+    onControlDriverStarted: (controlId, current) =>
+      Queue.offer(driverStarted, { controlId, ...current }).pipe(Effect.asVoid),
+    onControlDriverCutoff: (controlId, current) =>
+      Queue.offer(driverCutoff, { controlId, ...current }).pipe(Effect.asVoid),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     leaseUpdates: options.leaseUpdates ?? Stream.fromQueue(updates),
@@ -155,6 +175,10 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
   }).pipe(Effect.scoped, Effect.forkChild);
   return {
     send: (line: string) => Queue.offer(input, line),
+    sendPrimitive: (request: ComputerUsePrimitiveRequest) => Queue.offer(primitiveInput, request),
+    primitiveReply: Queue.take(primitiveOutput),
+    driverStarted: Queue.take(driverStarted),
+    driverCutoff: Queue.take(driverCutoff),
     push: (update: ComputerUseLeaseThreadUpdate) =>
       Queue.offer(updates, update).pipe(Effect.andThen(Queue.take(taken))),
     next: Queue.take(output).pipe(

@@ -11,13 +11,16 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 
 import * as ComputerUse from "./ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -184,13 +187,86 @@ const session: McpProviderSessionConfig = {
 };
 
 describe("computerUseAttachment", () => {
+  it.effect("detached attachment cleanup revokes only its own channel token", () =>
+    Effect.gen(function* () {
+      const signals = yield* PubSub.unbounded<void>();
+      const leases = ComputerUseLeases.ComputerUseLeases.of({
+        subscribe: PubSub.subscribe(signals),
+        currentControl: () => Effect.succeed(Option.some({ controlId: "control:one" })),
+        controlState: () => Effect.succeed({ _tag: "active" }),
+      } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
+      const channel = yield* ComputerUsePrimitiveChannel.make.pipe(
+        Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+      );
+      const token = "channel:old";
+      const config = {
+        ...session,
+        cuaDriver: {
+          command: "/goat/node",
+          args: [],
+          environment: [{ name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken, value: token }],
+        },
+      };
+      const sessions = McpProviderSessions.McpProviderSessions.of({
+        read: () => Effect.succeed(config),
+      } as unknown as McpProviderSessions.McpProviderSessions["Service"]);
+      const issue = (proxyChannelToken: string, attachmentGeneration: string) =>
+        channel.issue({
+          threadId: session.threadId,
+          controlId: "control:one",
+          proxyChannelToken,
+          attachmentGeneration,
+          expiresAt: 60_000,
+        });
+      yield* issue(token, "attachment:old");
+      yield* ComputerUse.revokeProxyChannelAttachment(
+        Option.some(channel),
+        sessions,
+        session.threadId,
+        "unrelated-credential",
+      );
+      assert.equal(
+        yield* channel.authenticate({ threadId: session.threadId, proxyChannelToken: token }),
+        "attachment:old",
+      );
+      yield* ComputerUse.revokeProxyChannelAttachment(
+        Option.some(channel),
+        sessions,
+        session.threadId,
+        session.providerSessionId,
+      );
+      assert.isUndefined(
+        yield* channel.authenticate({ threadId: session.threadId, proxyChannelToken: token }),
+      );
+      yield* issue("channel:new", "attachment:new");
+      yield* ComputerUse.revokeProxyChannelAttachment(
+        Option.some(channel),
+        sessions,
+        session.threadId,
+        session.providerSessionId,
+      );
+      assert.equal(
+        yield* channel.authenticate({
+          threadId: session.threadId,
+          proxyChannelToken: "channel:new",
+        }),
+        "attachment:new",
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("routes an interactive local provider thread through the proxy under a control", () =>
     Effect.gen(function* () {
       const driver = fakeDriver({ enabled: true, running: true });
       const leases = fakeLeases({});
-      assert.deepEqual(yield* decide(driver, { leases: leases.leases }), {
+      const attached = yield* decide(driver, { leases: leases.leases });
+      if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+      assert.match(attached.proxyChannelToken, /^[A-Za-z0-9_-]{43}$/);
+      assert.deepEqual(attached, {
         _tag: "proxied",
         mcp,
+        proxyChannelToken: attached.proxyChannelToken,
+        attachmentGeneration: attached.attachmentGeneration,
         control: interactiveControl,
         proxy,
         // A cua-driver the person configured would skip Stop, pauses and app approvals.
@@ -223,6 +299,33 @@ describe("computerUseAttachment", () => {
       assert.deepEqual(yield* skills(optedOut), []);
       assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use"]);
     }),
+  );
+
+  it.effect(
+    "a proxied control in a project with the computer-use skill switched off still gets the proxy descriptor and channel token but no skill",
+    () =>
+      Effect.gen(function* () {
+        const projectId = ProjectId.make("project-cua-off");
+        const attached = yield* decide(fakeDriver({ enabled: true, running: true }), {
+          leases: fakeLeases({}).leases,
+          projectId,
+        }).pipe(
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({
+              projectSettingsOverrides: {
+                [projectId]: { builtInSkills: { "computer-use": { enabled: false } } },
+              },
+            }),
+          ),
+        );
+        if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+        assert.deepEqual(attached.skills, []);
+        const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+        assert.deepInclude(config.cuaDriver?.environment ?? [], {
+          name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken,
+          value: attached.proxyChannelToken,
+        });
+      }),
   );
 
   it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>
@@ -561,9 +664,13 @@ describe("computerUseAttachment", () => {
     Effect.gen(function* () {
       const driver = fakeDriver({ enabled: true, running: true });
       const leased = fakeLeases({ grant: lease });
-      assert.deepEqual(yield* decide(driver, { origin: unattended, leases: leased.leases }), {
+      const attached = yield* decide(driver, { origin: unattended, leases: leased.leases });
+      if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+      assert.deepEqual(attached, {
         _tag: "proxied",
         mcp,
+        proxyChannelToken: attached.proxyChannelToken,
+        attachmentGeneration: attached.attachmentGeneration,
         control: {
           controlId: "control:unattended",
           threadId: lease.threadId,
@@ -601,6 +708,8 @@ describe("computerUseAttachment", () => {
         mcp,
         control: interactiveControl,
         proxy,
+        proxyChannelToken: "fixture-channel-token",
+        attachmentGeneration: "fixture-generation",
         overrideUserConfig: true,
         skills: ["computer-use"],
       },
@@ -641,6 +750,8 @@ describe("computerUseAttachment", () => {
         mcp,
         control: { ...interactiveControl, controlId: "control:unattended" },
         proxy,
+        proxyChannelToken: "fixture-channel-token",
+        attachmentGeneration: "fixture-generation",
         overrideUserConfig: true,
         skills: ["computer-use"],
       },
@@ -662,6 +773,7 @@ describe("computerUseAttachment", () => {
         { name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1:4100/api/computer-use/lease" },
         { name: "GOAT_CUA_LEASE_AUTHORIZATION", value: "Bearer fixture" },
         { name: "GOAT_CUA_DRIVER_MCP", value: JSON.stringify(mcp) },
+        { name: "GOAT_CUA_PROXY_CHANNEL_TOKEN", value: "fixture-channel-token" },
       ],
       socketPath: "/tmp/cua.sock",
     });
