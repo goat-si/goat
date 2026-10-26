@@ -26,6 +26,12 @@ export interface LayerCandidate {
   readonly overContent: boolean;
   /** The document, its body, <main> or role=main: content, never an overlay. */
   readonly mainContent: boolean;
+  /** Holds no element or text of its own, like the scrim behind a modal. */
+  readonly empty: boolean;
+  /** The viewport edge a fixed or sticky bar spans, such as a cookie banner's "bottom"; "" when none. */
+  readonly edge: "" | "top" | "bottom" | "left" | "right";
+  /** Its id, class or accessible name speaks of cookies or consent. */
+  readonly consent: boolean;
   readonly selectorHint: string;
 }
 
@@ -129,6 +135,40 @@ const LAYERS_SCRIPT = `(gridSize) => {
     return classes.length > 0 ? tag + "." + classes.join(".") : tag;
   };
   const hits = new Map();
+  // A bar docked to an edge lies outside the grid, which spans 5% to 95% of the viewport.
+  const docked = (hit) => {
+    for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
+      const position = getComputedStyle(node).position;
+      if (position === "fixed" || position === "sticky") return node;
+    }
+    return null;
+  };
+  const edgeOf = (element, position) => {
+    if (position !== "fixed" && position !== "sticky") return "";
+    const rect = element.getBoundingClientRect();
+    if (rect.width >= 0.9 * width) {
+      if (rect.bottom >= height - 2 && rect.top > 0) return "bottom";
+      if (rect.top <= 2 && rect.bottom < height) return "top";
+    }
+    if (rect.height >= 0.9 * height) {
+      if (rect.right >= width - 2 && rect.left > 0) return "right";
+      if (rect.left <= 2 && rect.right < width) return "left";
+    }
+    return "";
+  };
+  const edgePoints = [];
+  if (width > 0 && height > 0) {
+    for (let step = 0; step < gridSize; step++) {
+      const x = width * 0.05 + ((step + 0.5) * width * 0.9) / gridSize;
+      const y = height * 0.05 + ((step + 0.5) * height * 0.9) / gridSize;
+      edgePoints.push([x, height * 0.025], [x, height * 0.975], [width * 0.025, y], [width * 0.975, y]);
+    }
+  }
+  for (const [x, y] of edgePoints) {
+    const hit = topmost(document.elementsFromPoint(x, y), x, y);
+    const bar = hit && docked(hit);
+    if (bar && !hits.has(bar)) hits.set(bar, { count: 0, overContent: false });
+  }
   if (width > 0 && height > 0) {
     for (let row = 0; row < gridSize; row++) {
       for (let column = 0; column < gridSize; column++) {
@@ -148,6 +188,10 @@ const LAYERS_SCRIPT = `(gridSize) => {
   const total = gridSize * gridSize;
   const candidates = [...hits].map(([element, { count, overContent }]) => {
     const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const visible =
+      Math.max(0, Math.min(rect.right, width) - Math.max(rect.left, 0)) *
+      Math.max(0, Math.min(rect.bottom, height) - Math.max(rect.top, 0));
     const role = (element.getAttribute("role") || "").toLowerCase();
     const mainContent =
       element === document.documentElement ||
@@ -159,32 +203,63 @@ const LAYERS_SCRIPT = `(gridSize) => {
       role,
       // Content needs no name, and reading the whole body's text would force a full layout.
       name: mainContent ? "" : nameOf(element).slice(0, 200),
-      coverage: count / total,
+      // A bar only the edge pass found has no grid share; its visible area stands in.
+      coverage: count > 0 ? count / total : visible / (width * height),
       position: style.position,
       pointerEvents: style.pointerEvents,
       zIndex: style.zIndex,
       ariaModal: element.getAttribute("aria-modal") === "true",
       overContent,
       mainContent,
+      empty: element.childElementCount === 0 && !collapse(element.textContent),
+      edge: mainContent ? "" : edgeOf(element, style.position),
+      consent:
+        !mainContent &&
+        /cookie|consent|gdpr/i.test(
+          [element.id, element.getAttribute("class"), collapse(element.getAttribute("aria-label"))].join(" "),
+        ),
       selectorHint: hintOf(element),
     };
   });
   return { viewport: { width, height }, candidates };
 }`;
 
+/** aria-modal or alertdialog declares the rest of the page inert, however small its own box. */
+const isModal = (candidate: LayerCandidate) =>
+  candidate.role === "alertdialog" || candidate.ariaModal;
+
+/**
+ * A consent bar docked across an edge covers little but sits over the page until answered. A
+ * docked bar counts only as a dialog or by naming cookies or consent, so a site header, nav bar
+ * or toolbar, which are docked too, never does.
+ */
+const isConsentBar = (candidate: LayerCandidate) =>
+  candidate.edge !== "" && (candidate.role === "dialog" || isModal(candidate) || candidate.consent);
+
 const isBlocking = (candidate: LayerCandidate) => {
-  if (candidate.coverage < BLOCKING_COVERAGE || candidate.pointerEvents === "none") return false;
-  if (candidate.role === "dialog" || candidate.role === "alertdialog" || candidate.ariaModal)
-    return true;
-  if (candidate.mainContent || !candidate.overContent) return false;
+  if (candidate.pointerEvents === "none") return false;
+  if (isModal(candidate)) return true;
+  if (candidate.coverage < BLOCKING_COVERAGE)
+    return !candidate.mainContent && isConsentBar(candidate);
+  if (candidate.role === "dialog") return true;
+  if (candidate.mainContent) return false;
+  // A scrim holds nothing itself, so it blocks even where the page beneath it is blank.
+  if (!candidate.overContent)
+    return candidate.empty && candidate.position === "fixed" && candidate.zIndex !== "auto";
   if (candidate.position === "fixed") return true;
   // Apps often root themselves in an absolute full-page box; an overlay also stacks above.
   return candidate.position === "absolute" && candidate.zIndex !== "auto";
 };
 
 /** The widest candidate that blocks the page, or null when the content is reachable. */
-export const pickBlocking = (candidates: ReadonlyArray<LayerCandidate>) =>
-  candidates.toSorted((left, right) => right.coverage - left.coverage).find(isBlocking) ?? null;
+export const pickBlocking = (candidates: ReadonlyArray<LayerCandidate>) => {
+  const blocking = candidates
+    .toSorted((left, right) => right.coverage - left.coverage)
+    .filter(isBlocking);
+  // A scrim has no name or control to act on; the modal over it does.
+  const widest = blocking[0];
+  return (widest?.empty ? blocking.find(isModal) : undefined) ?? widest ?? null;
+};
 
 /** Page-controlled text, kept to one line so it cannot add lines to the header. */
 const oneLine = (text: string) => text.replace(/\s+/g, " ").replaceAll('"', "'").trim();
@@ -199,7 +274,9 @@ export const layersHeader = (report: LayersReport) => {
     .slice(0, MAX_NAME_LENGTH);
   const coverage = Math.round(blocking.coverage * 100);
   const kind = oneLine(blocking.role || blocking.tagName);
-  return `@layers blocking=${kind} "${name}" coverage=${coverage}% hint=${oneLine(blocking.selectorHint)}`;
+  const edge =
+    blocking.coverage < BLOCKING_COVERAGE && blocking.edge ? ` edge=${blocking.edge}` : "";
+  return `@layers blocking=${kind} "${name}" coverage=${coverage}%${edge} hint=${oneLine(blocking.selectorHint)}`;
 };
 
 export const describeLayers = async (

@@ -2030,7 +2030,7 @@ const make = Effect.gen(function* () {
         );
       case "evaluate":
         return ServerBrowserPage.evaluate(
-          tab.cdp,
+          tab,
           input as PreviewAutomationEvaluateInput,
           request.timeoutMs,
         );

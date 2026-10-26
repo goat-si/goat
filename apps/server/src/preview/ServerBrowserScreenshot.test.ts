@@ -21,6 +21,8 @@ const fixture = ({ width = 1500, height = 4000, deviceScale = 1 } = {}) => {
     mainFrame: () => page,
     frames: () => [page],
     viewportSize: () => ({ width: 1280, height: 800 }),
+    url: () => "https://example.test",
+    context: () => ({ cookies: async () => [] }),
     evaluate: vi.fn(async () => ({
       url: "https://example.test",
       title: "Fixture",

@@ -90,6 +90,7 @@ function makeContext() {
     sessions,
     newPage: async () => page as unknown as Page,
     grantPermissions: async () => {},
+    cookies: async () => [],
     newCDPSession: async (_target: unknown) => {
       const session = makeSession();
       sessions.push(session);

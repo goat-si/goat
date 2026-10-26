@@ -20,6 +20,7 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
+import { maskSecrets, maskTree, redactValue } from "./pageSecrets.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -245,8 +246,6 @@ const SNAPSHOT_SCRIPT = `(() => {
     interactiveElements: [],
   };
 })()`;
-
-const MASKED_VALUE = "••••••••";
 
 /**
  * A `data:` URL carries its content, which can be a whole file, and URLs and diagnostics
@@ -478,26 +477,6 @@ const dottedPattern = (values: ReadonlyArray<string>) => {
   return pattern;
 };
 
-// Playwright single-quotes keys containing ': ' and leaves /.../ names unquoted. Recognize only its attributes so name text cannot spoof them.
-const TREE_LINE =
-  /^(\s*- '?[^\s"':]+)( "(?:[^"\\]|\\.)*"| \/(?:.*?\/)?)?((?: \[(?:active|checked(?:=mixed)?|disabled|expanded|level=\d+|pressed(?:=mixed)?|selected|ref=(?:f\d+)?e\d+|cursor=pointer|box=-?\d+,-?\d+,\d+,\d+)\])*'?)(:.*)?$/;
-
-/** Preserve roles and attributes so refs work; unquoted /.../ names can make matches cross boundaries. */
-const maskTree = (tree: string, dotted: RegExp) =>
-  tree
-    .split("\n")
-    .map((line) => {
-      const node = TREE_LINE.exec(line);
-      const name = node?.[1]?.length ?? 0;
-      const attributes = name + (node?.[2]?.length ?? 0);
-      const end = attributes + (node?.[3]?.length ?? 0);
-      const kept = (from: number, to: number) => to <= name || (from >= attributes && to <= end);
-      return line.replace(dotted, (match: string, offset: number) =>
-        kept(offset, offset + match.length) ? match : MASKED_VALUE,
-      );
-    })
-    .join("\n");
-
 /** Chromium sizes the capture, so the reported size is read from the PNG header. */
 const pngSize = (base64: string) => {
   const header = Buffer.from(base64.slice(0, 32), "base64");
@@ -708,6 +687,7 @@ const capture = async (
     >,
     readLayersHeader(input.page),
     capture,
+    input.page.context().cookies(input.page.url()),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -739,19 +719,20 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [page, layersLine, screenshot] = await pageAndScreenshot;
+  const [page, layersLine, screenshot, cookies] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
-  const mask = (text: string) => (dotted ? text.replace(dotted, MASKED_VALUE) : text);
+  const mask = maskSecrets(dotted, cookies);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
-  const accessibilityTree = `${mask(layersLine)}\n${dotted ? maskTree(redacted, dotted) : redacted}`
-    .slice(0, MAX_VISIBLE_TEXT_LENGTH)
-    .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
-      const ref = `t3-${generation}-${nativeRef}`;
-      state.refs.set(ref, nativeRef);
-      return `[ref=${ref}]`;
-    });
+  const accessibilityTree =
+    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`
+      .slice(0, MAX_VISIBLE_TEXT_LENGTH)
+      .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
+        const ref = `t3-${generation}-${nativeRef}`;
+        state.refs.set(ref, nativeRef);
+        return `[ref=${ref}]`;
+      });
   return {
     ...page,
     // Mask text before truncating so a value crossing the cut cannot leak its prefix.
@@ -1059,9 +1040,19 @@ export const scroll = async (
   }
 };
 
+/** Masks what an evaluation reads back as a snapshot would: cookie values and secret field values. */
+const redactEvaluation = async (page: Page, cdp: CDPSession, value: unknown) => {
+  const [cookies, fields] = await Promise.all([
+    page.context().cookies(page.url()),
+    openReaders(page, cdp).then(({ read }) => read()),
+  ]);
+  const values = fields.flat().filter((each) => typeof each === "string");
+  return redactValue(value, maskSecrets(dottedPattern(values), cookies));
+};
+
 /** Terminate expired page scripts so a hung expression cannot block the tab's control queue. */
 export const evaluate = async (
-  cdp: CDPSession,
+  { page, cdp }: { readonly page: Page; readonly cdp: CDPSession },
   input: PreviewAutomationEvaluateInput,
   timeoutMs: number,
 ) => {
@@ -1101,7 +1092,7 @@ export const evaluate = async (
       { maximumBytes: MAX_EVALUATION_BYTES },
     );
   }
-  return value;
+  return redactEvaluation(page, cdp, value);
 };
 
 /** Native Playwright waits share one deadline; recheck the conjunction on the current document. */
