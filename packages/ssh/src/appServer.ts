@@ -346,3 +346,13 @@ export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
     },
   } satisfies SshHostResult;
 });
+
+/**
+ * Prints the host's GOAT environment id without starting anything: the app server's while its
+ * record names a live process, since SSH clients attach to it then, otherwise the managed home's.
+ */
+export const HOST_ENVIRONMENT_ID_SCRIPT = String.raw`home="$HOME/.goat/userdata"; app="$HOME/.goat/desktop/userdata"
+pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$app/server-runtime.json" 2>/dev/null || true)"
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ -f "$app/environment-id" ]; then home="$app"; fi
+if [ -f "$home/environment-id" ]; then cat "$home/environment-id"; fi
+`;

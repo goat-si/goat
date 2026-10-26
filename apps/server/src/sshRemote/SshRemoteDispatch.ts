@@ -1453,8 +1453,7 @@ const make = Effect.gen(function* () {
     yield* readyCloudTarget(target, false);
     const result = yield* withRuntime(
       manager.runRemoteScript(target, {
-        script:
-          'if [ -f "$HOME/.goat/userdata/environment-id" ]; then cat "$HOME/.goat/userdata/environment-id"; fi',
+        script: SshTunnel.HOST_ENVIRONMENT_ID_SCRIPT,
         timeoutMs: 15_000,
       }),
     ).pipe(

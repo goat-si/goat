@@ -87,7 +87,8 @@ reconnects, and so lands on the app server, only once the managed server's activ
 `idle` (`shouldMoveToAppServer`). Threads already running there finish where they started. Only an
 ensure that reconnects at once drops the forward; background revalidation and the check right after
 a launch leave it alone. A probe that cannot run counts as declined. If the app server refuses a
-credential, that target uses the managed server for ten minutes. The two
+credential, that target uses the managed server for ten minutes and then probes the app again;
+a ready-only request reports the refusal instead of switching servers. The two
 homes keep separate databases; nothing is merged. While the managed server still runs, the app
 lists its threads as **Headless server** (`apps/desktop/src/backend/DesktopHeadlessServer.ts`).
 When the app quits, its forward fails and the next ensure starts or reuses the managed server.
@@ -534,7 +535,8 @@ A node is one GOAT environment with one or more routes. Routes come from three s
 
 Routes with the same environment ID are one node. The ID comes from the link for linked hosts
 and, for SSH and running cloud machines, from `SshRemoteDispatch.identifyTarget`, which reads
-`$HOME/.goat/userdata/environment-id` over SSH without starting a runtime. A route whose ID is
+`environment-id` over SSH without starting a runtime: the [app server](#app-server)'s while its
+record names a live process, otherwise `$HOME/.goat/userdata/environment-id`. A route whose ID is
 unknown is its own node with ID `route:<routeId>` until a check learns it; `get` still resolves
 that ID afterwards. The hub's own ID is refused at add and dropped at merge.
 
