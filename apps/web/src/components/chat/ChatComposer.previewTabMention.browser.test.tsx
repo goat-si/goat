@@ -1,13 +1,13 @@
+// The fixture's atom registry mock must load before any state module imports the registry.
+import { id, local, setupSshComposer, state, store } from "~/test/sshComposerFixture";
 import { SERVER_BROWSER_AUTOMATION_CLIENT_ID, ThreadId } from "@goat/contracts";
 import type { OrchestrationMessageContext } from "@goat/contracts";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
 
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { previewEnvironment } from "~/state/preview";
 import { environmentServerConfigsAtom } from "~/state/server";
-import { id, local, setupSshComposer, state, store } from "~/test/sshComposerFixture";
 import { act } from "../../../test/render";
 
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
@@ -34,13 +34,13 @@ it("sends a server browser tab picked from the @ list as one exact preview-tab r
   const config = primary.serverConfig!;
   config.providers = config.providers.map((provider) => ({ ...provider, installed: true }));
   store().setDraftThreadContext(id, { envMode: "local", sshDestination: null });
-  store().setPrompt(id, "Check ");
+  store().setPrompt(id, "Check @");
   const listAtom = previewEnvironment.list({
     environmentId: local,
     input: { threadId: ThreadId.make("A") },
   });
-  state.queryData = (atom) =>
-    atom === listAtom
+  state.queryData = (atom) => {
+    return atom === listAtom
       ? {
           sessions: [
             {
@@ -57,6 +57,7 @@ it("sends a server browser tab picked from the @ list as one exact preview-tab r
           revision: 1,
         }
       : null;
+  };
   // Inline context support keeps the record on the wire instead of folding it into the text.
   const registry = state.registry!;
   const fallback = vi.mocked(registry.get).getMockImplementation()!;
@@ -68,9 +69,8 @@ it("sends a server browser tab picked from the @ list as one exact preview-tab r
 
   await mount();
   await act(async () => state.composer!.composerRef.current!.focusAtEnd());
-  await userEvent.keyboard("@");
   const row = await vi.waitFor(() => {
-    const element = container.querySelector<HTMLElement>(
+    const element = document.querySelector<HTMLElement>(
       '[data-composer-item-id="preview-tab:tab-7"]',
     );
     expect(element?.textContent).toContain("Orders");
