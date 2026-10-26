@@ -9,6 +9,7 @@ import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { isWindowsRenameLock } from "@goat/shared/atomicWrite";
 import * as HostProcess from "@goat/shared/HostProcess";
 
@@ -147,6 +148,8 @@ export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
   {
     readonly directory?: string;
+    /** Undefined disables caching when external changes cannot be observed. */
+    readonly revision?: Effect.Effect<number | undefined>;
     readonly get: (name: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
     readonly set: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
     readonly create: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
@@ -176,6 +179,29 @@ export const make = Effect.gen(function* () {
         }),
     ),
   );
+
+  let revision = 0;
+  let watching = false;
+  const invalidate = Effect.sync(() => {
+    revision++;
+  });
+  yield* fileSystem
+    .watch(serverConfig.secretsDir, {
+      onReady: () => {
+        watching = true;
+      },
+    })
+    .pipe(
+      Stream.runForEach(() => invalidate),
+      Effect.ensuring(
+        Effect.sync(() => {
+          watching = false;
+          revision++;
+        }),
+      ),
+      Effect.ignoreCause({ log: true }),
+      Effect.forkScoped({ startImmediately: true }),
+    );
 
   const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
 
@@ -231,6 +257,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       }),
+      Effect.ensuring(invalidate),
       Effect.withSpan("ServerSecretStore.set"),
     );
   };
@@ -270,6 +297,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       }),
+      Effect.ensuring(invalidate),
     );
   };
 
@@ -327,11 +355,13 @@ export const make = Effect.gen(function* () {
               }),
             ),
       ),
+      Effect.ensuring(invalidate),
       Effect.withSpan("ServerSecretStore.remove"),
     );
 
   return ServerSecretStore.of({
     directory: serverConfig.secretsDir,
+    revision: Effect.sync(() => (watching ? revision : undefined)),
     get,
     set,
     create,
