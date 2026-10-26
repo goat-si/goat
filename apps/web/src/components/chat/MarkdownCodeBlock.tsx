@@ -61,7 +61,7 @@ export function MarkdownCodeBlockFrame({
   return (
     <Wrapper
       dir="ltr"
-      className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-lg border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-code"
+      className="chat-markdown-codeblock group/codeblock my-[0.65rem] overflow-hidden rounded-lg border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-code"
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
     >
@@ -87,6 +87,10 @@ export function MarkdownCodeBlockFrame({
     </Wrapper>
   );
 }
+
+// Transparent rather than hidden, so the actions stay in the tab order and focusing one reveals them.
+const HOVER_REVEAL =
+  "opacity-0 transition-opacity group-hover/codeblock:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100";
 
 function MarkdownCodeBlockTitleContent({
   fenceTitle,
@@ -223,8 +227,16 @@ export function MarkdownCodeBlock({
 
   if (diagram) {
     return (
-      <div className="my-[0.65rem] border border-transparent" data-language={language}>
-        <div className="flex items-center justify-end gap-0.5 pt-1.5 pr-1.5 select-none">
+      <div
+        className="group/codeblock my-[0.65rem] border border-transparent"
+        data-language={language}
+      >
+        <div
+          className={cn(
+            "flex items-center justify-end gap-0.5 pt-1.5 pr-1.5 select-none",
+            HOVER_REVEAL,
+          )}
+        >
           {viewToggle}
           {copyButton}
         </div>
@@ -241,7 +253,11 @@ export function MarkdownCodeBlock({
       wrapped={wrapped}
       headerProps={THREAD_FIND_IGNORE_PROPS}
       actions={
-        <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
+        <span
+          className={cn("flex items-center gap-0.5", HOVER_REVEAL)}
+          role="toolbar"
+          aria-label="Code block actions"
+        >
           {canWrap ? (
             <Tooltip>
               <TooltipTrigger
