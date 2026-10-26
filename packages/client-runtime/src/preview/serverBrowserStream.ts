@@ -4,7 +4,19 @@ import {
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
+  AgentCursorSnapshot,
 } from "@goat/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+const decodeCursorState = Schema.decodeUnknownOption(AgentCursorSnapshot);
+type CursorState = typeof AgentCursorSnapshot.Type;
+const sameCursorOwner = (a: CursorState, b: CursorState) =>
+  a.identity.environmentId === b.identity.environmentId &&
+  a.identity.runId === b.identity.runId &&
+  a.identity.turnId === b.identity.turnId &&
+  a.identity.targetId === b.identity.targetId &&
+  a.identity.generation === b.identity.generation;
 
 export const PREVIEW_STREAM_BASE_PATH = "/api/preview-stream";
 
@@ -160,6 +172,7 @@ export interface PreviewStreamPointer {
   readonly x: number;
   readonly y: number;
   readonly sequence: number;
+  readonly cursor?: CursorState;
 }
 
 export const previewStreamModifiers = (event: {
@@ -191,6 +204,7 @@ export interface PreviewStreamEvents {
   readonly onViewport: (viewport: PreviewStreamViewport) => void;
   readonly onProbe?: (probe: PreviewStreamProbe) => void;
   readonly onPointer?: (pointer: PreviewStreamPointer) => void;
+  readonly onCursorState?: (state: CursorState) => void;
   readonly onControl?: (control: PreviewStreamControl) => void;
   readonly onClipboard?: (text: string) => void;
   readonly onDownload?: (download: PreviewStreamDownload) => void;
@@ -226,6 +240,36 @@ export function createPreviewStreamClient(
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let failures = 0;
   let control: PreviewStreamControl | null = null;
+  let cursorOwner: CursorState | null = null;
+  const clearCursor = () => {
+    if (cursorOwner !== null)
+      events.onCursorState?.({ identity: cursorOwner.identity, phase: "hidden" });
+    cursorOwner = null;
+  };
+  const acceptCursor = (next: CursorState, pointer = false) => {
+    const old = cursorOwner;
+    if (old !== null) {
+      if (sameCursorOwner(old, next)) {
+        if (
+          (pointer
+            ? next.identity.sequence < old.identity.sequence ||
+              (next.identity.sequence === old.identity.sequence && next.phase !== old.phase)
+            : next.identity.sequence <= old.identity.sequence) ||
+          ((old.phase === "hidden" || old.phase === "yielded") &&
+            next.phase !== "hidden" &&
+            next.phase !== "yielded")
+        )
+          return false;
+      } else if (
+        old.phase !== "hidden" &&
+        old.phase !== "yielded" &&
+        next.identity.generation <= old.identity.generation
+      )
+        return false;
+    }
+    cursorOwner = next;
+    return true;
+  };
   let fileChooser: string | null = null;
 
   const connect = () => {
@@ -280,6 +324,7 @@ export function createPreviewStreamClient(
         phase,
         sequence,
         tabId,
+        cursor,
       } = message as Record<string, unknown>;
       if (
         type === "fileChooser" &&
@@ -305,7 +350,20 @@ export function createPreviewStreamClient(
         typeof y === "number" &&
         typeof sequence === "number"
       ) {
-        events.onPointer?.({ phase, x, y, sequence });
+        if (cursor !== undefined) {
+          const decoded = decodeCursorState(cursor);
+          if (Option.isNone(decoded) || !acceptCursor(decoded.value, true)) return;
+          events.onPointer?.({ phase, x, y, sequence, cursor: decoded.value });
+        } else if (
+          cursorOwner === null ||
+          cursorOwner.phase === "hidden" ||
+          cursorOwner.phase === "yielded"
+        )
+          events.onPointer?.({ phase, x, y, sequence });
+      } else if (type === "cursor-state") {
+        const decoded = decodeCursorState(cursor);
+        if (Option.isSome(decoded) && acceptCursor(decoded.value))
+          events.onCursorState?.(decoded.value);
       } else if (type === "popup" && typeof tabId === "string") {
         events.onPopup?.(tabId);
       } else if (type === "clipboard" && typeof text === "string") {
@@ -348,6 +406,12 @@ export function createPreviewStreamClient(
           dialog,
           ...(typeof privateMode === "boolean" ? { private: privateMode } : {}),
         };
+        if (
+          control?.generation !== nextControl.generation ||
+          nextControl.private === true ||
+          nextControl.controller === "you"
+        )
+          clearCursor();
         control = nextControl;
         events.onControl?.(nextControl);
       }
@@ -356,6 +420,7 @@ export function createPreviewStreamClient(
       if (socket !== ws) return;
       socket = null;
       control = null;
+      clearCursor();
       if (opened) events.onConnectedChange(false);
       if (stopped) return;
       if (event.code === 4404) {

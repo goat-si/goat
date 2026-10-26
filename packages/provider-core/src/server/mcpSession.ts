@@ -48,10 +48,12 @@ export interface McpProviderSessionConfig {
    */
   readonly cuaDriverBlocked?: boolean;
   /**
-   * Built-in skills this thread's turns carry, from `resolveBuiltInSkills`. Set with
-   * `cuaDriver`; absent means every skill of what is attached.
+   * Built-in skills this turn carries, from `resolveBuiltInSkills`. The screen guide can attach
+   * with browser access even when no Cua Driver is present.
    */
   readonly builtInSkills?: ReadonlyArray<BuiltInSkillName>;
+  /** Present only after the attached screen guide was written on this host. */
+  readonly screenCodeSkillPath?: string;
   /**
    * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
    * while goatclaw is off, which leaves the provider's own limits in place.
@@ -157,6 +159,12 @@ export function carriesComputerUseSkill(
   config: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined,
 ): boolean {
   return config?.builtInSkills?.includes("computer-use") ?? true;
+}
+
+export function carriesScreenCodeSkill(
+  config: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined,
+): boolean {
+  return config?.builtInSkills?.includes("screen-code") ?? false;
 }
 
 export function withAgentDeviceEnvironment(

@@ -135,7 +135,6 @@ import type { DraftSshDestination } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
 import type { SshThreadOpenPorts } from "../../lib/sshWorktreeSubmission";
-import type { SshWorktreeSubmissionOutcome } from "../../lib/sshWorktreeSubmission";
 import type { SshWorktreeSubmissionPorts } from "../../lib/sshWorktreeSubmission";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentThreadDetails } from "../../state/threads";
@@ -151,6 +150,7 @@ import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
+import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useSideChatStore } from "../sideChat/sideChatStore";
 import { waitForThreadShell } from "../../state/entities";
@@ -495,34 +495,7 @@ export function useComposerSend(input: ComposerSendInput) {
     };
   };
 
-  const showSshStartedNotOpened = (
-    outcome: Extract<SshWorktreeSubmissionOutcome, { kind: "started-not-opened" }>,
-    saved: { destination: DraftSshDestination; hostLabel: string },
-  ) => {
-    // This continuation captures remote identity only; Open cannot resend or consume a draft.
-    const { remoteRef } = outcome;
-    const { destination, hostLabel } = saved;
-    const show = (reason: string) =>
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: `Started on ${hostLabel.slice(0, 120)}, but could not open the thread`,
-          description: `${remoteRef.threadId} · ${reason.slice(0, 500)}`,
-          actionProps: {
-            children: "Open thread",
-            onClick: () => {
-              void openSshThread(
-                { remoteRef, savedEnvironmentId: destination.environmentId },
-                makeSshThreadOpenPorts(destination, null),
-              ).catch((error: unknown) =>
-                show(error instanceof Error ? error.message : "Could not open the remote thread."),
-              );
-            },
-          },
-        }),
-      );
-    show(outcome.reason);
-  };
+  const showSshStartedNotOpened = sshStartedNotOpenedToast(makeSshThreadOpenPorts);
 
   const continueThreadOnSsh = async (
     selected: SavedSshWorktreeOption,
@@ -749,6 +722,7 @@ export function useComposerSend(input: ComposerSendInput) {
           capturedContent.previewAnnotations.length > 0 ||
           capturedContent.reviewComments.length > 0 ||
           capturedContent.threadContexts.length > 0 ||
+          capturedContent.previewTabs.length > 0 ||
           directAnnotation !== undefined,
         multipleModels: sendCtx.multipleModelSelections !== null,
       });
@@ -888,6 +862,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: sendContextPreviewAnnotations,
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
+      previewTabs: composerPreviewTabs,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -1159,6 +1134,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: composerPreviewAnnotations,
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
+      previewTabs: composerPreviewTabs,
     });
     const {
       files: composerFilesSnapshot,
@@ -1167,6 +1143,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: composerPreviewAnnotationsSnapshot,
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
+      previewTabs: previewTabsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -1202,6 +1179,7 @@ export function useComposerSend(input: ComposerSendInput) {
         reviewComments: composerReviewCommentsSnapshot,
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
+        previewTabs: previewTabsSnapshot,
         text: messageTextForSend,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,

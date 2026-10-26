@@ -175,7 +175,12 @@ const desktopApp = (patch: Partial<PreviewSession> = {}) =>
     id: "desktop-1",
     kind: "desktop",
     threadId: ThreadId.make("thread-desk"),
-    target: { kind: "desktop", bundleId: "com.apple.TextEdit", title: "Whole screen" },
+    target: {
+      kind: "desktop",
+      bundleId: "com.apple.TextEdit",
+      title: "Whole screen",
+      motionSupport: "unsupported",
+    },
     ...patch,
   });
 
@@ -656,6 +661,7 @@ it("draws the agent's cursor where it is on the window, inside a letterboxed pic
     capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
     target: {
       kind: "desktop",
+      motionSupport: "supported",
       pid: 7,
       windowId: 3,
       title: "Finder",
@@ -747,6 +753,7 @@ it("tells a turn left without computer use which grant to allow, and watches no 
     capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
     target: {
       kind: "desktop",
+      motionSupport: "unsupported",
       title: "Allow Screen & System Audio Recording for GOAT Computer Use",
     },
   });

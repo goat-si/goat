@@ -37,6 +37,28 @@ These limits keep agents away from places they never need. They do not stop an
 agent from typing into an app it may use, so give agents work you would let
 them do at that keyboard.
 
+## Ask an agent to work across the browser and apps
+
+Ask an agent to use a page in GOAT's built-in browser and an app on the computer
+running that GOAT environment in the same task. Point it to a specific tab or
+app when you start the turn. In the web or desktop composer, type `@` and pick
+the tab from the list; the agent then works in that exact tab, even if its title
+changes. Tabs that open inside the desktop app rather than on the GOAT
+environment are not listed, and the mobile app cannot pick a tab yet. A tab you
+opened stays yours; GOAT releases the agent's control when the turn ends. Tabs
+the agent opened close when the turn ends or you press **Stop**; if one cannot
+close, the thread says so and you can close it yourself. The agent may ask you
+to approve an app or finish a private step.
+
+Watch the browser and app tiles while it works. Use **Take control** or **Stop**
+on the affected tile, or **Stop all** to end every agent's screen work on that
+computer. The agent checks the screen again after you hand control back. A
+password or passkey step pauses its view and input.
+
+The cursor mark shows where the agent is working; it does not prove an action
+succeeded. If an outcome is uncertain, ask the agent to inspect the target
+before it tries another action.
+
 ## Approving apps
 
 Every thread in full access mode uses every app without asking, whatever

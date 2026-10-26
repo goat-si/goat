@@ -59,6 +59,7 @@ export async function loadMcpBridge(
     readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
     /** The per-turn computer use gate file the adapter writes. */
     readonly cuaGate?: string;
+    readonly screenSkillGate?: string;
     readonly inputSchema?: Record<string, unknown>;
     /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
     readonly goatMcp?: boolean;
@@ -143,6 +144,9 @@ export async function loadMcpBridge(
             ? {}
             : { GOAT_CUA_MCP: JSON.stringify({ ...options.cua, env: {} }) }),
           ...(options.cuaGate === undefined ? {} : { GOAT_CUA_GATE: options.cuaGate }),
+          ...(options.screenSkillGate === undefined
+            ? {}
+            : { GOAT_SCREEN_CODE_SKILL_GATE: options.screenSkillGate }),
         },
       },
       AbortSignal,

@@ -1,5 +1,6 @@
 import type {
   ComputerUseAgentCursor,
+  AgentCursorReport,
   ComputerUseControlEnd,
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
@@ -27,7 +28,9 @@ export interface ComputerUseControl {
   /** The window the agent's latest admitted call named, as its proxy reported it. */
   readonly target?: { readonly pid: number; readonly windowId: number };
   /** Where the helper draws the agent's cursor on that window, for the preview to draw too. */
-  readonly cursor?: ComputerUseAgentCursor;
+  readonly cursor?: LegacyCursor;
+  /** Latest scoped report, including a terminal identity-bearing tombstone. */
+  readonly cursorReport?: AgentCursorReport;
 }
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
@@ -72,8 +75,13 @@ export const markActed = <C extends ComputerUseControl & { readonly ended?: unkn
  * may show it, and unmarked if it sat idle between turns, since that turn has not asked for the
  * screen yet. A stopped card keeps its mark while idle.
  */
-export const nextTurn = <C extends ComputerUseControl>({ idle, acted, ...rest }: C) =>
-  idle !== true && acted === true ? { ...rest, acted } : rest;
+export const nextTurn = <C extends ComputerUseControl>({
+  idle,
+  acted,
+  cursor: _cursor,
+  cursorReport: _cursorReport,
+  ...rest
+}: C) => (idle !== true && acted === true ? { ...rest, acted } : rest);
 
 /**
  * Whether a person sees a card for this control in this state: its agent acted through it, and
@@ -115,8 +123,47 @@ export interface Interruptions {
 
 /** The agent's cursor a proxy reports, or null when the overlay draws none. */
 export type Cursor = ComputerUseAgentCursor | null;
+/**
+ * The preview's target.cursor keeps the phases origin/dev clients decode, since the protocol
+ * version did not change; moving and thinking reach newer clients through cursorState.
+ */
+export type LegacyCursor = Omit<ComputerUseAgentCursor, "phase"> & {
+  readonly phase: "acting" | "resting";
+};
 
-const sameCursor = (a: ComputerUseAgentCursor | undefined, b: ComputerUseAgentCursor | undefined) =>
+const legacyCursor = (cursor: ComputerUseAgentCursor): LegacyCursor => ({
+  ...cursor,
+  phase:
+    cursor.phase === "moving" ? "acting" : cursor.phase === "thinking" ? "resting" : cursor.phase,
+});
+
+export type CursorTargetReport =
+  | { readonly pid: number; readonly windowId: number }
+  | { readonly cursor: Cursor }
+  | { readonly report: AgentCursorReport };
+
+const sameOwner = (a: AgentCursorReport, b: AgentCursorReport) =>
+  a.identity.environmentId === b.identity.environmentId &&
+  a.identity.runId === b.identity.runId &&
+  a.identity.turnId === b.identity.turnId &&
+  a.identity.targetId === b.identity.targetId &&
+  a.identity.generation === b.identity.generation;
+
+export const staleCursorReport = (record: ComputerUseControl, report: AgentCursorReport) => {
+  const previous = record.cursorReport;
+  if (previous === undefined) return false;
+  if (sameOwner(previous, report))
+    return (
+      report.identity.sequence <= previous.identity.sequence ||
+      ((previous.phase === "hidden" || previous.phase === "yielded") &&
+        report.phase !== "hidden" &&
+        report.phase !== "yielded")
+    );
+  if (previous.phase === "hidden" || previous.phase === "yielded") return false;
+  return report.identity.generation <= previous.identity.generation;
+};
+
+const sameCursor = (a: LegacyCursor | undefined, b: LegacyCursor | undefined) =>
   a === b ||
   (a !== undefined &&
     b !== undefined &&
@@ -130,10 +177,25 @@ const sameCursor = (a: ComputerUseAgentCursor | undefined, b: ComputerUseAgentCu
  * the target; undefined when nothing changes.
  */
 const withCursor = <C extends ComputerUseControl>(record: C, cursor: Cursor): C | undefined => {
-  const next = cursor !== null && cursor.windowId === record.target?.windowId ? cursor : undefined;
+  const next =
+    cursor !== null && cursor.windowId === record.target?.windowId
+      ? legacyCursor(cursor)
+      : undefined;
   if (sameCursor(next, record.cursor)) return undefined;
   const { cursor: _previous, ...rest } = record;
   return (next === undefined ? rest : { ...rest, cursor: next }) as C;
+};
+
+const withReport = <C extends ComputerUseControl>(record: C, report: AgentCursorReport): C => {
+  const cursor =
+    report.phase !== "hidden" &&
+    report.phase !== "yielded" &&
+    report.cursor !== null &&
+    report.cursor.windowId === record.target?.windowId
+      ? legacyCursor(report.cursor)
+      : undefined;
+  const { cursor: _previous, cursorReport: _oldReport, ...rest } = record;
+  return { ...rest, cursorReport: report, ...(cursor === undefined ? {} : { cursor }) } as C;
 };
 
 /**
@@ -142,10 +204,13 @@ const withCursor = <C extends ComputerUseControl>(record: C, cursor: Cursor): C 
  */
 export const targeted = <C extends ComputerUseControl>(
   record: C,
-  report: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+  report: CursorTargetReport,
 ): C | undefined => {
+  if ("report" in report)
+    return staleCursorReport(record, report.report) ? undefined : withReport(record, report.report);
   if ("cursor" in report) return withCursor(record, report.cursor);
   if (record.target?.pid === report.pid && record.target.windowId === report.windowId) return;
-  const moved = { ...record, target: { pid: report.pid, windowId: report.windowId } };
+  const { cursorReport: _report, ...rest } = record;
+  const moved = { ...rest, target: { pid: report.pid, windowId: report.windowId } } as C;
   return withCursor(moved, null) ?? moved;
 };

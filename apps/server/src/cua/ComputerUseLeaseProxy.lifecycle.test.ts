@@ -2,11 +2,14 @@ import { assert, describe, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { foregroundProxy, foregroundProxyLayer } from "./ComputerUseForeground.testkit.ts";
+import { makeLeaseProxyLifecycle } from "./ComputerUseLeaseProxyLifecycle.ts";
 import {
   active,
   call,
@@ -24,6 +27,138 @@ const shortForeground = () => {
 };
 
 describe("proxy lifecycle ownership across foreground expiry", () => {
+  it.effect("Stop cuts off server-origin input and quarantines the late driver reply", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:stop",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 60_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9, x: 1, y: 1 },
+      });
+      const forwarded = yield* h.nextToDriver;
+      assert.match(String(forwarded.id), /^goat:primitive:/);
+      yield* h.push({ state: "ended", reason: "stopped" });
+      assert.equal((yield* h.driverCutoff).connectionId, current.connectionId);
+      assert.equal((yield* h.primitiveReply).status, "unknown_outcome");
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: forwarded.id,
+          result: { content: [], structuredContent: { marker: "late" } },
+        }),
+      );
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect("a paused control does not replay a queued primitive on resume", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      const first = yield* h.driverStarted;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:paused",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: first.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 60_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9 },
+      });
+      assert.equal((yield* h.primitiveReply).status, "not_started");
+      yield* h.push(active());
+      const next = yield* h.driverStarted;
+      assert.equal(next.generation, first.generation + 1);
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "a cutoff report stalled after the local fence cannot forward a request for the cut generation",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ driverCutoffGate: gate });
+        yield* h.push(active());
+        const current = yield* h.driverStarted;
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        assert.equal((yield* h.driverCutoff).connectionId, current.connectionId);
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "request:cut",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 60_000,
+          tool: "click",
+          args: { pid: 4, window_id: 9 },
+        });
+        assert.equal((yield* h.primitiveReply).status, "not_started");
+        assert.equal(yield* h.driverQueued, 0);
+        yield* Deferred.succeed(gate, undefined);
+        yield* h.killed;
+      }),
+  );
+
+  it.effect(
+    "each successful driver restart increments the generation exactly once and superseded acquisition reports nothing",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const acquiring = yield* Deferred.make<void>();
+        const started = yield* Queue.unbounded<{ generation: number; connectionId: string }>();
+        const lifecycle = yield* makeLeaseProxyLifecycle({
+          connectionId: "proxy:test",
+          active: () => true,
+          deadline: () => 600_000,
+          startDriver: Effect.gen(function* () {
+            yield* Deferred.succeed(acquiring, undefined);
+            yield* Deferred.await(gate);
+            return { send: () => Effect.void, lines: Stream.empty, kill: Effect.void };
+          }),
+          onStarted: (current) => Queue.offer(started, current).pipe(Effect.asVoid),
+        });
+        const obsolete = yield* lifecycle.start().pipe(Effect.forkChild);
+        yield* Deferred.await(acquiring);
+        lifecycle.interrupt();
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(obsolete);
+        assert.equal(yield* Queue.size(started), 0);
+        yield* lifecycle.start();
+        const first = yield* Queue.take(started);
+        assert.deepEqual(
+          { generation: first.generation, connectionId: first.connectionId },
+          { generation: 0, connectionId: "proxy:test:0" },
+        );
+        lifecycle.interrupt();
+        yield* lifecycle.start();
+        const second = yield* Queue.take(started);
+        assert.deepEqual(
+          { generation: second.generation, connectionId: second.connectionId },
+          { generation: 1, connectionId: "proxy:test:1" },
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect.each(["expiry", "stop", "pause", "replacement", "idle"] as const)(
     "GOAT release at %s sends no focus restore and refuses later foreground dispatch",
     (ending) =>

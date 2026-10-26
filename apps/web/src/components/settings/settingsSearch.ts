@@ -15,6 +15,7 @@ import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import { AGENT_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAgentItems";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
+import { COMPUTER_USE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchComputerUseItems";
 import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
 import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
 import { HUB_SETTINGS_SEARCH_ITEMS } from "./settingsSearchHubItems";
@@ -867,31 +868,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "devices",
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
-  {
-    id: "computer-use",
-    title: "Computer use",
-    to: "/settings/integrations",
-    targetId: "computer",
-    searchTerms: [
-      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions setup set up retry full access approval without asking every app",
-    ],
-  },
-  {
-    id: "computer-use-move-pointer",
-    title: "Let agents move my pointer",
-    to: "/settings/integrations",
-    searchTerms: [
-      "computer use pointer mouse cursor move foreground background click steal focus advanced",
-    ],
-  },
-  {
-    id: "computer-use-skill",
-    title: "Computer Use skill",
-    to: "/settings/integrations",
-    searchTerms: [
-      "built in builtin skill computer use instructions agents observe verify advanced readiness",
-    ],
-  },
+  ...COMPUTER_USE_SETTINGS_SEARCH_ITEMS,
   {
     id: "goat-bot-home",
     title: "Runs on",

@@ -46,6 +46,8 @@ const state = vi.hoisted(() => ({
   list: null as LegendListRef | null,
   contentLength: 1000,
   scrollToEnd: vi.fn(),
+  // Per-test query data by atom; null keeps every query empty.
+  queryData: null as ((atom: unknown) => unknown) | null,
   // Stable like the real store selectors; a fresh array per render loops the timeline.
   empty: [] as never[],
 }));
@@ -98,8 +100,8 @@ vi.mock("/src/state/session", async (original) => ({
 }));
 vi.mock("/src/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
-  useEnvironmentQuery: () => ({
-    data: null,
+  useEnvironmentQuery: (atom: unknown) => ({
+    data: state.queryData?.(atom) ?? null,
     isPending: false,
     isSuccess: true,
     error: null,
@@ -328,6 +330,7 @@ export async function setupSshComposer(realComposer = false) {
   });
   const { selection, project, primary } = (state.data = createSshData(realComposer));
   state.primaryConnection = null;
+  state.queryData = null;
   state.noopCommand.mockReset().mockResolvedValue({ _tag: "Success", value: { providers: [] } });
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
@@ -397,6 +400,7 @@ export async function setupSshComposer(realComposer = false) {
       : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
         ? true
         : get(atom)) as typeof registry.get);
+  // This fixture supplies navigation directly; the router would add an unrelated route context.
   const screen = stack.use(await render(<div />, { router: false }));
   stack.defer(() => act(() => state.composer?.onMultipleModelSelectionsChange(null)));
   state.navigate.mockReset().mockImplementation(async (request) => {

@@ -16,6 +16,8 @@ import {
 } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   type EnvironmentId,
+  type AgentCursorOwner,
+  type AgentCursorState,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
   ThreadId,
@@ -43,6 +45,7 @@ import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/prev
 import { observeResize } from "~/lib/observeResize";
 
 import { boxToViewport, viewportToBox } from "./letterbox";
+import { agentCursorAfterState, agentCursorOwnerFields } from "./agentCursorOwner";
 
 export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
@@ -432,6 +435,8 @@ export function ServerBrowserSurface(props: {
           );
           if (placed) setAgentCursor(placed);
         },
+        onCursorState: (state) =>
+          setAgentCursor((current) => agentCursorAfterState(current, state)),
         onClipboard: (text) => void copyPageText(text),
         onDownload: offerDownload,
         onPopup: popupOpened,
@@ -955,6 +960,8 @@ interface AgentCursorPlacement {
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
+  readonly owner?: AgentCursorOwner;
+  readonly cursorPhase?: AgentCursorState;
 }
 
 function placeAgentCursor(
@@ -970,5 +977,6 @@ function placeAgentCursor(
     sequence: pointer.sequence,
     left,
     top,
+    ...agentCursorOwnerFields(pointer.cursor),
   };
 }

@@ -31,6 +31,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
+import { useBrowserPointerTabs } from "./useBrowserPointerTabs";
 import { acquireBrowserSurfaceActivity, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
@@ -169,8 +170,10 @@ export function startElectronBrowserHost(): () => void {
   const disposers = [
     startAnnotationThemeSync(preview),
     preview.onPointerEvent((event) => {
-      useBrowserPointerStore.getState().apply(event);
-      avoidStackPointer(event);
+      const store = useBrowserPointerStore.getState();
+      store.apply(event);
+      if (!("type" in event) && useBrowserPointerStore.getState().byTabId[event.tabId] === event)
+        avoidStackPointer(event);
     }),
     preview.onOpenLink(openLinkInPreview),
   ];
@@ -186,6 +189,7 @@ export function ElectronBrowserHost() {
   const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
 
   const hostedTabIds = sessions.map((session) => session.runtimeTabId).join("\n");
+  useBrowserPointerTabs(hostedTabIds);
   useEffect(() => {
     const active = new Set(hostedTabIds.split("\n"));
     for (const tabId of reportedStackTabs) {

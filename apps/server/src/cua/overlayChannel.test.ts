@@ -54,6 +54,24 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("keeps a visible overlay unsafe after an unacknowledged hide", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(false);
+      const send = overlayChannel(helper.socket);
+      const show = yield* send({ op: "show", pid: 4, windowId: 9, phase: "acting" }).pipe(
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(OVERLAY_ACK_TIMEOUT_MS);
+      yield* Fiber.join(show);
+      assert.isFalse(send.captureHideConfirmed());
+      const hide = yield* send({ op: "hide", reason: "capture" }).pipe(Effect.forkChild);
+      yield* TestClock.adjust(OVERLAY_ACK_TIMEOUT_MS);
+      yield* Fiber.join(hide);
+      assert.equal(send.lastHideOutcome(), "timed_out");
+      assert.isFalse(send.captureHideConfirmed());
+    }),
+  );
+
   it.effect("passes on the helper's input reports and ignores lines it cannot read", () =>
     Effect.gen(function* () {
       const helper = helperEnd(true);

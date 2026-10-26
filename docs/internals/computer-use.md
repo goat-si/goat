@@ -1,6 +1,6 @@
 # GOAT Computer Use
 
-Status: proposed design for the GOAT Computer Use epic (#1140). The decisions are recorded in
+Status: current constraints and remaining design for the GOAT Computer Use epic (#1140). The decisions are recorded in
 [ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), which amends
 [ADR-0022](../../structure/decisions/ADR-0022-cua-driver-computer-use.md). What ships today is
 described in [server.md](../../structure/server.md#computer-use) and
@@ -11,13 +11,15 @@ traps behind the design; the workstream issues own the remaining work.
 
 ```text
 provider (Codex, Claude, ...)
-  └─ stdio MCP: goat cua-session-proxy        one per thread session, holds the thread's MCP credential
-       └─ GOAT server computer-use service    admission, approvals, lease, preview session, typing of results
-            └─ desktop host control pipe       Electron main on desktop
-                 └─ helper (line JSON on stdio) GOAT Computer Use.app / Windows / Linux helper, #1207 envelope
-                      └─ cua-driver mcp --direct --embedded --host-bundle-id <helper id>
-                           one stdio process per session, no listening socket
-                           └─ OS accessibility, capture and input
+  ├─ stdio MCP: goat cua-session-proxy        direct desktop tools, one per attached thread
+  │    └─ GOAT server computer-use service    admission, approvals, lease, preview session
+  └─ MCP: goat_screen_run                    one bounded JavaScript cell
+       └─ GOAT server screenCode service     turn session, host bridge, per-call admission
+            ├─ child QuickJS WASM guest      computation and GOAT screen API only
+            ├─ preview broker                built-in browser Target
+            └─ computer-use primitive channel / lease proxy   desktop Target
+                 └─ desktop host control pipe → helper → cua-driver mcp --direct --embedded
+                      └─ OS accessibility, capture and input
 ```
 
 - The helper is the only process that holds OS grants for computer use. It does not take grants
@@ -54,7 +56,7 @@ provider (Codex, Claude, ...)
   the server before each call and holds one session for its thread and generation.
 - Each session has its own `mcp --direct` driver process under the helper, and ending a session
   kills exactly that process. That is the boundary ADR-0022 measured: cancellation and session
-  revoke do not stop a running `run_script`, and killing its transport does. WS3 qualifies
+  revoke do not stop an already-dispatched driver effect, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
@@ -65,7 +67,7 @@ provider (Codex, Claude, ...)
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
 - Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
-  six-app `run_script` stop measurement is repeated through this topology before WS6 counts as
+  historical stop measurement is repeated through this topology before WS6 counts as
   done.
 - Remote machines run their own server and helper. Each server checks its own screen before
   starting the helper (`apps/server/src/cua/CuaDisplayCapability.ts`, from #697) and reports
@@ -76,15 +78,10 @@ Trap: Node's `child_process` cannot set the disclaim spawn attribute, which is w
 disclaims itself instead of being spawned disclaimed. Launching it with `open` would disclaim too
 but loses the stdio pipes, and the driver would no longer be a child of a process GOAT holds.
 
-The Codex app's computer use helper has the same shape at the identity level: a separately signed
-background app with its own designated requirement and its own updater, refreshed into a per-user
-location, reached over a per-user socket and started through LaunchServices when it is not
-running. GOAT keeps a spawned helper with stdio, because a spawned child gives the host its
-lifetime and pipes for free and needs no listener. The disclaim interface it relies on is private.
-If a macOS release breaks it, the fallback is the Codex arrangement: launch the helper through
-LaunchServices, which makes it its own responsible process with public API, and connect over a
-per-user socket that verifies the peer from its audit token against the helper's designated
-requirement, never from a pid or path alone. The driver stays the helper's child either way.
+The spawned helper gives the host a lifetime handle and stdio pipes without a listener. The
+disclaim interface it relies on is private. If a macOS release breaks it, a LaunchServices
+fallback would need a per-user socket and an audit-token peer check against the helper's
+designated requirement, never a pid or path alone. The driver would remain the helper's child.
 
 ## Channel
 
@@ -167,6 +164,56 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   stack below needs two reasons the contract does not have yet, for an unsafe capture and for
   unknown window bounds; WS7 adds them.
 
+## Screen code mode
+
+`goat_screen_run` executes one bounded JavaScript cell in the server-owned
+`apps/server/src/screenCode/` service. The child QuickJS guest has GOAT's `screen` Target API,
+without Node, filesystem, process, environment, arbitrary network or page-script access. A live
+turn can run later cells with computation values intact while its child remains live. An explicit
+reset clears those values, not a tab, app, grant or approval. Process and WASM limits bound
+accidental guest work, but are not an OS sandbox against same-user code.
+
+Each Target call crosses `ScreenHostBridge`. The host resolves an exact tab or app window and
+checks the current run, turn, reference generation and caller's browser or computer-use authority
+before dispatch. A preview tile gives no authority to a cell. A tab mention is a binding hint,
+not a grant. The web composer's mention carries the server browser's exact tab id, and the host
+binds by that id even when the tab's title is cleaned or has changed since. Desktop-native tabs
+and the mobile composer cannot make that mention yet. A user tab must be claimed for input; turn
+cleanup releases that claim without closing the tab. Temporary agent tabs close unless kept or
+handed over.
+
+A Stop of the thread or its desktop control, stop all, takeover, private mode, lease expiry, a new
+user message, turn end, and a cell failure that closes the child fence later effects and discard
+computation values. A Stop that names one tab, a person's Stop on it or the tab closing, cuts only
+a running cell that called that tab; a cell that never touched it keeps its child and values. The
+agent's own `close_tab` never cuts the cell that asked for it, and hand-back and resume restore
+authority without cutting anything, because the control generation already refuses stale input.
+A cell whose result has arrived returns it with its receipts even when a Stop lands while they are
+collected. When the agent did not ask for the reset itself, its next cell's result lists
+`context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
+dispatched call whose result is lost or times out has an unknown outcome; another cell must
+observe again before deciding what to do. The cell never replays that input. Every effect needs a
+journal slot for its receipt, so once a cell's journal is full its next call is refused with
+`call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
+request receives `live_children_limit` until a slot is released.
+
+A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
+stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
+in a detached, time-bounded cleanup. Stop has already moved the tab's control generation by then,
+so that cleanup still closes a tab the agent owns and no person holds. A tab it cannot close
+becomes a `cleanup_failed` receipt and a warning notice in the thread, because the tool reply has
+usually been sent already. For user-facing controls, see [Computer use](../user/computer-use.md).
+
+The guest engine is the Bellard QuickJS build vendored by `quickjs-emscripten` 0.32.0
+(engine `2025-09-13+f1139494`), staged as a sync WASM file. As of October 2026 no published
+CVE with an upstream fix applies to that engine, and the one open bytecode-reader CVE is not
+reachable because the bindings never load bytecode. Upstream has since fixed TypedArray,
+Atomics and FinalizationRegistry memory bugs without CVEs, and no quickjs-emscripten release
+carries them yet. Those bugs corrupt only the guest's WASM linear memory; a guest that exploits
+one still reaches the host only through `ScreenHostBridge`, which checks every call. Bump both
+pinned packages together when a release with a newer engine ships, and keep the pin check in
+`scripts/lib/screen-wasm-asset.ts` in step.
+
 ## Transcript fidelity
 
 The rule: the screenshot the model saw is the screenshot the person sees.
@@ -191,8 +238,10 @@ The rule: the screenshot the model saw is the screenshot the person sees.
 
 ## Preview session protocol
 
-Native computer use and built-in browser use share one contract in `packages/contracts`, one
-schema for both kinds:
+The UI's `PreviewSession` in `packages/contracts/src/previewSession.ts` describes what a person
+can watch and control on both surfaces. A code-mode Target is a separate server-held reference
+to one tab or app window, checked against its run, turn, owner and generation before each effect.
+The preview tile does not grant Target authority. The UI session has one schema for both kinds:
 
 ```text
 PreviewSession {
@@ -213,21 +262,18 @@ PreviewSession {
   `packages/contracts/src/previewAutomation.ts`) maps onto this: `unclaimed` becomes an idle
   session with no lease, and the generation stays the fence that drops in-flight results after a
   change of owner.
-- Handing control to a person is not the same as hiding the screen from the agent. Today
+- Handing control to a person is not the same as hiding the screen from the agent.
   `SessionControl.observe()` (`apps/server/src/preview/SessionControl.ts`) lets an agent read
-  while a person drives; that stays true for `human` and must not be true for `private`.
+  while a person drives; private mode fences observation.
 - Private mode starts by itself while a secure field or passkey prompt has focus: `input[type=password]`,
   `autocomplete=current-password` or WebAuthn in the browser; `AXSecureTextField`, UI Automation
   `IsPassword` or the AT-SPI password role on desktops. Observation, frame streaming and recording
   pause, in-flight results from before the switch are dropped by generation, and the agent gets
-  `privateMode` refusals until it ends. In this design only the person's explicit action ends
-  it. What ships today on the desktop path lifts the pause by itself once the field loses focus
-  (`apps/server/src/cua/ComputerUseLeases.ts`), and the built-in skill teaches that.
-- Ego Lite level for the browser means: a task space that groups an agent's tabs and keeps their
-  login state together (profile policy shared, isolated per task, or incognito, each explained),
-  a text-only snapshot, and a handoff in which a person finishes a step in the same tab and the
-  agent resumes in the same task. Native windows reuse the handoff and snapshot semantics; task
-  spaces stay a browser concept.
+  `privateMode` refusals until it ends. The browser's
+  `apps/server/src/preview/PreviewPrivateMode.ts` and desktop's
+  `apps/server/src/cua/ComputerUseLeases.ts` lift the pause when the private step ends.
+- Browser tab claims belong to the current turn; a handoff keeps the person's tab open. Browser
+  profile policy and login isolation remain separate work.
 - Frames stream only to a viewer that is open, at a bounded rate, dropping frames instead of
   queueing them, and stop when nobody watches. Idle panels show the last frame. A preview frame is
   never fed to the model.
@@ -246,13 +292,13 @@ browser.
   `handBack`. The stack header carries `stopAll`, the kill switch (#1209, #1134).
 - `pause` uses the Stop boundary and keeps the session. The proxy refuses new calls, queued
   primitives are dropped, and the session's driver client is killed, because cancellation does
-  not stop admitted `run_script` or `run_steps` work (ADR-0022). The helper releases held input
+  not stop an already-dispatched driver effect (ADR-0022). The helper releases held input
   and sends its cleanup report, results from the paused generation are discarded, and the
   interrupted action reports `partial` or `unverifiable`. The agent stays owner and the lease
   keeps running. `resume` checks that the lease is live, that a person has not taken over or
   entered private mode, and that cleanup was reported. It then starts a new driver client
   generation, and the agent must observe again before acting; nothing interrupted is replayed.
-  Pause during a nested script, with held input, and around lease expiry are conformance cases.
+  Pause during a screen code cell, with held input, and around lease expiry are conformance cases.
 - A tile in private mode shows a "Private — paused" placeholder and never pixels.
 - The desktop app docks the stack on the right of the GOAT window by default. Pop-out moves it into
   a floating stack at the right edge of the screen: always on top, never activating, and passing
@@ -581,7 +627,7 @@ real gateway with providers, and a signed packaged app on a real OS and display.
   drag targets and counters that record what it received. Negative cases: wrong pid or window,
   stale ids, an epoch change, Stop while queued, held modifiers during a kill, helper death, lost
   listener, a Stop of one thread while a sibling acts, and lock or sleep during a held drag and
-  during typing, pause and resume during a nested script, and a crop capture while the floating
+  during typing, pause and resume during a screen code cell, and a crop capture while the floating
   stack or cursor overlay sits inside the window's bounds.
 - **Real apps.** Calculator, TextEdit, Finder, a Chromium browser and an Electron app on macOS, and
   equivalents per platform, each with clean and contaminated runs reported apart.

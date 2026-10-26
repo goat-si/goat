@@ -6,6 +6,8 @@ import {
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
   GOAT_PI_MCP_EXTENSION_PATH_ENV,
+  GOAT_SCREEN_CODE_SKILL_ENV,
+  GOAT_SCREEN_CODE_SKILL_GATE_ENV,
 } from "./mcpExtensionSource.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import { legacyEnvName } from "@goat/contracts/legacyT3Names";
@@ -23,6 +25,24 @@ const mcpSession = {
 };
 
 describe("pi GOAT MCP injection", () => {
+  it("passes the attached screen guide and turn gate into Pi's extension", () => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { [GOAT_SCREEN_CODE_SKILL_ENV]: "on" },
+      mcpSession: { ...mcpSession, builtInSkills: ["screen-code"] },
+      extensionPath: "/tmp/pi-goat-mcp-extension.ts",
+      screenSkillGatePath: "/tmp/goat-pi-screen-guide",
+    });
+    assert.equal(launch.env[GOAT_SCREEN_CODE_SKILL_ENV], "on");
+    assert.equal(launch.env[GOAT_SCREEN_CODE_SKILL_GATE_ENV], "/tmp/goat-pi-screen-guide");
+    const off = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: { [GOAT_SCREEN_CODE_SKILL_ENV]: "on" },
+      mcpSession: undefined,
+      extensionPath: "/tmp/pi-goat-mcp-extension.ts",
+    });
+    assert.isUndefined(off.env[GOAT_SCREEN_CODE_SKILL_ENV]);
+  });
   it("hands the session's Cua Driver to GOAT's extension only, never from the parent", () => {
     const cuaDriver = {
       command: "/resources/cua-driver",

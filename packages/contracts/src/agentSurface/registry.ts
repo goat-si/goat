@@ -33,6 +33,7 @@ import { scheduleEntries } from "./entries/schedule.ts";
 import { schedulerEntries } from "./entries/scheduler.ts";
 import { sshEntries } from "./entries/ssh.ts";
 import { storageEntries } from "./entries/storage.ts";
+import { screenEntries } from "./entries/screen.ts";
 import { surfaceEntries } from "./entries/surface.ts";
 import { taskEntries } from "./entries/task.ts";
 import { threadEntries } from "./entries/thread.ts";
@@ -86,6 +87,7 @@ export const agentSurfaceRegistry = {
   ...storageEntries,
   ...cloudAgentEntries,
   ...noteEntries,
+  ...screenEntries,
   ...surfaceEntries,
   ...operationEntries,
 } as const;

@@ -35,6 +35,10 @@
       "types": "./src/server/builtinSkills/registry.ts",
       "import": "./src/server/builtinSkills/registry.ts"
     },
+    "./server/builtinSkills/screenCodeSkillFiles": {
+      "types": "./src/server/builtinSkills/screenCodeSkillFiles.ts",
+      "import": "./src/server/builtinSkills/screenCodeSkillFiles.ts"
+    },
     "./server/builtinSkills/computerUseSkillFiles": {
       "types": "./src/server/builtinSkills/computerUseSkillFiles.ts",
       "import": "./src/server/builtinSkills/computerUseSkillFiles.ts"

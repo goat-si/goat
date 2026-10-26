@@ -14,9 +14,7 @@ describe("goat-discipline built-in skill contract", () => {
     expect(BUILTIN_SKILLS.find((skill) => skill.name === "goat-discipline")).toMatchObject({
       displayName: "Development discipline",
     });
-    expect(BUILTIN_SKILLS.find((skill) => skill.name === "goat-discipline")?.capability).toBe(
-      undefined,
-    );
+    expect(BUILTIN_SKILLS.find((skill) => skill.name === "goat-discipline")?.anyOf).toBe(undefined);
     expect([...BUILTIN_SKILL_PROVIDER_DRIVERS].toSorted()).toEqual([
       "acpRegistry",
       "antigravity",

@@ -430,6 +430,55 @@ it.effect("renews authority under the same token and fences permits taken before
   }),
 );
 
+it.effect("a renewed credential replaces tab hints and resolves defensive copies", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const threadId = ThreadId.make("thread-tab-hints");
+    const hints = {
+      browserRequested: true,
+      computerRequested: false,
+      appIds: ["app-one"],
+      tabs: [
+        {
+          mentionId: "mention-one",
+          environmentId: "environment-1",
+          browserInstanceId: "browser-one",
+          tabId: "tab-one",
+          titleAtMention: "First",
+          urlAtMention: "https://example.test/first",
+        },
+      ],
+    };
+    const request = {
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      screenBindingHints: hints,
+    };
+    const issued = yield* registry.issue(request);
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    hints.appIds.push("changed-after-issue");
+    hints.tabs[0]!.titleAtMention = "Changed";
+    const first = yield* registry.resolve(token);
+    expect(first?.screenBindingHints?.appIds).toEqual(["app-one"]);
+    expect(first?.screenBindingHints?.tabs[0]?.titleAtMention).toBe("First");
+    (first!.screenBindingHints!.appIds as string[]).push("changed-after-resolve");
+    expect((yield* registry.resolve(token))?.screenBindingHints?.appIds).toEqual(["app-one"]);
+
+    yield* registry.issue({
+      ...request,
+      screenBindingHints: { ...hints, appIds: [], tabs: [] },
+      renew: {
+        authorizationHeader: issued.config.authorizationHeader,
+        providerSessionId: issued.config.providerSessionId,
+      },
+    });
+    expect((yield* registry.resolve(token))?.screenBindingHints?.tabs).toEqual([]);
+    expect((yield* first!.reauthorize!([]).pipe(Effect.flip))._tag).toBe(
+      "EnvironmentAuthorizationError",
+    );
+  }),
+);
+
 it.effect("never renews a revoked credential and refuses a mismatched renewal", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry(() => 1_000);

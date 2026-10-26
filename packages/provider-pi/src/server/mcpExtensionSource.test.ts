@@ -54,6 +54,27 @@ async function loadHooks(commands: ReadonlyArray<SkillCommand> = []) {
 }
 
 describe("Pi orchestration prompt section", () => {
+  it("a browser-only turn installs screen-code and removes it on the next disabled turn", async () => {
+    const directory = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "goat-pi-screen-guide-"),
+    );
+    try {
+      const gate = NodePath.join(directory, "screen-guide");
+      await NodeFSP.writeFile(gate, "on");
+      const bridge = await loadMcpBridge({ screenSkillGate: gate });
+      const hook = bridge.handlers.get("before_agent_start")!;
+      const context = { ui: { notify: assert.fail } };
+      const sections: Record<string, string> = {};
+      await hook({ systemPrompt: "base", systemPromptOptions: { sections } }, context);
+      assert.include(sections.goat_screen_code, "goat_screen_run");
+      assert.isUndefined(sections.goat_computer_use);
+      await NodeFSP.writeFile(gate, "off");
+      await hook({ systemPrompt: "base", systemPromptOptions: { sections } }, context);
+      assert.isUndefined(sections.goat_screen_code);
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
   it("adds GOAT guidance to Pi prompt sections without replacing the system prompt", async () => {
     const bridge = await loadMcpBridge();
     const hook = bridge.handlers.get("before_agent_start")!;

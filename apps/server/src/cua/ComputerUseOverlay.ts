@@ -18,6 +18,7 @@
  */
 import type {
   ComputerUseOverlayCommand,
+  AgentCursorEvent,
   ComputerUseOverlayHideReason,
   ComputerUseOverlayPoint,
   ComputerUsePauseReason,
@@ -54,6 +55,10 @@ const CAPTURES: ReadonlySet<string> = new Set([
   "replay_trajectory",
 ]);
 
+export const overlayCallCaptures = (name: string, args: unknown): boolean =>
+  CAPTURES.has(name) &&
+  !(name === "get_window_state" && record(args)?.include_screenshot === false);
+
 interface Target {
   readonly pid: number;
   readonly windowId: number;
@@ -74,6 +79,9 @@ export interface OverlayState {
   /** Window ids of calls in flight that return a window screenshot. */
   readonly snapshots: ReadonlyMap<string, number>;
   readonly shown: ComputerUseOverlayCommand | undefined;
+  readonly scoped: AgentCursorEvent | undefined;
+  readonly legacyTargetActive: boolean;
+  readonly directActing: ReadonlySet<string>;
 }
 
 export const initialOverlayState: OverlayState = {
@@ -87,10 +95,20 @@ export const initialOverlayState: OverlayState = {
   shots: new Map(),
   snapshots: new Map(),
   shown: undefined,
+  scoped: undefined,
+  legacyTargetActive: false,
+  directActing: new Set(),
 };
 
 export type OverlayEvent =
-  | { readonly type: "call"; readonly id: string; readonly name: string; readonly args: unknown }
+  | { readonly type: "cursor"; readonly event: AgentCursorEvent }
+  | {
+      readonly type: "call";
+      readonly id: string;
+      readonly name: string;
+      readonly args: unknown;
+      readonly codeMode?: boolean;
+    }
   | {
       readonly type: "reply";
       readonly id: string;
@@ -139,14 +157,27 @@ function hideReason(state: OverlayState): ComputerUseOverlayHideReason | undefin
   if (state.ended) return "ended";
   if (state.pause) return state.pause;
   if (state.capturing.size > 0 || state.recording) return "capture";
+  if (state.scoped?.op === "hide") return state.scoped.reason;
   if (!state.target) return "idle";
   return undefined;
 }
 
 function desired(state: OverlayState): ComputerUseOverlayCommand {
   const reason = hideReason(state);
-  if (reason !== undefined || !state.target) return { op: "hide", reason: reason ?? "idle" };
+  if (reason !== undefined || !state.target)
+    return state.scoped === undefined || state.legacyTargetActive
+      ? { op: "hide", reason: reason ?? "idle" }
+      : { op: "hide", identity: state.scoped.identity, phase: "hidden", reason: reason ?? "idle" };
   const { pid, windowId, point } = state.target;
+  if (state.scoped?.op === "show" && !state.legacyTargetActive)
+    return {
+      op: "show",
+      identity: state.scoped.identity,
+      pid,
+      windowId,
+      ...(point ? { point } : {}),
+      phase: state.acting.size > 0 ? "acting" : state.scoped.phase,
+    };
   return {
     op: "show",
     pid,
@@ -161,6 +192,30 @@ const same = (a: ComputerUseOverlayCommand | undefined, b: ComputerUseOverlayCom
 
 function apply(state: OverlayState, event: OverlayEvent): OverlayState {
   switch (event.type) {
+    case "cursor": {
+      const previous = state.scoped?.identity;
+      const next = event.event.identity;
+      if (previous !== undefined) {
+        const sameOwner =
+          previous.environmentId === next.environmentId &&
+          previous.runId === next.runId &&
+          previous.turnId === next.turnId &&
+          previous.targetId === next.targetId &&
+          previous.generation === next.generation;
+        if (
+          sameOwner
+            ? next.sequence <= previous.sequence ||
+              (state.scoped?.op === "hide" && event.event.op === "show")
+            : state.scoped?.op !== "hide" && next.generation <= previous.generation
+        )
+          return state;
+      }
+      return {
+        ...state,
+        scoped: event.event,
+        legacyTargetActive: state.directActing.size > 0 ? state.legacyTargetActive : false,
+      };
+    }
     case "call": {
       const args = record(event.args);
       if (event.name === "start_recording") return { ...state, recording: true };
@@ -168,9 +223,7 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
       if (event.name === "stop_recording")
         return { ...state, stopping: new Set(state.stopping).add(event.id) };
       const window = targetOf(event.args);
-      const capture =
-        CAPTURES.has(event.name) &&
-        !(event.name === "get_window_state" && args?.include_screenshot === false);
+      const capture = overlayCallCaptures(event.name, event.args);
       if (capture) {
         const snapshots =
           (event.name === "get_window_state" || event.name === "wait_for_window_settle") && window
@@ -184,6 +237,10 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         ...state,
         target: { ...window, ...(point ? { point } : {}) },
         acting: new Set(state.acting).add(event.id),
+        directActing: event.codeMode
+          ? state.directActing
+          : new Set(state.directActing).add(event.id),
+        legacyTargetActive: event.codeMode !== true,
       };
     }
     case "reply": {
@@ -199,6 +256,7 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
       return {
         ...state,
         acting: without(state.acting, event.id),
+        directActing: without(state.directActing, event.id),
         capturing: without(state.capturing, event.id),
         stopping: without(state.stopping, event.id),
         recording: state.recording && !(state.stopping.has(event.id) && !event.failed),

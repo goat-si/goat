@@ -79,6 +79,16 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     ],
     screenshotContextId: "ctx_2",
   },
+  "preview-tab": {
+    ...base,
+    kind: "preview-tab",
+    label: "Docs",
+    environmentId: "env-one",
+    browserInstanceId: "browser-one",
+    tabId: "tab-one",
+    title: "Docs",
+    url: "https://example.test/docs",
+  },
   "review-comment": {
     ...base,
     kind: "review-comment",

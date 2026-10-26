@@ -39,3 +39,25 @@ it("keeps a user's preapproval of a GOAT tool named as it shipped, under the lis
   assert.include(readOnly.allowedTools ?? [], "mcp__goat__goat_provider_list");
   assert.notInclude(readOnly.allowedTools ?? [], "mcp__goat__goat_task_create");
 });
+
+it("includes goat_screen_run in Claude's guide when screen code is attached", () => {
+  const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-4-5",
+    },
+    nativeThreadId: "native-screen-code",
+    resume: false,
+    cwd: "/workspace",
+    screenCodeSkill: true,
+    mcpServers: {
+      goat: {
+        type: "http",
+        url: mcpSession.endpoint,
+        headers: { Authorization: mcpSession.authorizationHeader },
+      },
+    },
+  });
+  assert.include(JSON.stringify(options.systemPrompt), "goat_screen_run");
+  assert.isDefined(options.mcpServers?.goat);
+});

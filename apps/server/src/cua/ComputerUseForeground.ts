@@ -274,5 +274,15 @@ export const makeForegroundAuthority = <E>(options: {
           : undefined;
       return foreground.available(threadId, controlId, purpose, grants, now);
     }),
+    releaseForeground: Effect.fn("ComputerUseLeases.releaseForeground")(function* (input: {
+      readonly threadId: ThreadId;
+      readonly controlId: string;
+    }) {
+      const current = options.controls.get(input.threadId);
+      if (current?.controlId !== input.controlId || current.ended !== undefined) return false;
+      foreground.revokeControl(input.threadId, input.controlId);
+      yield* options.changed;
+      return true;
+    }),
   };
 };

@@ -154,6 +154,7 @@ export const sendUnlessShared = Effect.fnUntraced(
     if (!current()) return "stale" as const;
     if (takesScreen && shared()) return "shared" as const;
     if ((yield* Clock.currentTimeMillis) >= permissionDeadline) return "expired" as const;
+    if (!current()) return "stale" as const;
     yield* send;
     return "sent" as const;
   },

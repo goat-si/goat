@@ -1,5 +1,5 @@
 import { continuationOrigin } from "./ContinuationChain.ts";
-import { runTurnCapabilities } from "./TurnCapabilities.ts";
+import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
@@ -595,8 +595,8 @@ export function runMemoryPrepareInput(input: {
 
 /** Everything prepare reads from the run: its memory ceiling and its capability chips. */
 export const runPrepareInput = (
-  input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnCapabilities>[0],
-) => ({ ...runMemoryPrepareInput(input), turnCapabilities: runTurnCapabilities(input) });
+  input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnPrepareInput>[0],
+) => ({ ...runMemoryPrepareInput(input), ...runTurnPrepareInput(input) });
 
 export interface RunExecutionServiceV2StartRootRunInput {
   readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];

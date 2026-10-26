@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 
 import {
   withThreadMcpEnvironment,
+  carriesScreenCodeSkill,
   type McpProviderSessionConfig,
 } from "@goat/provider-core/server/mcpSession";
 import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
@@ -12,6 +13,8 @@ import {
   PI_GOAT_MCP_EXTENSION_SOURCE,
   GOAT_CUA_MCP_ENV,
   GOAT_CUA_GATE_ENV,
+  GOAT_SCREEN_CODE_SKILL_ENV,
+  GOAT_SCREEN_CODE_SKILL_GATE_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
@@ -255,6 +258,7 @@ export function buildPiRpcLaunch(input: {
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   /** The per-turn computer use gate; only a process launched with the driver gets it. */
   readonly cuaGatePath?: string | undefined;
+  readonly screenSkillGatePath?: string | undefined;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -300,6 +304,8 @@ export function buildPiRpcLaunch(input: {
   }
   delete environment[GOAT_CUA_MCP_ENV];
   delete environment[GOAT_CUA_GATE_ENV];
+  delete environment[GOAT_SCREEN_CODE_SKILL_ENV];
+  delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
   // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
   const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
 
@@ -324,6 +330,10 @@ export function buildPiRpcLaunch(input: {
               [GOAT_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
                 input.mcpSession.authorizationHeader,
               ),
+              [GOAT_SCREEN_CODE_SKILL_ENV]: carriesScreenCodeSkill(input.mcpSession) ? "on" : "off",
+              ...(input.screenSkillGatePath === undefined
+                ? {}
+                : { [GOAT_SCREEN_CODE_SKILL_GATE_ENV]: input.screenSkillGatePath }),
             }
           : {}),
       }),

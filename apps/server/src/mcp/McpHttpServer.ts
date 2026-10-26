@@ -128,6 +128,10 @@ import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolki
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
+import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
+import { screenRunTool } from "./toolkits/screen/mcpTool.ts";
+import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
+export { credentialRefusalMessage } from "./mcpAuthResponse.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -226,72 +230,6 @@ const normalizeMcpHttpResponse = (
 
 // Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
 const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
-
-const GENERIC_REFUSAL = "A valid GOAT MCP credential is required.";
-const RETRY_AT_NEXT_TURN =
-  "GOAT re-authenticates the thread with a fresh credential when its next turn starts; retry this tool then.";
-
-/** What the agent reads when its thread credential is refused. Names no thread or id. */
-export const credentialRefusalMessage = (
-  reason: McpSessionRegistry.McpCredentialRefusalReason,
-): string => {
-  switch (reason) {
-    case "expired":
-      return `GOAT refused this call: this thread's GOAT credential expired after GOAT stopped holding its provider session. ${RETRY_AT_NEXT_TURN}`;
-    case "revoked":
-      return `GOAT refused this call: GOAT closed the provider session this thread's GOAT credential belonged to. ${RETRY_AT_NEXT_TURN}`;
-    case "earlier_server":
-      return `GOAT refused this call: this thread's GOAT credential was issued before the GOAT server restarted or updated. ${RETRY_AT_NEXT_TURN}`;
-    case "missing":
-    case "unknown":
-      return GENERIC_REFUSAL;
-  }
-};
-
-const MAX_REFUSED_BODY_BYTES = 1024 * 1024;
-/** An unauthenticated caller must not hold the read open; a slow body falls back to 401. */
-const REFUSED_BODY_DEADLINE = "5 seconds";
-const decodeToolCallRequest = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      jsonrpc: Schema.Literal("2.0"),
-      method: Schema.Literal("tools/call"),
-      id: Schema.Union([Schema.String, Schema.Number]),
-    }),
-  ),
-);
-
-/**
- * MCP clients turn a 401 into their own generic text ("Authentication
- * required" in Codex), so a refused tool call is answered as an error result
- * the agent can read. Only for a registry-shaped token, never a session token
- * that may still sign in through OAuth, and nothing is executed.
- */
-const refusedToolCallId = (request: HttpServerRequest.HttpServerRequest) =>
-  Effect.gen(function* () {
-    const declared = request.headers["content-length"];
-    if (
-      request.method !== "POST" ||
-      (declared !== undefined && !(Number(declared) <= MAX_REFUSED_BODY_BYTES))
-    )
-      return undefined;
-    // Chunked bodies declare no length, so the read itself stops at the bound.
-    let size = 0;
-    const chunks = yield* request.stream.pipe(
-      Stream.takeWhile((chunk) => (size += chunk.byteLength) <= MAX_REFUSED_BODY_BYTES),
-      Stream.runCollect,
-      Effect.timeoutOption(REFUSED_BODY_DEADLINE),
-      Effect.option,
-      Effect.map(Option.flatten),
-    );
-    if (Option.isNone(chunks) || size > MAX_REFUSED_BODY_BYTES) return undefined;
-    return Option.getOrUndefined(
-      Option.map(
-        decodeToolCallRequest(Buffer.concat(chunks.value).toString("utf8")),
-        (call) => call.id,
-      ),
-    );
-  });
 
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
@@ -718,6 +656,11 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
         );
       }),
   });
+});
+
+const registerScreenRun = Effect.fn("McpHttpServer.registerScreenRun")(function* () {
+  const server = yield* McpServer.McpServer;
+  yield* server.addTool(yield* screenRunTool);
 });
 
 const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function* <
@@ -1208,6 +1151,7 @@ export const catalogRegistrations = {
   attachment: toolkitRegistration(AttachmentToolkit, AttachmentHandlers.layer),
   note: toolkitRegistration(NoteToolkit, NoteHandlers.layer),
   computerUse: toolkitRegistration(ComputerUseToolkit, ComputerUseHandlers.layer),
+  screen: imageToolRegistration(registerScreenRun(), ScreenHandlers.layer),
   channel: toolkitRegistration(ChannelToolkit, ChannelHandlers.layer),
   pullRequests: toolkitRegistration(PullRequestsToolkit, PullRequestsHandlers.layer),
   deviceStandard: toolkitRegistration(DeviceStandardToolkit, DeviceHandlers.layerStandard),
@@ -1380,6 +1324,7 @@ export const layer = Layer.mergeAll(
   layerChannelToolkit,
   catalogRegistrations.note,
   catalogRegistrations.computerUse,
+  catalogRegistrations.screen,
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerHostStatusToolkit,

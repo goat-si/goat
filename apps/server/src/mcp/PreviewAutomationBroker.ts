@@ -40,6 +40,7 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as BoundPreviewTabs from "../screenCode/BoundPreviewTabs.ts";
 
 const HOST_RESPONSE_GRACE_MS = 1_000;
 
@@ -48,6 +49,9 @@ export interface PreviewAutomationInvokeInput {
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
   readonly tabId?: PreviewTabId;
+  readonly exact?: BoundPreviewTabs.ExactPreviewTab;
+  /** Code-mode new-tab creation cannot select an older host without the exact expectation gate. */
+  readonly serverHostOnly?: boolean;
   readonly timeoutMs?: number;
   /** Background metadata reads must not change the agent's current tab. */
   readonly updateCurrentTab?: boolean;
@@ -72,6 +76,7 @@ export class PreviewAutomationBroker extends Context.Service<
     readonly invoke: <A = unknown>(
       request: PreviewAutomationInvokeInput,
     ) => Effect.Effect<A, PreviewAutomationError>;
+    readonly listBoundTabs: BoundPreviewTabs.ListBoundTabs;
   }
 >()("goat/mcp/PreviewAutomationBroker") {}
 
@@ -527,8 +532,10 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             (!visibleOnly || tab.visible === true) &&
             (input.tabId === undefined || tab.tabId === input.tabId),
         );
-      const connection =
-        hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+      const screen = BoundPreviewTabs.screenConnection(current.clients, input, supportsOperation);
+      const connection = screen
+        ? screen.connection
+        : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined
@@ -559,7 +566,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         assigned !== undefined &&
         assigned.connectionId === connection.connectionId &&
         assigned.queue === connection.queue;
-      assignments.set(assignmentKey, {
+      const assignmentsToUpdate = input.updateCurrentTab === false ? undefined : assignments;
+      assignmentsToUpdate?.set(assignmentKey, {
         clientId: connection.clientId,
         connectionId: connection.connectionId,
         queue: connection.queue,
@@ -571,7 +579,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
 
       const requestSequence = current.requestSequence;
       const requestId = `preview-${requestSequence}`;
-      const tabId = input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
+      const tabId =
+        input.exact?.tabId ?? input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
       const selectorDiagnostics = selectorDiagnosticsFromInput(input.input);
       const context: PreviewAutomationRequestErrorContext = {
         operation: input.operation,
@@ -627,7 +636,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             requestId,
             threadId: input.scope.thread.threadId,
             tabId: requestContext.tabId,
-            tabIdExplicit: input.tabId !== undefined,
+            tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
+            ...BoundPreviewTabs.screenExpectationOf(input.exact),
             agentSessionId: hostAssignmentKey(input.scope),
             operation: input.operation,
             input: input.input,
@@ -690,7 +700,13 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     return result;
   });
 
-  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke });
+  const listBoundTabs = BoundPreviewTabs.makeListBoundTabs({
+    hosts: Effect.map(SynchronizedRef.get(state), (current) => current.clients),
+    supports: supportsOperation,
+    invoke,
+  });
+
+  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke, listBoundTabs });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
 export const layer = Layer.effect(PreviewAutomationBroker, make);

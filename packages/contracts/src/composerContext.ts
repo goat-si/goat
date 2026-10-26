@@ -25,6 +25,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "terminal",
   "element",
   "preview-annotation",
+  "preview-tab",
   "review-comment",
   "mention",
   "skill",
@@ -224,6 +225,18 @@ export const ThreadContextRecord = Schema.Struct({
 });
 export type ThreadContextRecord = typeof ThreadContextRecord.Type;
 
+/** Exact preview identity from the browser that owned this tab when the chip was selected. */
+export const PreviewTabContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("preview-tab"),
+  environmentId: EnvironmentId,
+  browserInstanceId: ShortString,
+  tabId: ShortString,
+  title: ContextLabel,
+  url: ShortString,
+});
+export type PreviewTabContextRecord = typeof PreviewTabContextRecord.Type;
+
 /**
  * Something the agent may use for this turn only, chosen with `@computer` or `@browser`.
  * The server reads the capabilities still referenced in the text when it prepares the turn;
@@ -282,6 +295,7 @@ export const KnownComposerContextRecord = Schema.Union([
   MentionContextRecord,
   SkillContextRecord,
   ThreadContextRecord,
+  PreviewTabContextRecord,
   CapabilityContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;

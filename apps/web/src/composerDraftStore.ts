@@ -21,6 +21,7 @@ import {
   type PreviewAnnotationPayload,
   RuntimeMode,
   ThreadContextRecord,
+  PreviewTabContextRecord,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -81,6 +82,16 @@ import {
   terminalContextReference,
   threadContextReference,
 } from "./lib/composerContextRecords";
+import { previewTabDraftActions, type PreviewTabDraftActions } from "./lib/previewTabDraft";
+import {
+  draftSshDestinationsEqual,
+  draftWorkspaceEdited,
+  normalizePersistedSshDestination,
+  resolveDraftSshDestination,
+  DraftSshDestinationSchema,
+  type DraftSshDestination,
+} from "./lib/draftSshDestination";
+export { draftSshDestinationsEqual, type DraftSshDestination } from "./lib/draftSshDestination";
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
@@ -99,6 +110,7 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
+const isPreviewTabContextRecord = Schema.is(PreviewTabContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 
@@ -239,6 +251,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
+  previewTabs: Schema.optionalKey(Schema.Array(PreviewTabContextRecord)),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
@@ -295,13 +308,6 @@ type LegacyV2StoreFields = {
 type LegacyPersistedComposerDraftStoreState = PersistedComposerDraftStoreState &
   LegacyStickyModelFields &
   LegacyV2StoreFields;
-
-export const DraftSshDestinationSchema = Schema.Struct({
-  connectionId: Schema.String.check(Schema.isMinLength(1)),
-  environmentId: EnvironmentId,
-});
-export type DraftSshDestination = typeof DraftSshDestinationSchema.Type;
-const isDraftSshDestination = Schema.is(DraftSshDestinationSchema);
 
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
@@ -370,6 +376,7 @@ export interface ComposerThreadDraftState {
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
+  previewTabs: PreviewTabContextRecord[];
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
   modelSelectionExplicit?: boolean;
@@ -391,7 +398,8 @@ export function composerDraftHasUserContent(
     draft.terminalContexts.length > 0 ||
     draft.previewAnnotations.length > 0 ||
     draft.reviewComments.length > 0 ||
-    draft.threadContexts.length > 0
+    draft.threadContexts.length > 0 ||
+    draft.previewTabs.length > 0
   );
 }
 
@@ -421,7 +429,7 @@ interface ProjectDraftSession extends DraftSessionState {
 
 export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
-interface ComposerDraftStoreState {
+interface ComposerDraftStoreState extends PreviewTabDraftActions {
   draftsByThreadKey: Record<string, ComposerThreadDraftState>;
   draftThreadsByThreadKey: Record<string, DraftThreadState>;
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
@@ -753,6 +761,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   previewAnnotations: EMPTY_PREVIEW_ANNOTATIONS,
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
+  previewTabs: [],
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -770,6 +779,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     previewAnnotations: [],
     reviewComments: [],
     threadContexts: [],
+    previewTabs: [],
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
@@ -875,6 +885,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.previewAnnotations.length === 0 &&
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
+    draft.previewTabs.length === 0 &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
@@ -1395,34 +1406,6 @@ function toProjectDraftSession(
   };
 }
 
-function resolveDraftSshDestination(input: {
-  previous: DraftSshDestination | null | undefined;
-  requested: DraftSshDestination | null | undefined;
-  projectChanged: boolean;
-  workspaceEdited: boolean;
-  envMode: DraftThreadEnvMode;
-  worktreePath: string | null;
-  startFromOrigin: boolean;
-}): DraftSshDestination | null {
-  const candidate =
-    input.requested !== undefined
-      ? input.requested
-      : input.projectChanged || input.workspaceEdited
-        ? null
-        : (input.previous ?? null);
-  return input.envMode === "worktree" && input.worktreePath === null && !input.startFromOrigin
-    ? candidate
-    : null;
-}
-export function draftSshDestinationsEqual(
-  left: DraftSshDestination | null | undefined,
-  right: DraftSshDestination | null | undefined,
-): boolean {
-  return left == null || right == null
-    ? left == null && right == null
-    : left.connectionId === right.connectionId && left.environmentId === right.environmentId;
-}
-
 function createDraftThreadState(
   projectRef: ScopedProjectRef,
   threadId: ThreadId,
@@ -1470,11 +1453,7 @@ function createDraftThreadState(
     previous: existingThread?.sshDestination,
     requested: options?.sshDestination,
     projectChanged,
-    workspaceEdited:
-      options?.envMode !== undefined ||
-      options?.branch !== undefined ||
-      options?.worktreePath !== undefined ||
-      options?.startFromOrigin !== undefined,
+    workspaceEdited: draftWorkspaceEdited(options),
     envMode: nextEnvMode,
     worktreePath: nextWorktreePath,
     startFromOrigin: nextStartFromOrigin,
@@ -1662,13 +1641,10 @@ function normalizePersistedDraftThreads(
         continue;
       }
       const normalizedEnvironmentId = environmentId as EnvironmentId;
-      const rawSshDestination = candidateDraftThread.sshDestination;
-      const normalizedSshDestination =
-        rawSshDestination == null
-          ? null
-          : isDraftSshDestination(rawSshDestination)
-            ? rawSshDestination
-            : { connectionId: "unavailable", environmentId: normalizedEnvironmentId };
+      const normalizedSshDestination = normalizePersistedSshDestination(
+        candidateDraftThread.sshDestination,
+        normalizedEnvironmentId,
+      );
       draftThreadsByThreadKey[threadKey] = {
         threadId,
         environmentId: normalizedEnvironmentId,
@@ -1841,6 +1817,9 @@ function normalizePersistedDraftsByThreadId(
     const threadContexts = Array.isArray(draftCandidate.threadContexts)
       ? draftCandidate.threadContexts.filter(isThreadContextRecord)
       : [];
+    const previewTabs = Array.isArray(draftCandidate.previewTabs)
+      ? draftCandidate.previewTabs.filter(isPreviewTabContextRecord)
+      : [];
     const previewAnnotations = Array.isArray(draftCandidate.previewAnnotations)
       ? draftCandidate.previewAnnotations.filter(isPreviewAnnotationPayload)
       : [];
@@ -1960,6 +1939,7 @@ function normalizePersistedDraftsByThreadId(
       previewAnnotations.length === 0 &&
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
+      previewTabs.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -1986,6 +1966,7 @@ function normalizePersistedDraftsByThreadId(
       ...(previewAnnotations.length > 0 ? { previewAnnotations } : {}),
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
+      ...(previewTabs.length > 0 ? { previewTabs } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -2009,7 +1990,8 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.terminalContexts?.length ?? 0) > 0 ||
     (draft.previewAnnotations?.length ?? 0) > 0 ||
     (draft.reviewComments?.length ?? 0) > 0 ||
-    (draft.threadContexts?.length ?? 0) > 0
+    (draft.threadContexts?.length ?? 0) > 0 ||
+    (draft.previewTabs?.length ?? 0) > 0
   );
 }
 
@@ -2088,6 +2070,7 @@ export function partializeComposerDraftStoreState(
       draft.previewAnnotations.length === 0 &&
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
+      draft.previewTabs.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
@@ -2142,6 +2125,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.threadContexts.length > 0
         ? { threadContexts: draft.threadContexts.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.previewTabs.length > 0
+        ? { previewTabs: draft.previewTabs.map((record) => ({ ...record })) }
         : {}),
       ...(hasModelData
         ? {
@@ -2405,6 +2391,7 @@ function toHydratedThreadDraft(
       ...(persistedDraft.reviewComments ?? []).map(reviewCommentContextReference),
       ...(persistedDraft.previewAnnotations ?? []).map(previewAnnotationContextReference),
       ...(persistedDraft.threadContexts ?? []).map(threadContextReference),
+      ...(persistedDraft.previewTabs ?? []).map((record) => record),
       ...files.map(fileContextReference),
     ]),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
@@ -2420,6 +2407,7 @@ function toHydratedThreadDraft(
       persistedDraft.previewAnnotations?.map((annotation) => ({ ...annotation })) ?? [],
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
+    previewTabs: persistedDraft.previewTabs?.map((record) => ({ ...record })) ?? [],
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
@@ -2726,11 +2714,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               previous: existing.sshDestination,
               requested: options.sshDestination,
               projectChanged,
-              workspaceEdited:
-                options.envMode !== undefined ||
-                options.branch !== undefined ||
-                options.worktreePath !== undefined ||
-                options.startFromOrigin !== undefined,
+              workspaceEdited: draftWorkspaceEdited(options),
               envMode: nextEnvMode,
               worktreePath: nextWorktreePath,
               startFromOrigin: nextStartFromOrigin,
@@ -3915,6 +3899,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
+        ...previewTabDraftActions(set, get, {
+          resolveComposerDraftKey,
+          contextInsertionHandlers,
+          createEmptyThreadDraft,
+        }),
         setThreadContexts: (threadRef, records) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) return;
@@ -4036,6 +4025,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               previewAnnotations: [],
               reviewComments: [],
               threadContexts: [],
+              previewTabs: [],
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4065,6 +4055,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ...current.terminalContexts.map(terminalContextReference),
                 ...current.reviewComments.map(reviewCommentContextReference),
                 ...current.threadContexts.map(threadContextReference),
+                ...current.previewTabs,
                 ...current.previewAnnotations.map(previewAnnotationContextReference),
               ]),
               images: [],

@@ -25,6 +25,7 @@ import {
   filterComposerPullRequestMatches,
 } from "@goat/shared/composerPullRequestMatches";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
+import { previewTabMenuItems } from "~/lib/previewTabDraft";
 
 import type { ComposerTrigger } from "../../composer-logic";
 import { basenameOfPath } from "../../pierre-icons";
@@ -41,6 +42,7 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
+import { previewEnvironment } from "~/state/preview";
 import { useComposerPathSearch, useDebouncedValue, useThreadSearch } from "~/state/queries";
 import {
   matchesPullRequestQuery,
@@ -162,6 +164,11 @@ export function useComposerMenuItems({
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(isPathTrigger ? [environmentId] : [], pathTriggerQuery, { titlesOnly: true });
+  const previewTabsQuery = useEnvironmentQuery(
+    isPathTrigger && activeThreadId
+      ? previewEnvironment.list({ environmentId, input: { threadId: activeThreadId } })
+      : null,
+  );
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -232,6 +239,11 @@ export function useComposerMenuItems({
       return [
         ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerAppItems(composerTrigger.query, capabilityContext, computerUseApps),
+        ...previewTabMenuItems(
+          composerTrigger.query,
+          previewTabsQuery.data?.sessions,
+          environmentId,
+        ),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           sshHostsByEnvironment,

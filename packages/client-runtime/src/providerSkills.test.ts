@@ -139,13 +139,25 @@ describe("built-in skills in the skill menu", () => {
   const on = { enableCua: true, disabledBuiltInSkills: [] };
   const names = (skills: ReadonlyArray<{ name: string }>) => skills.map((skill) => skill.name);
 
-  it("lists Computer Use for a local provider only while computer use is on", () => {
+  it("a local provider with computer use on lists computer-use and screen-code", () => {
     const listed = withBuiltInProviderSkills([], codex, on);
-    expect(listed).toMatchObject([{ name: "computer-use", scope: "builtin", enabled: true }]);
+    expect(listed).toMatchObject([
+      { name: "computer-use", scope: "builtin", enabled: true },
+      { name: "screen-code", scope: "builtin", enabled: true },
+    ]);
     expect(getProviderSkillsForSlashMenu(listed, true).map((skill) => skill.name)).toEqual([
       "computer-use",
+      "screen-code",
     ]);
-    expect(withBuiltInProviderSkills([], codex, { ...on, enableCua: false })).toEqual([]);
+  });
+
+  it("a local provider with computer use off still lists screen-code", () => {
+    expect(names(withBuiltInProviderSkills([], codex, { ...on, enableCua: false }))).toEqual([
+      "screen-code",
+    ]);
+  });
+
+  it("a cloud provider lists neither screen skill", () => {
     expect(withBuiltInProviderSkills([], { driver: ProviderDriverKind.make("muse") }, on)).toEqual(
       [],
     );
@@ -156,7 +168,7 @@ describe("built-in skills in the skill menu", () => {
       ...on,
       disabledBuiltInSkills: ["computer-use"],
     });
-    expect(getProviderSkillsForSlashMenu(listed, true)).toEqual([]);
+    expect(names(getProviderSkillsForSlashMenu(listed, true))).toEqual(["screen-code"]);
   });
 
   it("lets a skill the person wrote with the same name win", () => {
@@ -166,7 +178,7 @@ describe("built-in skills in the skill menu", () => {
       enabled: true,
     };
     const menu = getProviderSkillsForSlashMenu(withBuiltInProviderSkills([own], codex, on), true);
-    expect(names(menu)).toEqual(["computer-use"]);
+    expect(names(menu)).toEqual(["computer-use", "screen-code"]);
     expect(menu[0]?.path).toBe(own.path);
   });
 });
@@ -351,18 +363,23 @@ describe("the goat-discipline built-in skill in the skill menu", () => {
     ).map((skill) => skill.name);
 
   it("lists it on an ordinary turn with computer use off, for providers that carry GOAT instructions", () => {
-    expect(menu("codex", serving)).toEqual(["goat-discipline"]);
-    expect(menu("claudeAgent", serving)).toEqual(["goat-discipline"]);
+    expect(menu("codex", serving)).toEqual(["screen-code", "goat-discipline"]);
+    expect(menu("claudeAgent", serving)).toEqual(["screen-code", "goat-discipline"]);
     expect(menu("muse", serving)).toEqual([]);
   });
 
   it("hides it on a server that does not deliver it", () => {
-    expect(menu("codex", { ...serving, devDisciplineSkill: false })).toEqual([]);
-    expect(menu("codex", undefined)).toEqual([]);
+    expect(menu("codex", { ...serving, devDisciplineSkill: false })).toEqual(["screen-code"]);
+    expect(menu("codex", undefined)).toEqual(["screen-code"]);
   });
 
   it("keeps it out of a project that switched it off and in every other project", () => {
-    expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([]);
-    expect(menu("codex", { ...serving, projectId: null })).toEqual(["goat-discipline"]);
+    expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
+      "screen-code",
+    ]);
+    expect(menu("codex", { ...serving, projectId: null })).toEqual([
+      "screen-code",
+      "goat-discipline",
+    ]);
   });
 });

@@ -17,6 +17,7 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type BrowserProfile,
+  type AgentCursorSnapshot,
   type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
@@ -94,6 +95,8 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
+import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
@@ -187,7 +190,9 @@ export type ServerBrowserViewerOutput =
       readonly x: number;
       readonly y: number;
       readonly sequence: number;
+      readonly cursor?: AgentCursorSnapshot;
     }
+  | { readonly _tag: "cursor-state"; readonly cursor: AgentCursorSnapshot }
   | {
       readonly _tag: "fileChooser";
       readonly id: string;
@@ -250,6 +255,7 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
+    readonly onAuthorityChange?: (listener: ServerBrowserScreen.AuthorityListener) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -258,6 +264,7 @@ export class ServerBrowser extends Context.Service<
       readonly tabId: string;
       readonly control: "stop" | "handBack";
     }) => Effect.Effect<boolean>;
+    readonly cursorState?: ServerBrowserScreen.CursorStateSink;
   }
 >()("goat/preview/ServerBrowser") {}
 
@@ -403,6 +410,10 @@ const make = Effect.gen(function* () {
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
+  const screen = ServerBrowserScreen.makeSurface<ServerTab>(
+    (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
+    (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
+  );
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
 
@@ -602,6 +613,7 @@ const make = Effect.gen(function* () {
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
+    screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
     tab.closing = true;
     tab.diagnostics.dispose();
@@ -686,7 +698,6 @@ const make = Effect.gen(function* () {
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
       ServerBrowserPage.invalidateRefs(page),
     );
-    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     control.onDispatchCut(inputFence(cdp));
     const diagnostics = new ServerBrowserDiagnostics(page);
     const tab: ServerTab = {
@@ -809,7 +820,9 @@ const make = Effect.gen(function* () {
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
+    tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
     tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
+    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     reportLiveTabs();
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
@@ -1568,14 +1581,15 @@ const make = Effect.gen(function* () {
       if (tab.viewers.size === 0 && !encoder && !tab.desktop)
         return tab.control.assertAgentMayDispatch();
       const show = (next: "move" | "click") => {
-        const sequence = ++pointerSequence;
+        const { sequence, withCursor } = screen.nextPointer(tab, pointerSequence);
+        pointerSequence = sequence;
         for (const viewer of tab.viewers)
-          viewer.push({ _tag: "pointer", phase: next, x, y, sequence });
+          viewer.push({ _tag: "pointer", phase: next, x, y, sequence, ...withCursor });
         if (tab.desktop)
           runFork(
             desktopChannel.pointer(
               { threadId: tab.threadId, tabId: tab.tabId },
-              { phase: next, x, y },
+              { phase: next, x, y, ...withCursor },
             ),
           );
         void encoder
@@ -1642,6 +1656,7 @@ const make = Effect.gen(function* () {
         'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
       );
     }
+    ServerBrowserScreen.assertScreenExpectation(tab, request);
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted(
         "This tab belongs to another agent session. You can read it, but open your own tab to act.",
@@ -1668,11 +1683,12 @@ const make = Effect.gen(function* () {
     const input = request.input;
     switch (request.operation) {
       case "status":
-        return statusWithTitle(
+        return ServerBrowserScreen.checkedAround(
           request.tabId === undefined
             ? latestThreadTab(request.threadId, request.agentSessionId)
             : tabs.get(tabKey(request.threadId, request.tabId)),
-          request.agentSessionId,
+          request,
+          (tab) => statusWithTitle(tab, request.agentSessionId),
         );
       case "open": {
         if (!request.agentSessionId)
@@ -1828,6 +1844,7 @@ const make = Effect.gen(function* () {
         );
       if (tab.control.controller !== null)
         throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      ServerBrowserScreen.refusePrivateClose(tab);
       void tab.control.close().catch(constVoid);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);
@@ -1884,41 +1901,21 @@ const make = Effect.gen(function* () {
     signal?: AbortSignal,
   ) => {
     const input = request.input;
+    ServerBrowserScreen.assertScreenExpectation(tab, request);
+    const actionGate = () => ServerBrowserScreen.screenActionGate(tab, request);
     switch (request.operation) {
       case "back":
       case "forward":
-      case "reload": {
-        const operation = request.operation;
-        const generation = tab.control.generation;
-        const assertControl = () => {
-          if (
-            generation !== tab.control.generation ||
-            !tab.control.agentCanActNow(request.agentSessionId!)
-          )
-            throw new BrowserControlInterrupted(
-              "Browser control changed during navigation. The page may have navigated; refresh the snapshot before trying again.",
-            );
-        };
-        try {
-          await recordAction(tab, operation, () =>
-            ServerBrowserPage.navigateHistory(
-              tab.page,
-              tab.cdp,
-              operation,
-              input as PreviewAutomationReloadInput,
-              request.timeoutMs,
-              assertControl,
-            ),
-          );
-          assertControl();
-          const status = await statusWithTitle(tab, request.agentSessionId);
-          assertControl();
-          return status;
-        } catch (cause) {
-          assertControl();
-          throw cause;
-        }
-      }
+      case "reload":
+        return guardedHistoryNavigation({
+          tab,
+          operation: request.operation,
+          agentSessionId: request.agentSessionId!,
+          reload: input as PreviewAutomationReloadInput,
+          timeoutMs: request.timeoutMs,
+          recordAction,
+          status: (current) => statusWithTitle(current, request.agentSessionId),
+        });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
         await recordAction(tab, "navigate", () =>
@@ -1963,7 +1960,7 @@ const make = Effect.gen(function* () {
               timeoutMs: deadlineMs - performance.now(),
             }),
           deadlineMs,
-        );
+        ).then(ServerBrowserScreen.recheck(tab, request));
       }
       case "logs":
         return tab.diagnostics.read(decodeLogsInput(input));
@@ -1986,7 +1983,7 @@ const make = Effect.gen(function* () {
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
         await recordAction(tab, "click", () =>
-          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gateFor(tab)),
+          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
         );
         return undefined;
       }
@@ -1996,12 +1993,12 @@ const make = Effect.gen(function* () {
             tab.page,
             input as PreviewAutomationHoverInput,
             pointerFor(tab),
-            gateFor(tab),
+            actionGate(),
           ),
         );
       case "select":
         return recordAction(tab, "select", () =>
-          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gateFor(tab)),
+          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, actionGate()),
         );
       case "drag":
         return recordAction(tab, "drag", () =>
@@ -2009,7 +2006,7 @@ const make = Effect.gen(function* () {
             tab.page,
             input as PreviewAutomationDragInput,
             pointerFor(tab),
-            gateFor(tab),
+            actionGate(),
           ),
         );
       case "upload":
@@ -2018,15 +2015,15 @@ const make = Effect.gen(function* () {
         );
       case "type":
         return recordAction(tab, "type", () =>
-          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gateFor(tab)),
+          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, actionGate()),
         );
       case "press":
         return recordAction(tab, "press", () =>
-          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, gateFor(tab)),
+          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
         );
       case "scroll":
         return recordAction(tab, "scroll", () =>
-          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, gateFor(tab)),
+          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, actionGate()),
         );
       case "evaluate":
         return ServerBrowserPage.evaluate(
@@ -2039,7 +2036,7 @@ const make = Effect.gen(function* () {
           tab.page,
           { ...(input as PreviewAutomationWaitForInput), timeoutMs: request.timeoutMs },
           signal,
-        );
+        ).then(ServerBrowserScreen.recheck(tab, request));
       case "recordingStart": {
         const recording = await startRecording(tab, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
@@ -2049,10 +2046,12 @@ const make = Effect.gen(function* () {
 
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
-      try: () =>
-        answerCall(request.timeoutMs, (deadlineMs) =>
+      try: () => {
+        ServerBrowserScreen.assertScreenConnection(request, connectionId);
+        return answerCall(request.timeoutMs, (deadlineMs) =>
           runOperation(request, deadlineMs).finally(() => markUsed(request)),
-        ),
+        );
+      },
       catch: ServerBrowserPage.toOperationError,
     }).pipe(
       Effect.match({
@@ -2551,6 +2550,7 @@ const make = Effect.gen(function* () {
     answerFileChooser,
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
+    ...screen.service,
     stopAllAgents: Effect.sync(() => {
       for (const tab of tabs.values()) tab.control.stopAgents();
     }),

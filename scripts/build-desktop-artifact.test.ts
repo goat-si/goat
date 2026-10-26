@@ -84,7 +84,6 @@ import {
   WSL_RUNTIME_EXTRA_RESOURCES,
   parseServerVersionOutput,
   resolveDesktopBuildVersion,
-  sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
 import { stageCuaDriverExecutable } from "./desktop-artifact-computer-use.ts";
@@ -124,6 +123,8 @@ const stageWindowsSshRuntimeFixture = Effect.fn("test.stageWindowsSshRuntimeFixt
   assert.equal((yield* fs.readDirectory(destination)).length, 6);
 });
 
+const SCREEN_WASM_BYTES = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+
 const encodeModuleUrl = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 
 const decodePackageVersion = Schema.decodeUnknownEffect(
@@ -145,12 +146,15 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
     `${input.stem}/client/index.html`,
     `${input.stem}/node_modules/node-pty/package.json`,
     `${input.stem}/node_modules/node-pty/build/Release/pty.node`,
+    `${input.stem}/screen-code/quickjs.wasm`,
     ...(input.extraMembers ?? []),
   ].filter((member) => !(input.omitMembers ?? []).includes(member));
   for (const member of members) {
     const memberPath = path.join(contentRoot, member);
     yield* fs.makeDirectory(path.dirname(memberPath), { recursive: true });
-    yield* fs.writeFileString(memberPath, member);
+    if (member.endsWith("/screen-code/quickjs.wasm"))
+      yield* fs.writeFile(memberPath, SCREEN_WASM_BYTES);
+    else yield* fs.writeFileString(memberPath, member);
   }
   const archivePath = path.join(input.root, `${input.stem}.tar.gz`);
   const tar = yield* spawner.spawn(
@@ -302,6 +306,8 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     path.join(resourcesDir, "resource-monitor/goat-resource-monitor.exe"),
     "monitor",
   );
+  yield* fs.makeDirectory(path.join(resourcesDir, "screen-code"), { recursive: true });
+  yield* fs.writeFile(path.join(resourcesDir, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
   const appExecutableName = "t3code.exe";
   yield* fs.writeFileString(path.join(packagedAppDir, appExecutableName), "electron");
   yield* fs.writeFileString(path.join(packagedAppDir, "chrome_crashpad_handler.exe"), "crashpad");
@@ -479,6 +485,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       yield* h.fs.writeFile(h.archivePath, h.archive);
       const staged = yield* h.stage("driver");
       yield* h.fs.copy(h.path.join(staged, "cua-driver"), h.path.join(resources, "cua-driver"));
+      yield* h.fs.makeDirectory(h.path.join(resources, "screen-code"), { recursive: true });
+      yield* h.fs.writeFile(h.path.join(resources, "screen-code/quickjs.wasm"), SCREEN_WASM_BYTES);
       const result = yield* validateWindowsPackagedPayload({
         stageDistDir: fixture.stageDistDir,
         appExecutableName: fixture.appExecutableName,
@@ -2513,16 +2521,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
     }),
-  );
-});
-
-it("refuses a preload that Electron's sandbox wrapper cannot parse", () => {
-  // Effect's scheduler declared this at the top level of the 0.1.1 nightly preload.
-  const effectScheduler = "const setImmediate = (f) => f();\nsetImmediate(() => {});";
-  assert.include(sandboxedPreloadSyntaxError(effectScheduler) ?? "", "setImmediate");
-  assert.strictEqual(
-    sandboxedPreloadSyntaxError("(() => {\n" + effectScheduler + "\n})();"),
-    undefined,
   );
 });
 

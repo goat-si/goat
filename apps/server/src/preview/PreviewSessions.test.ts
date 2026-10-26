@@ -58,7 +58,11 @@ describe("preview sessions", () => {
       expect(session.capabilities.controls).toEqual(["takeover", "stop", "stopAll"]);
       expect(previewSessionChip(session)).toBe("Agent controlling");
     }
-    expect(desktop.target).toEqual({ kind: "desktop", title: "com.apple.calculator" });
+    expect(desktop.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "com.apple.calculator",
+    });
     expect(desktop.lease?.scope).toEqual(["com.apple.calculator"]);
   });
 
@@ -67,6 +71,7 @@ describe("preview sessions", () => {
     const targeted = { ...control, target: { pid: 7, windowId: 3 }, cursor };
     expect(desktopSession(base, targeted, active, detected)!.target).toEqual({
       kind: "desktop",
+      motionSupport: "supported",
       pid: 7,
       windowId: 3,
       cursor,
@@ -77,7 +82,7 @@ describe("preview sessions", () => {
     expect(desktopSession(base, targeted, paused, detected)!.target).not.toHaveProperty("cursor");
   });
 
-  it("shows a turn blocked on a missing grant as permission-needed, with nothing to stop (#1399)", () => {
+  it("a blocked desktop session projects motionSupport unsupported and keeps its permission-needed chip", () => {
     const session = blockedSession(base, threadId, {
       reason: "permissionsNotGranted",
       missing: ["accessibility", "screenRecording"],
@@ -88,6 +93,7 @@ describe("preview sessions", () => {
     expect(session.capabilities.controls).toEqual([]);
     expect(session.target).toEqual({
       kind: "desktop",
+      motionSupport: "unsupported",
       title: "Allow GOAT Computer Use in Accessibility and Screen & System Audio Recording",
     });
   });
@@ -103,6 +109,7 @@ describe("preview sessions", () => {
     expect(session.capabilities.controls).toEqual([]);
     expect(session.target).toEqual({
       kind: "desktop",
+      motionSupport: "unsupported",
       title: "Start GOAT from the signed-in Windows desktop",
     });
     const locked = blockedSession(base, threadId, {
@@ -195,7 +202,11 @@ describe("preview sessions", () => {
   it("keeps a stopped control's app label instead of calling it the whole screen", () => {
     const stopped = { _tag: "ended", reason: "stopped" } as const;
     const none = desktopSession(base, { ...control, scope: { apps: [] } }, stopped, detected)!;
-    expect(none.target).toEqual({ kind: "desktop", title: "No apps approved" });
+    expect(none.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "No apps approved",
+    });
     expect(none.lease?.scope).toEqual([]);
     const whole = desktopSession(
       base,
@@ -203,10 +214,15 @@ describe("preview sessions", () => {
       stopped,
       detected,
     )!;
-    expect(whole.target).toEqual({ kind: "desktop", title: "Whole screen" });
+    expect(whole.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "Whole screen",
+    });
     // Never seen active: nothing says which apps it held.
     expect(desktopSession(base, control, stopped, detected)!.target).toEqual({
       kind: "desktop",
+      motionSupport: "supported",
       title: "Computer use",
     });
   });

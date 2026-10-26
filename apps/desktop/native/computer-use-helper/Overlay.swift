@@ -9,7 +9,6 @@ import QuartzCore
 /// GOAT's own cursor and window glow. The artwork is drawn here and copies no other product's.
 final class AgentOverlayView: NSView {
   var windowRect = NSRect.zero
-  var point: NSPoint?
   var acting = false
 
   private let accent = NSColor(srgbRed: 0.27, green: 0.52, blue: 1.0, alpha: 1)
@@ -19,25 +18,6 @@ final class AgentOverlayView: NSView {
     glow.lineWidth = acting ? 4 : 2
     accent.withAlphaComponent(acting ? 0.9 : 0.45).setStroke()
     glow.stroke()
-    guard let point else { return }
-    if acting {
-      let ring = NSBezierPath(ovalIn: NSRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22))
-      ring.lineWidth = 2
-      accent.withAlphaComponent(0.6).setStroke()
-      ring.stroke()
-    }
-    // An arrow whose tip is the point; Cocoa's y grows upward, so the body hangs below it.
-    let arrow = NSBezierPath()
-    arrow.move(to: point)
-    arrow.line(to: NSPoint(x: point.x, y: point.y - 22))
-    arrow.line(to: NSPoint(x: point.x + 6, y: point.y - 16))
-    arrow.line(to: NSPoint(x: point.x + 15, y: point.y - 17))
-    arrow.close()
-    arrow.lineWidth = 2
-    accent.setFill()
-    arrow.fill()
-    NSColor.white.setStroke()
-    arrow.stroke()
   }
 }
 
@@ -81,8 +61,14 @@ final class AgentOverlay {
   private let margin: CGFloat = 24
   private let panel: NSPanel
   private let view = AgentOverlayView(frame: .zero)
+  private let cursorLayer = CAShapeLayer()
+  private let thinkLayer = CAShapeLayer()
   private var target: (windowId: CGWindowID, point: CGPoint?)?
   private var follow: Timer?
+  private var settledPoint: CGPoint?
+  private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+  private var currentPhase = "resting"
+  private var motionObserver: NSObjectProtocol?
 
   init() {
     panel = NSPanel(
@@ -103,6 +89,46 @@ final class AgentOverlay {
     panel.level = .normal
     panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     panel.contentView = view
+    view.wantsLayer = true
+    let arrow = CGMutablePath()
+    arrow.move(to: .zero)
+    arrow.addLine(to: CGPoint(x: 0, y: -22))
+    arrow.addLine(to: CGPoint(x: 6, y: -16))
+    arrow.addLine(to: CGPoint(x: 15, y: -17))
+    arrow.closeSubpath()
+    cursorLayer.path = arrow
+    cursorLayer.fillColor = NSColor(srgbRed: 0.27, green: 0.52, blue: 1, alpha: 1).cgColor
+    cursorLayer.strokeColor = NSColor.white.cgColor
+    cursorLayer.lineWidth = 2
+    cursorLayer.shadowColor = NSColor.black.cgColor
+    cursorLayer.shadowOpacity = 0.3
+    cursorLayer.shadowRadius = 2
+    cursorLayer.shadowPath = arrow
+    cursorLayer.isHidden = true
+    view.layer?.addSublayer(cursorLayer)
+    thinkLayer.path = CGPath(ellipseIn: CGRect(x: -12, y: -12, width: 24, height: 24), transform: nil)
+    thinkLayer.fillColor = NSColor.clear.cgColor
+    thinkLayer.strokeColor = NSColor(srgbRed: 0.27, green: 0.52, blue: 1, alpha: 0.55).cgColor
+    thinkLayer.lineWidth = 2
+    thinkLayer.opacity = 0.15
+    thinkLayer.isHidden = true
+    view.layer?.addSublayer(thinkLayer)
+    motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      guard let self else { return }
+      self.reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+      self.cursorLayer.removeAllAnimations()
+      self.thinkLayer.removeAllAnimations()
+      self.thinkLayer.isHidden = self.reducedMotion || self.currentPhase != "thinking" || self.target?.point == nil
+      self.place(animate: false)
+    }
+  }
+
+  deinit {
+    if let motionObserver { NSWorkspace.shared.notificationCenter.removeObserver(motionObserver) }
   }
 
   /// One command from the proxy: {op:"show", windowId, point?:{fx,fy}, phase} or {op:"hide"}.
@@ -116,25 +142,51 @@ final class AgentOverlay {
     {
       point = CGPoint(x: fx, y: fy)
     }
-    view.acting = command["phase"] as? String == "acting"
+    let phase = command["phase"] as? String ?? "resting"
+    currentPhase = phase
+    view.acting = phase == "acting" || phase == "moving"
     target = (CGWindowID(windowId), point)
-    place()
-    // The window can move or resize while the agent works; follow it while anything shows.
-    if follow == nil {
-      follow = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-        self?.place()
+    place(animate: phase == "moving" || phase == "acting")
+    thinkLayer.removeAllAnimations()
+    thinkLayer.isHidden = phase != "thinking" || reducedMotion || point == nil
+    if !thinkLayer.isHidden {
+      let pulse = CABasicAnimation(keyPath: "opacity")
+      pulse.fromValue = 0.15
+      pulse.toValue = 0.55
+      pulse.duration = 0.6
+      pulse.autoreverses = true
+      pulse.repeatCount = 4
+      thinkLayer.opacity = 0.15
+      thinkLayer.add(pulse, forKey: "boundedThink")
+    }
+    // External windows have no NSWindow notifications here. Sample geometry only briefly after
+    // activity; static idle leaves no timer or display link running.
+    follow?.invalidate()
+    if phase == "moving" || phase == "acting" {
+      var remaining = 4
+      follow = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
+        guard let self else { timer.invalidate(); return }
+        self.place(animate: false)
+        remaining -= 1
+        if remaining == 0 { timer.invalidate(); self.follow = nil }
       }
     }
   }
 
   func hide() {
+    currentPhase = "resting"
     follow?.invalidate()
     follow = nil
     target = nil
+    cursorLayer.removeAllAnimations()
+    thinkLayer.removeAllAnimations()
+    cursorLayer.isHidden = true
+    thinkLayer.isHidden = true
+    settledPoint = nil
     panel.orderOut(nil)
   }
 
-  private func place() {
+  private func place(animate: Bool) {
     guard let target, let frame = overlayWindowFrame(target.windowId) else {
       panel.orderOut(nil)
       return
@@ -143,8 +195,63 @@ final class AgentOverlay {
     view.frame = NSRect(origin: .zero, size: panel.frame.size)
     view.windowRect = NSRect(x: margin, y: margin, width: frame.width, height: frame.height)
     // fy counts down from the top of the screenshot; the view's y counts up from the bottom.
-    view.point = target.point.map {
-      NSPoint(x: margin + $0.x * frame.width, y: margin + (1 - $0.y) * frame.height)
+    let nextPoint = target.point.map {
+      CGPoint(x: margin + $0.x * frame.width, y: margin + (1 - $0.y) * frame.height)
+    }
+    if let nextPoint {
+      if !animate, !cursorLayer.isHidden, settledPoint == nextPoint {
+        // Frame follow leaves the current position animation and opacity untouched.
+      } else {
+        let wasVisible = !cursorLayer.isHidden
+        let oldPoint = wasVisible ? (cursorLayer.presentation()?.position ?? settledPoint) : nil
+        let retargeting = cursorLayer.animation(forKey: "position") != nil
+        cursorLayer.removeAnimation(forKey: "position")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cursorLayer.position = nextPoint
+        thinkLayer.position = nextPoint
+        cursorLayer.isHidden = false
+        CATransaction.commit()
+        if animate && !reducedMotion, let oldPoint {
+          let distance = hypot(nextPoint.x - oldPoint.x, nextPoint.y - oldPoint.y)
+          if distance >= 4 {
+            if retargeting {
+              let spring = CASpringAnimation(keyPath: "position")
+              spring.fromValue = NSValue(point: oldPoint)
+              spring.toValue = NSValue(point: nextPoint)
+              spring.mass = 1
+              spring.stiffness = 324
+              spring.damping = 36
+              spring.duration = 0.6
+              cursorLayer.add(spring, forKey: "position")
+            } else {
+              let duration = min(0.45, max(0.15, 0.15 + 0.075 * log2(1 + distance / 16)))
+              let path = CAKeyframeAnimation(keyPath: "position")
+              path.values = (0...20).map { index -> NSValue in
+                let t = Double(index) / 20
+                let progress = 10 * pow(t, 3) - 15 * pow(t, 4) + 6 * pow(t, 5)
+                return NSValue(point: NSPoint(
+                  x: oldPoint.x + (nextPoint.x - oldPoint.x) * progress,
+                  y: oldPoint.y + (nextPoint.y - oldPoint.y) * progress))
+              }
+              path.duration = duration
+              path.calculationMode = .linear
+              cursorLayer.add(path, forKey: "position")
+            }
+          }
+        } else if reducedMotion && (!wasVisible || settledPoint != nextPoint) {
+          let fade = CABasicAnimation(keyPath: "opacity")
+          fade.fromValue = 0.3
+          fade.toValue = 1
+          fade.duration = 0.1
+          cursorLayer.add(fade, forKey: "reducedFade")
+        }
+        settledPoint = nextPoint
+      }
+    } else {
+      cursorLayer.isHidden = true
+      thinkLayer.isHidden = true
+      settledPoint = nil
     }
     view.needsDisplay = true
     // Ordered relative to another app's window number: the window server accepts any window

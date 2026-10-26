@@ -211,8 +211,8 @@ function ServerSettingsDetail(props: {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
-  const skillOn = (entry: { settings: ServerSettings }) =>
-    !entry.settings.disabledBuiltInSkills.includes("computer-use");
+  const skillOn = (entry: { settings: ServerSettings }, skill = "computer-use") =>
+    !entry.settings.disabledBuiltInSkills.includes(skill);
   const computerUseAdvanced = useComputerUseAdvanced();
   const supportsDiscipline =
     targets.length > 0 &&
@@ -241,6 +241,13 @@ function ServerSettingsDetail(props: {
   const computerUseSkillOn =
     reference !== null && displayTargets.every((entry) => skillOn(entry) === skillOn(reference))
       ? skillOn(reference)
+      : null;
+  const screenCodeSkillOn =
+    reference !== null &&
+    displayTargets.every(
+      (entry) => skillOn(entry, "screen-code") === skillOn(reference, "screen-code"),
+    )
+      ? skillOn(reference, "screen-code")
       : null;
   const writeSettings = useSettingsWriter();
   const write = (patch: ServerSettingsPatch) => {
@@ -591,6 +598,16 @@ function ServerSettingsDetail(props: {
                           disabled={disabledFor("disabledBuiltInSkills")}
                           onValueChange={(value) =>
                             writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
+                          }
+                        />
+                        <SettingsSwitchRow
+                          icon="desktopcomputer"
+                          label="Screen Code skill"
+                          subtitle="Built in. Teaches agents to run bounded screen cells on attached browser or desktop targets. Off keeps the tools without this guide."
+                          value={screenCodeSkillOn}
+                          disabled={disabledFor("disabledBuiltInSkills")}
+                          onValueChange={(value) =>
+                            writeEach(planMobileBuiltInSkillToggle(targets, "screen-code", value))
                           }
                         />
                       </>

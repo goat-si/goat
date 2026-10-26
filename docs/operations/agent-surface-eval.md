@@ -1,15 +1,16 @@
-# Measuring the agent surface (D8)
+# Measuring the agent surface
 
-[D8](../internals/agent-surface.md#decision-log) builds `goat_eval` only if agents on
-providers without code execution need at least a third fewer model turns with it than with
-`goat_call` alone, with no rise in failed runs. The same runner checks the context diet's
-core listing against the full one and decides which tools stay resident
-([listing campaigns](#listing-campaigns)). This page explains how to run both
-measurements. The task set, runner, and report live in
-[scripts/agent-surface/eval](../../scripts/agent-surface/eval/). The reasons behind the method
-are in the [measurement protocol](../internals/agent-surface.md#measurement-protocol-draft), which
-follows aside-codemode's
-[paired runs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs).
+[D8](../internals/agent-surface.md#decision-log) originally gated the general
+`goat_eval` proposal on paired provider tasks. That tool remains unbuilt. The
+separate `goat_screen_run` is bundled on this branch without that pre-ship gate.
+A screen-task regression campaign can reuse this method only after defining
+browser/desktop tasks and answer oracles; this runner's provider tasks do not
+measure screen work.
+
+The same runner checks the context diet's core listing against the full one
+([listing campaigns](#listing-campaigns)). The task set, runner and report live in
+[scripts/agent-surface/eval](../../scripts/agent-surface/eval/). The method is
+summarized in [post-ship regression measurement](../internals/agent-surface.md#post-ship-regression-measurement).
 Results live beside their raw rows in [results](../../scripts/agent-surface/eval/results/).
 
 ## The task set
@@ -37,7 +38,7 @@ the control as suspect.
 
 A campaign compares two arms. They use the same provider, model, prompt, and answer contract,
 and they differ only in the tool listing: the baseline lists `goat_call` without
-`goat_eval`, and the candidate lists both. Both arms run on a provider instance without
+`goat_eval`, and the historical candidate lists both. Both arms run on a provider instance without
 code execution, because that is the population D8 is about. Harnesses that run code, such as
 Codex code mode, already compose calls themselves. To measure one as a reference, run it as a
 separate campaign against the baseline. Its result does not count toward the gate.
@@ -112,7 +113,7 @@ Each failed tool call is recorded with its tool, error code, and message in `fai
 an argument the server refused can be told apart from a tool the agent could not find.
 
 Tool calls, result bytes, and wall time are recorded but never decide the gate; the
-[protocol](../internals/agent-surface.md#measurement-protocol-draft) explains why. Result bytes
+[protocol](../internals/agent-surface.md#post-ship-regression-measurement) explains why. Result bytes
 are the compact JSON the server returned to the run's tool calls. In Codex code mode a script
 can keep a result out of the transcript, so there they count what was served, not what the
 model read. First-prompt bytes come from
@@ -160,14 +161,14 @@ Raw rows are never edited: a row a later fix can judge again goes into a derived
 it, with the command that made it, and a row it cannot is marked superseded.
 
 The manual tasks need connected hosts and a person who approves or finishes sign-in, and the
-runner includes them only with `--include-manual`. D8 names provider sync, so the gate
-cannot pass until those tasks have run.
+runner includes them only with `--include-manual`. D8's historical provider-sync
+verdict requires those tasks; this does not gate `goat_screen_run`.
 
 ## Not yet possible
 
-- No server lists `goat_eval` yet ([rollout](../internals/agent-surface.md#rollout) step 11),
-  and none can hide it per provider instance. Until a prototype provides both, only the
-  baseline arm can run. That yields baseline numbers but no verdict.
+- `goat_eval` is unbuilt. Its candidate arm remains historical; this runner does
+  not validate `goat_screen_run`. Record screen-run evidence separately until a
+  screen-task campaign is designed.
 - Until the `agentToolListing` setting is on dev, a listing campaign can run only its full arm.
 - The checks for the manual tasks (`providerReadyOnEveryHost`, `oneApprovalPerSync`,
   `oneHandoffPerHumanStep`) are not written, so the runner refuses those tasks.

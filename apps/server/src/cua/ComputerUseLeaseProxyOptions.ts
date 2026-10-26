@@ -4,6 +4,7 @@
  *
  * @module ComputerUseLeaseProxyOptions
  */
+// @effect-diagnostics preferSchemaOverJson:off -- Driver JSON-RPC responses remain opaque at this boundary.
 import type {
   ComputerUseAgentCursor,
   ComputerUseCallAdmission,
@@ -11,16 +12,147 @@ import type {
   ComputerUseHumanInputSource,
   ComputerUseLeaseUpdate,
   ComputerUseOverlayCommand,
+  ComputerUsePrimitiveReply,
+  ComputerUsePrimitiveRequest,
+  AgentCursorLeaseUpdate,
+  AgentCursorReport,
 } from "@goat/contracts";
+import { DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
-import type * as Stream from "effect/Stream";
+import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
+
+export const PRIMITIVE_ID = "goat:primitive:";
+
+export interface ReplySink {
+  readonly answer: (
+    line: string,
+    status?: ComputerUsePrimitiveReply["status"],
+    context?: { readonly tool?: string | undefined },
+  ) => Effect.Effect<unknown>;
+}
+
+export const primitiveReplySink = (
+  request: ComputerUsePrimitiveRequest,
+  reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
+): ReplySink => ({
+  answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(
+    (line: string, status: ComputerUsePrimitiveReply["status"] = "not_started") => {
+      const envelope = parse(line);
+      const rawResult = envelope?.result;
+      const record = (value: unknown): Record<string, unknown> | undefined =>
+        value !== null && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : undefined;
+      const resultObject = record(rawResult);
+      const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
+      const imagePart = content.map(record).find((part) => part?.type === "image");
+      const state = record(resultObject?.structuredContent);
+      const width = state?.screenshot_width;
+      const height = state?.screenshot_height;
+      const bytes = imagePart?.data;
+      const imageSize =
+        typeof bytes === "string" &&
+        bytes.length <= Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 &&
+        /^[A-Za-z0-9+/]*={0,2}$/.test(bytes)
+          ? Buffer.from(bytes, "base64").byteLength
+          : Infinity;
+      const validImage =
+        imagePart !== undefined &&
+        (imagePart.mimeType === "image/png" || imagePart.mimeType === "image/jpeg") &&
+        typeof bytes === "string" &&
+        bytes.length % 4 === 0 &&
+        imageSize <= DEFAULT_SCREEN_RUN_LIMITS.imageBytes &&
+        Number.isSafeInteger(width) &&
+        (width as number) > 0 &&
+        Number.isSafeInteger(height) &&
+        (height as number) > 0;
+      const image = validImage
+        ? {
+            mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
+            bytes: bytes as string,
+            width: width as number,
+            height: height as number,
+          }
+        : undefined;
+      const imageError = imagePart !== undefined && !validImage;
+      const strippedResult =
+        imagePart === undefined
+          ? rawResult
+          : {
+              ...resultObject,
+              content: content.filter((part) => record(part)?.type !== "image"),
+            };
+      const bounded = (value: unknown) => {
+        if (value === undefined) return undefined;
+        const encoded = JSON.stringify(value);
+        return encoded !== undefined && Buffer.byteLength(encoded) <= 64 * 1024
+          ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
+          : { message: "Driver reply exceeded the primitive channel limit." };
+      };
+      const result = imageError ? undefined : bounded(strippedResult);
+      const error = bounded(
+        imageError
+          ? { message: "Driver image exceeded the primitive image limit or was invalid." }
+          : envelope?.error,
+      );
+      return (
+        reply?.({
+          requestId: request.requestId,
+          registrationId: request.registrationId,
+          controlId: request.controlId,
+          connectionGeneration: request.connectionGeneration,
+          runId: request.runId,
+          turnId: request.turnId,
+          callId: request.callId,
+          status,
+          ...(result === undefined ? {} : { result }),
+          ...(error === undefined ? {} : { error }),
+          ...(image === undefined ? {} : { image }),
+        }) ?? Effect.void
+      );
+    },
+  ),
+});
+
+export const forwardPrimitiveRequests = <E>(
+  requests: Stream.Stream<ComputerUsePrimitiveRequest> | undefined,
+  reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
+  nextId: () => string,
+  forward: (
+    line: string,
+    sink: ReplySink,
+    connectionId: string,
+    request: ComputerUsePrimitiveRequest,
+  ) => Effect.Effect<unknown, E>,
+  onSettled?: (requestId: string) => void,
+) =>
+  requests === undefined
+    ? Effect.void
+    : requests.pipe(
+        Stream.runForEach((request) =>
+          forward(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: nextId(),
+              method: "tools/call",
+              params: { name: request.tool, arguments: request.args },
+            }),
+            primitiveReplySink(request, reply),
+            request.connectionGeneration,
+            request,
+          ).pipe(Effect.ensuring(Effect.sync(() => onSettled?.(request.requestId)))),
+        ),
+        Effect.forkScoped,
+        Effect.asVoid,
+      );
 
 export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
@@ -57,6 +189,20 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly bundleIds: boolean;
   /** Lines the provider writes. The proxy stops when this ends. */
   readonly input: Stream.Stream<string>;
+  /** Server-origin calls share the driver's admission path but answer on a separate channel. */
+  readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
+  readonly primitiveCancelled?: (requestId: string) => boolean;
+  readonly onPrimitiveSettled?: (requestId: string) => void;
+  readonly cursorEvents?: Stream.Stream<AgentCursorLeaseUpdate>;
+  readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
+  readonly onDriverStarted?: (current: {
+    readonly connectionId: string;
+    readonly generation: number;
+  }) => Effect.Effect<void>;
+  readonly onDriverCutoff?: (current: {
+    readonly connectionId: string;
+    readonly generation: number;
+  }) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
   readonly output: (
     line: string,
@@ -102,6 +248,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
+  readonly onCursorReport?: (report: AgentCursorReport) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

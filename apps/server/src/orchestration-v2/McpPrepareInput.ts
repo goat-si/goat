@@ -1,5 +1,27 @@
-import type { ProviderMemoryPrepareInput } from "./ProviderSessionManager.ts";
+import type { OrchestrationV2ConversationMessage, ProviderInstanceId } from "@goat/contracts";
+import { screenBindingHintsFromOrigin } from "@goat/shared/turnCapabilities";
+import type {
+  ProviderMemoryPrepareInput,
+  ProviderSessionManagerV2Shape,
+} from "./ProviderSessionManager.ts";
 import { preparedTurnCapabilities } from "./TurnCapabilities.ts";
+import { continuationOrigin } from "./ContinuationChain.ts";
+
+export function runScreenBindingHints(
+  input: Parameters<
+    typeof continuationOrigin<Pick<OrchestrationV2ConversationMessage, "text" | "context">>
+  >[0],
+) {
+  const origin = continuationOrigin(input);
+  return origin === undefined
+    ? {}
+    : {
+        screenBindingHints: screenBindingHintsFromOrigin({
+          text: origin.message.text,
+          records: origin.message.context?.records ?? [],
+        }),
+      };
+}
 
 /**
  * How a prepare reuses earlier admission: `false` admits the caller's input as is, an object is
@@ -33,5 +55,34 @@ export function selectPrepareInput<Stored extends ProviderMemoryPrepareInput>(
     ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
     ...preparedTurnCapabilities(reuse === true, admitted, input),
     readOnly: admitted.readOnly === true || input.readOnly === true,
+  };
+}
+
+export function openPrepareInput(
+  input: Parameters<ProviderSessionManagerV2Shape["open"]>[0],
+  providerInstanceId: ProviderInstanceId,
+): ProviderMemoryPrepareInput {
+  const sandbox = input.runtimePolicy.sandboxPolicy;
+  return {
+    threadId: input.threadId,
+    providerInstanceId,
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.delegatedTaskId === undefined ? {} : { delegatedTaskId: input.delegatedTaskId }),
+    ...(input.memoryGrantCeiling === undefined
+      ? {}
+      : { memoryGrantCeiling: input.memoryGrantCeiling }),
+    ...(input.dispatchScopes === undefined ? {} : { dispatchScopes: input.dispatchScopes }),
+    readOnly:
+      input.readOnly === true ||
+      sandbox === "read-only" ||
+      (typeof sandbox === "object" &&
+        sandbox !== null &&
+        "type" in sandbox &&
+        sandbox.type === "readOnly"),
+    interactionMode: input.runtimePolicy.interactionMode,
+    turnCapabilities: input.turnCapabilities ?? [],
+    ...(input.screenBindingHints === undefined
+      ? {}
+      : { screenBindingHints: input.screenBindingHints }),
   };
 }

@@ -1,0 +1,110 @@
+import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AgentCursorEvent } from "./computerUseOverlay.ts";
+import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
+
+// Screen primitives on the computer use lease stream. A leaf: cua.ts re-exports it and joins the
+// request, cancel and cursor updates into its lease update unions.
+const primitiveId = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+const primitiveJson = Schema.Json.check(
+  Schema.makeFilter(
+    (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 64 * 1024,
+  ),
+);
+const strictPrimitive = <S extends Schema.Constraint>(schema: S) =>
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
+    [schema],
+    ([codec]) => {
+      const decode = SchemaParser.decodeUnknownEffect(codec);
+      return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
+    },
+    {
+      toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
+      toCodecJson: () => undefined,
+    },
+  );
+const primitiveCallIdentity = {
+  requestId: primitiveId,
+  registrationId: primitiveId,
+  controlId: primitiveId,
+  connectionGeneration: primitiveId,
+  runId: primitiveId,
+  turnId: primitiveId,
+  callId: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+};
+
+export const ComputerUsePrimitiveRequest = Schema.Struct({
+  state: Schema.Literal("primitive-request"),
+  ...primitiveCallIdentity,
+  deadlineMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+  tool: primitiveId,
+  args: primitiveJson,
+});
+export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
+
+/** Cancels a request already delivered to the proxy while admission is still pending. */
+export const ComputerUsePrimitiveCancel = Schema.Struct({
+  state: Schema.Literal("primitive-cancel"),
+  requestId: primitiveId,
+});
+export type ComputerUsePrimitiveCancel = typeof ComputerUsePrimitiveCancel.Type;
+
+/** Host-origin cursor state on the authenticated proxy stream; never forwarded to the driver. */
+export const AgentCursorLeaseUpdate = Schema.Struct({
+  state: Schema.Literal("cursor-state"),
+  controlId: TrimmedNonEmptyString,
+  connectionGeneration: TrimmedNonEmptyString,
+  event: AgentCursorEvent,
+});
+export type AgentCursorLeaseUpdate = typeof AgentCursorLeaseUpdate.Type;
+
+export const ComputerUsePrimitiveReply = strictPrimitive(
+  Schema.Struct({
+    ...primitiveCallIdentity,
+    status: Schema.Literals(["not_started", "settled", "unknown_outcome"]),
+    result: Schema.optionalKey(primitiveJson),
+    error: Schema.optionalKey(primitiveJson),
+    image: Schema.optionalKey(
+      Schema.Struct({
+        mimeType: Schema.Literals(["image/png", "image/jpeg"]),
+        bytes: Schema.String.check(
+          Schema.isMaxLength(Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4),
+          Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+          Schema.makeFilter(
+            (value) =>
+              (value.length / 4) * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <=
+              DEFAULT_SCREEN_RUN_LIMITS.imageBytes,
+          ),
+        ),
+        width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+        height: Schema.Int.check(
+          Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        ),
+      }),
+    ),
+  }),
+);
+export type ComputerUsePrimitiveReply = typeof ComputerUsePrimitiveReply.Type;
+
+const primitiveControlReport = {
+  registrationId: primitiveId,
+  controlId: primitiveId,
+  connectionId: primitiveId,
+  driverGeneration: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+};
+export const ComputerUsePrimitiveControlReady = strictPrimitive(
+  Schema.Struct(primitiveControlReport),
+);
+export type ComputerUsePrimitiveControlReady = typeof ComputerUsePrimitiveControlReady.Type;
+export const ComputerUsePrimitiveControlCutoff = strictPrimitive(
+  Schema.Struct(primitiveControlReport),
+);
+export type ComputerUsePrimitiveControlCutoff = typeof ComputerUsePrimitiveControlCutoff.Type;

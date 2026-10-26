@@ -28,6 +28,7 @@ describe("buildCodexAdditionalContext", () => {
       { browser: false, device: true },
       { browser: true, device: true },
       { browser: true, device: true, computerUse: true },
+      { browser: true, device: false, screenCode: true },
     ])("keeps every entry within Codex's per-entry cap with tools %j", (availability) => {
       const context = buildCodexAdditionalContext(runtime, availability);
 
@@ -41,6 +42,15 @@ describe("buildCodexAdditionalContext", () => {
         );
       }
     });
+  });
+
+  it("a browser-only attachment gives Codex the screen-code guide", () => {
+    const context = buildCodexAdditionalContext(
+      { model: "gpt-5.3-codex" },
+      { browser: true, device: false, screenCode: true },
+    );
+    NodeAssert.match(context.goat_code_runtime_screen_code_01?.value ?? "", /goat_screen_run/);
+    NodeAssert.equal(context.goat_code_runtime_computer_use_01, undefined);
   });
 
   it("delivers all orchestration sections in authored order when keys are sorted", () => {

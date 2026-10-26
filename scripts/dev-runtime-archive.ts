@@ -20,6 +20,7 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import { DEFAULT_GOAT_HOME } from "./dev-runner.ts";
 import { validateSshRuntimeArchives } from "./build-desktop-artifact.ts";
+import { verifyScreenWasmArchiveMember } from "./lib/screen-wasm-asset.ts";
 import {
   releasePackageFiles,
   updateReleasePackageVersions,
@@ -370,6 +371,7 @@ export async function buildDevRuntimeArchive(input: {
     ]);
     const name = cliArchiveFileName(version, key);
     const file = NodePath.join(staging, name);
+    await verifyScreenWasmArchiveMember(file, "screen-code/quickjs.wasm", buildRoot);
     const bytes = await NodeFSP.readFile(file);
     const hash = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
     await NodeFSP.writeFile(`${file}.sha256`, `${hash}  ${name}\n`);

@@ -1,4 +1,8 @@
-import { TurnItemId, type ComputerUseLeaseThreadUpdate } from "@goat/contracts";
+import {
+  TurnItemId,
+  type ComputerUseLeaseThreadUpdate,
+  type ComputerUsePrimitiveRequest,
+} from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,6 +29,70 @@ import {
 const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text: "fixture work" });
 
 describe("thread lease proxy", () => {
+  it.effect(
+    "thread-follow routes server requests only to the current control and driver generation",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* threadHarness();
+        yield* h.push(snapshot("A"));
+        const a = yield* h.started;
+        yield* h.applied;
+        const first = yield* h.driverStarted;
+        assert.equal(first.controlId, "A");
+        const primitive = (
+          controlId: string,
+          connectionGeneration: string,
+          requestId: string,
+        ): ComputerUsePrimitiveRequest => ({
+          state: "primitive-request",
+          requestId,
+          registrationId: "registration:one",
+          controlId,
+          connectionGeneration,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 600_000,
+          tool: "list_windows",
+          args: {},
+        });
+        yield* h.sendPrimitive(primitive("B", first.connectionId, "request:wrong-control"));
+        assert.equal((yield* h.primitiveReply).status, "not_started");
+        yield* h.sendPrimitive(primitive("A", "driver:stale", "request:stale-driver"));
+        assert.equal((yield* h.primitiveReply).status, "not_started");
+        yield* h.sendPrimitive(primitive("A", first.connectionId, "request:current"));
+        const forwarded = JSON.parse(yield* Queue.take(a.sent)) as { id: string; method: string };
+        assert.equal(forwarded.method, "tools/call");
+        assert.match(forwarded.id, /^goat:primitive:/);
+        yield* Queue.offer(
+          a.replies,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: forwarded.id,
+            result: { content: [], structuredContent: { marker: "A" } },
+          }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+        assert.equal((yield* h.driverCutoff).connectionId, first.connectionId);
+        yield* h.push(snapshot("B"));
+        const b = yield* h.started;
+        yield* h.applied;
+        const second = yield* h.driverStarted;
+        assert.equal(second.controlId, "B");
+        yield* h.sendPrimitive(primitive("A", first.connectionId, "request:old-control"));
+        assert.equal((yield* h.primitiveReply).status, "not_started");
+        yield* h.sendPrimitive(primitive("B", second.connectionId, "request:new-control"));
+        const newForward = JSON.parse(yield* Queue.take(b.sent)) as { id: string };
+        assert.match(newForward.id, /^goat:primitive:/);
+        yield* Queue.offer(
+          b.replies,
+          JSON.stringify({ jsonrpc: "2.0", id: newForward.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+      }),
+  );
+
   it.effect("a thread's windowless launch tells the agent to list that app's windows", () =>
     Effect.gen(function* () {
       const h = yield* threadHarness({ guide: makeAppGuide("darwin", undefined) });

@@ -182,6 +182,7 @@ import {
   settledCodexFailure,
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
+import { codexTurnSkills } from "./CodexTurnSkills.ts";
 
 const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
@@ -758,6 +759,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly deviceToolsAvailable?: boolean;
     /** The managed `cua-driver` MCP server is attached to this thread. */
     readonly computerUse?: boolean;
+    readonly screenCode?: boolean;
     readonly computerUseDeferred?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
@@ -798,6 +800,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
               computerUse: input.computerUse ?? false,
+              screenCode: input.screenCode ?? false,
             },
           )
         : buildCodexDevelopmentContext();
@@ -7180,10 +7183,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasGoatMcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
-              computerUse:
-                mcpSession !== undefined &&
-                runtime.cuaDriver !== undefined &&
-                McpProviderSession.carriesComputerUseSkill(mcpSession),
+              ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),

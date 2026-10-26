@@ -20,6 +20,7 @@ import type {
   ModelSelection,
   ProjectId,
   PreviewAnnotationPayload,
+  PreviewTabContextRecord,
   ProviderApprovalDecision,
   ThreadContextRecord,
   ProviderInteractionMode,
@@ -186,6 +187,7 @@ import {
   composerCapabilityTargetDrivers,
   composerComputerSetupLocation,
   selectComposerCapability,
+  selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
 import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
@@ -244,12 +246,8 @@ import {
 } from "./composerScrollGesture";
 import { observeResize } from "~/lib/observeResize";
 import { ArrowUpIcon } from "~/components/solar";
-import { Button } from "../ui/button";
 import { ContextWindowMeter } from "./ContextWindowMeter";
-import { PlusIcon } from "~/components/solar";
-import { Tooltip } from "../ui/tooltip";
-import { TooltipPopup } from "../ui/tooltip";
-import { TooltipTrigger } from "../ui/tooltip";
+import { ComposerAttachAction } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
@@ -356,6 +354,7 @@ export interface ChatComposerHandle {
     previewAnnotations: PreviewAnnotationPayload[];
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
+    previewTabs: PreviewTabContextRecord[];
     threadContextRoutingEnvironmentId: EnvironmentId;
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
@@ -751,6 +750,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const composerThreadContexts = attachmentDraft.threadContexts;
+  const composerPreviewTabs = attachmentDraft.previewTabs;
   const {
     pendingSnapShotAnimations,
     pendingSnapShotIds,
@@ -802,6 +802,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reviewComments: composerReviewComments,
     previewAnnotations: composerPreviewAnnotations,
     threadContexts: composerThreadContexts,
+    previewTabs: composerPreviewTabs,
     images: composerImages,
     files: composerFiles,
     uploadsByImageId,
@@ -1373,6 +1374,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.addPreviewAnnotation,
   );
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
+  const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
     const wanted = new Set(contextIds);
@@ -1390,6 +1392,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         .filter((c) => wanted.has(terminalContextReference(c).contextId))
         .map(terminalContextRecord),
       ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
+      ...composerPreviewTabs.filter((record) => wanted.has(record.contextId)),
       ...composerReviewComments
         .filter((c) => wanted.has(reviewCommentContextId(c.id)))
         .map(reviewCommentContextRecord),
@@ -1953,6 +1956,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         replaceTriggerWith,
         onReplaced: () => setComposerHighlightedItemId(null),
         openSetup: () => void navigate(composerComputerSetupLocation(environmentId)),
+      });
+    }
+    if (item.type === "preview-tab") {
+      const record = item.record;
+      return selectComposerPreviewTab(record, trigger, environmentId, replaceTriggerWith, () => {
+        addComposerDraftPreviewTabs(attachmentDraftTarget, [record], { appendReference: false });
+        setComposerHighlightedItemId(null);
       });
     }
     if (item.type === "path") {
@@ -2689,43 +2699,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       removeComposerImageFromDraft,
       insertAttachmentReferences,
     });
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerAttachAction = showComposerAttachAction ? (
-    <>
-      <input
-        ref={attachmentInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = "";
-          // Inserting a chip refocuses the editor after the draft renders;
-          // focusing synchronously here would report the editor's stale text
-          // over the prompt that was just written.
-          void addComposerAttachments(files).then((inserted) => {
-            if (!inserted) focusComposer();
-          });
-        }}
-      />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={() => attachmentInputRef.current?.click()}
-              aria-label="Attach files"
-            />
-          }
-        >
-          <PlusIcon />
-        </TooltipTrigger>
-        <TooltipPopup>Attach files</TooltipPopup>
-      </Tooltip>
-    </>
+    <ComposerAttachAction
+      addComposerAttachments={addComposerAttachments}
+      focusComposer={focusComposer}
+    />
   ) : null;
   const composerContextWindowMeter = settings.contextWindowMeterHidden ? null : (
     <span data-resting-fixed-control className="flex shrink-0 items-center">
@@ -3331,6 +3309,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             isDesktopRenderer: window.desktopBridge !== undefined,
           }),
         ],
+        previewTabs: composerPreviewTabs,
         threadContextRoutingEnvironmentId: environmentId,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,

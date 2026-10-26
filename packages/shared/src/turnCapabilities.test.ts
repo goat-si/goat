@@ -6,6 +6,7 @@ import {
   appIdForContextId,
   capabilityContextRecordsInText,
   requestedTurnCapabilities,
+  screenBindingHintsFromOrigin,
   turnCapabilityContextRecord,
   turnCapabilityForContextId,
   withTurnCapabilities,
@@ -13,6 +14,32 @@ import {
 import { formatComposerContextReference } from "./composerContextReferences.ts";
 
 describe("turn capabilities", () => {
+  it("only referenced typed tab identity reaches screen binding hints", () => {
+    const browser = turnCapabilityContextRecord("browser");
+    const tab = {
+      version: 1 as const,
+      kind: "preview-tab" as const,
+      contextId: "tab-one" as import("@goat/contracts").ComposerContextId,
+      label: "Docs",
+      environmentId: "env-one" as import("@goat/contracts").EnvironmentId,
+      browserInstanceId: "browser-one",
+      tabId: "tab-one",
+      title: "Docs",
+      url: "https://example.test/docs",
+    };
+    const text = `${formatComposerContextReference(browser)} ${formatComposerContextReference(tab)}`;
+    expect(screenBindingHintsFromOrigin({ text, records: [browser, tab] })).toMatchObject({
+      browserRequested: true,
+      computerRequested: false,
+      tabs: [{ mentionId: "tab-one", browserInstanceId: "browser-one", tabId: "tab-one" }],
+    });
+    expect(
+      screenBindingHintsFromOrigin({
+        text: formatComposerContextReference(browser),
+        records: [browser, tab],
+      }).tabs,
+    ).toEqual([]);
+  });
   it("counts only the chips still in the text", () => {
     const message = withTurnCapabilities({ text: "Open the dashboard" }, [
       "browser",

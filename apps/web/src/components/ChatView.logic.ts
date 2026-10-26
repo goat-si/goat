@@ -1278,27 +1278,7 @@ export function restorePlanFollowUpComposer(input: {
   });
 }
 
-import type { ComposerThreadDraftState } from "../composerDraftStore";
-
-export function snapshotDraftContent(draft: ComposerThreadDraftState): string {
-  return JSON.stringify({
-    prompt: draft.prompt,
-    images: draft.images.map(({ id }) => id),
-    files: draft.files.map(({ id }) => id),
-    nonPersistedImageIds: [...draft.nonPersistedImageIds],
-    persistedAttachments: draft.persistedAttachments.map(({ id }) => id),
-    terminalContexts: draft.terminalContexts,
-    previewAnnotations: draft.previewAnnotations,
-    reviewComments: draft.reviewComments,
-    threadContexts: draft.threadContexts,
-  });
-}
-export function isDraftContentUnchanged(
-  snapshot: string,
-  current: ComposerThreadDraftState | null | undefined,
-): boolean {
-  return current != null && snapshotDraftContent(current) === snapshot;
-}
+export { isDraftContentUnchanged, snapshotDraftContent } from "./composerDraftContent";
 
 /** Includes the annotation screenshot only within the attachment cap; exceeding it rejects the whole turn. */
 export function mergeDirectPreviewAnnotation(input: {
@@ -1452,6 +1432,7 @@ export interface ComposerSendContents {
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
+  readonly previewTabs?: ReadonlyArray<import("@goat/contracts").PreviewTabContextRecord>;
 }
 
 /**
@@ -1471,6 +1452,7 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
     previewAnnotations: [...contents.previewAnnotations],
     reviewComments: [...contents.reviewComments],
     threadContexts: [...contents.threadContexts],
+    previewTabs: [...(contents.previewTabs ?? [])],
     messageText: contents.terminalContexts
       .filter((context) => !terminalContexts.includes(context))
       .reduce(

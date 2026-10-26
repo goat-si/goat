@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { contextChipAccent, contextChipPresentation } from "./composerChipPresentation";
+import {
+  contextChipAccent,
+  contextChipPresentation,
+  UNAVAILABLE_CONTEXT_CHIP_PRESENTATION,
+} from "./composerChipPresentation";
 import {
   flattenThemeColor,
   getMobileThemeVariables,
@@ -71,6 +75,11 @@ const BUILT_IN_THEMES = MOBILE_THEME_IDS.filter((id) => id !== "material-you").f
 );
 
 describe("contextChipAccent", () => {
+  it("renders a browser tab mention sent from web as a tab chip", () => {
+    expect(contextChipPresentation("preview-tab")).not.toBe(UNAVAILABLE_CONTEXT_CHIP_PRESENTATION);
+    expect(contextChipPresentation("preview-tab").icon).toBe("mouse-pointer-click");
+  });
+
   it("draws one color per theme that reads at 5:1 in messages, replies and the composer", () => {
     for (const { name, theme } of BUILT_IN_THEMES) {
       for (const accent of CHIP_ACCENTS) {

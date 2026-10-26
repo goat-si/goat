@@ -75,4 +75,20 @@ describe("GOAT provider instructions", () => {
       "/review",
     );
   });
+
+  it("ACP adds the full screen guide only while this turn carries the skill", () => {
+    const active = { interactionMode: "default" as const, hasGoatMcp: true, screenCodeSkill: true };
+    const first = goatAcpPromptWithInstructions({ prompt: "Inspect the tab", state: active });
+    assert.include(first, "<screen_code>");
+    assert.equal(
+      goatAcpPromptWithInstructions({ prompt: "Continue", state: active, previousState: active }),
+      "Continue",
+    );
+    const off = goatAcpPromptWithInstructions({
+      prompt: "Continue",
+      state: { ...active, screenCodeSkill: false },
+      previousState: active,
+    });
+    assert.notInclude(off, "<screen_code>");
+  });
 });

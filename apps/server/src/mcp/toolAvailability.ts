@@ -76,9 +76,17 @@ export const availability = (
   if (!served) return { now: false, reason: "This GOAT server does not serve it." };
   if (entry.resource === "computer_use" && host.computerUseFailure !== undefined)
     return { now: false, reason: host.computerUseFailure };
-  if (entry.resource === "surface") return { now: true };
   if (entry.requires === "thread" && scope.thread === undefined)
     return { now: false, reason: "Needs an agent running inside a GOAT thread." };
+  if (entry.resource === "surface") {
+    // goat_describe and goat_call share this resource and stay listed for every caller.
+    if (entry.verb === "screen_run" && !scope.capabilities.has("screen"))
+      return {
+        now: false,
+        reason: "Needs the built-in browser or computer use attached to this turn.",
+      };
+    return { now: true };
+  }
   if (entry.requires === "client" && scope.thread !== undefined)
     return { now: false, reason: "Only an outside MCP client can call it." };
   if (entry.effect !== "read" && scope.client?.access === "read-only")

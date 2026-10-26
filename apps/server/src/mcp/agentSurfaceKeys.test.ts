@@ -3,7 +3,10 @@ import type { AgentSurfaceEntry } from "@goat/contracts/agentSurface";
 import { isKeyedWrite } from "@goat/contracts/agentSurface/resolve";
 import { Tool } from "effect/ai";
 
-import { entries, toolkits } from "./agentSurface.testkit.ts";
+import { entries, toolkits as standardToolkits } from "./agentSurface.testkit.ts";
+import { ScreenToolkit } from "./toolkits/screen/tools.ts";
+
+const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
 type Entry = (typeof entries)[number];
 const reasonOf = (entry: AgentSurfaceEntry) => entry.idempotencyReason;

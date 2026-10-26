@@ -40,14 +40,18 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
-import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { type Cursor, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
+import {
+  type CursorTargetReport,
+  nextTurn,
+  rememberScope,
+  staleCursorReport,
+  targeted,
+} from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
@@ -62,11 +66,7 @@ import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
-import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
-import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
-
-/** Private mode is off for now (#1695): secret-field reports never pause computer use. */
-const PRIVATE_MODE_DISABLED = true;
+import { makeLeaseSafety } from "./ComputerUseLeaseSafety.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -197,6 +197,10 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       purpose: string,
     ) => Effect.Effect<boolean, ComputerUseLeaseError>;
+    readonly releaseForeground?: (input: {
+      readonly threadId: ThreadId;
+      readonly controlId: string;
+    }) => Effect.Effect<boolean>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -206,7 +210,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly setTarget: (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+      target: CursorTargetReport,
     ) => Effect.Effect<boolean>;
     /**
      * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
@@ -272,6 +276,13 @@ export class ComputerUseLeases extends Context.Service<
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly changed: Effect.Effect<void>;
+    readonly onAuthorityChange?: (
+      listener: (change: {
+        readonly kind: "stop" | "credentialRevoked" | "pause" | "private";
+        readonly threadId: ThreadId;
+        readonly controlId: string;
+      }) => void,
+    ) => () => void;
     /** How this server starts its own lease proxy subcommand. */
     readonly proxy: SelfInvocation | undefined;
   }
@@ -301,6 +312,20 @@ const make = Effect.gen(function* () {
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
+  const authorityListeners = new Set<
+    (change: {
+      kind: "stop" | "credentialRevoked" | "pause" | "private";
+      threadId: ThreadId;
+      controlId: string;
+    }) => void
+  >();
+  const notifyAuthority = (change: {
+    kind: "stop" | "credentialRevoked" | "pause" | "private";
+    threadId: ThreadId;
+    controlId: string;
+  }) => {
+    for (const listener of authorityListeners) listener(change);
+  };
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
   const foreground = makeForegroundApprovals();
@@ -568,6 +593,11 @@ const make = Effect.gen(function* () {
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
+    notifyAuthority({
+      kind: reason === "revoked" ? "credentialRevoked" : "stop",
+      threadId,
+      controlId: record.controlId,
+    });
     // A pause belongs to the agents it held; with none left the next one starts unpaused.
     if (![...controls.values()].some((other) => other.ended === undefined)) paused = undefined;
     return true;
@@ -607,65 +637,19 @@ const make = Effect.gen(function* () {
       if (![...controls.values()].some(acting)) return false;
       paused = reason;
       interrupted(reason);
+      for (const record of controls.values())
+        if (record.ended === undefined)
+          notifyAuthority({
+            kind: reason === "private" ? "private" : "pause",
+            threadId: record.threadId,
+            controlId: record.controlId,
+          });
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
-  let privateHost = false;
-  const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
-  // The desktop host's helper reports a person's own input and secret fields, and its readiness
-  // says which it can detect at all; a standalone server and an older helper report nothing, so
-  // they detect neither (#1235). Read on every admission from the receiver's accepted report,
-  // so a downgrade counts from the moment it arrives.
-  const linuxFrames = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
-  // A standalone Linux server runs its own helper (#1223) and reports the same way; the desktop
-  // host's helper, when one reports, speaks for the host.
-  const linuxHelper = yield* Effect.serviceOption(LinuxHelperHost.LinuxHelperHost);
-  const readinessReport = Effect.gen(function* () {
-    const reported = Option.isSome(desktop) ? yield* desktop.value.cuaReadiness : Option.none();
-    if (Option.isSome(reported) || Option.isNone(linuxHelper)) return reported;
-    // Only the helper that runs with the driver watches; a setup check never counts (#1542).
-    return yield* linuxHelper.value.liveReadiness;
-  });
-  const fromDesktop: Effect.Effect<ComputerUseDetection> = readinessReport.pipe(
-    Effect.map(
-      Option.match({
-        onNone: () => ({ humanInput: false, privateMode: false, frames: false }),
-        onSome: ({ signals, frames }) => ({
-          humanInput: signals.humanInput === "supported",
-          privateMode: signals.privateMode === "supported",
-          frames: frames === true,
-        }),
-      }),
-    ),
-  );
-  // A Linux server that runs the driver itself captures its own frames (#1370).
-  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(linuxFrames)
-    ? Effect.zipWith(fromDesktop, linuxFrames.value.supported, (reported, linux) => ({
-        ...reported,
-        frames: reported.frames || linux,
-      }))
-    : fromDesktop;
-  const safetyReports = [
-    ...(Option.isSome(desktop) ? [desktop.value.cuaSafety] : []),
-    ...(Option.isSome(linuxHelper) ? [linuxHelper.value.safety] : []),
-  ];
-  if (safetyReports.length > 0)
-    yield* Stream.mergeAll(safetyReports, { concurrency: "unbounded" }).pipe(
-      Stream.runForEach((report) => {
-        // Admitted work continues while a person uses the computer. Secret fields still pause.
-        if (report.type === "cuaHumanInput") return Effect.void;
-        if (report.type === "cuaReadiness") return changed;
-        return Effect.sync(() => {
-          if (PRIVATE_MODE_DISABLED) return;
-          if (report.active && !privateHost) {
-            foreground.clear();
-            interrupted("private");
-          }
-          privateHost = report.active;
-        }).pipe(Effect.andThen(changed));
-      }),
-      Effect.forkScoped,
-    );
+  const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
+  // Private mode reports are disabled until their host signal is trustworthy (#1695).
+  const privateHost = false;
 
   // The helper watches for secret fields and a person's input only while an agent controls this
   // host (D7): from the first live control until the last one ends or expires. The desktop's
@@ -817,10 +801,11 @@ const make = Effect.gen(function* () {
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+      target: CursorTargetReport,
     ) {
       const record = yield* liveControl(threadId, controlId);
       if (record === undefined) return false;
+      if ("report" in target && staleCursorReport(record, target.report)) return false;
       const next = targeted(record, target);
       if (next === undefined) return true;
       controls.set(threadId, next);
@@ -951,6 +936,10 @@ const make = Effect.gen(function* () {
     ),
     subscribe: PubSub.subscribe(signals),
     changed,
+    onAuthorityChange: (listener) => {
+      authorityListeners.add(listener);
+      return () => void authorityListeners.delete(listener);
+    },
     proxy,
     blocked: (threadId, block) =>
       Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),

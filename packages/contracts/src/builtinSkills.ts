@@ -7,18 +7,15 @@ import { TurnCapability } from "./composerContext.ts";
 /** `ServerProviderSkill.scope` of skills GOAT ships itself rather than a provider discovers. */
 export const BUILTIN_SKILL_SCOPE = "builtin";
 
-export const BuiltInSkillName = Schema.Literals(["computer-use", "goat-discipline"]);
+export const BuiltInSkillName = Schema.Literals(["computer-use", "screen-code", "goat-discipline"]);
 export type BuiltInSkillName = typeof BuiltInSkillName.Type;
 
 export interface BuiltInSkillListing {
   readonly name: BuiltInSkillName;
   readonly displayName: string;
   readonly description: string;
-  /**
-   * The skill loads on turns that have this capability attached. A skill without one loads on
-   * the turn whose message names it.
-   */
-  readonly capability?: TurnCapability;
+  /** Any attached capability can load this skill; absent means message-named only. */
+  readonly anyOf?: ReadonlyArray<TurnCapability>;
 }
 
 /** What clients list; the skill text lives with the provider runtime. */
@@ -28,7 +25,14 @@ export const BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillListing> = [
     displayName: "Computer Use",
     description:
       "Operate app windows on the computer that runs GOAT: observe one window, act once, verify. Loads on every turn that has computer use.",
-    capability: "computer-use",
+    anyOf: ["computer-use"],
+  },
+  {
+    name: "screen-code",
+    displayName: "Screen Code",
+    description:
+      "Run bounded JavaScript cells against available GOAT browser tabs or admitted desktop apps. Loads when either surface is attached.",
+    anyOf: ["browser", "computer-use"],
   },
   {
     name: "goat-discipline",

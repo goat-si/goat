@@ -3189,8 +3189,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         buildRuntimeInstructions({
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
-          computerUse:
-            state.cua !== undefined && McpProviderSession.carriesComputerUseSkill(mcpSession),
+          skills: mcpSession,
+          computerUse: state.cua !== undefined,
         }),
         goatOrchestrationSystemPrompt(mcpAvailable),
         availability.read || availability.write || availability.source

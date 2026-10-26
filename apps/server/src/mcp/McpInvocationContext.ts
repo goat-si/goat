@@ -8,6 +8,7 @@ import {
   PreviewAutomationUnavailableError,
   type ProviderInstanceId,
   type RuntimeMode,
+  type ScreenBindingHints,
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -21,6 +22,7 @@ const ALL_MCP_CAPABILITIES = [
   "worktree",
   "device",
   "pull-requests",
+  "screen",
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
@@ -48,6 +50,8 @@ export const clientRuntimeModeCeiling = (client: McpClientCaller | undefined): R
 /** Thread callers default to their own thread; client callers need thread for tools that act as the caller. */
 export interface McpInvocationScope {
   readonly readOnly?: boolean;
+  /** Trusted typed mentions for this credential generation; never supplied by MCP arguments. */
+  readonly screenBindingHints?: ScreenBindingHints;
   readonly memoryPolicy?: {
     readonly grant: import("@goat/contracts").MemoryTaskGrantCeiling;
     readonly policyEpoch: number;

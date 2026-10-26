@@ -7,7 +7,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
+import { ComputerUseOverlayPoint, AgentCursorSnapshot } from "./computerUseOverlay.ts";
 import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 
 export const PreviewSessionKind = Schema.Literals(["browser", "desktop"]);
@@ -15,6 +15,13 @@ export type PreviewSessionKind = typeof PreviewSessionKind.Type;
 
 export const PreviewSessionPlatform = Schema.Literals(["mac", "windows", "linux"]);
 export type PreviewSessionPlatform = typeof PreviewSessionPlatform.Type;
+
+/** Keep the original cursor field decodable by older clients; detailed phases live in cursorState. */
+const PreviewSessionLegacyCursor = Schema.Struct({
+  windowId: Schema.Int,
+  point: ComputerUseOverlayPoint,
+  phase: Schema.Literals(["acting", "resting"]),
+});
 
 export const PreviewSessionTarget = Schema.Union([
   Schema.Struct({
@@ -31,7 +38,9 @@ export const PreviewSessionTarget = Schema.Union([
     windowId: Schema.optionalKey(Schema.Int),
     title: Schema.String,
     /** Where the agent's cursor is on that window, while the helper draws it there. */
-    cursor: Schema.optionalKey(ComputerUseAgentCursor),
+    cursor: Schema.optionalKey(PreviewSessionLegacyCursor),
+    cursorState: Schema.optionalKey(AgentCursorSnapshot),
+    motionSupport: Schema.optionalKey(Schema.Literals(["supported", "unsupported"])),
   }),
 ]);
 export type PreviewSessionTarget = typeof PreviewSessionTarget.Type;

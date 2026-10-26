@@ -1,3 +1,4 @@
+import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
   DesktopPreviewRecordingInputSchema,
@@ -8,7 +9,7 @@ import type {
   DesktopPreviewColorScheme,
   DesktopPreviewFavicon,
   DesktopPreviewOpenLinkEvent,
-  DesktopPreviewPointerEvent,
+  DesktopPreviewCursorEvent,
   PreviewAnnotationPayload,
   PreviewAnnotationRect,
   PreviewAnnotationSubmissionResult,
@@ -418,7 +419,7 @@ const isRecordingInput = Schema.is(DesktopPreviewRecordingInputSchema);
 
 type RecordingInputListener = (event: DesktopPreviewRecordingInputEvent) => Effect.Effect<void>;
 
-type PointerEventListener = (event: DesktopPreviewPointerEvent) => Effect.Effect<void>;
+type PointerEventListener = (event: DesktopPreviewCursorEvent) => Effect.Effect<void>;
 
 type OpenLinkListener = (event: DesktopPreviewOpenLinkEvent) => Effect.Effect<void>;
 
@@ -3168,26 +3169,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   let pointerSequence = 0;
-  const emitAgentPointer = Effect.fn("PreviewManager.emitAgentPointer")(function* (pointer: {
-    readonly key: { readonly threadId: string; readonly tabId: string };
-    readonly phase: "move" | "click";
-    readonly x: number;
-    readonly y: number;
-  }) {
+  const cursorOwners = new Map<string, import("@goat/contracts").AgentCursorSnapshot>();
+  const emitAgentPointer = Effect.fn("PreviewManager.emitAgentPointer")(function* (
+    pointer: AgentPointer,
+  ) {
     const tab = [...(yield* SynchronizedRef.get(tabsRef)).values()].find(
       (candidate) =>
         candidate.serverTab?.threadId === pointer.key.threadId &&
         candidate.serverTab.tabId === pointer.key.tabId,
     );
     if (!tab) return;
-    const event: DesktopPreviewPointerEvent = {
-      tabId: tab.tabId,
-      phase: pointer.phase,
-      x: pointer.x,
-      y: pointer.y,
-      sequence: ++pointerSequence,
-      createdAt: yield* currentIso,
-    };
+    if (!admitAgentPointer(cursorOwners, tab.tabId, pointer)) return;
+    const event = pointerEvent(pointer, tab.tabId, ++pointerSequence, yield* currentIso);
     const recording = (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tab.tabId);
     const webContentsId = tab.webContentsId;
     if (recording?.consumers.has("recording") && webContentsId != null) {

@@ -749,6 +749,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
       path.startsWith("apps/mobile/") ||
       path === "apps/server/src/device/AgentDeviceTarget.ts" ||
       path === "apps/server/src/preview/ServerBrowserPage.ts" ||
+      path === "apps/server/src/preview/ServerBrowserScreen.ts" ||
       path === "apps/server/src/htmlRender/headlessChrome.ts",
     reason:
       "Native caches and embedded browser/device handles can outlive this build or be read by another client; preserve origin/handle contracts (D17/D18).",

@@ -40,6 +40,7 @@ import { readPreparedConnection } from "~/state/session";
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
 import { toastManager } from "../ui/toast";
+import { importedPreviewTabRecord } from "./previewTabImport";
 import {
   type ComposerDraftContextRecords,
   uploadedContextRecordFromDraft,
@@ -108,6 +109,7 @@ export function useComposerContextImport(input: {
     (store) => store.addPreviewAnnotation,
   );
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
+  const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
   const loadThreadTranscript = useAtomCommand(orchestrationEnvironment.threadTranscript, {
     reportFailure: false,
@@ -323,9 +325,11 @@ export function useComposerContextImport(input: {
                 })
               : existing?.kind === "thread"
                 ? existing.record
-                : existing
-                  ? (uploadedContextRecordFromDraft(existing) ?? undefined)
-                  : undefined;
+                : existing?.kind === "preview-tab"
+                  ? existing.record
+                  : existing
+                    ? (uploadedContextRecordFromDraft(existing) ?? undefined)
+                    : undefined;
       if (
         existingRecord &&
         isSameComposerContextPayload(existingRecord, record) &&
@@ -377,6 +381,15 @@ export function useComposerContextImport(input: {
         case "thread": {
           // Routed together after the loop so a refused batch shows one reason.
           importedThreads.push(record);
+          break;
+        }
+        case "preview-tab": {
+          const imported = importedPreviewTabRecord(record, environmentId, conflicts);
+          if (imported === undefined) break;
+          addComposerDraftPreviewTabs(attachmentDraftTarget, [imported], {
+            appendReference: false,
+          });
+          rewritten.set(record.contextId, imported.contextId);
           break;
         }
         case "image":

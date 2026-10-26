@@ -15,6 +15,7 @@ import {
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import * as Screen from "./previewAutomationScreen.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
@@ -646,8 +647,11 @@ export const PreviewAutomationSnapshot = Schema.Struct({
       fullPage: Schema.optional(Schema.Boolean),
       clipped: Schema.optional(Schema.Boolean),
       byteLength: Schema.optional(Schema.Int),
+      ...Screen.ScreenshotPlacementFields,
     }),
   ),
+  treeComplete: Schema.optional(Schema.Boolean),
+  refGeneration: Schema.optional(Schema.String),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
 
@@ -709,6 +713,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   threadId: ThreadId,
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
+  screenExpectation: Schema.optional(Screen.PreviewAutomationScreenExpectation),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   operation: PreviewAutomationOperation,
@@ -1067,12 +1072,5 @@ export const PreviewUrlResolution = Schema.Struct({
 });
 export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
 
-/**
- * Page global holding the time (ms since epoch) until which the server holds a preview tab's input
- * after Stop or a secret cut an agent action. The desktop relay checks it after its own focus wait,
- * right before inserting text.
- */
-export const PREVIEW_AGENT_INPUT_HELD_GLOBAL = "__goatAgentInputHeld";
-/** Longest a hold lasts if its release never reaches the page; agent dispatch takes far less. */
-export const PREVIEW_AGENT_INPUT_HOLD_MAX_MS = 5_000;
+export * from "./previewAutomationInputHold.ts";
 export * from "./previewAutomationPrimitives.ts";

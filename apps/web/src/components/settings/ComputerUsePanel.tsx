@@ -31,6 +31,7 @@ export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-adv
 // Settings search jumps that land on a row inside Advanced.
 const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
   "computer-use-skill",
+  "screen-code-skill",
   "computer-use-move-pointer",
 ]);
 
@@ -434,12 +435,18 @@ function BuiltInSkillRows({
   canConfigure: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
 }) {
-  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => (
+  return BUILTIN_SKILLS.filter((skill) => skill.anyOf?.includes("computer-use")).map((skill) => (
     <SettingSwitchRow
       key={skill.name}
-      {...searchableSetting("computer-use-skill")}
+      {...searchableSetting(
+        skill.name === "computer-use" ? "computer-use-skill" : "screen-code-skill",
+      )}
       settingKey="disabledBuiltInSkills"
-      description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+      description={
+        skill.name === "screen-code"
+          ? "Built in. Teaches agents to run bounded screen cells on attached browser or desktop targets. Off keeps the tools without this guide."
+          : "Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+      }
       label={`${skill.displayName} skill`}
       checked={!disabledSkills.includes(skill.name)}
       canConfigure={canConfigure}

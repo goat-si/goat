@@ -64,6 +64,8 @@ import {
 } from "./desktop-artifact-computer-use.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { stageScreenWasmAsset, windowsScreenWasmProblem } from "./lib/screen-wasm-asset.ts";
+import { validateSandboxedPreloads } from "./lib/sandboxed-preloads.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -1054,6 +1056,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // app; a second copy inside app.asar would stay ad hoc signed.
   "!apps/desktop/prod-resources/resource-monitor",
   "!apps/desktop/prod-resources/resource-monitor/**/*",
+  "!apps/desktop/prod-resources/screen-code/quickjs.wasm",
   // GOAT always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
@@ -1180,6 +1183,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/screen-code/quickjs.wasm", to: "screen-code/quickjs.wasm" },
   { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
@@ -2960,64 +2964,6 @@ const validateBundledClientAssets = Effect.fn("build-desktop-artifact.validateBu
   },
 );
 
-/** The sandboxed preload bundles in apps/desktop/dist-electron (see apps/desktop/vite.config.ts). */
-export const SANDBOXED_PRELOADS = [
-  "preload.cjs",
-  "preview-pick-preload.cjs",
-  "preview-pip-preload.cjs",
-  "mac-permission-preload.cjs",
-] as const;
-
-// The parameters Electron's sandbox wraps around a preload's source.
-const SANDBOXED_PRELOAD_PARAMETERS = [
-  "require",
-  "process",
-  "Buffer",
-  "global",
-  "setImmediate",
-  "clearImmediate",
-  "exports",
-  "module",
-] as const;
-
-/** Why Electron's sandbox would refuse this preload source, or undefined when it parses. */
-export function sandboxedPreloadSyntaxError(source: string): string | undefined {
-  try {
-    // Parses only: the function is never called.
-    Function(...SANDBOXED_PRELOAD_PARAMETERS, source);
-    return undefined;
-  } catch (error) {
-    return error instanceof SyntaxError ? error.message : undefined;
-  }
-}
-
-export class SandboxedPreloadInvalidError extends Schema.TaggedError<SandboxedPreloadInvalidError>()(
-  "SandboxedPreloadInvalidError",
-  { problems: Schema.Array(Schema.String) },
-) {
-  override get message(): string {
-    return [
-      "Electron's sandbox cannot load these preload bundles:",
-      ...this.problems.map((problem) => "  - " + problem),
-    ].join("\n");
-  }
-}
-
-const validateSandboxedPreloads = Effect.fn("build-desktop-artifact.validateSandboxedPreloads")(
-  function* (desktopDist: string) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const problems: string[] = [];
-    for (const name of SANDBOXED_PRELOADS) {
-      const problem = sandboxedPreloadSyntaxError(
-        yield* fs.readFileString(path.join(desktopDist, name)),
-      );
-      if (problem !== undefined) problems.push(name + ": " + problem);
-    }
-    if (problems.length > 0) return yield* new SandboxedPreloadInvalidError({ problems });
-  },
-);
-
 export function resolveDesktopRuntimeDependencies(
   dependencies: Record<string, string> | undefined,
   catalog: Record<string, string>,
@@ -3498,6 +3444,7 @@ export const validateSshRuntimeArchives = Effect.fn("validateSshRuntimeArchives"
         `${stem}/goat`,
         `${stem}/client/index.html`,
         `${stem}/resource-monitor/${key}/goat-resource-monitor`,
+        `${stem}/screen-code/quickjs.wasm`,
       ];
       const pty = [
         `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -3994,6 +3941,10 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: ["resource-monitor/goat-resource-monitor.exe"],
     });
   }
+  const screenWasm = yield* windowsScreenWasmProblem(resourcesDir);
+  if (screenWasm) {
+    return yield* new WindowsPackagedPayloadValidationError({ packagedAppDir, ...screenWasm });
+  }
 
   const wslArchivePath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_NAME);
   const wslArchiveHashPath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_HASH_NAME);
@@ -4074,7 +4025,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
         ),
       );
     }
-    const requiredMembers = [`${stem}/goat`, `${stem}/client`, `${stem}/node_modules`];
+    const requiredMembers = [
+      `${stem}/goat`,
+      `${stem}/client`,
+      `${stem}/node_modules`,
+      `${stem}/screen-code/quickjs.wasm`,
+    ];
     const missingMembers = requiredMembers.filter((member) => !members.includes(member));
     const ptyCandidates = [
       `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -4386,6 +4342,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  yield* stageScreenWasmAsset({
+    repoRoot,
+    destination: path.join(stageProdResourcesDir, "screen-code/quickjs.wasm"),
+  });
   yield* fs.copyFile(
     path.join(repoRoot, "LICENSE"),
     path.join(stageProdResourcesDir, "LICENSE-T3CODE.txt"),

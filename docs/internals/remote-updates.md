@@ -146,9 +146,10 @@ needs a person's confirmation bound to that environment and target.
   Public and `gh` downloads are checked against `SHA256SUMS`. An archive
   without a sidecar is accepted only from the local cache, which only the user
   writes; that is the supported way to hand a source build to remote hosts
-  (`node scripts/dev-runtime-archive.ts --version <server version> --output-dir
-  <base dir>/runtime/archives`). Dev and PR builds are never published, so they
-  skip the host download and go straight to the upload.
+  (`node scripts/dev-runtime-archive.ts --version <server version> --home-dir
+  <base dir>`, which writes `<base dir>/runtime/archives`). Dev and PR builds
+  are never published, so they skip the host download and go straight to the
+  upload.
 - **No release.** `goat-releases` publishes sparsely (the first nightly appeared
   in October 2026), and source builds never publish. When the exact archive is
   missing, a live compatible server stays attached; with nothing running, the

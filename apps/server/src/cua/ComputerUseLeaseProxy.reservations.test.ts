@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@goat/contracts";
+import { ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -13,6 +13,186 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect("an expired primitive cannot start display proof after placement stalls", () =>
+    Effect.gen(function* () {
+      const placement = yield* Deferred.make<void>();
+      const h = yield* harness({ elsewhere: new Set(), placementGate: placement });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:placement",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 1_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9 },
+      });
+      yield* h.checking;
+      yield* TestClock.adjust("1001 millis");
+      yield* Deferred.succeed(placement, undefined);
+      assert.equal((yield* h.primitiveReply).status, "not_started");
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+  it.effect("a primitive whose admission outlives its cell deadline never reaches the driver", () =>
+    Effect.gen(function* () {
+      const admission = yield* Deferred.make<void>();
+      const h = yield* harness({
+        reservation: (call) =>
+          call.action === "reserve"
+            ? Deferred.await(admission).pipe(
+                Effect.as({ status: "admitted" as const, reservationId: "ticket:late" }),
+              )
+            : Effect.succeed({ status: "released" as const }),
+      });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:late",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 1_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9 },
+      });
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      yield* TestClock.adjust("1001 millis");
+      yield* Deferred.succeed(admission, undefined);
+      assert.equal((yield* h.primitiveReply).status, "not_started");
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect("a delivered primitive cancelled during admission never reaches the driver", () =>
+    Effect.gen(function* () {
+      const admission = yield* Deferred.make<void>();
+      const cancelled = new Set<string>();
+      const h = yield* harness({
+        primitiveCancelled: (requestId) => cancelled.has(requestId),
+        reservation: (call) =>
+          call.action === "reserve"
+            ? Deferred.await(admission).pipe(
+                Effect.as({ status: "admitted" as const, reservationId: "ticket:cancelled" }),
+              )
+            : Effect.succeed({ status: "released" as const }),
+      });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:cancelled",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 60_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9 },
+      });
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      cancelled.add("request:cancelled");
+      yield* Deferred.succeed(admission, undefined);
+      assert.equal((yield* h.primitiveReply).status, "not_started");
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+  it.effect(
+    "a reverse primitive uses display proof, start report and ticket validation before input",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ elsewhere: new Set(), humanInput: true });
+        yield* h.push(active());
+        const current = yield* h.driverStarted;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "request:proof",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 60_000,
+          tool: "click",
+          args: { pid: 4, window_id: 9, x: 1, y: 1 },
+        });
+        const proof = yield* h.nextToDriver;
+        assert.deepEqual(proof.params, { name: "list_windows", arguments: {} });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: proof.id,
+            result: { content: [], structuredContent: { windows: [{ pid: 4, window_id: 9 }] } },
+          }),
+        );
+        const forwarded = yield* h.nextToDriver;
+        assert.equal((forwarded.params as { name: string }).name, "click");
+        assert.match(String(forwarded.id), /^goat:primitive:/);
+        assert.deepEqual(
+          h.reservations.slice(0, 2).map((call) => call.action),
+          ["reserve", "validate"],
+        );
+        assert.match(yield* h.agentCall, /^start /);
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: forwarded.id,
+            result: { content: [], structuredContent: { pid: 4, window_id: 9 } },
+          }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+      }),
+  );
+
+  it.effect("server and provider input to one window share one reservation", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      const primitive: ComputerUsePrimitiveRequest = {
+        state: "primitive-request",
+        requestId: "request:server",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 60_000,
+        tool: "click",
+        args: { pid: 4, window_id: 9, x: 1, y: 1 },
+      };
+      yield* h.sendPrimitive(primitive);
+      const serverCall = yield* h.nextToDriver;
+      assert.match(String(serverCall.id), /^goat:primitive:/);
+      assert.equal(h.reservations[0]?.action, "reserve");
+      assert.equal(h.reservations[1]?.action, "validate");
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const providerCall = yield* h.nextToDriver;
+      assert.equal(providerCall.id, 1);
+      assert.equal(h.reservations[2]?.action, "reserve");
+      assert.equal(h.reservations[3]?.action, "validate");
+      yield* h.reply(
+        JSON.stringify({ jsonrpc: "2.0", id: serverCall.id, result: { content: [] } }),
+      );
+      assert.equal((yield* h.primitiveReply).status, "settled");
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 1);
+    }),
+  );
+
   it.effect.each(["missing", "empty", "substituted", "no-permissions"] as const)(
     "refuses %s execution ticket authority without forwarding or retaining input cover",
     (invalid) =>

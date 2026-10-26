@@ -50,3 +50,30 @@ it("an open admits exactly its own turn's chips", () => {
       ?.turnCapabilities,
   );
 });
+
+it("a later turn replaces exact tab hints while an internal re-prepare keeps the admitted turn", () => {
+  const first = {
+    ...turn(codex, ["browser"]),
+    screenBindingHints: {
+      browserRequested: true,
+      computerRequested: false,
+      appIds: [],
+      tabs: [
+        {
+          mentionId: "first",
+          environmentId: "env",
+          browserInstanceId: "browser",
+          tabId: "tab-one",
+          titleAtMention: "One",
+          urlAtMention: "https://example.test/one",
+        },
+      ],
+    },
+  };
+  const second = {
+    ...turn(codex, ["browser"]),
+    screenBindingHints: { ...first.screenBindingHints, tabs: [] },
+  };
+  assert.deepEqual(selectPrepareInput(second, false, first)?.screenBindingHints?.tabs, []);
+  assert.deepEqual(selectPrepareInput(first, true, second)?.screenBindingHints?.tabs, []);
+});

@@ -1,5 +1,5 @@
 import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
-import type { EnvironmentId, ModelSelection } from "@goat/contracts";
+import type { EnvironmentId, ModelSelection, PreviewTabContextRecord } from "@goat/contracts";
 import {
   appCapabilityContextRecord,
   turnCapabilityContextRecord,
@@ -7,6 +7,7 @@ import {
 
 import { formatInlineContextReference } from "../../lib/composerContextReferences";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import type { ComposerTrigger } from "../../composer-logic";
 
 /** The drivers a send goes to: every selected model when it fans out, else the one selected. */
 export function composerCapabilityTargetDrivers(
@@ -50,4 +51,17 @@ export function selectComposerCapability(input: {
   if (availability.state !== "unavailable" || !availability.setup) return;
   if (input.replaceTriggerWith("")) input.onReplaced();
   input.openSetup();
+}
+
+export function selectComposerPreviewTab(
+  record: PreviewTabContextRecord,
+  trigger: ComposerTrigger,
+  environmentId: EnvironmentId,
+  replaceTriggerWith: (replacement: string) => boolean,
+  onSelected: () => void,
+): void {
+  if (trigger.kind !== "path") return;
+  if (record.environmentId !== environmentId) return;
+  if (!replaceTriggerWith(`${formatInlineContextReference(record)} `)) return;
+  onSelected();
 }

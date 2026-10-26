@@ -17,8 +17,10 @@ import {
 } from "@goat/contracts";
 import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import type * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -29,6 +31,7 @@ import * as CuaDriver from "./CuaDriver.ts";
 import { everyAppKind } from "./ComputerUseFullAccess.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
+import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 
 export type ComputerUseRefusal =
   | "unsupported-provider"
@@ -63,6 +66,9 @@ export type ComputerUseAttachment =
       readonly _tag: "proxied";
       readonly mcp: CuaDriverMcpConfiguration;
       readonly control: ComputerUseLeases.ComputerUseControl;
+      /** Absent when this server has no primitive channel, so the proxy opens no reverse channel. */
+      readonly proxyChannelToken?: string;
+      readonly attachmentGeneration: string;
       readonly proxy: SelfInvocation;
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
@@ -215,12 +221,29 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     Option.isSome(config) && skills.includes("computer-use")
       ? installComputerUseSkill(config.value.stateDir, HostProcess.Platform.defaultValue())
       : undefined;
+  const attachmentGeneration = NodeCrypto.randomUUID();
+  const channel = yield* Effect.serviceOption(
+    ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel,
+  );
+  const proxyChannelToken = Option.isSome(channel)
+    ? yield* channel.value.tokenFor(input.threadId)
+    : undefined;
+  if (Option.isSome(channel))
+    yield* channel.value.issue({
+      threadId: input.threadId,
+      attachmentGeneration,
+      proxyChannelToken: yield* channel.value.tokenFor(input.threadId),
+      expiresAt: DateTime.toEpochMillis(control.value.expiresAt),
+      controlId: control.value.controlId,
+    });
   return {
     _tag: "proxied",
     mcp: mcp.value,
     ...(skillPath === undefined ? {} : { skillPath }),
     ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
     control: control.value,
+    ...(proxyChannelToken === undefined ? {} : { proxyChannelToken }),
+    attachmentGeneration,
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
@@ -236,7 +259,30 @@ export const LEASE_PROXY_ENV = {
   driver: "GOAT_CUA_DRIVER_MCP",
   skill: "GOAT_CUA_SKILL_PATH",
   x11Display: "GOAT_CUA_X11_DISPLAY",
+  proxyChannelToken: "GOAT_CUA_PROXY_CHANNEL_TOKEN",
 } as const;
+
+/** The descriptor token identifies exactly one attachment generation during cleanup. */
+const proxyChannelTokenOf = (config: McpProviderSessionConfig | undefined) =>
+  config?.cuaDriver?.environment.find((entry) => entry.name === LEASE_PROXY_ENV.proxyChannelToken)
+    ?.value;
+
+export const revokeProxyChannelAttachment = Effect.fn("ComputerUse.revokeProxyChannelAttachment")(
+  function* (
+    channel: Option.Option<ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel["Service"]>,
+    sessions: McpProviderSessions.McpProviderSessions["Service"],
+    threadId: ThreadId,
+    expectedCredentialId?: string,
+  ) {
+    if (Option.isNone(channel)) return;
+    const config = yield* sessions.read(threadId);
+    if (expectedCredentialId !== undefined && config?.providerSessionId !== expectedCredentialId)
+      return;
+    const token = proxyChannelTokenOf(config);
+    if (token !== undefined) yield* channel.value.revoke({ threadId, proxyChannelToken: token });
+    else if (expectedCredentialId === undefined) yield* channel.value.revoke({ threadId });
+  },
+);
 
 /**
  * The stdio server a thread's provider spawns. It carries the thread's own GOAT MCP credential
@@ -291,6 +337,9 @@ function leaseProxyDescriptor(
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
       { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
+      ...(attachment.proxyChannelToken === undefined
+        ? []
+        : [{ name: LEASE_PROXY_ENV.proxyChannelToken, value: attachment.proxyChannelToken }]),
       ...(attachment.skillPath === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.skill, value: attachment.skillPath }]),
@@ -315,15 +364,16 @@ export function withComputerUse(
     builtInSkills: _previousSkills,
     ...rest
   } = config;
+  const base = _previousSkills === undefined ? rest : { ...rest, builtInSkills: _previousSkills };
   switch (attachment._tag) {
     case "none":
-      return attachment.blockUserConfig ? { ...rest, cuaDriverBlocked: true } : rest;
+      return attachment.blockUserConfig ? { ...base, cuaDriverBlocked: true } : base;
     case "proxied":
       return {
-        ...rest,
+        ...base,
         cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute),
         ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
-        builtInSkills: attachment.skills,
+        builtInSkills: [...new Set([...(_previousSkills ?? []), ...attachment.skills])],
       };
   }
 }

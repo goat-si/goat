@@ -16,8 +16,13 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
-import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
+import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
+import {
+  AgentCursorLeaseUpdate,
+  ComputerUsePrimitiveCancel,
+  ComputerUsePrimitiveRequest,
+} from "./cuaPrimitives.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -218,10 +223,13 @@ export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
  * Proxy -> server: where the agent's cursor is now, what the helper overlay draws, or null when
  * the overlay hides it. The preview draws it over the window's live picture.
  */
-export const ComputerUseLeaseCursor = Schema.Struct({
-  controlId: TrimmedNonEmptyString,
-  cursor: Schema.NullOr(ComputerUseAgentCursor),
-});
+export const ComputerUseLeaseCursor = Schema.Union([
+  Schema.Struct({ controlId: TrimmedNonEmptyString, report: AgentCursorReport }),
+  Schema.Struct({
+    controlId: TrimmedNonEmptyString,
+    cursor: Schema.NullOr(ComputerUseAgentCursor),
+  }),
+]);
 export type ComputerUseLeaseCursor = typeof ComputerUseLeaseCursor.Type;
 
 /**
@@ -563,6 +571,9 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     expiresAt: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
+  ComputerUsePrimitiveRequest,
+  ComputerUsePrimitiveCancel,
+  AgentCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
@@ -587,6 +598,9 @@ export const ComputerUseLeaseThreadUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     reason: ComputerUseControlEnd,
   }),
+  ComputerUsePrimitiveRequest,
+  ComputerUsePrimitiveCancel,
+  AgentCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseThreadUpdate = typeof ComputerUseLeaseThreadUpdate.Type;
 
@@ -632,6 +646,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "token_first",
   /** It would move the person's hardware pointer, which this host keeps still (cuaMovePointer). */
   "pointer_locked",
+  /** The helper may still draw over a capture because its hide was not acknowledged. */
+  "capture_hide_unconfirmed",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -657,6 +673,9 @@ export const computerUseRefusalReason = (
 
 /** Path the proxy reads control updates from, on the server that issued its MCP credential. */
 export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+export const COMPUTER_USE_PRIMITIVE_REPLY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-replies`;
+export const COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-ready`;
+export const COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-cutoff`;
 
 const ComputerUseCallOwner = {
   controlId: TrimmedNonEmptyString,
@@ -890,3 +909,4 @@ export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "opencode",
   "pi",
 ]);
+export * from "./cuaPrimitives.ts";

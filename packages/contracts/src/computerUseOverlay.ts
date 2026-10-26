@@ -12,6 +12,7 @@
  * @module computerUseOverlay
  */
 import * as Schema from "effect/Schema";
+import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** The notification method the helper consumes; the driver never sees it. */
 export const COMPUTER_USE_OVERLAY_METHOD = "goat/overlay";
@@ -36,14 +37,72 @@ export const ComputerUseOverlayHideReason = Schema.Literals([
 ]);
 export type ComputerUseOverlayHideReason = typeof ComputerUseOverlayHideReason.Type;
 
+export const AgentCursorState = Schema.Literals([
+  "moving",
+  "acting",
+  "thinking",
+  "resting",
+  "yielded",
+  "hidden",
+]);
+export type AgentCursorState = typeof AgentCursorState.Type;
+
+export const AgentCursorOwner = Schema.Struct({
+  environmentId: EnvironmentId,
+  runId: TrimmedNonEmptyString,
+  turnId: TrimmedNonEmptyString,
+  targetId: TrimmedNonEmptyString,
+  generation: Schema.Int,
+  sequence: Schema.Int,
+});
+export type AgentCursorOwner = typeof AgentCursorOwner.Type;
+
+export const AgentCursorSnapshot = Schema.Struct({
+  identity: AgentCursorOwner,
+  phase: AgentCursorState,
+});
+export type AgentCursorSnapshot = typeof AgentCursorSnapshot.Type;
+
+export const AgentCursorEvent = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("show"),
+    identity: AgentCursorOwner,
+    phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
+    pid: Schema.optionalKey(Schema.Int),
+    windowId: Schema.optionalKey(Schema.Int),
+    point: Schema.optionalKey(ComputerUseOverlayPoint),
+  }),
+  Schema.Struct({
+    op: Schema.Literal("hide"),
+    identity: AgentCursorOwner,
+    phase: Schema.Literals(["yielded", "hidden"]),
+    reason: ComputerUseOverlayHideReason,
+  }),
+]);
+export type AgentCursorEvent = typeof AgentCursorEvent.Type;
+
 export const ComputerUseOverlayCommand = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("show"),
+    identity: AgentCursorOwner,
+    pid: Schema.Int,
+    windowId: Schema.Int,
+    point: Schema.optionalKey(ComputerUseOverlayPoint),
+    phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
+  }),
+  Schema.Struct({
+    op: Schema.Literal("hide"),
+    identity: AgentCursorOwner,
+    phase: Schema.Literals(["yielded", "hidden"]),
+    reason: ComputerUseOverlayHideReason,
+  }),
   Schema.Struct({
     op: Schema.Literal("show"),
     pid: Schema.Int,
     windowId: Schema.Int,
     /** Absent when the call named an element, a zoomed region or a window not yet seen. */
     point: Schema.optionalKey(ComputerUseOverlayPoint),
-    /** "acting" while an input call is in flight; "resting" after it answered. */
+    /** Direct driver calls retain their original marker. */
     phase: Schema.Literals(["acting", "resting"]),
   }),
   Schema.Struct({ op: Schema.Literal("hide"), reason: ComputerUseOverlayHideReason }),
@@ -57,6 +116,13 @@ export type ComputerUseOverlayCommand = typeof ComputerUseOverlayCommand.Type;
 export const ComputerUseAgentCursor = Schema.Struct({
   windowId: Schema.Int,
   point: ComputerUseOverlayPoint,
-  phase: Schema.Literals(["acting", "resting"]),
+  phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
 });
 export type ComputerUseAgentCursor = typeof ComputerUseAgentCursor.Type;
+
+export const AgentCursorReport = Schema.Struct({
+  identity: AgentCursorOwner,
+  cursor: Schema.NullOr(ComputerUseAgentCursor),
+  phase: AgentCursorState,
+});
+export type AgentCursorReport = typeof AgentCursorReport.Type;

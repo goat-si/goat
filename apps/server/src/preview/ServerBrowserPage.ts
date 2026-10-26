@@ -21,6 +21,7 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
+import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -614,6 +615,7 @@ const captureFullPage = async (cdp: CDPSession) => {
       fullPage: true,
       clipped,
       byteLength,
+      ...documentPlacement(width, height, imageWidth),
     };
   }
   throw new ServerBrowserOperationError("PreviewAutomationExecutionError", FULL_PAGE_TOO_LARGE);
@@ -674,7 +676,7 @@ const capture = async (
             .then((data) => ({
               mimeType: "image/png" as const,
               data,
-              ...pngSize(data),
+              ...viewportPlacement(viewport, pngSize(data)),
             }));
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
@@ -691,6 +693,7 @@ const capture = async (
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
+  let unread: ReadonlyArray<Frame> = [];
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
@@ -706,7 +709,7 @@ const capture = async (
     dotted = dottedPattern(after.flatMap((values) => values ?? []));
     // A frame that didn't answer both times, such as one that crashed, can only hold values the
     // tree shows if the tree shows its content.
-    const unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
+    unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
     const filled = /^\s*- iframe (?:\[active\] )?\[ref=(\S+?)\].*:$/gm;
     for (const [, ref] of unread.length ? tree.matchAll(filled) : []) {
       const iframe = await input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 });
@@ -725,14 +728,10 @@ const capture = async (
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
-  const accessibilityTree =
-    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`
-      .slice(0, MAX_VISIBLE_TEXT_LENGTH)
-      .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
-        const ref = `t3-${generation}-${nativeRef}`;
-        state.refs.set(ref, nativeRef);
-        return `[ref=${ref}]`;
-      });
+  const { accessibilityTree, ...treeFields } = screenTree(
+    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
+    { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
+  );
   const masked = <A>(value: A) => redactValue(value, mask) as A;
   return {
     ...page,
@@ -741,6 +740,7 @@ const capture = async (
     // Mask text before truncating so a value crossing the cut cannot leak its prefix.
     visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
     accessibilityTree,
+    ...treeFields,
     consoleEntries: masked([...input.consoleEntries]),
     networkEntries: masked([...input.networkEntries]),
     actionTimeline: masked([...input.actionTimeline]),

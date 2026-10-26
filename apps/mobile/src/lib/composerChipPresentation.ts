@@ -43,6 +43,8 @@ const CONTEXT_CHIP_PRESENTATIONS = {
     accent: "#009c96",
     icon: "messages-square",
   },
+  // A tab mention is picked on web or desktop; web draws it with the thread accent.
+  "preview-tab": { accent: "#009c96", icon: "mouse-pointer-click" },
   capability: { accent: "#3f9a55", icon: "monitor" },
 } as const satisfies Record<string, ContextChipPresentation>;
 

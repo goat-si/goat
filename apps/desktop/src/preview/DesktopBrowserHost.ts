@@ -17,6 +17,7 @@ import * as Stream from "effect/Stream";
 
 import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts";
 import { sendPageCommand } from "./GuestInput.ts";
+import type { AgentPointer } from "./CursorStateOrdering.ts";
 
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
@@ -90,12 +91,7 @@ export class DesktopBrowserHost extends Context.Service<
     readonly detach: (key: DesktopBrowserTabKey) => void;
     readonly humanStartedDownload: (source: Electron.WebContents) => boolean;
     readonly placeDownload: (source: Electron.WebContents, item: Electron.DownloadItem) => boolean;
-    readonly pointers: Stream.Stream<{
-      readonly key: DesktopBrowserTabKey;
-      readonly phase: "move" | "click";
-      readonly x: number;
-      readonly y: number;
-    }>;
+    readonly pointers: Stream.Stream<AgentPointer>;
     /** Each relayed screenshot as it starts and as it settles. */
     readonly captures: Stream.Stream<{
       readonly key: DesktopBrowserTabKey;
@@ -111,12 +107,7 @@ export class DesktopBrowserHost extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const outbox = yield* PubSub.unbounded<DesktopBrowserEventType>();
-  const pointers = yield* PubSub.sliding<{
-    readonly key: DesktopBrowserTabKey;
-    readonly phase: "move" | "click";
-    readonly x: number;
-    readonly y: number;
-  }>(16);
+  const pointers = yield* PubSub.sliding<AgentPointer>(16);
   const captures = yield* PubSub.unbounded<{
     readonly key: DesktopBrowserTabKey;
     readonly capturing: boolean;
@@ -495,8 +486,24 @@ export const make = Effect.gen(function* () {
       const tab = tabs.get(keyOf(command.value));
       if (!tab) return;
       if (command.value.type === "pointer") {
-        const { threadId, tabId, phase, x, y } = command.value;
-        runFork(PubSub.publish(pointers, { key: { threadId, tabId }, phase, x, y }));
+        const { threadId, tabId, phase, x, y, cursor } = command.value;
+        runFork(
+          PubSub.publish(pointers, {
+            key: { threadId, tabId },
+            type: "pointer",
+            phase,
+            x,
+            y,
+            ...(cursor ? { cursor } : {}),
+          }),
+        );
+        return;
+      }
+      if (command.value.type === "cursor-state") {
+        const { threadId, tabId, cursor } = command.value;
+        runFork(
+          PubSub.publish(pointers, { key: { threadId, tabId }, type: "cursor-state", cursor }),
+        );
         return;
       }
       if (command.value.type === "release") {

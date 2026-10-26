@@ -3,6 +3,14 @@ import { describe, expect, it } from "vite-plus/test";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 describe("SessionControl", () => {
+  it("rejects a page action after its expected control generation changes", async () => {
+    const control = new SessionControl("agent");
+    const gate = control.dispatchGate(control.generation);
+    await control.take("person");
+    await control.release("person");
+    expect(() => gate()).toThrow(BrowserControlInterrupted);
+    expect(() => control.assertObservedGeneration(0)).toThrow(BrowserControlInterrupted);
+  });
   it("returns an action result before tracked navigation but drains it before already queued actions", async () => {
     const control = new SessionControl("agent");
     const committed = Promise.withResolvers<void>();

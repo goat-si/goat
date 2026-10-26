@@ -41,8 +41,7 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { providerMessageTextWithAttachmentPaths } from "@goat/provider-core/server/attachmentPrompt";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
-import { openPiCuaGate, writePiCuaGate } from "./cuaGate.ts";
+import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -461,22 +460,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
-      const cuaGate =
-        mcpSession?.cuaDriver === undefined
-          ? undefined
-          : {
-              path: yield* provideCacheFs(
-                openPiCuaGate(fileSystem).pipe(Effect.provideService(Scope.Scope, scope)),
-              ),
-              key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
-            };
+      const gates = yield* provideCacheFs(
+        openPiTurnGates(fileSystem, mcpSession).pipe(Effect.provideService(Scope.Scope, scope)),
+      );
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
-        cuaGatePath: cuaGate?.path,
+        cuaGatePath: gates.cua?.path,
+        screenSkillGatePath: gates.screenSkillPath,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -2416,14 +2410,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (cuaGate !== undefined) {
-              const attached = yield* mcpSessions.read(turnInput.threadId);
-              yield* writePiCuaGate(fileSystem, cuaGate, attached).pipe(
-                Effect.mapError(() =>
-                  protocolError("Could not update Pi's computer use access for this turn"),
-                ),
-              );
-            }
+            yield* writePiTurnGates(fileSystem, gates, mcpSessions.read(turnInput.threadId)).pipe(
+              Effect.mapError((gate) =>
+                protocolError(`Could not update Pi's ${gate} for this turn`),
+              ),
+            );
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({

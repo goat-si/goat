@@ -14,7 +14,15 @@ import {
   ComputerUseLeaseThreadUpdate,
   ComputerUseCallReservation,
   ComputerUseCallAdmission,
+  COMPUTER_USE_PRIMITIVE_REPLY_ROUTE,
+  COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE,
+  COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE,
+  ComputerUsePrimitiveReply,
+  ComputerUsePrimitiveControlReady,
+  ComputerUsePrimitiveControlCutoff,
+  DEFAULT_SCREEN_RUN_LIMITS,
 } from "@goat/contracts";
+import * as ByteSize from "effect/ByteSize";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -24,13 +32,19 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  HttpIncomingMessage,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { threadLeaseUpdates } from "./ComputerUseLeaseThreadStream.ts";
+import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -38,6 +52,17 @@ const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLe
 const encodeAdmission = Schema.encodeSync(Schema.fromJsonString(ComputerUseCallAdmission));
 const decodeReservation = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUseCallReservation),
+);
+const decodePrimitiveReply = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ComputerUsePrimitiveReply),
+);
+const PRIMITIVE_REPLY_BODY_BYTES =
+  Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
+const decodeControlReady = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ComputerUsePrimitiveControlReady),
+);
+const decodeControlCutoff = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ComputerUsePrimitiveControlCutoff),
 );
 
 /** Updates for one thread's control until one of them ends it. */
@@ -189,25 +214,68 @@ const streamLayer = HttpRouter.add(
     const threadId = yield* threadOf;
     const params = new URL(request.url, "http://local").searchParams;
     const controlId = params.get("control");
+    const primitive = params.get("primitive") === "1";
+    const instance = params.get("instance");
+    const channel = Option.getOrUndefined(
+      yield* Effect.serviceOption(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
+    );
+    const token = request.headers["x-goat-proxy-channel"] ?? "";
+    const attachmentGeneration =
+      threadId === undefined || !primitive || channel === undefined
+        ? undefined
+        : yield* channel.authenticate({ threadId, proxyChannelToken: token });
+    if (primitive && (threadId === undefined || attachmentGeneration === undefined || !instance))
+      return HttpServerResponse.empty({ status: 401 });
     if (params.has("thread")) {
       if (threadId === undefined || params.get("thread") !== threadId)
         return HttpServerResponse.text(
           encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",
           { status: 401, contentType: "application/x-ndjson" },
         );
-      if (params.size !== 1) return HttpServerResponse.empty({ status: 400 });
+      if (params.size !== (primitive ? 3 : 1)) return HttpServerResponse.empty({ status: 400 });
+      const registration =
+        primitive &&
+        channel !== undefined &&
+        attachmentGeneration !== undefined &&
+        instance !== null
+          ? yield* channel.registerStream({
+              threadId,
+              attachmentGeneration,
+              proxyChannelToken: token,
+              proxyInstanceId: instance,
+              kind: "thread",
+            })
+          : undefined;
+      if (registration?.status === "unauthorized") return HttpServerResponse.empty({ status: 401 });
+      if (registration?.status === "conflict") return HttpServerResponse.empty({ status: 409 });
       const context = yield* Effect.context<
         | ComputerUseLeases.ComputerUseLeases
         | ServerSettings.ServerSettingsService
         | McpSessionRegistry.McpSessionRegistry
       >();
       return HttpServerResponse.stream(
-        threadLeaseUpdates({ threadId, token: bearer(request.headers.authorization) }).pipe(
+        withPrimitiveRequests(
+          threadLeaseUpdates({ threadId, token: bearer(request.headers.authorization) }),
+          registration?.status === "registered" ? registration.requests : undefined,
+        ).pipe(
           Stream.map((update) => encodeThreadUpdate(update) + "\n"),
           Stream.encodeText,
           Stream.provideContext(context),
+          Stream.ensuring(
+            channel !== undefined && registration?.status === "registered"
+              ? channel.closeStream({ threadId, registrationId: registration.registrationId })
+              : Effect.void,
+          ),
         ),
-        { contentType: "application/x-ndjson", headers: { "cache-control": "no-store" } },
+        {
+          contentType: "application/x-ndjson",
+          headers: {
+            "cache-control": "no-store",
+            ...(registration?.status === "registered"
+              ? { "x-goat-primitive-registration": registration.registrationId }
+              : {}),
+          },
+        },
       );
     }
     if (threadId === undefined || !controlId)
@@ -215,16 +283,46 @@ const streamLayer = HttpRouter.add(
         encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",
         { status: 401, contentType: "application/x-ndjson" },
       );
+    if (params.size !== (primitive ? 3 : 1)) return HttpServerResponse.empty({ status: 400 });
+    const registration =
+      primitive && channel !== undefined && attachmentGeneration !== undefined && instance !== null
+        ? yield* channel.registerStream({
+            threadId,
+            attachmentGeneration,
+            proxyChannelToken: token,
+            proxyInstanceId: instance,
+            kind: "control",
+            controlId,
+          })
+        : undefined;
+    if (registration?.status === "unauthorized") return HttpServerResponse.empty({ status: 401 });
+    if (registration?.status === "conflict") return HttpServerResponse.empty({ status: 409 });
     const context = yield* Effect.context<
       ComputerUseLeases.ComputerUseLeases | ServerSettings.ServerSettingsService
     >();
     return HttpServerResponse.stream(
-      leaseUpdates({ threadId, controlId }).pipe(
+      withPrimitiveRequests(
+        leaseUpdates({ threadId, controlId }),
+        registration?.status === "registered" ? registration.requests : undefined,
+      ).pipe(
         Stream.map((update) => encodeUpdate(update) + "\n"),
         Stream.encodeText,
         Stream.provideContext(context),
+        Stream.ensuring(
+          channel !== undefined && registration?.status === "registered"
+            ? channel.closeStream({ threadId, registrationId: registration.registrationId })
+            : Effect.void,
+        ),
       ),
-      { contentType: "application/x-ndjson", headers: { "cache-control": "no-store" } },
+      {
+        contentType: "application/x-ndjson",
+        headers: {
+          "cache-control": "no-store",
+          ...(registration?.status === "registered"
+            ? { "x-goat-primitive-registration": registration.registrationId }
+            : {}),
+        },
+      },
     );
   }),
 );
@@ -267,4 +365,97 @@ const callLayer = HttpRouter.add(
   }),
 );
 
-export const layer = Layer.mergeAll(streamLayer, reportLayer, callLayer);
+const primitiveReplyLayer = HttpRouter.add(
+  "POST",
+  COMPUTER_USE_PRIMITIVE_REPLY_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const threadId = yield* threadOf;
+    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+    const channel = Option.getOrUndefined(
+      yield* Effect.serviceOption(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
+    );
+    if (channel === undefined) return HttpServerResponse.empty({ status: 503 });
+    const proxyChannelToken = request.headers["x-goat-proxy-channel"] ?? "";
+    const attachmentGeneration = yield* channel.authenticate({ threadId, proxyChannelToken });
+    if (attachmentGeneration === undefined) return HttpServerResponse.empty({ status: 401 });
+    const body = yield* request.text.pipe(
+      Effect.provideService(
+        HttpIncomingMessage.MaxBodySize,
+        ByteSize.bytes(PRIMITIVE_REPLY_BODY_BYTES),
+      ),
+      Effect.flatMap(decodePrimitiveReply),
+      Effect.option,
+    );
+    if (Option.isNone(body)) return HttpServerResponse.empty({ status: 400 });
+    const accepted = yield* channel.reply({
+      threadId,
+      attachmentGeneration,
+      proxyChannelToken,
+      registrationId: body.value.registrationId,
+      reply: body.value,
+    });
+    return HttpServerResponse.empty({ status: accepted ? 204 : 409 });
+  }),
+);
+
+const controlReadyLayer = HttpRouter.add(
+  "POST",
+  COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const threadId = yield* threadOf;
+    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+    const channel = Option.getOrUndefined(
+      yield* Effect.serviceOption(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
+    );
+    if (channel === undefined) return HttpServerResponse.empty({ status: 503 });
+    const proxyChannelToken = request.headers["x-goat-proxy-channel"] ?? "";
+    const attachmentGeneration = yield* channel.authenticate({ threadId, proxyChannelToken });
+    if (attachmentGeneration === undefined) return HttpServerResponse.empty({ status: 401 });
+    const body = yield* request.text.pipe(Effect.flatMap(decodeControlReady), Effect.option);
+    if (Option.isNone(body)) return HttpServerResponse.empty({ status: 400 });
+    const accepted = yield* channel.reportControlReady({
+      threadId,
+      attachmentGeneration,
+      proxyChannelToken,
+      ...body.value,
+    });
+    return HttpServerResponse.empty({ status: accepted ? 204 : 409 });
+  }),
+);
+
+const controlCutoffLayer = HttpRouter.add(
+  "POST",
+  COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const threadId = yield* threadOf;
+    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+    const channel = Option.getOrUndefined(
+      yield* Effect.serviceOption(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
+    );
+    if (channel === undefined) return HttpServerResponse.empty({ status: 503 });
+    const proxyChannelToken = request.headers["x-goat-proxy-channel"] ?? "";
+    const attachmentGeneration = yield* channel.authenticate({ threadId, proxyChannelToken });
+    if (attachmentGeneration === undefined) return HttpServerResponse.empty({ status: 401 });
+    const body = yield* request.text.pipe(Effect.flatMap(decodeControlCutoff), Effect.option);
+    if (Option.isNone(body)) return HttpServerResponse.empty({ status: 400 });
+    const accepted = yield* channel.reportControlCutoff({
+      threadId,
+      attachmentGeneration,
+      proxyChannelToken,
+      ...body.value,
+    });
+    return HttpServerResponse.empty({ status: accepted ? 204 : 409 });
+  }),
+);
+
+export const layer = Layer.mergeAll(
+  streamLayer,
+  reportLayer,
+  callLayer,
+  primitiveReplyLayer,
+  controlReadyLayer,
+  controlCutoffLayer,
+);

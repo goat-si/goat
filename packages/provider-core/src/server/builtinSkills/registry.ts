@@ -16,6 +16,7 @@ import {
   COMPUTER_USE_SKILL_PEOPLE,
 } from "./computerUse.ts";
 import { GOAT_DISCIPLINE_SKILL } from "./goatDiscipline.ts";
+import { SCREEN_CODE_SKILL_CORE } from "./screenCode.ts";
 
 const SECTIONS: Readonly<
   Record<BuiltInSkillName, (platform: NodeJS.Platform) => ReadonlyArray<string>>
@@ -26,6 +27,7 @@ const SECTIONS: Readonly<
     return notes === undefined ? skill : [...skill, notes];
   },
   "goat-discipline": () => [GOAT_DISCIPLINE_SKILL],
+  "screen-code": () => [SCREEN_CODE_SKILL_CORE],
 };
 
 /**
@@ -41,10 +43,11 @@ export function resolveBuiltInSkills(input: BuiltInSkillActivationInput): BuiltI
   const disabled = new Set(input.disabled ?? []);
   return {
     active: BUILTIN_SKILLS.filter((skill) =>
-      skill.capability === undefined
+      skill.anyOf === undefined
         ? named.has(skill.name) && !disabled.has(skill.name)
-        : attached.has(skill.capability) &&
-          (requested.has(skill.capability) || !disabled.has(skill.name)),
+        : skill.anyOf.some((capability) => attached.has(capability)) &&
+          (skill.anyOf.some((capability) => requested.has(capability)) ||
+            !disabled.has(skill.name)),
     ).map((skill) => skill.name),
     unattached: [...requested].filter((capability) => !attached.has(capability)),
   };
@@ -52,7 +55,7 @@ export function resolveBuiltInSkills(input: BuiltInSkillActivationInput): BuiltI
 
 const isBuiltInSkillName = Schema.is(BuiltInSkillName);
 const NAMED_SKILLS = new Set(
-  BUILTIN_SKILLS.filter((skill) => skill.capability === undefined).map((skill) => skill.name),
+  BUILTIN_SKILLS.filter((skill) => skill.anyOf === undefined).map((skill) => skill.name),
 );
 
 /**

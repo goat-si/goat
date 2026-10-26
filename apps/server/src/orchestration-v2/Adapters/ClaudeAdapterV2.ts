@@ -188,7 +188,7 @@ import {
   GOAT_ORCHESTRATION_INSTRUCTIONS,
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
@@ -1439,6 +1439,7 @@ export function makeClaudeQueryOptions(input: {
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly computerUseSkill?: boolean;
+  readonly screenCodeSkill?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -1550,15 +1551,7 @@ export function makeClaudeQueryOptions(input: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append: [
-        buildRuntimeInstructions({
-          harness: "Claude Code",
-          computerUse:
-            input.computerUseSkill !== false &&
-            input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
-            !McpProviderSession.isBlockedCuaServer(
-              input.mcpServers[McpProviderSession.CUA_MCP_SERVER_NAME],
-            ),
-        }) +
+        ClaudeRuntimeSkills.runtimeInstructions(input) +
           "\n\n" +
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
           "\n\n" +
@@ -10028,7 +10021,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
             resume: shouldResume,
-            computerUseSkill: McpProviderSession.carriesComputerUseSkill(mcpSession),
+            ...ClaudeRuntimeSkills.skillOptions(mcpSession),
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
