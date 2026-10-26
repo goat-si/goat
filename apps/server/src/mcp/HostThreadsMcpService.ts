@@ -610,6 +610,8 @@ const make = Effect.gen(function* () {
       Effect.map((limits) => ({ limits, readFallback: false as const })),
       Effect.catchIf(
         (error) =>
+          // Only a linked host's own server judges the remote read; local watches keep operate.
+          input.host !== undefined &&
           error.code === "capability_denied" &&
           input.checkpointReplication !== "on" &&
           scope.readOnly !== true &&

@@ -107,7 +107,11 @@ const runService = <A, E>(
     Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0]
   > = [];
   const layer = HostThreadsMcpService.layer.pipe(
-    Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
+    Layer.provide(
+      Layer.mock(ThreadResultService.ThreadResultService)({
+        forRun: () => Effect.succeed(null as never),
+      }),
+    ),
     Layer.provide(Layer.mock(RemoteReportService.RemoteReportService)({})),
     Layer.provide(
       Layer.mock(LaunchWatchService.LaunchWatchService)({
@@ -147,7 +151,11 @@ const runService = <A, E>(
         isTaskThread: () => Effect.succeed(false),
       }),
     ),
-    Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
+    Layer.provide(
+      Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
+        readThread: () => Effect.succeed(remoteWatchRead as never),
+      }),
+    ),
     Layer.provide(layerNoFleetSync),
     Layer.provide(
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
@@ -322,5 +330,20 @@ it.effect("refuses watch when the calling thread loses orchestration:read", () =
     if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");
     expect(registrations).toHaveLength(0);
     expect(requested).toEqual(["orchestration:operate", "orchestration:read"]);
+  }),
+);
+
+it.effect("refuses a local watch without orchestration:operate", () =>
+  Effect.gen(function* () {
+    const { invocation, requested } = watchScope(["orchestration:read"]);
+    const { result, calls, registrations } = yield* runService(
+      { interactionMode: "default", hostCall: () => Effect.succeed(remoteWatchRead) },
+      (service) => service.watchThread(invocation, { threadId: ThreadId.make("remote-1") }),
+    );
+    expect(calls).toHaveLength(0);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");
+    expect(registrations).toHaveLength(0);
+    expect(requested).toEqual(["orchestration:operate"]);
   }),
 );
