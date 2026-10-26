@@ -740,4 +740,61 @@ describe("GOAT Bot follow-ups under failure", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect(
+    "narrates a turn's running progress report by default while honoring explicit milestone:false",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { gateway, runtime, reports, turn } = yield* runningTurn;
+        const workerThreadId = turn.worker!.threadId;
+        yield* reports.report(
+          {
+            taskId: turn.taskId,
+            generation: turn.generation,
+            eventId: "turn-progress-default" as never,
+            status: "running",
+            summary: "Checking disk usage now; I will report back shortly.",
+          },
+          workerThreadId,
+        );
+        yield* reports.report(
+          {
+            taskId: turn.taskId,
+            generation: turn.generation,
+            eventId: "turn-progress-quiet" as never,
+            status: "running",
+            summary: "Internal step that stays quiet.",
+            milestone: false,
+          },
+          workerThreadId,
+        );
+        yield* runtime.drain;
+        const texts = (yield* botMessages).messages.map((message) => message.text);
+        assert.include(texts, "Checking disk usage now; I will report back shortly.");
+        assert.notInclude(texts, "Internal step that stays quiet.");
+
+        // A non-turn coding task's unmarked running report still stays silent.
+        yield* gateway.ingest(goatInput("do: fix the build", "work-quiet-check"), rpcContext);
+        yield* runtime.drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const workTask = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.find(
+          (candidate) => candidate.kind !== "turn",
+        )!;
+        yield* reports.report(
+          {
+            taskId: workTask.taskId,
+            generation: workTask.generation,
+            eventId: "work-progress-unmarked" as never,
+            status: "running",
+            summary: "Routine worker step that stays silent.",
+          },
+          workTask.worker!.threadId,
+        );
+        yield* runtime.drain;
+        const afterTexts = (yield* botMessages).messages.map((message) => message.text);
+        assert.notInclude(afterTexts, "Routine worker step that stays silent.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });

@@ -22,6 +22,10 @@ describe("channel worker brief", () => {
       lines.find((line) => line.startsWith("Before anything sent under the person's name")) ?? "";
     assert.include(askFirst(local), "waiting_input question");
     assert.include(askFirst(remote), "needs_input report");
+    assert.include(
+      local.join("\n"),
+      'goat_call {path:"channel.task_report"} with status "running" and milestone true',
+    );
     assert.include(remote.join("\n"), 'goat_call {path:"origin.report"} with status progress');
     assert.include(remote.join("\n"), 'goat_call {path:"thread.report_result"}');
     assert.strictEqual(local.length, remote.length);
