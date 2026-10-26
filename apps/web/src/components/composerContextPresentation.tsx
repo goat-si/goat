@@ -6,7 +6,11 @@ import { useEnvironmentConnectionPhase } from "~/state/presentation";
 import ChatMarkdown from "./ChatMarkdown";
 import { isSvgAttachment } from "@goat/shared/image";
 import { ReadOnlySourcePreview } from "./files/AttachmentFilePreview";
-import type { PreviewAnnotationPayload, PreviewTabContextRecord, ThreadContextRecord } from "@goat/contracts";
+import type {
+  PreviewAnnotationPayload,
+  PreviewTabContextRecord,
+  ThreadContextRecord,
+} from "@goat/contracts";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import { videoMimeType } from "@goat/shared/video";
 import { MessageCircleIcon, MousePointerClickIcon } from "~/components/solar";
@@ -106,6 +110,7 @@ export function composerContextRecordsFromDraft(input: {
   reviewComments?: ReadonlyArray<ReviewCommentContext>;
   previewAnnotations?: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
+  previewTabs?: ReadonlyArray<PreviewTabContextRecord>;
   images?: ReadonlyArray<ComposerImageAttachment>;
   files?: ReadonlyArray<ComposerFileAttachment>;
   uploadsByImageId?: Readonly<Record<string, AttachmentUploadState>>;
@@ -141,6 +146,9 @@ export function composerContextRecordsFromDraft(input: {
   }
   for (const record of input.threadContexts ?? []) {
     records.set(record.contextId, { kind: "thread", record });
+  }
+  for (const record of input.previewTabs ?? []) {
+    records.set(record.contextId, { kind: "preview-tab", record });
   }
   return records;
 }
@@ -387,7 +395,15 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
   ComposerContextRenderContext,
   ReactElement
 >({
-  requiredKinds: ["image", "file", "terminal", "review-comment", "preview-annotation", "thread", "preview-tab"],
+  requiredKinds: [
+    "image",
+    "file",
+    "terminal",
+    "review-comment",
+    "preview-annotation",
+    "thread",
+    "preview-tab",
+  ],
   handlers: [
     {
       kind: "terminal",
@@ -488,7 +504,14 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
       canRender: (entry) => entry.kind === "preview-tab",
       render: (entry, context) =>
         entry.kind === "preview-tab" ? (
-          <ContextChip icon={<MousePointerClickIcon />} label={entry.record.title || entry.record.url} kindLabel="Browser tab" details={entry.record.url} detailsMode="tooltip" kind="thread" />
+          <ContextChip
+            icon={<MousePointerClickIcon />}
+            label={entry.record.title || entry.record.url}
+            kindLabel="Browser tab"
+            details={entry.record.url}
+            detailsMode="tooltip"
+            kind="thread"
+          />
         ) : (
           <UnresolvedContextChip label={context.label} />
         ),

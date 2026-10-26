@@ -71,6 +71,7 @@ import {
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
+import { readEnvironmentPresentation, draftHasNonPromptContent } from "./composerSendEnvironment";
 import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { ensureInlineContextReferences } from "../../lib/composerContextReferences";
 import {
@@ -81,7 +82,6 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
-import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
   loadBalancingSendWarning,
@@ -164,15 +164,6 @@ const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 
 const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
-
-function readEnvironmentPresentation(environmentId: EnvironmentId) {
-  return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);
-}
-
-function draftHasNonPromptContent(target: ComposerThreadTarget) {
-  const draft = useComposerDraftStore.getState().getComposerDraft(target);
-  return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-}
 
 type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
 type LocalDispatchState = ReturnType<typeof useLocalDispatchState>;
@@ -749,6 +740,7 @@ export function useComposerSend(input: ComposerSendInput) {
           capturedContent.previewAnnotations.length > 0 ||
           capturedContent.reviewComments.length > 0 ||
           capturedContent.threadContexts.length > 0 ||
+          capturedContent.previewTabs.length > 0 ||
           directAnnotation !== undefined,
         multipleModels: sendCtx.multipleModelSelections !== null,
       });
@@ -888,6 +880,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: sendContextPreviewAnnotations,
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
+      previewTabs: composerPreviewTabs,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -1159,6 +1152,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: composerPreviewAnnotations,
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
+      previewTabs: composerPreviewTabs,
     });
     const {
       files: composerFilesSnapshot,
@@ -1167,6 +1161,7 @@ export function useComposerSend(input: ComposerSendInput) {
       previewAnnotations: composerPreviewAnnotationsSnapshot,
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
+      previewTabs: previewTabsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -1202,6 +1197,7 @@ export function useComposerSend(input: ComposerSendInput) {
         reviewComments: composerReviewCommentsSnapshot,
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
+        previewTabs: previewTabsSnapshot,
         text: messageTextForSend,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,

@@ -108,6 +108,7 @@ export function useComposerContextImport(input: {
     (store) => store.addPreviewAnnotation,
   );
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
+  const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
   const loadThreadTranscript = useAtomCommand(orchestrationEnvironment.threadTranscript, {
     reportFailure: false,
@@ -323,9 +324,11 @@ export function useComposerContextImport(input: {
                 })
               : existing?.kind === "thread"
                 ? existing.record
-                : existing
-                  ? (uploadedContextRecordFromDraft(existing) ?? undefined)
-                  : undefined;
+                : existing?.kind === "preview-tab"
+                  ? existing.record
+                  : existing
+                    ? (uploadedContextRecordFromDraft(existing) ?? undefined)
+                    : undefined;
       if (
         existingRecord &&
         isSameComposerContextPayload(existingRecord, record) &&
@@ -377,6 +380,27 @@ export function useComposerContextImport(input: {
         case "thread": {
           // Routed together after the loop so a refused batch shows one reason.
           importedThreads.push(record);
+          break;
+        }
+        case "preview-tab": {
+          if (record.environmentId !== environmentId) {
+            toastManager.add({
+              type: "error",
+              title: "Browser tab is on another machine",
+              description: "Choose a tab on this environment instead.",
+            });
+            break;
+          }
+          const imported = conflicts
+            ? {
+                ...record,
+                contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
+              }
+            : record;
+          addComposerDraftPreviewTabs(attachmentDraftTarget, [imported], {
+            appendReference: false,
+          });
+          rewritten.set(record.contextId, imported.contextId);
           break;
         }
         case "image":

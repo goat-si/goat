@@ -41,9 +41,10 @@ them do at that keyboard.
 
 Ask an agent to use a page in GOAT's built-in browser and an app on the computer
 running that GOAT environment in the same task. Point it to a specific tab or
-app when you start the turn. A tab you opened stays yours; GOAT releases the
-agent's control when the turn ends. The agent may ask you to approve an app or
-finish a private step.
+app when you start the turn. In the web or desktop composer, type `@` and choose
+a listed server browser tab to attach its exact tab identity. A tab you opened
+stays yours; GOAT releases the agent's control when the turn ends. The agent may
+ask you to approve an app or finish a private step.
 
 Watch the browser and app tiles while it works. Use **Take control** or **Stop**
 on the affected tile, or **Stop all** to end every agent's screen work on that

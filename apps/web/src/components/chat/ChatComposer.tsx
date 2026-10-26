@@ -12,16 +12,12 @@ import {
   useQuestionAttachmentPreparation,
 } from "../../questionAttachments";
 import type {
-  KeybindingCommand,
-  AssistantCitation,
   ChatAttachment as ContractChatAttachment,
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
   ProjectId,
-  PreviewAnnotationPayload,
   ProviderApprovalDecision,
-  ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
   RuntimeMode,
@@ -185,7 +181,9 @@ import {
 import {
   composerCapabilityTargetDrivers,
   composerComputerSetupLocation,
+  compactSlashCommandAvailable as isCompactSlashCommandAvailable,
   selectComposerCapability,
+  selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
 import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
@@ -286,7 +284,6 @@ import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope } from "../../state/session";
-import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
@@ -302,76 +299,12 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
-
-function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
-  const armed = Date.now() <= deadline.current;
-  deadline.current = 0;
-  return armed;
-}
+import type { ChatComposerHandle } from "./ChatComposerHandle";
+import { consumePasteAsTextShortcut } from "./composerPasteAsTextShortcut";
 
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
-export interface ChatComposerHandle {
-  focusAtEnd: () => void;
-  focusAt: (cursor: number) => void;
-  restoreAfterTimelineReachedEnd: () => void;
-  collapseForTimelineScrollKey: (key: string) => void;
-  addDroppedFiles: (files: File[]) => void;
-  addDroppedFolders: (folders: File[]) => void;
-  hasPendingAttachments: () => boolean;
-  insertTextAtEnd: (
-    text: string,
-    options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
-  ) => boolean;
-  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
-  citeAssistantText: (
-    citation: AssistantCitation,
-    sourceAnchor: AssistantCitationSourceAnchor,
-  ) => boolean;
-  openModelPicker: () => void;
-  stepReasoningEffort: (direction: 1 | -1) => void;
-  toggleModelPicker: () => void;
-  openControl: (command: KeybindingCommand) => void;
-  isModelPickerOpen: () => boolean;
-  isCaretAtStart: () => boolean;
-  compactContext: () => void;
-  readSnapshot: () => {
-    value: string;
-    cursor: number;
-    expandedCursor: number;
-    contextIds: string[];
-  };
-  resetCursorState: (options?: {
-    cursor?: number;
-    prompt?: string;
-    detectTrigger?: boolean;
-  }) => void;
-  addTerminalContext: (selection: TerminalContextSelection) => void;
-  getSendContext: () => {
-    answeringPendingUserInput: boolean;
-    prompt: string;
-    images: ComposerImageAttachment[];
-    files: ComposerFileAttachment[];
-    terminalContexts: TerminalContextDraft[];
-    previewAnnotations: PreviewAnnotationPayload[];
-    reviewComments: ReviewCommentContext[];
-    threadContexts: ThreadContextRecord[];
-    threadContextRoutingEnvironmentId: EnvironmentId;
-    selectedPromptEffort: string | null;
-    selectedModelOptionsForDispatch: unknown;
-    selectedModelSelection: ModelSelection;
-    multipleModelSelections: ReadonlyArray<ModelSelection> | null;
-    providerAvailable: boolean;
-    selectedProvider: ProviderDriverKind;
-    selectedModel: string;
-    selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
-    interactionMode: ProviderInteractionMode;
-    interactionModeEnabled: boolean;
-    shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
-  };
-  validateProviderInput: (providerInput: string) => boolean;
-  setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
-}
+export type { ChatComposerHandle } from "./ChatComposerHandle";
 
 export interface ChatComposerProps {
   sshWorktreeSelected?: boolean;
@@ -751,6 +684,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const composerThreadContexts = attachmentDraft.threadContexts;
+  const composerPreviewTabs = attachmentDraft.previewTabs;
   const {
     pendingSnapShotAnimations,
     pendingSnapShotIds,
@@ -802,6 +736,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reviewComments: composerReviewComments,
     previewAnnotations: composerPreviewAnnotations,
     threadContexts: composerThreadContexts,
+    previewTabs: composerPreviewTabs,
     images: composerImages,
     files: composerFiles,
     uploadsByImageId,
@@ -1189,16 +1124,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
   });
   const composerTriggerKind = composerTrigger?.kind ?? null;
-  const compactSlashCommandAvailable =
-    composerTrigger?.kind === "slash-command" &&
-    prompt.slice(0, composerTrigger.rangeStart).trim() === "" &&
-    !compactThreadUnavailable &&
-    prompt.slice(composerTrigger.rangeEnd).trim() === "" &&
-    composerImages.length + composerFiles.length === 0 &&
-    composerDraft.persistedAttachments.length === 0 &&
-    composerTerminalContexts.length === 0 &&
-    composerPreviewAnnotations.length === 0 &&
-    composerReviewComments.length === 0;
+  const compactSlashCommandAvailable = isCompactSlashCommandAvailable({
+    trigger: composerTrigger,
+    prompt,
+    compactThreadUnavailable,
+    attachmentCount:
+      composerImages.length + composerFiles.length + composerDraft.persistedAttachments.length,
+    contextCount:
+      composerTerminalContexts.length +
+      composerPreviewAnnotations.length +
+      composerReviewComments.length,
+  });
   const {
     items: composerMenuItems,
     isLoading: isComposerMenuLoading,
@@ -1373,6 +1309,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.addPreviewAnnotation,
   );
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
+  const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
     const wanted = new Set(contextIds);
@@ -1390,6 +1327,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         .filter((c) => wanted.has(terminalContextReference(c).contextId))
         .map(terminalContextRecord),
       ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
+      ...composerPreviewTabs.filter((record) => wanted.has(record.contextId)),
       ...composerReviewComments
         .filter((c) => wanted.has(reviewCommentContextId(c.id)))
         .map(reviewCommentContextRecord),
@@ -1953,6 +1891,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         replaceTriggerWith,
         onReplaced: () => setComposerHighlightedItemId(null),
         openSetup: () => void navigate(composerComputerSetupLocation(environmentId)),
+      });
+    }
+    if (item.type === "preview-tab") {
+      if (trigger.kind !== "path") return;
+      return selectComposerPreviewTab({
+        record: item.record,
+        environmentId,
+        replaceTriggerWith,
+        addToDraft: (record) =>
+          addComposerDraftPreviewTabs(attachmentDraftTarget, [record], { appendReference: false }),
+        onReplaced: () => setComposerHighlightedItemId(null),
       });
     }
     if (item.type === "path") {
@@ -3331,6 +3280,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             isDesktopRenderer: window.desktopBridge !== undefined,
           }),
         ],
+        previewTabs: composerPreviewTabs,
         threadContextRoutingEnvironmentId: environmentId,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,

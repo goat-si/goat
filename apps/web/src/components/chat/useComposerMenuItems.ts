@@ -25,6 +25,11 @@ import {
   filterComposerPullRequestMatches,
 } from "@goat/shared/composerPullRequestMatches";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
+import {
+  sanitizeComposerContextLabel,
+  toKindScopedComposerContextId,
+} from "@goat/shared/composerContextReferences";
+import { randomUUID } from "~/lib/utils";
 
 import type { ComposerTrigger } from "../../composer-logic";
 import { basenameOfPath } from "../../pierre-icons";
@@ -41,6 +46,8 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
+import { previewEnvironment } from "~/state/preview";
+import { SERVER_BROWSER_AUTOMATION_CLIENT_ID } from "@goat/contracts";
 import { useComposerPathSearch, useDebouncedValue, useThreadSearch } from "~/state/queries";
 import {
   matchesPullRequestQuery,
@@ -162,6 +169,11 @@ export function useComposerMenuItems({
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
   // Mounts older settled threads matching the mention, which shells may leave out.
   useThreadSearch(isPathTrigger ? [environmentId] : [], pathTriggerQuery, { titlesOnly: true });
+  const previewTabsQuery = useEnvironmentQuery(
+    isPathTrigger && activeThreadId
+      ? previewEnvironment.list({ environmentId, input: { threadId: activeThreadId } })
+      : null,
+  );
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -232,6 +244,35 @@ export function useComposerMenuItems({
       return [
         ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerAppItems(composerTrigger.query, capabilityContext, computerUseApps),
+        ...(previewTabsQuery.data?.sessions ?? []).flatMap((session) => {
+          if (session.runtime !== "server" || session.navStatus._tag === "Idle") return [];
+          const { title, url } = session.navStatus;
+          const query = composerTrigger.query.trim().toLowerCase();
+          if (
+            query &&
+            ![title, url, "tab", "browser"].some((value) => value.toLowerCase().includes(query))
+          )
+            return [];
+          return [
+            {
+              id: `preview-tab:${session.tabId}`,
+              type: "preview-tab" as const,
+              record: {
+                version: 1 as const,
+                kind: "preview-tab" as const,
+                contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
+                label: sanitizeComposerContextLabel(title || url, "browser tab"),
+                environmentId,
+                browserInstanceId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+                tabId: session.tabId,
+                title: sanitizeComposerContextLabel(title, "browser tab"),
+                url,
+              },
+              label: title || url,
+              description: url,
+            },
+          ];
+        }),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           sshHostsByEnvironment,

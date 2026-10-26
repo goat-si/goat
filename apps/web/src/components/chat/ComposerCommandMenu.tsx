@@ -13,6 +13,7 @@ import {
   type ProviderDriverKind,
   type PullRequestContextMetadata,
   type ScopedThreadRef,
+  type PreviewTabContextRecord,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@goat/contracts";
@@ -85,7 +86,14 @@ export type ComposerCommandItem =
       label: string;
       description: string;
     }
-  | ComposerCapabilityItem;
+  | ComposerCapabilityItem
+  | {
+      id: string;
+      type: "preview-tab";
+      record: PreviewTabContextRecord;
+      label: string;
+      description: string;
+    };
 
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   listId: string;
@@ -219,6 +227,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       ) : null}
       {props.item.type === "thread" ? (
         <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+      ) : null}
+      {props.item.type === "preview-tab" ? (
+        <GlobeIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
       ) : null}
       {props.item.type === "capability" ? (
         props.item.app?.icon !== undefined ? (

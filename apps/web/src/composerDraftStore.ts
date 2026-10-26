@@ -21,6 +21,7 @@ import {
   type PreviewAnnotationPayload,
   RuntimeMode,
   ThreadContextRecord,
+  PreviewTabContextRecord,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -81,6 +82,14 @@ import {
   terminalContextReference,
   threadContextReference,
 } from "./lib/composerContextRecords";
+import { addPreviewTabsToDraftState, setPreviewTabsInDraftState } from "./lib/previewTabDraft";
+import { composerImageDedupKey } from "./lib/composerImageDedupKey";
+import {
+  clearStaleFileUploadMetadata,
+  composerDraftHasUserContent,
+  shouldRemoveDraft,
+} from "./lib/composerDraftHelpers";
+export { composerDraftHasUserContent } from "./lib/composerDraftHelpers";
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
@@ -99,6 +108,7 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
+const isPreviewTabContextRecord = Schema.is(PreviewTabContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 
@@ -172,29 +182,6 @@ export function composerFileNeedsReattach(file: ComposerFileAttachment): boolean
   return file.file === null && file.uploadedAttachmentId === undefined;
 }
 
-function clearStaleFileUploadMetadata(
-  draft: ComposerThreadDraftState,
-  environmentId: EnvironmentId,
-): ComposerThreadDraftState {
-  let changed = false;
-  const files = draft.files.map((file) => {
-    if (
-      (file.uploadedAttachmentId === undefined && file.uploadEnvironmentId === undefined) ||
-      file.uploadEnvironmentId === environmentId
-    ) {
-      return file;
-    }
-
-    changed = true;
-    const nextFile = { ...file };
-    delete nextFile.uploadedAttachmentId;
-    delete nextFile.uploadEnvironmentId;
-    return nextFile;
-  });
-
-  return changed ? { ...draft, files } : draft;
-}
-
 export const PersistedComposerFileAttachment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -239,6 +226,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
+  previewTabs: Schema.optionalKey(Schema.Array(PreviewTabContextRecord)),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
@@ -370,29 +358,12 @@ export interface ComposerThreadDraftState {
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
+  previewTabs: PreviewTabContextRecord[];
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
-}
-
-export function composerDraftHasUserContent(
-  draft: ComposerThreadDraftState | null | undefined,
-): boolean {
-  if (!draft) {
-    return false;
-  }
-  return (
-    draft.prompt.trim().length > 0 ||
-    draft.images.length > 0 ||
-    draft.files.length > 0 ||
-    draft.persistedAttachments.length > 0 ||
-    draft.terminalContexts.length > 0 ||
-    draft.previewAnnotations.length > 0 ||
-    draft.reviewComments.length > 0 ||
-    draft.threadContexts.length > 0
-  );
 }
 
 export interface DraftSessionState {
@@ -610,6 +581,15 @@ interface ComposerDraftStoreState {
     records: ReadonlyArray<ThreadContextRecord>,
     options?: ComposerContextAddOptions,
   ) => void;
+  addPreviewTabs: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<PreviewTabContextRecord>,
+    options?: ComposerContextAddOptions,
+  ) => void;
+  setPreviewTabs: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<PreviewTabContextRecord>,
+  ) => void;
   setThreadContexts: (
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<ThreadContextRecord>,
@@ -753,6 +733,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   previewAnnotations: EMPTY_PREVIEW_ANNOTATIONS,
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
+  previewTabs: [],
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -770,16 +751,12 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     previewAnnotations: [],
     reviewComments: [],
     threadContexts: [],
+    previewTabs: [],
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
   };
-}
-
-function composerImageDedupKey(image: ComposerImageAttachment): string {
-  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
-  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
 }
 
 export function composerFileDedupKey(
@@ -863,23 +840,6 @@ function normalizeTerminalContextsForThread(
   }
 
   return normalizedContexts;
-}
-
-function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
-  return (
-    draft.prompt.length === 0 &&
-    draft.images.length === 0 &&
-    draft.files.length === 0 &&
-    draft.persistedAttachments.length === 0 &&
-    draft.terminalContexts.length === 0 &&
-    draft.previewAnnotations.length === 0 &&
-    draft.reviewComments.length === 0 &&
-    draft.threadContexts.length === 0 &&
-    Object.keys(draft.modelSelectionByProvider).length === 0 &&
-    draft.activeProvider === null &&
-    draft.runtimeMode === null &&
-    draft.interactionMode === null
-  );
 }
 
 function normalizeProviderDriverKind(value: unknown): ProviderDriverKind | null {
@@ -1841,6 +1801,9 @@ function normalizePersistedDraftsByThreadId(
     const threadContexts = Array.isArray(draftCandidate.threadContexts)
       ? draftCandidate.threadContexts.filter(isThreadContextRecord)
       : [];
+    const previewTabs = Array.isArray(draftCandidate.previewTabs)
+      ? draftCandidate.previewTabs.filter(isPreviewTabContextRecord)
+      : [];
     const previewAnnotations = Array.isArray(draftCandidate.previewAnnotations)
       ? draftCandidate.previewAnnotations.filter(isPreviewAnnotationPayload)
       : [];
@@ -1960,6 +1923,7 @@ function normalizePersistedDraftsByThreadId(
       previewAnnotations.length === 0 &&
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
+      previewTabs.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -1986,6 +1950,7 @@ function normalizePersistedDraftsByThreadId(
       ...(previewAnnotations.length > 0 ? { previewAnnotations } : {}),
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
+      ...(previewTabs.length > 0 ? { previewTabs } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -2009,7 +1974,8 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.terminalContexts?.length ?? 0) > 0 ||
     (draft.previewAnnotations?.length ?? 0) > 0 ||
     (draft.reviewComments?.length ?? 0) > 0 ||
-    (draft.threadContexts?.length ?? 0) > 0
+    (draft.threadContexts?.length ?? 0) > 0 ||
+    (draft.previewTabs?.length ?? 0) > 0
   );
 }
 
@@ -2088,6 +2054,7 @@ export function partializeComposerDraftStoreState(
       draft.previewAnnotations.length === 0 &&
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
+      draft.previewTabs.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
@@ -2142,6 +2109,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.threadContexts.length > 0
         ? { threadContexts: draft.threadContexts.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.previewTabs.length > 0
+        ? { previewTabs: draft.previewTabs.map((record) => ({ ...record })) }
         : {}),
       ...(hasModelData
         ? {
@@ -2405,6 +2375,7 @@ function toHydratedThreadDraft(
       ...(persistedDraft.reviewComments ?? []).map(reviewCommentContextReference),
       ...(persistedDraft.previewAnnotations ?? []).map(previewAnnotationContextReference),
       ...(persistedDraft.threadContexts ?? []).map(threadContextReference),
+      ...(persistedDraft.previewTabs ?? []).map((record) => record),
       ...files.map(fileContextReference),
     ]),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
@@ -2420,6 +2391,7 @@ function toHydratedThreadDraft(
       persistedDraft.previewAnnotations?.map((annotation) => ({ ...annotation })) ?? [],
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
+    previewTabs: persistedDraft.previewTabs?.map((record) => ({ ...record })) ?? [],
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
@@ -3915,6 +3887,31 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
+        addPreviewTabs: (threadRef, records, options) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          const placedAtCaret =
+            options?.appendReference !== false &&
+            options?.insertAtCaret !== false &&
+            (contextInsertionHandlers.get(threadKey)?.(records) ?? false);
+          set((state) =>
+            addPreviewTabsToDraftState(
+              state,
+              threadKey,
+              records,
+              placedAtCaret,
+              options?.appendReference === false,
+              createEmptyThreadDraft(),
+            ),
+          );
+        },
+        setPreviewTabs: (threadRef, records) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (threadKey)
+            set((state) =>
+              setPreviewTabsInDraftState(state, threadKey, records, createEmptyThreadDraft()),
+            );
+        },
         setThreadContexts: (threadRef, records) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) return;
@@ -4036,6 +4033,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               previewAnnotations: [],
               reviewComments: [],
               threadContexts: [],
+              previewTabs: [],
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4065,6 +4063,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ...current.terminalContexts.map(terminalContextReference),
                 ...current.reviewComments.map(reviewCommentContextReference),
                 ...current.threadContexts.map(threadContextReference),
+                ...current.previewTabs,
                 ...current.previewAnnotations.map(previewAnnotationContextReference),
               ]),
               images: [],

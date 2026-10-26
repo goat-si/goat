@@ -1,5 +1,5 @@
 import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
-import type { EnvironmentId, ModelSelection } from "@goat/contracts";
+import type { EnvironmentId, ModelSelection, PreviewTabContextRecord } from "@goat/contracts";
 import {
   appCapabilityContextRecord,
   turnCapabilityContextRecord,
@@ -7,6 +7,25 @@ import {
 
 import { formatInlineContextReference } from "../../lib/composerContextReferences";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import type { ComposerTrigger } from "../../composer-logic";
+
+export function compactSlashCommandAvailable(input: {
+  trigger: ComposerTrigger | null;
+  prompt: string;
+  compactThreadUnavailable: boolean;
+  attachmentCount: number;
+  contextCount: number;
+}): boolean {
+  const { trigger, prompt } = input;
+  return (
+    trigger?.kind === "slash-command" &&
+    prompt.slice(0, trigger.rangeStart).trim() === "" &&
+    !input.compactThreadUnavailable &&
+    prompt.slice(trigger.rangeEnd).trim() === "" &&
+    input.attachmentCount === 0 &&
+    input.contextCount === 0
+  );
+}
 
 /** The drivers a send goes to: every selected model when it fans out, else the one selected. */
 export function composerCapabilityTargetDrivers(
@@ -50,4 +69,17 @@ export function selectComposerCapability(input: {
   if (availability.state !== "unavailable" || !availability.setup) return;
   if (input.replaceTriggerWith("")) input.onReplaced();
   input.openSetup();
+}
+
+export function selectComposerPreviewTab(input: {
+  readonly record: PreviewTabContextRecord;
+  readonly environmentId: EnvironmentId;
+  readonly replaceTriggerWith: (replacement: string) => boolean;
+  readonly addToDraft: (record: PreviewTabContextRecord) => void;
+  readonly onReplaced: () => void;
+}): void {
+  if (input.record.environmentId !== input.environmentId) return;
+  if (!input.replaceTriggerWith(`${formatInlineContextReference(input.record)} `)) return;
+  input.addToDraft(input.record);
+  input.onReplaced();
 }

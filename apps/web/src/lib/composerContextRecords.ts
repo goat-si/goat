@@ -14,6 +14,7 @@ import type {
   OrchestrationMessageContext,
   PreviewAnnotationContextRecord,
   PreviewAnnotationPayload,
+  PreviewTabContextRecord,
   ReviewCommentContextRecord,
   ScopedThreadRef,
   TerminalContextRecord,
@@ -312,6 +313,7 @@ export function buildMessageContext(input: {
   reviewComments: ReadonlyArray<ReviewCommentContext>;
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
+  previewTabs?: ReadonlyArray<PreviewTabContextRecord>;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
   /** The text being sent; its `@computer` / `@browser` chips become capability records. */
   text?: string;
@@ -325,6 +327,11 @@ export function buildMessageContext(input: {
     ...input.terminalContexts.map(terminalContextRecord),
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
+    ...(input.previewTabs ?? []).filter((record) =>
+      collectComposerContextReferences(input.text ?? "").some(
+        (reference) => reference.contextId === record.contextId,
+      ),
+    ),
     ...capabilityContextRecordsInText(input.text ?? ""),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {
