@@ -1,9 +1,11 @@
 import { parseScopedThreadKey } from "@goat/client-runtime/environment";
+import { threadRuntimeIsActive } from "@goat/client-runtime/state/models";
 import {
   AuthPreviewOperateScope,
   type DesktopPreviewOpenLinkEvent,
   type DesktopPreviewPointerEvent,
   FILL_PREVIEW_VIEWPORT,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { type ComponentProps, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -12,6 +14,7 @@ import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
+import { useThreadShell } from "~/state/entities";
 import { useDesktopHostedPreviewSessions } from "~/components/preview/usePreviewSession";
 import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
@@ -144,23 +147,6 @@ export function ElectronBrowserHost() {
     }
   }, [hostedTabIds]);
 
-  // An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
-  // parked outside the window composites no frames: the agent's clicks would wait for a frame and
-  // time out. Keep every tab an agent drives painting, behind the app, while it is not on screen.
-  const agentTabIds = sessions
-    .filter(
-      ({ snapshot }) => snapshot.runtime === "server" && snapshot.automationOwner !== undefined,
-    )
-    .map((session) => session.runtimeTabId)
-    .join("\n");
-  useEffect(() => {
-    if (agentTabIds === "") return;
-    const releases = agentTabIds.split("\n").map(acquireBrowserSurfaceActivity);
-    return () => {
-      for (const release of releases) release();
-    };
-  }, [agentTabIds]);
-
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview) return;
@@ -230,6 +216,13 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
+      {sessions
+        .filter(
+          ({ snapshot }) => snapshot.runtime === "server" && snapshot.automationOwner !== undefined,
+        )
+        .map(({ threadRef, runtimeTabId }) => (
+          <AgentTabPainting key={runtimeTabId} threadRef={threadRef} runtimeTabId={runtimeTabId} />
+        ))}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
@@ -257,6 +250,25 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
+}
+
+/**
+ * An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
+ * parked outside the window composites no frames: the agent's clicks would wait for a frame and
+ * time out. While the tab's thread runs a turn, it keeps painting behind the app; an idle or
+ * finished thread lets it park, so a page left open costs nothing.
+ */
+function AgentTabPainting(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly runtimeTabId: string;
+}) {
+  const working = threadRuntimeIsActive(useThreadShell(props.threadRef)?.runtime);
+  const { runtimeTabId } = props;
+  useEffect(() => {
+    if (!working) return;
+    return acquireBrowserSurfaceActivity(runtimeTabId);
+  }, [runtimeTabId, working]);
+  return null;
 }
 
 function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
