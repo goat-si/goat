@@ -345,3 +345,17 @@ describe("ChatMarkdown Windows file links", () => {
     }
   });
 });
+
+describe("ChatMarkdown code block actions", () => {
+  it("keeps keyboard focus on the view toggle when a diagram switches to its source", async () => {
+    setup();
+    await using screen = await renderText("```mermaid\ngraph TD\nA-->B\n```");
+    const toggle = buttonsLabelled(screen.container, "Show code")[0]!;
+    toggle.focus();
+    await userEvent.keyboard("{Enter}");
+    // The toolbar remounts for the source view; focus must follow so the actions stay revealed.
+    await vi.waitFor(() =>
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Show diagram"),
+    );
+  });
+});

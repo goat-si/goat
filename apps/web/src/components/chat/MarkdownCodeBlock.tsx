@@ -88,7 +88,7 @@ export function MarkdownCodeBlockFrame({
   );
 }
 
-// Like Codex, code block actions wait for hover or keyboard focus; touch screens always show them.
+// Transparent rather than hidden, so the actions stay in the tab order and focusing one reveals them.
 const HOVER_REVEAL =
   "opacity-0 transition-opacity group-hover/codeblock:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100";
 
