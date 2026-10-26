@@ -760,9 +760,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   }
   if (options.browser?.onAuthorityChange) {
     const unsubscribe = options.browser.onAuthorityChange((change) => {
-      // The agent's own close_tab moves that tab's control before it replies; its dispatch
-      // releases the claim, so no report from the closing tab may cut the cell that asked.
-      if (options.tabHost?.isClosingOwnTab(change.threadId, change.tabId)) return;
+      // Only the expected tab-close notification is exempt, never a person's authority change.
+      if (
+        change.kind === "stop" &&
+        change.reason === "tabClosed" &&
+        options.tabHost?.isClosingOwnTab(change.threadId, change.tabId)
+      )
+        return;
       fenceNow(change);
       void runCallback(
         service
