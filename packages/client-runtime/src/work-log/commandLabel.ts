@@ -2,7 +2,7 @@ import {
   POWERSHELL_FLAGS,
   POWERSHELL_OPTIONS_WITH_VALUE,
   powerShellCommandArgumentIndex,
-} from "./powerShellOptions";
+} from "./powerShellOptions.ts";
 
 type CommandWrapper = "env" | "sudo";
 type CommandProgramContext = "exec" | "shell";
