@@ -81,8 +81,8 @@ const AppServerDescriptor = Schema.Struct({
 });
 const decodeAppServerDescriptor = Schema.decodeUnknownOption(fromLenientJson(AppServerDescriptor));
 
-/** Names the probe's SSH command, so traces and test doubles can tell it from other scripts. */
-export const APP_SERVER_PROBE_COMMAND = "goat-app-server-probe";
+/** Names the probe's SSH command, so traces can tell it from other scripts. */
+const APP_SERVER_PROBE_COMMAND = "goat-app-server-probe";
 
 const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
 const isGrantScope = Schema.is(AuthGrantScope);
