@@ -10,7 +10,7 @@ const isCopySurface = (path: string): boolean =>
   /^(?:apps\/(?:web|mobile|desktop)\/src\/|apps\/server\/src\/|packages\/(?:client-runtime|shared)\/src\/|docs\/(?:user|operations)\/|structure\/|\.agents\/skills\/)/.test(
     path,
   ) &&
-  !/^(?:apps\/server\/src\/(?:provider\/|vcs\/|sshRemote\/|cloud\/bootService\.ts$|telemetry\/AnalyticsService\.ts$|orchestration-v2\/Orchestrator\.ts$)|structure\/decisions\/|\.agents\/skills\/contribution-triage\/)/.test(
+  !/^(?:apps\/server\/src\/(?:provider\/|vcs\/|sshRemote\/|cloud\/bootService\.ts$|telemetry\/AnalyticsService\.ts$|orchestration-v2\/Orchestrator\.ts$)|structure\/decisions\/)/.test(
     path,
   ) &&
   !/(?:^|\/)(?:DesktopLegacyLocalStorage|DesktopSafeStorage[^/]*|relay|usageLimits)\.ts$/.test(
@@ -111,10 +111,7 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
     // connect onboarding stays gated, while the runtime comments below describe existing calls.
     find: /\b(?:npx )?t3 (?!project cli\b)(?=(?:serve|start|pair|doctor|theme|triage|project|auth|browser|service|update|uninstall|trace|provider|thread|imessage|app|help)\b)/g,
     replace: "goat ",
-    scope: (path) =>
-      isCopySurface(path) ||
-      path === "packages/contracts/src/settings.ts" ||
-      path === ".agents/skills/contribution-triage/SKILL.md",
+    scope: (path) => isCopySurface(path) || path === "packages/contracts/src/settings.ts",
   },
   {
     id: "visible-cli-launcher-comment",
