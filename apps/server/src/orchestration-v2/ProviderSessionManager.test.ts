@@ -5967,12 +5967,12 @@ it.effect(
 
         // Opened while computer use is off.
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
-        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy. The
-        // thread is in full access, so that turn's control covers every app without a grant (D16).
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy, which
+        // launches with the thread alone and reads its control at call time (#1629).
         yield* Ref.set(enabled, true);
         const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
         assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
-        assert.isTrue(enabledDriver?.args.includes("control:every-app"));
+        assert.isTrue(enabledDriver?.args.includes(threadId));
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
