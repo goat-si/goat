@@ -206,7 +206,7 @@
       "bundles": ["mobile"],
       "license": "MIT",
       "name": "react-native-uitextview",
-      "noticeFile": "apps/mobile/modules/t3-source-text/LICENSE",
+      "noticeFile": "apps/mobile/modules/goat-source-text/LICENSE",
       "sourceUrl": "https://github.com/bluesky-social/react-native-uitextview",
       "version": "2.2.0"
     },
@@ -214,7 +214,7 @@
       "bundles": ["mobile"],
       "license": "MIT",
       "name": "Expo text editor implementation",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE",
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE",
       "sourceUrl": "https://github.com/expo/expo"
     },
     {
@@ -593,11 +593,11 @@
     },
     {
       "name": "@expo/sdk-runtime-versions",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE"
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE"
     },
     {
       "name": "@expo/ws-tunnel",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE"
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE"
     },
     {
       "name": "stream-buffers",

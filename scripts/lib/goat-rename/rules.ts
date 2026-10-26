@@ -17,6 +17,7 @@ import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
 import { META_KEEP_RULES, META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
+import { MOBILE_KEEP_RULES, MOBILE_PATH_RULES, MOBILE_TEXT_RULES } from "./rules-mobile.ts";
 import {
   CONNECT_CONTRAST_RULES,
   RELAY_KEEP_RULES,
@@ -148,6 +149,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   ...WIRE_TEXT_RULES,
   ...INTERNAL_TEXT_RULES,
   ...RELAY_TEXT_RULES,
+  ...MOBILE_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -530,6 +532,7 @@ export const PATH_RULES: readonly PathRule[] = [
   },
   ...LEFTOVER_PATH_RULES,
   ...RELAY_PATH_RULES,
+  ...MOBILE_PATH_RULES,
   {
     // Builds since v0.1.1 read goat.json first and fall back to t3.json (plan 261013 D9).
     id: "repo-project-file",
@@ -560,6 +563,7 @@ export const DROP_RULES: readonly DropRule[] = [
 export const KEEP_RULES: readonly KeepRule[] = [
   ...META_KEEP_RULES,
   ...RELAY_KEEP_RULES,
+  ...MOBILE_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
   ...OWNER_KEEP_RULES,
   ...RESIDUE_KEEP_RULES,
@@ -695,7 +699,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "installed-native-and-helper-state",
     pattern:
-      /t3-chrome-headless-shell|t3-snap-shot-|t3_capture_|t3_\$\{|t3-(?:capture|permission-check|kde-bus)|t3_chats|t3_pull_requests|t3-preview-|t3-context-content|t3-showcase-(?:scene|ready)|t3_subscription_widget_enabled/g,
+      /t3-chrome-headless-shell|t3-snap-shot-|t3_capture_|t3_\$\{|t3-(?:capture|permission-check|kde-bus)|t3-preview-|t3-context-content/g,
     scope: (path) =>
       path.startsWith("native/") ||
       path.startsWith("apps/mobile/modules/") ||

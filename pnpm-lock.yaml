@@ -540,14 +540,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       '@goat/mobile-review-diff-native':
-        specifier: file:./modules/t3-review-diff
-        version: file:apps/mobile/modules/t3-review-diff
+        specifier: file:./modules/goat-review-diff
+        version: file:apps/mobile/modules/goat-review-diff
       '@goat/mobile-source-text':
-        specifier: file:./modules/t3-source-text
-        version: file:apps/mobile/modules/t3-source-text(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
+        specifier: file:./modules/goat-source-text
+        version: file:apps/mobile/modules/goat-source-text(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
       '@goat/mobile-terminal-native':
-        specifier: file:./modules/t3-terminal
-        version: file:apps/mobile/modules/t3-terminal
+        specifier: file:./modules/goat-terminal
+        version: file:apps/mobile/modules/goat-terminal
       '@goat/provider-acp-registry':
         specifier: workspace:*
         version: link:../../packages/provider-acp-registry
@@ -4260,17 +4260,17 @@ packages:
   '@formkit/auto-animate@0.9.0':
     resolution: {integrity: sha512-VhP4zEAacXS3dfTpJpJ88QdLqMTcabMg0jwpOSxZ/VzfQVfl3GkZSCZThhGC5uhq/TxPHPzW0dzr4H9Bb1OgKA==}
 
-  '@goat/mobile-review-diff-native@file:apps/mobile/modules/t3-review-diff':
-    resolution: {directory: apps/mobile/modules/t3-review-diff, type: directory}
+  '@goat/mobile-review-diff-native@file:apps/mobile/modules/goat-review-diff':
+    resolution: {directory: apps/mobile/modules/goat-review-diff, type: directory}
 
-  '@goat/mobile-source-text@file:apps/mobile/modules/t3-source-text':
-    resolution: {directory: apps/mobile/modules/t3-source-text, type: directory}
+  '@goat/mobile-source-text@file:apps/mobile/modules/goat-source-text':
+    resolution: {directory: apps/mobile/modules/goat-source-text, type: directory}
     peerDependencies:
       react: '*'
       react-native: '*'
 
-  '@goat/mobile-terminal-native@file:apps/mobile/modules/t3-terminal':
-    resolution: {directory: apps/mobile/modules/t3-terminal, type: directory}
+  '@goat/mobile-terminal-native@file:apps/mobile/modules/goat-terminal':
+    resolution: {directory: apps/mobile/modules/goat-terminal, type: directory}
 
   '@hono/node-server@1.19.17':
     resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
@@ -14749,14 +14749,14 @@ snapshots:
 
   '@formkit/auto-animate@0.9.0': {}
 
-  '@goat/mobile-review-diff-native@file:apps/mobile/modules/t3-review-diff': {}
+  '@goat/mobile-review-diff-native@file:apps/mobile/modules/goat-review-diff': {}
 
-  '@goat/mobile-source-text@file:apps/mobile/modules/t3-source-text(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)':
+  '@goat/mobile-source-text@file:apps/mobile/modules/goat-source-text(react-native@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)':
     dependencies:
       react: 19.3.0
       react-native: 0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.0(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6)
 
-  '@goat/mobile-terminal-native@file:apps/mobile/modules/t3-terminal': {}
+  '@goat/mobile-terminal-native@file:apps/mobile/modules/goat-terminal': {}
 
   '@hono/node-server@1.19.17(hono@4.13.7)':
     dependencies:

@@ -1,0 +1,17 @@
+{
+  "name": "@goat/mobile-review-diff-native",
+  "version": "0.0.0",
+  "private": true,
+  "expo-module": {
+    "ios": {
+      "modules": [
+        "GoatReviewDiffModule"
+      ]
+    },
+    "android": {
+      "modules": [
+        "expo.modules.goatreviewdiff.GoatReviewDiffModule"
+      ]
+    }
+  }
+}

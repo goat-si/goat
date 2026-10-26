@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["GoatComposerEditorModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.goatcomposereditor.GoatComposerEditorModule"]
+  }
+}

@@ -206,7 +206,11 @@ const BRAND_ASSETS =
   /^assets\/prod\/t3-black-(?:windows\.ico|web-favicon\.ico|web-favicon-(?:16x16|32x32)\.png|web-apple-touch-180\.png)$/;
 
 /** Binary files the driver may move although their contents are exempt from rewriting. */
-export const isMovableAsset = (path: string): boolean => BRAND_ASSETS.test(path);
+export const isMovableAsset = (path: string): boolean =>
+  BRAND_ASSETS.test(path) ||
+  path === "apps/mobile/assets/widget/T3Mark.svg" ||
+  // Licenses, notices, icons and fonts move with their renamed mobile module directory, unchanged.
+  /^apps\/mobile\/modules\/t3-[a-z-]+\//.test(path);
 
 export const LEFTOVER_PATH_RULES: readonly PathRule[] = [
   {

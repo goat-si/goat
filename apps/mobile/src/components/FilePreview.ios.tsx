@@ -19,7 +19,7 @@ const NativeControls = requireNativeModule<{
     identifier: string,
   ): Promise<void>;
   dismissFile(identifier: string): Promise<void>;
-}>("T3NativeControls");
+}>("GoatNativeControls");
 
 function NativeFilePreview(props: {
   readonly source: ResolvedFilePreviewSource;
