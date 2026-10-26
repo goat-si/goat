@@ -1,5 +1,6 @@
 import type { ClientConnectionMethod } from "@goat/contracts";
 import { isLoopbackHost } from "@goat/shared/preview";
+import * as Duration from "effect/Duration";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import type { ConnectionTarget } from "./model.ts";
@@ -55,6 +56,10 @@ export function isLoopbackEntry(entry: ConnectionCatalogEntry): boolean {
 /** A setup or silence budget, raised to the local allowance for this device's own server. */
 export function loopbackBudgetMs(loopback: boolean, remoteBudgetMs: number): number {
   return loopback ? Math.max(remoteBudgetMs, LOOPBACK_SILENCE_TIMEOUT_MS) : remoteBudgetMs;
+}
+
+export function loopbackBudget(loopback: boolean, remoteBudget: Duration.Input) {
+  return Duration.millis(loopbackBudgetMs(loopback, Duration.toMillis(remoteBudget)));
 }
 
 /** Jittered exponential backoff, capped low for this device's own server. */
