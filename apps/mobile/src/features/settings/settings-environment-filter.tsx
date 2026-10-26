@@ -153,7 +153,7 @@ export function useSettingsEnvironmentFilter() {
           toggleSettingsEnvironment(current, availableTargets, environmentId),
         ),
       focusEnvironment: (environmentId: EnvironmentId) => {
-        setSelectedProjectKey(null);
+        selectProject(null);
         setSelectedIds(new Set([environmentId]));
       },
     }),

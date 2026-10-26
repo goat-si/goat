@@ -22,7 +22,7 @@ import {
   deriveThreadStructureRuntime,
 } from "@goat/client-runtime/state/thread-execution";
 import { createQuestionHistoryProjector } from "@goat/client-runtime/state/thread-requests";
-import { ArrowUpIcon, PaperclipIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, PaperclipIcon, XIcon } from "~/components/solar";
 import {
   createRef,
   useEffect,
@@ -79,7 +79,7 @@ interface GuestEntry {
 let capturedEntry: GuestEntry | null = null;
 
 // A reload keeps the tab's session, so it keeps which messages still wait for a row too.
-const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
+const AWAITING_ROWS_KEY = "goat:guest-awaiting-rows";
 const AWAITING_ROWS_LIMIT = 50;
 
 function readAwaitingRowIds(): ReadonlySet<GuestMessageId> {
@@ -362,6 +362,7 @@ function GuestThread({
   // No ":" so the timeline finds no environment thread behind the key.
   const threadKey = `guest-${shareId}`;
   const listRef = useRef<LegendListRef | null>(null);
+  const [timelineScrollNode, setTimelineScrollNode] = useState<HTMLElement | null>(null);
   const { resolvedTheme } = useTheme();
   // The rest is what ChatView derives from the same projection.
   const [projectQuestionHistory] = useState(() => createQuestionHistoryProjector());
@@ -391,6 +392,7 @@ function GuestThread({
   const runningRunId = runtime?.activeRunId ?? null;
   const follow = useTimelineFollow({
     legendListRef: listRef,
+    timelineScrollNode,
     composerRef: NO_COMPOSER,
     composerTimelineInset: 0,
     routeThreadKey: threadKey,
@@ -474,6 +476,7 @@ function GuestThread({
           emptyPlaceholderInset={0}
           liveFollowEnabled={follow.timelineLiveFollowEnabled}
           onIsAtEndChange={follow.onIsAtEndChangeStable}
+          onScrollableNodeChange={setTimelineScrollNode}
           onViewportAttach={follow.attachTimelineViewport}
           footer={
             unplaced.length === 0 ? null : (

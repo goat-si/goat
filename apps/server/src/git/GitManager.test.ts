@@ -761,7 +761,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "refs/heads/feature/shared-reads",
       ]);
       const gitCommands: string[] = [];
-      const { manager, ghCalls } = yield* makeManager({ gitCommands });
+      const { manager, providerCalls } = yield* makeManager({ gitCommands });
       const lookup = manager.branchPullRequest(
         { cwd: repoDir, branch: "feature/shared-reads" },
         { freshGitState: true },
@@ -778,7 +778,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(gitCommands.filter((command) => command === "remote")).toHaveLength(1);
       expect(gitCommands.filter((command) => command.startsWith("for-each-ref "))).toHaveLength(1);
       expect(gitCommands.length).toBe(afterBurst);
-      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(1);
+      expect(listed(providerCalls)).toHaveLength(1);
       yield* TestClock.adjust("1 second");
       yield* lookup;
       expect(gitCommands.filter((command) => command === "remote")).toHaveLength(2);
@@ -786,7 +786,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         { cwd: repoDir, branch: "feature/shared-reads" },
         { refresh: true },
       );
-      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
+      expect(listed(providerCalls)).toHaveLength(2);
     }),
   );
 
@@ -802,19 +802,22 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "branch.feature/repoint.merge",
         "refs/heads/feature/repoint",
       ]);
-      const pullRequest = (number: number, repository: string, branch: string) =>
-        encodeCliJson([
-          {
-            number,
-            title: branch,
-            url: `https://github.com/example/${repository}/pull/${number}`,
-            baseRefName: "main",
-            headRefName: branch,
-            state: "OPEN",
-          },
-        ]);
-      const { manager, ghCalls } = yield* makeManager({
-        ghScenario: {
+      const pullRequest = (
+        number: number,
+        repository: string,
+        branch: string,
+      ): FakeChangeRequest[] => [
+        {
+          number,
+          title: branch,
+          url: `https://github.com/example/${repository}/pull/${number}`,
+          baseRefName: "main",
+          headRefName: branch,
+          state: "open",
+        },
+      ];
+      const { manager, providerCalls } = yield* makeManager({
+        providerScenario: {
           prListSequence: [
             pullRequest(31, "first", "feature/repoint"),
             pullRequest(32, "second", "feature/repoint"),
@@ -837,7 +840,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         "refs/heads/feature/replacement",
       ]);
       expect((yield* lookup)?.number).toBe(33);
-      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(3);
+      expect(listed(providerCalls)).toHaveLength(3);
     }),
   );
 

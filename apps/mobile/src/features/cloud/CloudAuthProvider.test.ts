@@ -15,11 +15,13 @@ import { requestConnectOnboarding } from "./connectOnboarding";
 import { restoreCloudComposerDrafts } from "../../state/use-composer-drafts";
 
 const expoConfig = vi.hoisted(() => ({ extra: {} as Record<string, unknown> }));
+const goatConnect = vi.hoisted(() => ({ enabled: true }));
 
 vi.mock("expo-constants", () => ({ default: { expoConfig } }));
 
 vi.mock("@clerk/expo", () => ({
   ClerkProvider: vi.fn(() => null),
+  getClerkInstance: vi.fn(() => ({ addListener: () => () => {}, session: null })),
   useAuth: vi.fn(),
 }));
 
@@ -50,7 +52,6 @@ vi.mock("../../state/use-composer-drafts", () => ({
 }));
 
 vi.mock("../agent-awareness/remoteRegistration", () => ({
-  releaseAgentAwarenessRelayTokenProvider: vi.fn(),
   setAgentAwarenessRelayTokenProvider: vi.fn(),
   releaseAgentAwarenessRelayTokenProvider: vi.fn(),
   unregisterAgentAwarenessDeviceForCurrentUser: vi.fn(),
@@ -122,5 +123,51 @@ describe("cloudAccountService", () => {
     await vi.waitFor(() =>
       expect(appAtomRegistry.get(managedRelaySessionAtom)?.accountId).toBe("account-1"),
     );
+  });
+});
+
+vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
+  isGoatConnectEnabled: () => goatConnect.enabled,
+}));
+
+const completeExtra = {
+  clerk: { publishableKey: "pk_test_example", jwtTemplate: "relay" },
+  relay: { url: "https://relay.example.test" },
+};
+
+async function renderProvider() {
+  const { CloudAuthProvider } = await import("./CloudAuthProvider");
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(() => root.render(createElement(CloudAuthProvider, null, createElement("span"))));
+  await act(() => root.unmount());
+}
+
+it("does not initialize Clerk when cloud config lacks a JWT template", async () => {
+  expoConfig.extra = { ...completeExtra, clerk: { publishableKey: "pk_test_example" } };
+  vi.resetModules();
+  await renderProvider();
+  expect(ClerkProvider).not.toHaveBeenCalled();
+});
+
+it("does not initialize Clerk when GOAT Connect is disabled", async () => {
+  expoConfig.extra = completeExtra;
+  goatConnect.enabled = false;
+  vi.resetModules();
+  try {
+    await renderProvider();
+    expect(ClerkProvider).not.toHaveBeenCalled();
+  } finally {
+    goatConnect.enabled = true;
+  }
+});
+
+it("initializes Clerk when cloud config is complete", async () => {
+  expoConfig.extra = completeExtra;
+  vi.resetModules();
+  await renderProvider();
+  expect(vi.mocked(ClerkProvider).mock.calls[0]?.[0]).toMatchObject({
+    publishableKey: "pk_test_example",
   });
 });

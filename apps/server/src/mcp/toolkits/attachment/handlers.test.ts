@@ -10,10 +10,15 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
+import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
+
+const attachmentToolkit = McpHttpServer.layerAttachmentToolkit.pipe(
+  Layer.provide(DocumentText.layer),
+);
 
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("mcp-attachment-environment"),
@@ -101,10 +106,7 @@ it.effect.each(obstacles)(
       expect(declaredFailure(again)).toMatchObject({ code: "invalid_request" });
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(
-          McpHttpServer.layerAttachmentToolkit,
-          McpHttpServer.catalogRegistrations.agentSurface,
-        ).pipe(
+        Layer.mergeAll(attachmentToolkit, McpHttpServer.catalogRegistrations.agentSurface).pipe(
           Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
@@ -165,7 +167,7 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
     expect(discarded.isError).toBe(false);
   }).pipe(
     Effect.provide(
-      McpHttpServer.layerAttachmentToolkit.pipe(
+      attachmentToolkit.pipe(
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),

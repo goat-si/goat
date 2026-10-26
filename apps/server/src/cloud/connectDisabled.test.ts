@@ -206,7 +206,7 @@ it.effect("does not create or flush a relay exporter with valid OTLP configurati
       tracesDataset: "relay",
       tracesToken: "synthetic",
     },
-    { serviceName: "wp1", runtime: "test", client: "test" },
+    { serviceName: "wp1", serviceInstanceId: "wp1-test", runtime: "test", client: "test" },
   ).pipe(
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),

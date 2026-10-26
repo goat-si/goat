@@ -535,36 +535,38 @@ export const layerMcpClientAuthenticator = Layer.effect(
     const environment = yield* ServerEnvironment.ServerEnvironment;
     const environmentId = yield* environment.getEnvironmentId;
     return McpHttpServer.McpClientAuthenticator.of({
-      authenticate: (request) =>
-        environmentAuth.authenticateMcpClient(request).pipe(
-          Effect.flatMap((client) =>
-            Clock.currentTimeMillis.pipe(
-              Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({
-                environmentId,
-                ...(client.grantedScopes === undefined
-                  ? {}
-                  : { grantedScopes: client.grantedScopes }),
-                ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
-                requestNamespace: `client:${client.sessionId}`,
-                thread: undefined,
-                client: {
-                  sessionId: client.sessionId,
-                  label: client.label,
-                  access: client.access,
-                  approvals: client.approvals,
-                },
-                capabilities: new Set<McpInvocationContext.McpCapability>([
-                  ...(client.grantedScopes?.some(
-                    (scope) => scope === "memory:read" || scope === "memory:write",
-                  )
-                    ? ["memory" as const]
-                    : []),
-                  "orchestration",
-                  "worktree",
-                  "pull-requests",
-                ]),
-                issuedAt,
-              })),
+      authenticate: Effect.fn("McpHttpServer.McpClientAuthenticator.authenticate")(
+        function (request) {
+          return environmentAuth.authenticateMcpClient(request).pipe(
+            Effect.flatMap((client) =>
+              Clock.currentTimeMillis.pipe(
+                Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({
+                  environmentId,
+                  ...(client.grantedScopes === undefined
+                    ? {}
+                    : { grantedScopes: client.grantedScopes }),
+                  ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
+                  requestNamespace: `client:${client.sessionId}`,
+                  thread: undefined,
+                  client: {
+                    sessionId: client.sessionId,
+                    label: client.label,
+                    access: client.access,
+                    approvals: client.approvals,
+                  },
+                  capabilities: new Set<McpInvocationContext.McpCapability>([
+                    ...(client.grantedScopes?.some(
+                      (scope) => scope === "memory:read" || scope === "memory:write",
+                    )
+                      ? ["memory" as const]
+                      : []),
+                    "orchestration",
+                    "worktree",
+                    "pull-requests",
+                  ]),
+                  issuedAt,
+                })),
+              ),
             ),
             Effect.catch((error) =>
               (EnvironmentAuth.isServerAuthCredentialError(error)

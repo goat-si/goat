@@ -186,7 +186,10 @@ function PaletteRow(props: {
           <Text numberOfLines={1} className={cn("text-sm", mutedForegroundClassName)}>
             {props.item.matchHint.label}:{" "}
             {splitSearchText(props.item.matchHint.text, props.item.matchHint.ranges).map((part) => (
-              <Text key={part.start} className={cn("text-sm", part.highlighted && "font-goat-bold")}>
+              <Text
+                key={part.start}
+                className={cn("text-sm", part.highlighted && "font-goat-bold")}
+              >
                 {part.text}
               </Text>
             ))}
@@ -349,26 +352,24 @@ export function CommandPalette(props: {
     ) {
       actions.push(
         memoryPaletteItem(() =>
-          navigation.navigate("SettingsSheet", {
-            screen: "SettingsContent",
-            params: {
-              screen: "SettingsMemory",
-              params: activeThreadRef
-                ? {
-                    environmentId: activeThreadRef.environmentId,
-                    thread: activeThreadRef,
-                    ...(activeThread
-                      ? {
-                          project: {
-                            environmentId: activeThread.environmentId,
-                            projectId: activeThread.projectId,
-                          },
-                        }
-                      : {}),
-                  }
-                : undefined,
-            },
-          }),
+          openSettings(
+            navigation,
+            "SettingsMemory",
+            activeThreadRef
+              ? {
+                  environmentId: activeThreadRef.environmentId,
+                  thread: activeThreadRef,
+                  ...(activeThread
+                    ? {
+                        project: {
+                          environmentId: activeThread.environmentId,
+                          projectId: activeThread.projectId,
+                        },
+                      }
+                    : {}),
+                }
+              : undefined,
+          ),
         ),
       );
     }

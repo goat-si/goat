@@ -96,12 +96,6 @@ export const make = Effect.gen(function* () {
             : textGeneration.generateMemorySummary(input),
         ),
       ),
-    generateCommitMessage: (input) =>
-      resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
-      ),
-    generatePrContent: (input) =>
-      resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
       return resolveInstance(
         registry,
@@ -117,7 +111,8 @@ export const make = Effect.gen(function* () {
     generateBranchName: Effect.fn("TextGeneration.generateBranchName")(function (input) {
       return resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
-      ),
+      );
+    }),
     generateChannelReception: (input) =>
       resolveInstance(registry, "generateChannelReception", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
@@ -131,8 +126,8 @@ export const make = Effect.gen(function* () {
             : textGeneration.generateChannelReception(input),
         ),
       ),
-    generateReviewGuide: (input) =>
-      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+    generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
+      return resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
       );
     }),

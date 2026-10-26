@@ -1,4 +1,5 @@
-import { useEffectEvent, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
+import { useStableCallback } from "../hooks/useStableCallback";
 
 import {
   acquireBrowserSurface,
@@ -35,13 +36,11 @@ export function BrowserSurfaceSlot(props: {
   } = props;
   const presentationRef = useRef({ visible, cornerRadius, zIndex });
   const updateRef = useRef<(() => void) | null>(null);
-  const presentedChange = useEffectEvent((presented: boolean) =>
+  const presentedChange = useStableCallback((presented: boolean) =>
     props.onPresentedChange?.(presented),
   );
 
-  useLayoutEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
+  const attachSurface = (element: HTMLDivElement) => {
     const measure = () => {
       const rect = element.getBoundingClientRect();
       return {
@@ -135,7 +134,7 @@ export function BrowserSurfaceSlot(props: {
       if (updateRef.current === update) updateRef.current = null;
       lease.release();
     };
-  }, [fitSourceContent, passive, tabId]);
+  };
 
   useLayoutEffect(() => {
     presentationRef.current = { visible, cornerRadius, zIndex };

@@ -1147,6 +1147,15 @@ export const layerQueryRunner: Layer.Layer<
                   }),
                 ),
               ),
+            setMcpServers: (servers) =>
+              Effect.tryPromise({
+                try: async () => {
+                  const result = await queryRuntime.setMcpServers(servers);
+                  if (Object.keys(result.errors).length > 0)
+                    throw new Error("MCP registration unavailable.");
+                },
+                catch: (cause) => queryRunnerError(cause, "setMcpServers"),
+              }),
             applyFlagSettings: (settings) =>
               Effect.tryPromise({
                 try: () => queryRuntime.applyFlagSettings(settings),
@@ -1243,131 +1252,7 @@ export const layerQueryRunner: Layer.Layer<
                 isClaudeMcpRegistrationTimeoutError(error.cause),
             }),
           ),
-          offer: (message) =>
-            Queue.offer(promptQueue, message).pipe(
-              Effect.asVoid,
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: {
-                    type: "prompt.offer",
-                    message,
-                  },
-                }),
-              ),
-            ),
-          setMcpServers: (servers) =>
-            Effect.tryPromise({
-              try: async () => {
-                const result = await queryRuntime.setMcpServers(servers);
-                if (Object.keys(result.errors).length > 0)
-                  throw new Error("MCP registration unavailable.");
-              },
-              catch: (cause) => queryRunnerError(cause, "setMcpServers"),
-            }),
-          setModel: (model) =>
-            Effect.tryPromise({
-              try: () => queryRuntime.setModel(model),
-              catch: (cause) => queryRunnerError(cause, "setModel"),
-            }).pipe(
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: {
-                    type: "query.set_model",
-                    model,
-                  },
-                }),
-              ),
-            ),
-          applyFlagSettings: (settings) =>
-            Effect.tryPromise({
-              try: () => queryRuntime.applyFlagSettings(settings),
-              catch: (cause) => queryRunnerError(cause, "applyFlagSettings"),
-            }).pipe(
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: {
-                    type: "query.apply_flag_settings",
-                    settings,
-                  },
-                }),
-              ),
-            ),
-          setPermissionMode: (mode) =>
-            Effect.tryPromise({
-              try: () => queryRuntime.setPermissionMode(mode),
-              catch: (cause) => queryRunnerError(cause, "setPermissionMode"),
-            }).pipe(
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: {
-                    type: "query.set_permission_mode",
-                    mode,
-                  },
-                }),
-              ),
-            ),
-          stopTask: (taskId) =>
-            Effect.tryPromise({
-              try: () => queryRuntime.stopTask(taskId),
-              catch: (cause) => queryRunnerError(cause, "stopTask"),
-            }).pipe(
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: { type: "query.stop_task", taskId },
-                }),
-              ),
-            ),
-          backgroundTasks: (toolUseId) =>
-            Effect.tryPromise({
-              try: () => queryRuntime.backgroundTasks(toolUseId),
-              catch: (cause) => queryRunnerError(cause, "backgroundTasks"),
-            }).pipe(
-              Effect.tap(() =>
-                logProtocolEvent({
-                  direction: "outgoing",
-                  stage: "decoded",
-                  payload: { type: "query.background_tasks", toolUseId },
-                }),
-              ),
-            ),
-          interrupt: Effect.tryPromise({
-            try: () => queryRuntime.interrupt(),
-            catch: (cause) => queryRunnerError(cause, "interrupt"),
-          }).pipe(
-            Effect.tap(() =>
-              logProtocolEvent({
-                direction: "outgoing",
-                stage: "decoded",
-                payload: {
-                  type: "query.interrupt",
-                },
-              }),
-            ),
-          ),
-          close: Queue.shutdown(promptQueue).pipe(
-            Effect.andThen(closeClaudeQuery(queryRuntime)),
-            Effect.tap(() =>
-              logProtocolEvent({
-                direction: "outgoing",
-                stage: "decoded",
-                payload: {
-                  type: "query.close",
-                },
-              }),
-            ),
-          ),
-        } satisfies ClaudeAgentSdkQuerySession;
-      }),
+      ),
       forkSession: Effect.fn("ClaudeAgentSdkQueryRunner.forkSession")(function* (
         input: ClaudeAgentSdkSessionForkInput,
       ) {
@@ -1684,7 +1569,9 @@ export function makeClaudeQueryOptions(input: {
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
           "\n\n" +
           GOAT_DEVELOPMENT_INSTRUCTIONS +
-          (input.mcpServers === undefined ? "" : GOAT_ORCHESTRATION_INSTRUCTIONS),
+          (input.mcpServers === undefined
+            ? ""
+            : GOAT_ORCHESTRATION_INSTRUCTIONS + CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS),
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
@@ -4521,6 +4408,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 ) {
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const memoryRegistry = Option.getOrUndefined(
     yield* Effect.serviceOption(McpSessionRegistry.McpSessionRegistry),
   );
@@ -10524,7 +10412,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* startUserTurnForWakeReports(nativeThreadId);
               yield* Effect.uninterruptibleMask((restore) =>
                 restore(
-                  querySession.query.offer(userMessage, () => {
+                  querySession.query.offer(admittedMessage, () => {
                     pdfReservation.commit();
                   }),
                 ).pipe(
@@ -10900,7 +10788,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 else next.delete(turnInput.providerTurnId);
                 return next;
               });
-            yield* existing.query.offer(admitted).pipe(
+            // The PDF budget is spent once the message is queued, even if the steer is later refused.
+            yield* Effect.uninterruptibleMask((restore) =>
+              restore(
+                existing.query.offer(admitted, () => {
+                  pdfReservation.commit();
+                }),
+              ).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    pdfReservation.commit();
+                  }),
+                ),
+              ),
+            ).pipe(
               Effect.tap(() => settleSteer(true)),
               Effect.onError(() => settleSteer(false)),
             );
@@ -11573,6 +11474,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
 const layer: Layer.Layer<
   ProviderAdapter.ProviderAdapterV2,
   never,
+  | ChildProcessSpawner.ChildProcessSpawner
   | ClaudeAgentSdkQueryRunner
   | Crypto.Crypto
   | FileSystem.FileSystem

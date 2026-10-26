@@ -23,10 +23,67 @@ const rule = (
 ): TextRule => ({ id: `leftover:${id}`, category: "leftovers", find, replace, scope });
 
 export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
+  rule(
+    "native-upload-scratch",
+    at("scripts/mobile-native-client.ts"),
+    /t3-native-upload-/g,
+    "goat-native-upload-",
+  ),
+  rule("render-metrics-scratch", at("scripts/render-metrics.ts"), /t3-renders-/g, "goat-renders-"),
+  rule(
+    "mobile-permission-storage",
+    at("apps/mobile/src/features/connection/permissionUpdateNotice.ts"),
+    /(?<=")t3code(?=\.permission-update\.v1")/g,
+    "goat",
+  ),
+  rule(
+    "guest-awaiting-storage",
+    at("apps/web/src/components/guest/GuestPage.tsx"),
+    /(?<=")t3:(?=guest-awaiting-rows")/g,
+    "goat:",
+  ),
+  rule(
+    "web-render-symbols",
+    at("apps/web/src/components/files/FilePreviewPanel.tsx", "apps/web/test/renderCounter.ts"),
+    /(?<=")t3code(?=\.render(?:Mermaid|Counter)")/g,
+    "goat",
+  ),
+  rule(
+    "web-chunk-cycle-plugin",
+    at("apps/web/vite.config.ts"),
+    /t3code:chunk-cycle-guard/g,
+    "goat:chunk-cycle-guard",
+  ),
+  rule(
+    "mobile-diff-trace",
+    at("apps/mobile/src/features/diffs/nativeReviewDiffTrace.ts"),
+    /t3-diff-highlight-trace\.jsonl/g,
+    "goat-diff-highlight-trace.jsonl",
+  ),
+  rule(
+    "mobile-e2e-local-names",
+    (path) => /^scripts\/mobile-e2e(?:\.ts|\/device\.ts)$/.test(path),
+    /t3-mobile-e2e-|t3-e2e-/g,
+    "goat-e2e-",
+  ),
+  rule("mobile-e2e-scheme", at("scripts/mobile-e2e.ts"), /(?<=")t3code-dev(?=")/g, "goat-dev"),
+  rule(
+    "highlights-generator-scratch",
+    at("apps/mobile/scripts/generate-highlights.mts"),
+    /(?<=")t3-highlights-(?=")/g,
+    "goat-highlights-",
+  ),
+  rule(
+    "boot-download-url",
+    at("apps/web/src/lib/bootError.ts"),
+    /https:\/\/t3\.codes\/download/g,
+    "https://github.com/goat-si/goat-releases/releases",
+  ),
   // Local console tags; the relay never reads them.
   rule(
     "connect-console-tags",
-    (path) => /^apps\/(?:web|mobile|desktop|server)\/src\//.test(path),
+    (path) =>
+      /^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/client-runtime\/src\/)/.test(path),
     /\[t3-(connect|cloud)\]/g,
     "[goat-$1]",
   ),
@@ -144,7 +201,10 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
   ),
   rule(
     "bitbucket-clone-dir",
-    at("packages/source-control-bitbucket/src/client/definition.ts"),
+    at(
+      "packages/source-control-bitbucket/src/client/definition.ts",
+      "packages/source-control-bitbucket/src/shared/definition.ts",
+    ),
     /(?<=\.git )t3code-pr-(?=\$\{number\})/g,
     "goat-pr-",
   ),
@@ -181,7 +241,7 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
   ),
   rule(
     "mobile-native-client-cache",
-    at("scripts/mobile-native-client.ts"),
+    at("scripts/mobile-native-client.ts", "apps/mobile/README.md"),
     /(?<=\.cache\/)t3code(?=\/native-clients)/g,
     "goat",
   ),

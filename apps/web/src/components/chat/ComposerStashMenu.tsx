@@ -1,6 +1,6 @@
 import { BookmarkIcon, FileIcon, FileTextIcon } from "~/components/solar";
-import { memo, useEffect, useRef, useState, type RefObject } from "react";
-import { memo, useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type RefObject, useEffectEvent } from "react";
+
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 
 import { RelativeTime } from "../RelativeTime";

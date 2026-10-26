@@ -9,7 +9,7 @@ const EFFECT_HOOKS = new Set(["useEffect", "useLayoutEffect", "useInsertionEffec
 const EFFECT_HOOK_TEXT = /use(?:Layout|Insertion)?Effect/;
 const UNBUDGETED_FILE = /\.test\.[cm]?[jt]sx?$|[\\/](?:test|__tests__)[\\/]/;
 const budgets: Readonly<Record<string, number>> = budget;
-const JUSTIFIED = /oxlint-disable-next-line[^\n]*t3code\/react-effect-budget\s+--\s*\S/;
+const JUSTIFIED = /oxlint-disable-next-line[^\n]*goat\/react-effect-budget\s+--\s*\S/;
 
 // An effect with a stated reason on the line above is a reviewed decision: it is not counted, and it
 // is always reported so that the suppression comment above it is used.
@@ -63,7 +63,7 @@ export default defineRule({
           `This file has ${calls.length} React ${calls.length === 1 ? "effect" : "effects"} against a budget of ${allowed}. ` +
           "First ask whether this is synchronization that belongs in render or in the handler that causes it. " +
           "If an effect is the honest model, say why on the line above it: " +
-          "`// oxlint-disable-next-line t3code/react-effect-budget -- <why>`.";
+          "`// oxlint-disable-next-line goat/react-effect-budget -- <why>`.";
         for (const node of calls.slice(allowed)) context.report({ node, message });
       },
     };

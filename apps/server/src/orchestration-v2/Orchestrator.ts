@@ -676,7 +676,7 @@ function delegatedTasksStopEffect(command: {
 
 const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
-  "T3 Code could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
+  "GOAT could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
 
 function withoutPreparationResult(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>,
@@ -2923,6 +2923,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     projectionStore,
     stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
     mapDispatchError,
+  });
+
   // Deleted after the share change commits: the files of waiting messages it dismissed or dropped.
   const releaseGuestAttachments = (
     command: { readonly commandId: CommandId; readonly threadId: ThreadId },
@@ -13467,9 +13469,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
     }),
     getLaunchedPendingQuestions: (input) =>
-      projectionStore.getLaunchedPendingQuestions(input).pipe(
-        Effect.mapError((cause) => new OrchestratorProjectionError({ threadId: input.launcherThreadId, cause })),
-      ),
+      projectionStore
+        .getLaunchedPendingQuestions(input)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: input.launcherThreadId, cause }),
+          ),
+        ),
     getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId) {
       return projectionStore
         .getThreadShell(threadId)
@@ -13625,6 +13631,13 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
           cause: "Orchestration V2 live runtime is not configured.",
         }),
       ),
+    listOlderSettledThreads: () =>
+      Effect.fail(
+        new OrchestratorProjectionError({
+          threadId: ThreadId.make("thread:shell"),
+          cause: "Orchestration V2 live runtime is not configured.",
+        }),
+      ),
     readShellSnapshot: () =>
       Effect.fail(
         new OrchestratorProjectionError({
@@ -13643,6 +13656,13 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
       Effect.fail(
         new OrchestratorProjectionError({
           threadId,
+          cause: "Orchestration V2 live runtime is not configured.",
+        }),
+      ),
+    findGuestShareThreadId: () =>
+      Effect.fail(
+        new OrchestratorProjectionError({
+          threadId: ThreadId.make("thread:shell"),
           cause: "Orchestration V2 live runtime is not configured.",
         }),
       ),

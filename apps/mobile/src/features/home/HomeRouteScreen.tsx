@@ -270,8 +270,7 @@ export function HomeRouteScreen() {
           <WorkspaceEmptyDetail
             onAddConnection={
               Platform.OS === "android" && !catalogState.hasConnections
-                ? () =>
-                    openSettings(navigation, "SettingsEnvironmentNew")
+                ? () => openSettings(navigation, "SettingsEnvironmentNew")
                 : undefined
             }
             onStartNewTask={
@@ -296,12 +295,7 @@ export function HomeRouteScreen() {
       selectedProjectKey={selectedProjectKey}
       onEnvironmentChange={setSelectedEnvironmentId}
       onProjectChange={setSelectedProjectKey}
-      onOpenEnvironments={() =>
-        navigation.navigate("SettingsSheet", {
-          screen: "SettingsContent",
-          params: { screen: "SettingsEnvironments" },
-        })
-      }
+      onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
       onOpenSettings={() => selectTab("settings")}
       onSearchQueryChange={setSearchQuery}
       onStartNewTask={startNewTask}

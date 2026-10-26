@@ -31,6 +31,7 @@ import * as ThreadMessageIntake from "../orchestration-v2/ThreadMessageIntake.ts
 import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as ProviderAdapters from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -165,6 +166,7 @@ const make = Effect.gen(function* () {
   const reports = yield* RemoteReportService.RemoteReportService;
   const adapters = yield* ProviderAdapters.ProviderAdapterRegistryV2;
   const sources = yield* CloudSource.CloudTaskSourceService;
+  const documentText = yield* DocumentText.DocumentText;
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   /**
    * Refuses a provider instance this environment does not have, or a requested
@@ -788,6 +790,7 @@ const make = Effect.gen(function* () {
         Effect.provideService(ServerSettings.ServerSettingsService, settings),
         Effect.provideService(LaunchWatchService.LaunchWatchService, watches),
         Effect.provideService(RemoteReportService.RemoteReportService, reports),
+        Effect.provideService(DocumentText.DocumentText, documentText),
       ),
   });
 });

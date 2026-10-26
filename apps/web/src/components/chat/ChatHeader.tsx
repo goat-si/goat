@@ -244,6 +244,7 @@ export const ChatHeader = memo(function ChatHeader({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
     onStartRename: startRename,
+    canShareWithGuest,
     globalAgent,
   });
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);

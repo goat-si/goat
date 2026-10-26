@@ -1694,6 +1694,7 @@ describe("OpenCodeAdapterV2", () => {
           },
           mcp: { add: async () => ({ data: true }) },
         },
+        {},
         {
           resolveAttachmentPath: () => "/workspace/report.docx",
           resolveExtractedTextPath: () =>

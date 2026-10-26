@@ -7,7 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { Atom } from "effect/reactivity";
-import { useState } from "react";
 
 import {
   decodeThirdPartyLicenseManifest,

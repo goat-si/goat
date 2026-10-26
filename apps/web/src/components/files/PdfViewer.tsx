@@ -7,7 +7,13 @@ import {
   type CSSProperties,
 } from "react";
 import { TextLayer, type PDFDocumentProxy } from "pdfjs-dist";
-import { ChevronDownIcon, ChevronUpIcon, MinusIcon, PlusIcon, ScanIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  MinusIcon,
+  PlusIcon,
+  MinimizeIcon as ScanIcon,
+} from "~/components/solar";
 import { Input } from "~/components/ui/input";
 import { observeResize } from "~/lib/observeResize";
 import { FileSurfaceAction, FileSurfaceFailure, FileSurfaceLoading } from "./fileSurfaceChrome";
@@ -29,7 +35,7 @@ function PdfPage(props: {
   const canvas = useRef<HTMLCanvasElement>(null);
   const text = useRef<HTMLDivElement>(null);
   const { document: pdf, index, width, onSize, onError } = props;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Render the PDF page canvas and text layer, cancelling tasks and releasing pdf.js page resources on cleanup.
+  // oxlint-disable-next-line goat/react-effect-budget -- Render the PDF page canvas and text layer, cancelling tasks and releasing pdf.js page resources on cleanup.
   useEffect(() => {
     let cancelled = false;
     let paint: ReturnType<Awaited<ReturnType<PDFDocumentProxy["getPage"]>>["render"]> | undefined;
@@ -78,7 +84,7 @@ function PdfPage(props: {
       void Promise.allSettled([paint?.promise]).then(() => loadedPage?.cleanup());
     };
   }, [pdf, index, width, onSize, onError]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Highlight pdf.js-owned text nodes and observe asynchronous text layer mutations for the current search query.
+  // oxlint-disable-next-line goat/react-effect-budget -- Highlight pdf.js-owned text nodes and observe asynchronous text layer mutations for the current search query.
   useEffect(() => {
     const node = text.current;
     if (!node) return;
@@ -133,7 +139,7 @@ export default function PdfViewer(props: { src: string; title: string }) {
   const scroll = useRef<HTMLDivElement>(null);
   const find = useRef<HTMLInputElement>(null);
   const zoomAnchor = useRef<{ page: number; offset: number; width: number } | null>(null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Own the PDF fetch, load timeout, and pdf.js document task across source changes, retries, and unmounts.
+  // oxlint-disable-next-line goat/react-effect-budget -- Own the PDF fetch, load timeout, and pdf.js document task across source changes, retries, and unmounts.
   useEffect(() => {
     const controller = new AbortController();
     let disposed = false;
@@ -173,7 +179,7 @@ export default function PdfViewer(props: { src: string; title: string }) {
       void task?.destroy();
     };
   }, [props.src, revision]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Measure the PDF viewport before paint and observe resizes for fit-width sizing and visible-page selection.
+  // oxlint-disable-next-line goat/react-effect-budget -- Measure the PDF viewport before paint and observe resizes for fit-width sizing and visible-page selection.
   useLayoutEffect(() => {
     const node = scroll.current;
     if (!node) return;
@@ -220,7 +226,7 @@ export default function PdfViewer(props: { src: string; title: string }) {
     };
     setZoom(value);
   };
-  // oxlint-disable-next-line t3code/react-effect-budget -- Restore the DOM scroll anchor after the new zoom width has committed to page layout.
+  // oxlint-disable-next-line goat/react-effect-budget -- Restore the DOM scroll anchor after the new zoom width has committed to page layout.
   useLayoutEffect(() => {
     const anchor = zoomAnchor.current;
     zoomAnchor.current = null;
@@ -229,11 +235,11 @@ export default function PdfViewer(props: { src: string; title: string }) {
       top: offsets[anchor.page]! - 16 + (anchor.offset * width) / anchor.width,
     });
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- Scroll to the first asynchronous search result after its measured page offsets have committed.
+  // oxlint-disable-next-line goat/react-effect-budget -- Scroll to the first asynchronous search result after its measured page offsets have committed.
   useLayoutEffect(() => {
     if (matches.length) jumpToPage(matches[0]!);
   }, [matches]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Debounce pdf.js text extraction and cancel obsolete searches when the query or document changes.
+  // oxlint-disable-next-line goat/react-effect-budget -- Debounce pdf.js text extraction and cancel obsolete searches when the query or document changes.
   useEffect(() => {
     if (!pdf || !query.trim()) {
       // oxlint-disable-next-line react/set-state-in-effect -- A blank query cancels the previous search.

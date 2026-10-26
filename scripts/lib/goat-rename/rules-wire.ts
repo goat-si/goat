@@ -5,6 +5,57 @@ const source = (path: string, paths: readonly string[]) => paths.includes(path);
 
 export const WIRE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "wire-guest-session-cookie",
+    category: "wire",
+    find: /(?<=`)t3_guest_/g,
+    replace: "goat_guest_",
+    scope: (path) => path === "packages/contracts/src/guestShare.ts",
+  },
+  {
+    id: "wire-browser-session-fixture",
+    category: "wire",
+    find: /(?<=sessionCookieName: ")t3_session(?=")/g,
+    replace: "goat_session",
+    scope: (path) => path === "apps/web/test/fakeEnvironment.ts",
+  },
+  {
+    id: "wire-private-diff-theme",
+    category: "wire",
+    find: /\bt3-light\b/g,
+    replace: "goat-light",
+    scope: (path) =>
+      source(path, [
+        "apps/web/src/components/DiffWorkerPoolProvider.tsx",
+        "apps/web/src/lib/readableSyntaxTheme.ts",
+      ]),
+  },
+  {
+    id: "wire-release-resource-attribute",
+    category: "wire",
+    find: /\bt3code\.release\.channel\b/g,
+    replace: "goat.release.channel",
+    scope: (path) =>
+      source(path, [
+        "packages/shared/src/releaseResource.ts",
+        "packages/shared/src/releaseResource.test.ts",
+        "docs/operations/observability.md",
+      ]),
+  },
+  {
+    id: "wire-desktop-mode-attribute",
+    category: "wire",
+    find: /\bt3code\.desktop\.mode\b/g,
+    replace: "goat.desktop.mode",
+    scope: (path) => path === "apps/desktop/src/app/DesktopObservability.ts",
+  },
+  {
+    id: "wire-orchestration-metrics",
+    category: "wire",
+    find: /(?<=")t3_(?=orchestration_command)/g,
+    replace: "goat_",
+    scope: (path) => path === "apps/server/src/observability/Metrics.ts",
+  },
+  {
     id: "wire-mobile-render-counter",
     category: "wire",
     find: /(?<!T3 Code.*)__t3RenderCounter(?!.*T3 Code)/g,
@@ -85,6 +136,7 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
     scope: (path) =>
       source(path, [
         "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+        "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.subagents.test.ts",
         "apps/server/src/orchestration-v2/Adapters/CodexReplay.testkit.ts",
         "packages/effect-codex-app-server/src/replay.test.ts",
       ]),

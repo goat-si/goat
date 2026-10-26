@@ -12,14 +12,14 @@ ${Array.from({ length: effects }, (_, index) => (index % 2 === 0 ? "  useEffect(
 }
 `;
 
-const reports = (output: string) => output.match(/t3code\(react-effect-budget\)/g)?.length ?? 0;
+const reports = (output: string) => output.match(/goat\(react-effect-budget\)/g)?.length ?? 0;
 const lint = (filename: string) =>
-  createOxlintRuleHarness("t3code/react-effect-budget", { filename });
+  createOxlintRuleHarness("goat/react-effect-budget", { filename });
 
 const budgeted = lint(budgetedFile);
 const unbudgeted = lint("apps/web/src/NotInTheBudget.tsx");
 
-describe("t3code/react-effect-budget", () => {
+describe("goat/react-effect-budget", () => {
   budgeted.valid("passes a file at its budget", component(allowed));
 
   budgeted.invalid("reports only the calls past the budget", component(allowed + 2), (output) => {
@@ -49,7 +49,7 @@ const alias = useEffect;
   unbudgeted.valid(
     "does not count an effect that states its reason",
     `export function New() {
-  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to the window's resize events
+  // oxlint-disable-next-line goat/react-effect-budget -- subscribes to the window's resize events
   React.useEffect(() => {});
   return null;
 }

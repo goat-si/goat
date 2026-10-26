@@ -1,3 +1,4 @@
+import * as Option from "effect/Option";
 import { ScheduledTaskId } from "@goat/contracts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";

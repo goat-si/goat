@@ -66,7 +66,7 @@ const make = Effect.gen(function* () {
     readonly running: Deferred.Deferred<HostStorageHealth, HostMaintenanceError> | null;
   }>({ since: null, last: null, running: null });
 
-  // The notice shows host-shell quoting verbatim; desktop needs its launcher because t3 is absent from PATH.
+  // The notice shows host-shell quoting verbatim; desktop needs its launcher because goat is absent from PATH.
   const { command: compactCommand } = yield* resolveHostCliCommand("doctor", [
     "--base-dir",
     config.baseDir,
@@ -166,80 +166,80 @@ const make = Effect.gen(function* () {
   });
   const runCompaction = (paced: boolean) =>
     Effect.gen(function* () {
-    const before = yield* readHealth;
-    yield* Ref.update(compaction, (state) => ({ ...state, since: before.measuredAt }));
-    yield* readHealth;
-    const betweenPages = paced ? yield* makePacer : Effect.void;
-    const result = yield* maintenance.compactEventStore(betweenPages);
-    const { storageCleanup } = yield* settings.getSettings;
-    // Archiving whole idle threads first leaves trimming only what is still over budget.
-    const archived = yield* archive.runPass({
-      archiveAfterDays: storageCleanup.historyArchiveAfterDays,
-      deleteAfterDays: storageCleanup.historyArchiveDeleteAfterDays,
-      now: yield* Clock.currentTimeMillis,
-    });
-    if (archived.archivedThreads > 0 || archived.deletedArchives > 0) {
-      yield* Effect.logInfo("Archived idle thread history", archived);
-    }
-    const history = yield* maintenance.boundHistory({
-      budgetBytes: storageCleanup.historyBudgetBytes,
-      now: yield* Clock.currentTimeMillis,
-    });
-    const completedAt = yield* Clock.currentTimeMillis;
-    yield* fs.writeFileString(compactedAtPath, String(completedAt)).pipe(Effect.ignore);
-    if (result.deletedEventCount > 0 || result.deletedReceiptCount > 0) {
-      yield* Effect.logInfo("Compacted orchestration history", result);
-    }
-    if (history.trimmedRows > 0) {
-      yield* Effect.logInfo("Bounded orchestration history", {
-        ...history,
-        budgetBytes: storageCleanup.historyBudgetBytes,
+      const before = yield* readHealth;
+      yield* Ref.update(compaction, (state) => ({ ...state, since: before.measuredAt }));
+      yield* readHealth;
+      const betweenPages = paced ? yield* makePacer : Effect.void;
+      const result = yield* maintenance.compactEventStore(betweenPages);
+      const { storageCleanup } = yield* settings.getSettings;
+      // Archiving whole idle threads first leaves trimming only what is still over budget.
+      const archived = yield* archive.runPass({
+        archiveAfterDays: storageCleanup.historyArchiveAfterDays,
+        deleteAfterDays: storageCleanup.historyArchiveDeleteAfterDays,
+        now: yield* Clock.currentTimeMillis,
       });
-    }
-    yield* reclaim;
-    const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
-    const after = yield* readHealth;
-    const last: HostStorageCompactionResult = {
-      finishedAt: after.measuredAt,
-      removedEvents: result.deletedEventCount,
-      freedBytes: Math.max(0, before.databaseBytes - after.databaseBytes),
-      needsOfflineCompaction: mode[0]?.auto_vacuum !== 2 && after.reclaimableBytes > 0,
-    };
-    yield* Ref.update(compaction, (state) => ({ ...state, last }));
-  }).pipe(
-    Effect.ensuring(Ref.update(compaction, (state) => ({ ...state, since: null }))),
-    Effect.andThen(publishStatus),
-    Effect.andThen(Ref.get(healthRef)),
-    Effect.flatMap((health) =>
-      health === null
-        ? Effect.fail(new HostMaintenanceError({ operation: "compact_storage", message: "" }))
-        : Effect.succeed(health),
-    ),
-    Effect.mapError(
-      (cause) =>
-        new HostMaintenanceError({
-          operation: "compact_storage",
-          message:
-            "Could not compact this machine's history" +
-            (cause instanceof Error && cause.message.length > 0 ? ": " + cause.message : "."),
-        }),
-    ),
-  );
+      if (archived.archivedThreads > 0 || archived.deletedArchives > 0) {
+        yield* Effect.logInfo("Archived idle thread history", archived);
+      }
+      const history = yield* maintenance.boundHistory({
+        budgetBytes: storageCleanup.historyBudgetBytes,
+        now: yield* Clock.currentTimeMillis,
+      });
+      const completedAt = yield* Clock.currentTimeMillis;
+      yield* fs.writeFileString(compactedAtPath, String(completedAt)).pipe(Effect.ignore);
+      if (result.deletedEventCount > 0 || result.deletedReceiptCount > 0) {
+        yield* Effect.logInfo("Compacted orchestration history", result);
+      }
+      if (history.trimmedRows > 0) {
+        yield* Effect.logInfo("Bounded orchestration history", {
+          ...history,
+          budgetBytes: storageCleanup.historyBudgetBytes,
+        });
+      }
+      yield* reclaim;
+      const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
+      const after = yield* readHealth;
+      const last: HostStorageCompactionResult = {
+        finishedAt: after.measuredAt,
+        removedEvents: result.deletedEventCount,
+        freedBytes: Math.max(0, before.databaseBytes - after.databaseBytes),
+        needsOfflineCompaction: mode[0]?.auto_vacuum !== 2 && after.reclaimableBytes > 0,
+      };
+      yield* Ref.update(compaction, (state) => ({ ...state, last }));
+    }).pipe(
+      Effect.ensuring(Ref.update(compaction, (state) => ({ ...state, since: null }))),
+      Effect.andThen(publishStatus),
+      Effect.andThen(Ref.get(healthRef)),
+      Effect.flatMap((health) =>
+        health === null
+          ? Effect.fail(new HostMaintenanceError({ operation: "compact_storage", message: "" }))
+          : Effect.succeed(health),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new HostMaintenanceError({
+            operation: "compact_storage",
+            message:
+              "Could not compact this machine's history" +
+              (cause instanceof Error && cause.message.length > 0 ? ": " + cause.message : "."),
+          }),
+      ),
+    );
 
   const runShared = (paced: boolean) =>
     Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const fresh = yield* Deferred.make<HostStorageHealth, HostMaintenanceError>();
-      const joined = yield* Ref.modify(compaction, (state) =>
-        state.running === null ? [null, { ...state, running: fresh }] : [state.running, state],
-      );
-      if (joined !== null) return yield* restore(Deferred.await(joined));
-      const exit = yield* Effect.exit(restore(runCompaction(paced)));
-      yield* Ref.update(compaction, (state) => ({ ...state, running: null }));
-      yield* Deferred.done(fresh, exit);
-      return yield* exit;
-    }),
-  );
+      Effect.gen(function* () {
+        const fresh = yield* Deferred.make<HostStorageHealth, HostMaintenanceError>();
+        const joined = yield* Ref.modify(compaction, (state) =>
+          state.running === null ? [null, { ...state, running: fresh }] : [state.running, state],
+        );
+        if (joined !== null) return yield* restore(Deferred.await(joined));
+        const exit = yield* Effect.exit(restore(runCompaction(paced)));
+        yield* Ref.update(compaction, (state) => ({ ...state, running: null }));
+        yield* Deferred.done(fresh, exit);
+        return yield* exit;
+      }),
+    );
   const compactNow = runShared(false);
 
   const compact = runShared(true).pipe(

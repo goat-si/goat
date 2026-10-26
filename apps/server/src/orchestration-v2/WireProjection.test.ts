@@ -4,7 +4,6 @@ import {
   ProviderThreadId,
   NodeId,
   EventId,
-  type OrchestrationV2DomainEvent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,

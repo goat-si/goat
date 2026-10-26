@@ -1,5 +1,5 @@
 import { Button } from "~/components/ui/button";
-import { DownloadIcon, CopyIcon, CheckIcon } from "lucide-react";
+import { DownloadIcon, CopyIcon, CheckIcon } from "~/components/solar";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -1131,7 +1131,7 @@ export default function FilePreviewPanel({
   const isMarkdown = previewPath ? isMarkdownPreviewFile(previewPath) : false;
   const isMermaid = previewPath !== null && /\.(mmd|mermaid)$/i.test(previewPath);
   const [renderMermaidPreferred, setRenderMermaidPreferred] = useLocalStorage(
-    "t3code.renderMermaid",
+    "goat.renderMermaid",
     true,
     Schema.Boolean,
   );

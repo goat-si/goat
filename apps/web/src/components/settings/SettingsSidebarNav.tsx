@@ -1,12 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-  type ComponentType,
-  type KeyboardEvent,
-} from "react";
+import { lazy, Suspense, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
 import {
   ArchiveIcon,
   InboxIcon,
@@ -43,6 +35,7 @@ import {
   SidebarInput,
 } from "../ui/sidebar";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
+import { cn } from "../../lib/utils";
 import { registerSettingsSearchInput } from "./SettingsSearchShortcut";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import { SETTINGS_NAV_GROUPS } from "./settingsNav";
@@ -91,6 +84,10 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
 };
 
+function scrollResultIntoView(row: HTMLElement | null) {
+  row?.scrollIntoView({ block: "nearest" });
+}
+
 function SettingsSectionIcon({ to }: { to: SettingsPath }) {
   const Icon = SETTINGS_SECTION_ICONS[to];
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
@@ -109,7 +106,6 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     ...group,
     paths: group.paths.filter(isNavItemVisible),
   })).filter((group) => group.paths.length > 0);
-  const { isMobile, setOpenMobile } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   // Below md the nav is an icon rail; searching expands it over the page.
@@ -123,14 +119,6 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   if (activeResultIndex > maxResultIndex) {
     setActiveResultIndex(maxResultIndex);
   }
-
-  useEffect(() => {
-    const result = results[activeResultIndex];
-    if (!result) return;
-    document
-      .getElementById(`settings-search-result-${result.id}`)
-      ?.scrollIntoView({ block: "nearest" });
-  }, [activeResultIndex, results]);
 
   const handleSectionClick = (to: SettingsPath) => {
     void navigate({

@@ -48,9 +48,6 @@ import { copyContextMenuImage } from "./ContextMenuImage.ts";
 const MIN_MAIN_WINDOW_WIDTH = 840;
 const MIN_MAIN_WINDOW_HEIGHT = 620;
 const TITLEBAR_HEIGHT = 40;
-// Match --workspace-topbar-height in apps/web/src/index.css; native macOS buttons stay 14 points at any zoom.
-const MACOS_WORKSPACE_TOPBAR_HEIGHT = 52;
-const MACOS_WINDOW_BUTTON_RADIUS = 7;
 
 function syncMacosWindowButtons(window: Electron.BrowserWindow): void {
   if (window.isDestroyed() || window.isFullScreen()) return;

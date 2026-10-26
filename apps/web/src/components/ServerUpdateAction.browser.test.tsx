@@ -1,6 +1,6 @@
 import {
   readConfirmDialogState,
-  registerConfirmDialogHost,
+  subscribeConfirmDialogHost,
   resetConfirmDialogForTests,
   respondToConfirmDialog,
 } from "~/confirmDialog";
@@ -238,7 +238,8 @@ describe("ServerUpdateAction", () => {
 
   it("updates remote desktop apps through the shared update flow after confirmation", async () => {
     using _state = setup();
-    registerConfirmDialogHost();
+    const unsubscribe = subscribeConfirmDialogHost(() => {});
+    using _host = { [Symbol.dispose]: unsubscribe };
     testState.updateServer.mockResolvedValue(success("desktop-app", "0.0.34"));
 
     await using screen = await renderAction({

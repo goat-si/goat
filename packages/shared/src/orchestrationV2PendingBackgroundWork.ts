@@ -11,7 +11,6 @@ import { isOrchestrationV2WorkActive } from "@goat/contracts";
 import * as Predicate from "effect/Predicate";
 
 import { resolveGoatMcpItemCall, resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
-import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
 const BACKGROUND_TURN_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "command_execution",

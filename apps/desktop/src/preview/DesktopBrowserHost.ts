@@ -23,7 +23,8 @@ const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBr
 const lineEncoder = new TextEncoder();
 const AGENT_INPUT_COMMAND =
   /"method":"(?:Input\.|Page\.(?:navigate|navigateToHistoryEntry|reload)"|Runtime\.(?:evaluate|callFunctionOn)")/;
-const AGENT_INPUT_METHOD = /^(?:Input\.|Page\.(?:navigate|navigateToHistoryEntry|reload)$|Runtime\.(?:evaluate|callFunctionOn)$)/;
+const AGENT_INPUT_METHOD =
+  /^(?:Input\.|Page\.(?:navigate|navigateToHistoryEntry|reload)$|Runtime\.(?:evaluate|callFunctionOn)$)/;
 const AGENT_DOWNLOAD_WINDOW_MS = 5_000;
 const FOCUS_IDLE = "5 seconds";
 
@@ -274,8 +275,19 @@ export const make = Effect.gen(function* () {
     syncPainting(tab);
   };
 
+  /**
+   * A relay the server let go of can no longer release an input hold it set (the server's
+   * PreviewInputFence), and nothing that relay sent is still on its way, so the hold ends with it.
+   */
   const dropRelay = (tab: AttachedTab) => {
+    tab.relay?.close();
     tab.relay = null;
+    const release = (method: string, params: Record<string, unknown>) =>
+      void tab.debuggee.debugger.sendCommand(method, params).catch(() => undefined);
+    release("Input.setIgnoreInputEvents", { ignore: false });
+    release("Runtime.evaluate", {
+      expression: `globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} = 0`,
+    });
     tab.screencasts.clear();
     tab.agentUsed = false;
     dropFocusHolds(tab);
@@ -467,24 +479,6 @@ export const make = Effect.gen(function* () {
     debuggee.debugger.on("message", tab.onMessage);
     debuggee.webContents.on("did-navigate", tab.onNewDocument);
     emit({ type: "attached", ...key });
-  };
-
-  /**
-   * A relay the server let go of can no longer release an input hold it set (the server's
-   * PreviewInputFence), and nothing that relay sent is still on its way, so the hold ends with it.
-   */
-  const dropRelay = (tab: {
-    relay: CdpRelayConnection | null;
-    readonly debuggee: { readonly debugger: Electron.Debugger };
-  }) => {
-    tab.relay?.close();
-    tab.relay = null;
-    const release = (method: string, params: Record<string, unknown>) =>
-      void tab.debuggee.debugger.sendCommand(method, params).catch(() => undefined);
-    release("Input.setIgnoreInputEvents", { ignore: false });
-    release("Runtime.evaluate", {
-      expression: `globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} = 0`,
-    });
   };
 
   const handleCommandLine = (line: string) =>

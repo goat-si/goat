@@ -112,9 +112,7 @@ const dispatchToBot = Effect.fn("ThreadMessageIntake.dispatchToBot")(function* (
   return { sequence: result.timelineSequence ?? 0, storedEvents: [] };
 });
 
-export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(function* (
-  command: OrchestrationV2Command,
-  channelOwner?: ChannelConnectionOwner,
+/**
  * A guest message goes out with the files the guest attached, never ones a client names. They
  * are already the thread's attachments. A message no longer waiting gets none; the orchestrator
  * then refuses or replays the send.
@@ -144,6 +142,7 @@ const withGuestAttachments = Effect.fn("ThreadMessageIntake.withGuestAttachments
 
 export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(function* (
   incoming: OrchestrationV2Command,
+  channelOwner?: ChannelConnectionOwner,
 ) {
   const command =
     incoming.type === "message.dispatch" ? yield* withGuestAttachments(incoming) : incoming;
@@ -322,8 +321,7 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
         if (error._tag === "ThreadLaunchWorkspaceMissingError") {
           return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
         }
-        // Project/receipt reads precede message dispatch. The create-thread error
-        // also wraps post-message projection reads, so its tag alone is not proof.
+        // Project/receipt reads precede dispatch; create-thread errors can wrap post-message reads and prove nothing alone.
         const notAccepted =
           error.operation === "resolve-project" ||
           error.operation === "read-receipt" ||

@@ -626,8 +626,12 @@ export function buildThreadListV2Items(input: {
     (thread) =>
       thread.archivedAt === null &&
       thread.lineage.relationshipToParent !== "subagent" &&
+      !isSideChatThread(thread) &&
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
-      (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+      (projectKeys === null ||
+        projectKeys.has(`${thread.environmentId}:${thread.projectId}`) ||
+        isActiveThreadWork(thread) ||
+        queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true),
   );
   // The same matches as the command palette, typo fallback included. Only
   // listed threads are ranked: a hidden exact match must not turn typos off.
@@ -655,6 +659,8 @@ export function buildThreadListV2Items(input: {
     }
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
+    const hasQueuedMessages =
+      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (supportsSnooze && effectiveSnoozed(thread, { now })) {
       snoozed.push(thread);
       if (

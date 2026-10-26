@@ -3,7 +3,6 @@ import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@goat/cont
 import { ChevronDownIcon as ChevronDown, XIcon as X } from "~/components/solar";
 import { useEffect, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";

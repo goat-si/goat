@@ -592,10 +592,7 @@ export function layerWithRegistry<Error>(
     return layerReplayRuntime;
   }
   // Build recovery before runtime so it commits before the effect worker claims work.
-  const layerStartupRecovery: Layer.Layer<
-    never,
-    MigrationError | PlatformError.PlatformError | SqlError
-  > =
+  const layerStartupRecovery =
     options.recoverOnStartup === true
       ? Layer.effectDiscard(
           ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService.use(

@@ -359,7 +359,7 @@ describe("computer use safety signals", () => {
   });
 
   it("accepts events only from the current helper generation and within the frame limit", () => {
-    const frame = Schema.decodeUnknownSync(ComputerUseEventFrame)({
+    const frame = Schema.decodeSync(ComputerUseEventFrame)({
       generation: "g2",
       watchId: "w1",
       event: { type: "privateMode", active: true, target: { pid: 10, windowId: 20 } },
@@ -434,7 +434,7 @@ describe("computer use watch ordering", () => {
   it("delivers the old watch's clearing event and the new watch's initial state across a rewatch", () => {
     const target = { pid: 10, windowId: 20 };
     const frame = (watchId: string, active: boolean) =>
-      Schema.decodeUnknownSync(ComputerUseEventFrame)({
+      Schema.decodeSync(ComputerUseEventFrame)({
         generation: "g1",
         watchId,
         event: { type: "privateMode", active, target },

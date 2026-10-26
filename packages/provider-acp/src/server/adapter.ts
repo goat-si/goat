@@ -236,7 +236,7 @@ export interface AcpAdapterV2Flavor {
   }) => Effect.Effect<ReadonlyArray<EffectAcpSchema.ContentBlock>, EffectAcpErrors.AcpError>;
   readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
   /**
-   * Runs before attachment paths, T3 instructions and native slash-command detection,
+   * Runs before attachment paths, GOAT instructions and native slash-command detection,
    * so a rewrite can turn the user's text into a native command.
    */
   readonly rewriteUserText?: (
@@ -312,7 +312,7 @@ export interface AcpAdapterV2Flavor {
         ) => EffectAcpSchema.RequestPermissionResponse | undefined;
       }
     | undefined;
-  /** Grok Auto asks only about classifier refusals; T3 policy must not auto-approve them. */
+  /** Grok Auto asks only about classifier refusals; GOAT policy must not auto-approve them. */
   readonly permissionDisposition?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
     request: EffectAcpSchema.RequestPermissionRequest,
@@ -561,7 +561,7 @@ export const AcpProviderCapabilitiesV2 = {
   checkpointing: {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
-    // ACP lacks truncation; rollback restores T3 checkpoints and starts a fresh agent session.
+    // ACP lacks truncation; rollback restores GOAT checkpoints and starts a fresh agent session.
     providerCanRollbackConversation: true,
     providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: false,
@@ -6921,7 +6921,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           status: "completed" | "interrupted" | "failed" | "cancelled",
           failure?: OrchestrationV2ProviderFailure,
-          options?: { readonly childTurnsContinue?: boolean },
+          finalizeOptions?: { readonly childTurnsContinue?: boolean },
         ): Effect.fn.Return<void> {
           if (context.finalized) return;
           const settledStatus = context.interrupted ? "interrupted" : status;
@@ -7023,7 +7023,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const rootSessionId = yield* Ref.get(activeSessionId);
           const childTurnsContinue =
             settledStatus === "failed" &&
-            (options?.childTurnsContinue === true ||
+            (finalizeOptions?.childTurnsContinue === true ||
               (followsAgentWorkState &&
                 rootSessionId !== null &&
                 hasWorkingDescendant(rootSessionId)));

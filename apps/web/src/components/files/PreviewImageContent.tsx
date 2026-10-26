@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { MaximizeIcon, MinusIcon, PlusIcon, ScanIcon } from "lucide-react";
+import { MaximizeIcon, MinusIcon, PlusIcon, MinimizeIcon as ScanIcon } from "~/components/solar";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import { observeResize } from "~/lib/observeResize";
 import { AttachmentImage } from "../media/AttachmentImage";
@@ -17,7 +17,7 @@ export default function PreviewImageContent(props: {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Measure the image viewport before paint and observe resizes to keep fit-to-view scaling accurate.
+  // oxlint-disable-next-line goat/react-effect-budget -- Measure the image viewport before paint and observe resizes to keep fit-to-view scaling accurate.
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;

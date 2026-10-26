@@ -378,21 +378,24 @@ function ThreadRouteContent(
       return;
     }
     mergeBackBusyRef.current = true;
-    const result = await mergeBack({
-      environmentId: selectedThread.environmentId,
-      input: {
-        sourceThreadId: selectedThread.id,
-        targetThreadId: mergeBackTargetThreadId,
-        runId: mergeBackRun.id,
-        creationSource: "mobile",
-      },
-    });
-    mergeBackBusyRef.current = false;
-    if (result._tag !== "Success") return;
-    selectDetail({
-      name: "Thread",
-      params: { environmentId: selectedThread.environmentId, threadId: mergeBackTargetThreadId },
-    });
+    try {
+      const result = await mergeBack({
+        environmentId: selectedThread.environmentId,
+        input: {
+          sourceThreadId: selectedThread.id,
+          targetThreadId: mergeBackTargetThreadId,
+          runId: mergeBackRun.id,
+          creationSource: "mobile",
+        },
+      });
+      if (result._tag !== "Success") return;
+      selectDetail({
+        name: "Thread",
+        params: { environmentId: selectedThread.environmentId, threadId: mergeBackTargetThreadId },
+      });
+    } finally {
+      mergeBackBusyRef.current = false;
+    }
   };
   const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);

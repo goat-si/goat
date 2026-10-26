@@ -16,7 +16,6 @@ import {
   injectMcpAppThemeBootstrap,
   MCP_APP_MAX_HTML_BYTES,
 } from "@goat/shared/mcpApp";
-import * as GitHubCredentials from "@goat/source-control-github/server/GitHubCredentials";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -44,6 +43,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import { base64UrlEncode, signPayload } from "./auth/utils.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerHttp from "./http.ts";
+import * as BuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import {
   assetFileResponse,
   assetResponseHeaders,
@@ -591,7 +591,7 @@ describe("signed media HTTP route", () => {
             Layer.mock(WorkspacePaths.WorkspacePaths)({}),
             Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
             Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
-            Layer.mock(GitHubCredentials.GitHubCredentials)({}),
+            Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
           ).pipe(Layer.provide(NodeServices.layer), Layer.provideMerge(layerFileResponse)),
         ),
       );

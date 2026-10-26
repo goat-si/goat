@@ -271,7 +271,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     );
   input.onProgress?.({ stage: "extract" });
   const extractStep = "extracting the GOAT release archive";
-  // Strip the archive's stem directory so the executable lands at <versionDir>/t3.
+  // Strip the archive's stem directory so the executable lands at <versionDir>/goat.
   yield* input.runner
     .run({
       command: cliArchiveTarCommand(input.platform, process.env),

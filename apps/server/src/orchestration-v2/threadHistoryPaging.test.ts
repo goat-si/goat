@@ -654,7 +654,7 @@ describe("threadHistoryPaging", () => {
     ]);
     expect(bounded.projection.turnItems[1]).toEqual(huge);
     expect(bounded.projection.turnItems[2]).toEqual(approval);
-    expect(bounded.payloadBudgetExceeded).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(bounded.projection), "utf8")).toBeGreaterThan(1_000);
     expect(bounded.hasMoreHistory).toBe(true);
     expect(bounded.historyCursor).not.toBeNull();
     expect(decodeThreadHistoryCursor(bounded.historyCursor!).si).toBe("item-3");

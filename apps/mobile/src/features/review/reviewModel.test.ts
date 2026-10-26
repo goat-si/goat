@@ -40,6 +40,8 @@ describe("buildReviewParsedDiff", () => {
     );
     const file = parsed.kind === "files" ? parsed.files[0] : undefined;
     expect(file?.rows.filter((row) => row.kind === "line")).toHaveLength(3);
+  });
+
   it("keeps UI identities compact, stable, and isolated from parser cache keys", () => {
     const patch =
       "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n";

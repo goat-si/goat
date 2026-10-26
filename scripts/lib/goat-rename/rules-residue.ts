@@ -11,6 +11,30 @@ const keep = (id: string, paths: readonly string[], pattern: RegExp, reason: str
 
 export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   keep(
+    "upstream-task-cache-credentials",
+    ["scripts/mobile-native-client.ts"],
+    /t3-task-cache|x-t3-(?:digest|build-ms)/g,
+    "D12/D18: shared native artifact credentials and digest/build headers belong to the upstream task cache.",
+  ),
+  keep(
+    "palette-search-digit-samples",
+    ["packages/shared/src/paletteSearch.ts", "packages/shared/src/paletteSearch.test.ts"],
+    /(?<=["'])t3(?:code|coed|co|c)(?=["' ]|\/["'])|T3 Code vs Gemini/g,
+    "D12: search examples deliberately include digits and misspellings; changing them changes what the test exercises.",
+  ),
+  keep(
+    "palette-search-legacy-branches",
+    ["packages/shared/src/paletteSearch.ts"],
+    /(?<=WORKTREE_BRANCH_PREFIX}\|)t3code/g,
+    "D17: filtering recognizes the legacy branch prefix in existing upstream thread history.",
+  ),
+  keep(
+    "historic-background-wait-doc",
+    ["docs/internals/server-updates.md"],
+    /t3_background_wait/g,
+    "D17: recovery guidance names the tool recorded by older crashed sessions.",
+  ),
+  keep(
     "upstream-vendor-product-attribution",
     [
       "patches/@ff-labs__fff-node@0.11.0.patch",
@@ -87,7 +111,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   keep(
     "upstream-native-dependency-provenance",
     ["apps/mobile/deps/README.md", "docs/operations/mobile-screens-fork.md"],
-    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.43|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
+    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.(?:43|45)|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
     "D12/D18: dependency repository branches, pack commands and provenance metadata belong to the vendor.",
   ),
   keep(

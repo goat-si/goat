@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - a no-follow directory handle has no Effect FileSystem equivalent.
 /** Worktrees use isolated .t3 state; ambient GOAT_HOME could otherwise select the live userdata database. */
 
 import * as NodeFS from "node:fs";

@@ -6,8 +6,7 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
-import { ChevronDownIcon as ChevronDown, ChevronUpIcon as ChevronUp } from "~/components/solar";
-import { Minus, Plus } from "~/components/solar/nodes";
+import { ChevronDown, ChevronUp, Minus, Plus } from "~/components/solar/nodes";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";

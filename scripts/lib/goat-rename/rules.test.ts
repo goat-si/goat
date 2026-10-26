@@ -92,6 +92,7 @@ describe("env names", () => {
     ];
     for (const path of [
       "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+      "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.subagents.test.ts",
       "apps/server/src/orchestration-v2/Adapters/CodexReplay.testkit.ts",
       "packages/effect-codex-app-server/src/replay.test.ts",
     ]) {

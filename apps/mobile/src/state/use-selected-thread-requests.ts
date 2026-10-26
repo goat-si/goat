@@ -16,7 +16,7 @@ import {
   composerAttachmentsStillUploading,
 } from "./composer-attachment-uploads";
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type EnvironmentId,
@@ -209,19 +209,6 @@ export function useSelectedThreadRequests() {
       if (key.startsWith(prefix) && !held.has(key)) userInputResponsesInFlight.current.delete(key);
     }
   }, [pendingRequests, selectedThreadShell]);
-  useEffect(() => {
-    if (!activePendingUserInput || !selectedThreadShell) return;
-    const requestKey = scopedRequestKey(
-      selectedThreadShell.environmentId,
-      activePendingUserInput.requestId,
-    );
-    const existing = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-    const drafts = existing[requestKey] ?? {};
-    const seeded = seedUserInputDraftAnswers(activePendingUserInput.questions, drafts);
-    if (seeded !== drafts) {
-      appAtomRegistry.set(userInputDraftsByRequestKeyAtom, { ...existing, [requestKey]: seeded });
-    }
-  }, [activePendingUserInput, selectedThreadShell]);
   const questionServerConfigs = useServerConfigs();
   const attachmentDrafts = useAtomValue(
     questionAttachmentDraftsAtom(

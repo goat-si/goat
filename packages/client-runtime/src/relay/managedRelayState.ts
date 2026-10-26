@@ -312,7 +312,7 @@ const logListingFailure =
       Effect.tapCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void;
         const { message, traceId } = describeManagedRelayFailure(cause);
-        return Effect.logError(`[t3-cloud] Relay ${label} listing failed`).pipe(
+        return Effect.logError(`[goat-cloud] Relay ${label} listing failed`).pipe(
           Effect.annotateLogs({ message, traceId }),
         );
       }),

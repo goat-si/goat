@@ -116,6 +116,7 @@ export function createSidebarSortingStrategy(input: {
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
       active: [],
+      working: [],
       priority: [],
       snoozed: [],
       settled: [],

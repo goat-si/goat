@@ -3,6 +3,7 @@ import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { useEffect, useRef } from "react";
 import { useClientSettings } from "../../hooks/useSettings";
 import {
+  browserMiniPlayerSource,
   usePreviewMiniPlayerStore,
   type PreviewMiniPlayerState,
 } from "../../previewMiniPlayerStore";
@@ -17,11 +18,23 @@ export function useAgentOpenedPreviews(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly deviceState: DeviceServiceState;
   readonly deviceStateLoaded: boolean;
+  readonly previewState: ThreadPreviewState;
+  readonly serverBrowserAvailable: boolean;
+  readonly panelSurfaces: ReadonlyArray<RightPanelSurface>;
   readonly miniPlayerSource: PreviewMiniPlayerState["source"] | null;
   // Sheet layouts show neither floating previews nor auto-opened device tabs.
   readonly sheetLayout: boolean;
 }) {
-  const { threadRef, deviceState, deviceStateLoaded, miniPlayerSource, sheetLayout } = input;
+  const {
+    threadRef,
+    deviceState,
+    deviceStateLoaded,
+    previewState,
+    serverBrowserAvailable,
+    panelSurfaces,
+    miniPlayerSource,
+    sheetLayout,
+  } = input;
   const autoShowFloatingPreview = useClientSettings(selectAutoShowFloatingPreview);
   // Baseline sessions to preserve dismissals on reload; missing device summaries must remain eligible to open
   // later.

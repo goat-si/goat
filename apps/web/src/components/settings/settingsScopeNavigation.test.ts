@@ -13,7 +13,7 @@ import { retainSettingsScope, validateSettingsRouteSearch } from "./settingsScop
 
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 import { validateScheduledTasksSearch } from "./scheduledTasksSettings.logic";
-import { Route as IntegrationsRoute } from "../../routes/settings.integrations";
+import { Route as IntegrationsRoute } from "../../routes/_chat.settings.integrations";
 
 const checkoutSearch = {
   project: "repository:t3code",

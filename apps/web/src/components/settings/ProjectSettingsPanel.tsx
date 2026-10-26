@@ -17,7 +17,6 @@ import { Navigate, useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { InfoIcon, TrashIcon as Trash2Icon } from "~/components/solar";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";

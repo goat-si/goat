@@ -430,6 +430,14 @@ function providerDetail(
   return unavailableRequirement(requirementOf, error) ?? error.detail;
 }
 
+function toUnavailableError(error: PullRequestProviderError): PullRequestUnavailableError {
+  return new PullRequestUnavailableError({
+    reason: error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
+    provider: error.provider,
+    cause: error,
+  });
+}
+
 function toPullRequestErrorWith(
   requirementOf: UnavailableRequirementOf,
 ): (operation: string) => (error: PullRequestProviderError) => PullRequestError {

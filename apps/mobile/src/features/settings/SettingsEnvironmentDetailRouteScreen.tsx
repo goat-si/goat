@@ -407,10 +407,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                                 if (selectedIds !== null && !selectedIds.has(environmentId)) {
                                   toggleEnvironment(environmentId);
                                 }
-                                navigation.navigate("SettingsSheet", {
-                                  screen: "SettingsContent",
-                                  params: { screen: "SettingsProviderAccounts" },
-                                });
+                                navigation.navigate("SettingsProviderAccounts");
                               }}
                             />
                           ) : null}

@@ -1,3 +1,4 @@
+import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -5441,6 +5442,7 @@ it.effect.each(turnStartMemoryCases)(
                 Layer.provide(
                   Layer.mergeAll(
                     McpAppModelContext.layerEmpty,
+                    PreviewAgentActivity.layer,
                     RemoteReportInbox.layerEmpty,
                     settingsLayer,
                     Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({

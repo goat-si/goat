@@ -2,11 +2,11 @@ import { assert, describe } from "@effect/vitest";
 
 import { createOxlintRuleHarness } from "../test/utils.ts";
 
-const rule = createOxlintRuleHarness("t3code/require-registered-list-scroll", {
+const rule = createOxlintRuleHarness("goat/require-registered-list-scroll", {
   filename: "fixture.tsx",
 });
 
-describe("t3code/require-registered-list-scroll", () => {
+describe("goat/require-registered-list-scroll", () => {
   rule.valid(
     "allows a list that renders through a registered scroll view",
     `const el = <LegendList data={rows} renderScrollComponent={NativeScrollView} />;`,

@@ -71,6 +71,8 @@ const makeDebuggee = (
           own.push({ method, params });
           resolve({});
           ownWaiters.get(method)?.();
+          return;
+        }
         if (method === "Emulation.setFocusEmulationEnabled") {
           focusEmulation.push(params?.enabled === true);
           if (options.deferFocus) focusChanges.push(() => resolve({}));
@@ -336,12 +338,22 @@ describe("DesktopBrowserHost", () => {
         Effect.forkScoped,
       );
       yield* Effect.yieldNow;
-      yield* command(host, 1, "DOM.enable");
-      yield* command(host, 2, "Page.captureScreenshot");
+      const command = (id: number, method: string) =>
+        host.handleCommandLine(
+          encodeJson({
+            type: "cdp",
+            ...key,
+            message: encodeJson({ id, method, sessionId: "goat-preview-page" }),
+          }),
+        );
+      yield* command(1, "DOM.enable");
+      yield* command(2, "Page.captureScreenshot");
       expect(yield* Queue.take(captures)).toEqual({ key, capturing: true });
+      yield* Effect.yieldNow;
+      expect(yield* Queue.size(captures)).toBe(0);
       debuggee.release();
       expect(yield* Queue.take(captures)).toEqual({ key, capturing: false });
-    }),
+    }).pipe(Effect.scoped),
   );
 
   it.effect("emulates focus while the server drives a guest, then lets a hidden one throttle", () =>
@@ -349,12 +361,14 @@ describe("DesktopBrowserHost", () => {
       const host = yield* DesktopBrowserHost.make;
       const debuggee = makeDebuggee();
       host.attach(key, debuggee.tab);
+
       yield* command(host, 1, "DOM.enable");
       yield* settle;
       expect(debuggee.focusEmulation).toEqual([true]);
       expect(debuggee.sent).toEqual([1]);
       debuggee.release();
       yield* settle;
+
       yield* TestClock.adjust("4 seconds");
       yield* command(host, 2, "Input.dispatchMouseEvent");
       yield* settle;
@@ -362,8 +376,10 @@ describe("DesktopBrowserHost", () => {
       yield* settle;
       yield* TestClock.adjust("4 seconds");
       expect(debuggee.focusEmulation).toEqual([true]);
+
       yield* TestClock.adjust("10 seconds");
       expect(debuggee.focusEmulation).toEqual([true, false]);
+
       yield* command(host, 3, "Page.captureScreenshot");
       yield* settle;
       expect(debuggee.focusEmulation).toEqual([true, false, true]);

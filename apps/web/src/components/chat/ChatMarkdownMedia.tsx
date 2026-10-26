@@ -1,6 +1,5 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@goat/client-runtime/state/assets";
 import { mediaFileReference, mediaUrlReference } from "@goat/client-runtime/media-reference";
-import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import { TriangleAlertIcon } from "~/components/solar";
 import type { AssetResource, EnvironmentId, SOURCE_CONTROL_MEDIA_ASSET } from "@goat/contracts";
 import {

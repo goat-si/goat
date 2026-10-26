@@ -596,7 +596,7 @@ const deliver = <E>(answer: Effect.Effect<void, E>) =>
 
 type ModelRef = ReturnType<typeof Model.Ref.make>;
 
-// msg_ IDs cannot cross sessions; include session identity because T3 IDs repeat across environments.
+// msg_ IDs cannot cross sessions; include session identity because GOAT IDs repeat across environments.
 // Pre-acknowledgement IDs also establish fork/rollback boundaries.
 const turnPromptId = (sessionId: string, attemptId: string) =>
   SessionMessage.ID.make(`msg_t3_turn_${sessionId}:${attemptId}`);
@@ -1789,7 +1789,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               Effect.ignore({ log: true }),
             );
 
-    // T3 expired pre-load requests and no longer shows them; stop them so OpenCode cannot wait forever.
+    // GOAT expired pre-load requests and no longer shows them; stop them so OpenCode cannot wait forever.
     const stopLeftoverRequests = Effect.fnUntraced(function* (state: ThreadState) {
       const sessionID = Session.ID.make(state.sessionId);
       const listed = yield* Effect.all([
@@ -2735,7 +2735,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     // Subscribed before any session or prompt call, so no event of theirs is missed.
     yield* follow(yield* connection.events).pipe(Effect.forkScoped);
 
-    // External servers outlive T3; stop their turns before losing observation.
+    // External servers outlive GOAT; stop their turns before losing observation.
     if (connection.external) {
       yield* Effect.addFinalizer(() =>
         Effect.forEach(
@@ -2941,7 +2941,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     // Failed/interrupted rollbacks must clear staged reverts before the next prompt commits them.
-    // Leave files to T3 checkpoints; history-only rewinds must preserve them.
+    // Leave files to GOAT checkpoints; history-only rewinds must preserve them.
     const rollBackTo = Effect.fnUntraced(function* (
       sessionId: string,
       boundary: SessionMessage.ID,

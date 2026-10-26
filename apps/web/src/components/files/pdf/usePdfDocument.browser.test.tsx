@@ -19,7 +19,7 @@ function pdf() {
   return {
     document: {
       numPages: 3,
-      destroy,
+      loadingTask: { destroy },
       getPage: async () => ({ getViewport: () => ({ width: 600, height: 800 }) }),
     } as unknown as PDFDocumentProxy,
     destroy,

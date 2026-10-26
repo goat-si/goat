@@ -8,9 +8,8 @@ import {
   isWorkspaceFontPreviewPath,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
-  isWorkspaceImagePreviewPath,
   mediaKindFromPath,
-  hostPreviewMimeTypeFromExtension,
+  officePreviewKind,
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {

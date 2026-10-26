@@ -13,7 +13,7 @@ import {
   TrashIcon as Trash2Icon,
 } from "~/components/solar";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type ReactNode, useRef, useState } from "react";
+
 import type {
   EnvironmentId,
   ModelSelection,

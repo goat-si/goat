@@ -26,6 +26,8 @@ export const isExempt = (path: string): boolean =>
   // Recorded protocols and generated/binary assets are upstream input, not rename output.
   /\.ndjson$|\.(?:png|jpg|jpeg|ico|icns|woff2?|ttf|wasm|pdf|svg)$/.test(path) ||
   path === "pnpm-lock.yaml" ||
+  // D12/D18: wasm2c output and vendored SIMD/runtime sources stay byte-identical.
+  path.startsWith("apps/mobile/modules/t3-highlights/Vendor/") ||
   path.startsWith("apps/marketing/") ||
   path.startsWith("infra/") ||
   path.startsWith(".devcontainer/") ||
@@ -130,7 +132,7 @@ const outsideSshRunner = (path: string) =>
 
 /** Lint rule ids are listed so that unrelated `t3code/...` paths and branch names stay. */
 const LINT_RULE_IDS =
-  "namespace-node-imports|no-dom-test-environment|no-em-dash-copy|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|require-centered-scroll-gutter|require-disposable-render|require-suppression-reason";
+  "namespace-node-imports|no-ambiguous-detail-navigation|no-dom-test-environment|no-em-dash-copy|no-frame-waits-in-browser-tests|no-global-process-runtime|no-hermes-unsupported-apis|no-hookless-use-function|no-inline-schema-compile|no-low-value-comments|no-manual-effect-runtime-in-tests|no-manual-memo|no-mobile-pull-request-glyph-literals|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-polling-loop-in-tests|no-raw-mcp-registration|no-raw-resize-observer|no-real-time-wait-in-tests|no-rpc-permission-bypass|no-test-in-loop|no-test-timeout-or-unreasoned-skip|no-unscoped-has|no-wall-clock-in-tests|prefer-catch-tags|prefer-effect-fn|react-effect-budget|require-centered-scroll-gutter|require-disposable-render|require-registered-list-scroll|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
   ...VISIBLE_TEXT_RULES,
@@ -352,6 +354,20 @@ export const TEXT_RULES: readonly TextRule[] = [
     category: "tooling",
     find: new RegExp(`\\bt3code/(${LINT_RULE_IDS})\\b`, "g"),
     replace: "goat/$1",
+  },
+  {
+    id: "lint-rule-ids-escaped",
+    category: "tooling",
+    find: new RegExp(String.raw`\bt3code\\/(${LINT_RULE_IDS})\b`, "g"),
+    replace: "goat\\/$1",
+    scope: inLintPlugin,
+  },
+  {
+    id: "lint-diagnostic-names-escaped",
+    category: "tooling",
+    find: new RegExp(String.raw`\bt3code(?=\\\((?:${LINT_RULE_IDS})\\\))`, "g"),
+    replace: "goat",
+    scope: inLintPlugin,
   },
   {
     id: "lint-plugin-name",

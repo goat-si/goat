@@ -1,4 +1,3 @@
-import { threadPullRequestsOf, threadPullRequestKeysEqual } from "../../../sourceControl/threadPullRequests.ts";
 import {
   CommandId,
   type OrchestrationProjectShell,

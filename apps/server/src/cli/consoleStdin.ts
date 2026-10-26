@@ -41,7 +41,7 @@ export function attachConsoleStdin(): number | undefined {
     stdinOpen: isOpen(0),
     stdoutIsConsole: NodeTty.isatty(1),
   });
-  // The launcher marker must not propagate to child shells or t3 processes.
+  // The launcher marker must not propagate to child shells or goat processes.
   delete process.env.GOAT_DESKTOP_CLI_LAUNCHER;
   if (!needed) return undefined;
   let fd: number;

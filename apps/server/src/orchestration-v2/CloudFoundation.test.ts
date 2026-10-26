@@ -1,3 +1,4 @@
+import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -213,6 +214,7 @@ it.effect.each([
         Layer.provide(
           Layer.mergeAll(
             McpAppModelContext.layerEmpty,
+            PreviewAgentActivity.layer,
             inboxLayer,
             IdAllocator.layer,
             ServerSettings.layerTest(),

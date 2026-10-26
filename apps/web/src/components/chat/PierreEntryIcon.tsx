@@ -1,6 +1,5 @@
 import { FileIcon, FolderIcon } from "~/components/solar";
 import { memo, useInsertionEffect } from "react";
-import { memo } from "react";
 
 import { ensurePierreIconSprite, resolvePierreIconForEntry } from "../../pierre-icons";
 import { cn } from "~/lib/utils";

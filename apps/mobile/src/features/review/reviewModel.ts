@@ -2,7 +2,6 @@ import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import type { ReviewDiffPreviewSource, ReviewDiffPreviewSourceKind } from "@goat/contracts";
-import type { ReviewDiffPreviewSource } from "@goat/contracts";
 import { quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -594,7 +593,7 @@ export function buildReviewParsedDiff(
     return { kind: "empty" };
   }
 
-  const { text, truncated } = splitTruncationMarker(diff);
+  const { text, truncated } = splitTruncationMarker(normalized);
   if (text.length === 0) {
     return { kind: "empty" };
   }

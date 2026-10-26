@@ -578,7 +578,7 @@ const upload = Effect.fn("nativeClient.upload")(function* (
   const uploadUrl = `${remote.url}/${key}/uploads/${encodeURIComponent(created.uploadId)}`;
   yield* Console.error(`Uploading native client ${key} to the shared cache...`);
   yield* Effect.gen(function* () {
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-native-upload-" });
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-native-upload-" });
     const file =
       platform === "ios"
         ? path.join(directory, "client.tgz")

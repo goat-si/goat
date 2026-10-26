@@ -51,7 +51,6 @@ vi.mock("./settingsLayout", () => ({
       {control}
     </div>
   ),
-  useRelativeTimeTick: () => Date.UTC(2026, 9, 21),
 }));
 vi.mock("../ui/qr-code", () => ({
   QRCodeSvg: ({ value }: { value: string }) => (
@@ -87,7 +86,7 @@ const https: AdvertisedEndpoint = {
   source: "desktop-addon",
   compatibility: { hostedHttpsApp: "compatible", desktopApp: "compatible" },
 };
-function created(expiresAt = Date.UTC(2026, 9, 21) + 60_000): AuthPairingCredentialResult {
+function created(expiresAt = Date.UTC(2099, 0, 1)): AuthPairingCredentialResult {
   return { id: "phone-link", credential: "PHONE1234", expiresAt: DateTime.makeUnsafe(expiresAt) };
 }
 async function render(patch: Partial<Props> = {}) {

@@ -7,7 +7,6 @@ import {
 } from "@goat/shared/htmlRender";
 import { MaximizeIcon as Maximize2Icon } from "~/components/solar";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useEffect, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";

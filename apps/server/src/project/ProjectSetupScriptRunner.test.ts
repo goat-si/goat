@@ -1,4 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { ProjectId, type TerminalEvent, type TerminalSessionSnapshot } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -60,29 +62,32 @@ const makeHarness = Effect.fn(function* (options: {
         Layer.mock(ProjectService.ProjectService)({}),
         ServerSettings.layerTest(),
         NodeCrypto.layer,
-      ),
+        GoatProjectFileLoader.layer,
+      ).pipe(Layer.provideMerge(NodeServices.layer)),
     ),
     Effect.provideService(HostProcess.Platform, "darwin"),
     Effect.provideService(HostProcess.Environment, { SHELL: "/bin/zsh" }),
   );
-  const start = runner.runForThread({
-    threadId,
-    worktreePath: "/repo/.t3/worktrees/feature",
-    observeCompletion: { onOutputLine: (line) => Queue.offer(outputLines, line) },
-    project: {
-      id: ProjectId.make("project-1"),
-      workspaceRoot: "/repo",
-      scripts: [
-        {
-          id: "setup",
-          name: "Setup",
-          command: "vp i",
-          icon: "configure",
-          runOnWorktreeCreate: true,
-        },
-      ],
-    },
-  });
+  const start = runner
+    .runForThread({
+      threadId,
+      worktreePath: "/repo/.t3/worktrees/feature",
+      observeCompletion: { onOutputLine: (line) => Queue.offer(outputLines, line) },
+      project: {
+        id: ProjectId.make("project-1"),
+        workspaceRoot: "/repo",
+        scripts: [
+          {
+            id: "setup",
+            name: "Setup",
+            command: "vp i",
+            icon: "configure",
+            runOnWorktreeCreate: true,
+          },
+        ],
+      },
+    })
+    .pipe(Effect.provide(NodeServices.layer));
   const emit = (terminalEvent: TerminalEvent) =>
     Effect.forEach([...listeners], (listener) => listener(terminalEvent), { discard: true });
   return { start, listeners, writes, outputLines, emit };

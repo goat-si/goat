@@ -1,5 +1,12 @@
-import { ProviderDriverKind, ProviderInstanceId, type RepositoryIdentity } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
   type PullRequestLinkedThreadsResult,
+  type RepositoryIdentity,
+} from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 

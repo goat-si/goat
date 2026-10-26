@@ -72,7 +72,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
 const branchBaseConfigKey = (branch: string) => `branch.${branch}.t3-merge-base`;
 /**
- * Where T3 kept that record before it had a key of its own, for every host alike: the GitHub
+ * Where GOAT kept that record before it had a key of its own, for every host alike: the GitHub
  * CLI's key, which branches cut before then still carry instead.
  */
 const legacyBranchBaseConfigKey = (branch: string) => `branch.${branch}.gh-merge-base`;
@@ -5206,9 +5206,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* withListRefsInvalidation(input.cwd, createWorktree(input, options));
     }),
     inspectExistingBranch,
-    fetchPullRequestBranch: (input) =>
-      withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
-    fetchPullRequestHeadCommit,
     fetchRefIntoBranch: Effect.fnUntraced(function* (input) {
       return yield* withListRefsInvalidation(input.cwd, fetchRefIntoBranch(input));
     }),

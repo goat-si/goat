@@ -18,6 +18,7 @@ import {
   ToolActivityNativeAppReference,
   TurnItemId,
 } from "@goat/contracts";
+import { audioMimeTypeFromExtension } from "@goat/shared/mediaPreview";
 import {
   hostPreviewMimeTypeFromExtension,
   isWorkspaceAudioPreviewPath,

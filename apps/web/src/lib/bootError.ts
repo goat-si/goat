@@ -1,7 +1,7 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 
 const FALLBACK_TRIAGE_COMMAND = "goat triage";
-const DOWNLOAD_URL = "https://t3.codes/download";
+const DOWNLOAD_URL = "https://github.com/goat-si/goat-releases/releases";
 const ISSUE_URL = "https://github.com/pingdotgg/t3code/issues/new";
 const LAST_FAILURE_KEY = "goat:boot-failed-at";
 const REPEAT_FAILURE_MS = 5 * 60_000;

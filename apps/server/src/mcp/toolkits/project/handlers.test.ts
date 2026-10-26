@@ -65,6 +65,7 @@ const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
 /** Launch handlers resolve their service from the tool invocation context. */
 const withLaunchService = <A, E, R>(dependencies: Layer.Layer<A, E, R>) =>
   ThreadLaunchMcpService.layer.pipe(
+    Layer.provideMerge(DocumentText.layer.pipe(Layer.provide(NodeServices.layer))),
     Layer.provideMerge(Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({})),
     Layer.provide(
       Layer.mock(ProviderAdapters.ProviderAdapterRegistryV2)({

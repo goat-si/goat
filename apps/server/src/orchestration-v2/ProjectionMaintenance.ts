@@ -634,8 +634,7 @@ export const layer: Layer.Layer<
     return ProjectionMaintenanceV2.of({
       verify: mapError("verify")(verify),
       rebuild: mapError("rebuild")(rebuild),
-      compactEventStore: (betweenPages) =>
-        mapError("compact event store")(compactEventStore(betweenPages)),
+      compactEventStore,
       boundHistory: (policy) => mapError("bound history")(boundHistory(policy)),
     });
   }),

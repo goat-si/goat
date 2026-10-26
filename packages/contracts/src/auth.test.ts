@@ -196,7 +196,7 @@ describe("memory permissions", () => {
   });
 });
 it("old approval omission grants no memory", () => {
-  const decision = Schema.decodeUnknownSync(AuthMcpApprovalDecision)({
+  const decision = Schema.decodeSync(AuthMcpApprovalDecision)({
     _tag: "pairing-code",
     access: "full-access",
     code: "synthetic",
@@ -231,7 +231,7 @@ it("rejects sync duplicate and unknown memory grants", () => {
     ).toThrow();
 });
 it("one click advertised scopes grant nothing by themselves", () => {
-  const details = Schema.decodeUnknownSync(AuthMcpApprovalDetails)({
+  const details = Schema.decodeSync(AuthMcpApprovalDetails)({
     clientName: "Synthetic",
     redirectHost: "localhost",
     environmentHost: "env",

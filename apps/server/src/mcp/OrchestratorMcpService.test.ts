@@ -434,7 +434,15 @@ describe("OrchestratorMcpService", () => {
         const waited = yield* service.waitForThread(scope, { threadId: childThreadId });
         assert.equal(waited.status, "completed");
         assert.notProperty(waited, "next");
-      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }).pipe(
+        Effect.provide(
+          layerOrchestratorService.pipe(
+            Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+            Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
+            Layer.provide(layerDependencies),
+          ),
+        ),
+      );
     }),
   );
 

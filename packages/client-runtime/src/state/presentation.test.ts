@@ -21,7 +21,7 @@ import {
   connectionProgressLabel,
 } from "../connection/presentation.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
-import type { EnvironmentShellState } from "./shell.ts";
+import { EMPTY_SHELL_STATE, type EnvironmentShellState } from "./shell.ts";
 import { v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
 
 describe("shell sync presentation", () => {
@@ -30,6 +30,7 @@ describe("shell sync presentation", () => {
     (cached) => {
       const registry = AtomRegistry.make();
       const shell = Atom.make<EnvironmentShellState>({
+        ...EMPTY_SHELL_STATE,
         status: "synchronizing",
         snapshot: cached ? Option.some(v2ShellSnapshot) : Option.none(),
         error: Option.none(),
@@ -53,6 +54,7 @@ describe("shell sync presentation", () => {
         });
         expect(registry.get(sync)).toBe("synchronizing");
         registry.set(shell, {
+          ...EMPTY_SHELL_STATE,
           snapshot: Option.some(v2ShellSnapshot),
           status: "live",
           error: Option.none(),
@@ -68,6 +70,7 @@ describe("shell sync presentation", () => {
   it("does not notify sync consumers for live snapshot updates", () => {
     const registry = AtomRegistry.make();
     const shell = Atom.make<EnvironmentShellState>({
+      ...EMPTY_SHELL_STATE,
       snapshot: Option.some(v2ShellSnapshot),
       status: "live",
       error: Option.none(),

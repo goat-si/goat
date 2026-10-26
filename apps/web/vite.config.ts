@@ -276,7 +276,7 @@ function devCompressionPlugin(): Plugin {
 // which blanks the app at boot. Fail the build instead of shipping it.
 function chunkCycleGuardPlugin(): Plugin {
   return {
-    name: "t3code:chunk-cycle-guard",
+    name: "goat:chunk-cycle-guard",
     apply: "build",
     generateBundle(_options, bundle) {
       const done = new Set<string>();

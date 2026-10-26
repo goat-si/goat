@@ -176,7 +176,7 @@ describe("memory canonical contracts", () => {
     ] as const) {
       rejects(schema, raw);
       expect(() => Schema.encodeUnknownSync(schema)(raw)).toThrow();
-      expect(() => Schema.decodeUnknownSync(Schema.toCodecJson(schema))(raw)).toThrow();
+      expect(() => Schema.decodeSync(Schema.toCodecJson(schema))(raw)).toThrow();
       expect(() => Schema.encodeUnknownSync(Schema.toCodecJson(schema))(raw)).toThrow();
       expect(() => schema.make(raw as never)).toThrow();
       expect(() => Schema.decodeUnknownSync(schema, { onExcessProperty: "ignore" })(raw)).toThrow();
@@ -1869,17 +1869,17 @@ describe("task memory grant ceiling JSON", () => {
     for (const input of [{}, { memoryGrantCeiling: "none" as const }]) {
       const encoded = Schema.encodeSync(json)(input);
       expect(JSON.parse(encoded)).not.toHaveProperty("memoryGrantCeiling");
-      expect(Schema.decodeUnknownSync(json)(JSON.stringify(input))).toEqual({
+      expect(Schema.decodeSync(json)(JSON.stringify(input))).toEqual({
         memoryGrantCeiling: "none",
       });
-      expect(Schema.decodeUnknownSync(json)(encoded)).toEqual({ memoryGrantCeiling: "none" });
+      expect(Schema.decodeSync(json)(encoded)).toEqual({ memoryGrantCeiling: "none" });
     }
   });
   it("preserves read and read_write in JSON", () => {
     for (const memoryGrantCeiling of ["read", "read_write"] as const) {
       const encoded = Schema.encodeSync(json)({ memoryGrantCeiling });
       expect(JSON.parse(encoded)).toHaveProperty("memoryGrantCeiling", memoryGrantCeiling);
-      expect(Schema.decodeUnknownSync(json)(encoded)).toEqual({ memoryGrantCeiling });
+      expect(Schema.decodeSync(json)(encoded)).toEqual({ memoryGrantCeiling });
     }
   });
 });
@@ -2248,7 +2248,7 @@ it("report retry reset accepts at most 32 distinct exact-owner IDs and rejects e
   ])
     expect(() => decode(invalid)).toThrow();
   expect(() =>
-    Schema.decodeUnknownSync(M.MemoryResetReportAttemptsResult)({
+    Schema.decodeSync(M.MemoryResetReportAttemptsResult)({
       resetCount: 33,
       unchangedCount: 0,
     }),
@@ -2305,7 +2305,7 @@ it("strictly bounds hub diagnostics and rejects unsafe or duplicated reasons", (
   ])
     expect(() => decode(invalid)).toThrow();
   const request = { memorySpaceId: id(), environmentId: "fixture", expectedVersion: 1 };
-  expect(Schema.decodeUnknownSync(M.MemoryHubReconcileInput)(request)).toEqual(request);
+  expect(Schema.decodeSync(M.MemoryHubReconcileInput)(request)).toEqual(request);
   expect(() =>
     Schema.decodeUnknownSync(M.MemoryHubReconcileInput)({ ...request, releaseAll: true }),
   ).toThrow();

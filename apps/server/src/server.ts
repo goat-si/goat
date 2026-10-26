@@ -212,6 +212,7 @@ import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import * as GuestHttp from "./guest/http.ts";
 import { fixPath } from "./os-jank.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
@@ -254,7 +255,6 @@ import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts
 
 export { MemorySourceReadBinding } from "./memory/MemoryApplicationLayers.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import { loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";

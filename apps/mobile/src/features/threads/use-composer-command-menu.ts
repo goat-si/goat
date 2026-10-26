@@ -57,6 +57,7 @@ import { useNavigation } from "@react-navigation/native";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import {
   useComposerPathSearch,
@@ -512,10 +513,7 @@ export function useComposerCommandMenu({
       if (availability.state === "checking") return;
       if (availability.state === "unavailable") {
         if (availability.setup && environmentId !== null) {
-          navigation.navigate("SettingsSheet", {
-            screen: "SettingsContent",
-            params: { screen: "SettingsEnvironmentAgentBehavior", params: { environmentId } },
-          });
+          navigation.navigate("SettingsEnvironmentAgentBehavior", { environmentId });
           return;
         }
         Dialog.alert(

@@ -145,7 +145,7 @@ function resolveWasm2c(): { readonly binary: string; readonly prefix: string } {
 async function generate() {
   const source = resolveHighlightsPackage();
   const wasm2c = resolveWasm2c();
-  const scratch = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-highlights-"));
+  const scratch = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-highlights-"));
   try {
     NodeChildProcess.execFileSync(wasm2c.binary, [
       NodePath.join(source.root, "dist/highlights.wasm"),

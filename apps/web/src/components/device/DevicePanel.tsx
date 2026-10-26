@@ -14,7 +14,6 @@ import {
 } from "~/components/solar";
 import { type ReactNode, useEffect, useState } from "react";
 import { useAtomMount } from "@effect/atom-react";
-import { type ReactNode, useState } from "react";
 
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import {

@@ -80,7 +80,7 @@ export class Device {
 
   /** Leases a device for the pose; `open` waits in the pool's queue while every match is busy. */
   static async lease(pose: Pose, pool: Pool, runId: string): Promise<Device> {
-    const device = new Device(pose, `t3-e2e-${runId}-${pose.id}`, pool);
+    const device = new Device(pose, `goat-e2e-${runId}-${pose.id}`, pool);
     await device.agent(["connect", "proxy", "--daemon-base-url", pool.agentDeviceUrl]);
     await device.agent(
       [

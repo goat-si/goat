@@ -1,4 +1,5 @@
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+import fallbackUrl from "pdfjs-dist/wasm/openjpeg_nowasm_fallback.js?url";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist";
 
 export type { PDFDocumentProxy, PDFPageProxy, PageViewport };
@@ -15,7 +16,7 @@ const fonts = import.meta.glob("../../../../node_modules/pdfjs-dist/standard_fon
   query: "?url&no-inline",
   import: "default",
 });
-const wasm = import.meta.glob("../../../../node_modules/pdfjs-dist/wasm/*.wasm", {
+const wasm = import.meta.glob("../../../../node_modules/pdfjs-dist/wasm/*.{wasm,js}", {
   eager: true,
   query: "?url&no-inline",
   import: "default",
@@ -29,19 +30,18 @@ async function readAsset(manifest: Record<string, unknown>, name: string) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-class CMapReaderFactory {
-  async fetch({ name }: { name: string }) {
-    return { cMapData: await readAsset(cmaps, `${name}.bcmap`), compressionType: 1 };
-  }
-}
-class StandardFontDataFactory {
-  fetch({ filename }: { filename: string }) {
-    return readAsset(fonts, filename);
-  }
-}
-class WasmFactory {
-  fetch({ filename }: { filename: string }) {
-    return readAsset(wasm, filename);
+class BinaryDataFactory {
+  fetch({ kind, filename }: { kind: string; filename: string }) {
+    switch (kind) {
+      case "cMapUrl":
+        return readAsset(cmaps, filename);
+      case "standardFontDataUrl":
+        return readAsset(fonts, filename);
+      case "wasmUrl":
+        return readAsset(wasm, filename);
+      default:
+        throw new Error(`Unknown PDF resource kind: ${kind}`);
+    }
   }
 }
 
@@ -61,11 +61,10 @@ export async function loadPdfDocument(
   signal.throwIfAborted();
   const task = engine.getDocument({
     data,
-    isEvalSupported: false,
     useWorkerFetch: false,
-    CMapReaderFactory,
-    StandardFontDataFactory,
-    WasmFactory,
+    BinaryDataFactory,
+    // PDF.js imports JavaScript decoders directly, bypassing BinaryDataFactory.
+    wasmUrl: new URL(".", new URL(fallbackUrl, import.meta.url)).href,
   });
   let destruction: Promise<void> | undefined;
   const destroy = () => (destruction ??= task.destroy());

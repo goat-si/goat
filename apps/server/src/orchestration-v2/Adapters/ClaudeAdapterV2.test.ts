@@ -863,7 +863,6 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     assert.equal(systemPrompt.preset, "claude_code");
     assert.include(systemPrompt.append ?? "", GOAT_DEVELOPMENT_INSTRUCTIONS);
     assert.include(systemPrompt.append ?? "", "## GOAT orchestration");
-    assert.include(systemPrompt.append ?? "", "Use `delegate_task`");
     assert.include(systemPrompt.append ?? "", "call `goat_background_wait`");
     const logged = ClaudeAdapterV2.loggedClaudeQueryOptions(options);
     assert.equal(logged.hasMcpServers, true);
@@ -2103,7 +2102,6 @@ describe("ClaudeAdapterV2 attachments", () => {
 
           assert.equal(offeredMessages[1]?.priority, "now");
           assert.deepEqual(offeredMessages[1]?.message.content, expectedContent);
-        }).pipe(Effect.provide(layerAdapterTest)),
           const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
           for (const scenario of [
             "pages",
@@ -2245,11 +2243,7 @@ describe("ClaudeAdapterV2 attachments", () => {
               assert.equal(sent, ultrathink ? "Ultrathink:\nContinue." : "Continue.");
             else assert.include(JSON.stringify(sent), documentPath);
           }
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
-        ),
+        }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );
 });
@@ -2510,16 +2504,11 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
       });
     }).pipe(
       Effect.provide(ClaudeAdapterV2.layerQueryRunner),
-      Effect.provideService(
-        ProviderEventLoggers.ProviderEventLoggers,
-        ProviderEventLoggers.NoOpProviderEventLoggers,
-      ),
-      Effect.provide(layerAdapterTest),
       Effect.provideService(ProviderEventLoggers.ProviderEventLoggers, {
         ...ProviderEventLoggers.NoOpProviderEventLoggers,
         native,
       }),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(layerAdapterTest),
     );
 
   it.effect("commits queued delivery before interruptible protocol logging", () =>
@@ -3108,12 +3097,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             if (event.type === "turn.terminal") {
               yield* Queue.offer(terminalReceipts, event);
             }
-            if (event.type === "runtime_request.updated") {
-              yield* Queue.offer(runtimeRequestReceipts, event);
-            }
-            if (event.type === "plan.updated") {
-              yield* Queue.offer(planReceipts, event);
-            }
             if (event.type === "provider_thread.updated") {
               yield* Queue.offer(providerThreadReceipts, event);
             }
@@ -3164,8 +3147,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         terminalReceipts,
         subagentReceipts,
         systemNoticeReceipts,
-        runtimeRequestReceipts,
-        planReceipts,
         providerThreadReceipts,
         getOpenedOptions: () => openedOptions,
         terminalEvents,
@@ -3337,11 +3318,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           Buffer.byteLength(encodeJsonString(delivered.map((message) => message.message.content))),
           32_000_000,
         );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
   );
 
   const attachmentBudgetOutcomes = [
@@ -3568,11 +3545,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           assert.include(encodeJsonString(content), "budget.");
         }
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
   );
 
   describe("Claude settings restrictions", () => {
@@ -4017,97 +3990,90 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
         }).pipe(Effect.provide(layerAdapterTest)),
     );
-
-    it.effect("pins tool search on when the user's Claude settings choose auto", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const home = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-tool-search-",
-        });
-        const openedToolSearch = (
-          settingsJson: string,
-          cwd = CLAUDE_TEST_RUNTIME_POLICY.cwd,
-          environment?: NodeJS.ProcessEnv,
-        ) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              yield* fileSystem.writeFileString(path.join(home, "settings.json"), settingsJson);
-              const harness = yield* makeWakeHarnessWithOptions({
-                settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: home },
-                ...(environment === undefined ? {} : { environment }),
-              });
-              yield* harness.runtime.startTurn(
-                makeClaudeTestTurnInput({
-                  threadId: harness.threadId,
-                  providerThread: harness.providerThread,
-                  now: yield* DateTime.now,
-                  attemptId: RunAttemptId.make("attempt-tool-search"),
-                  text: "Run git status.",
-                  attachments: [],
-                  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-                    ...CLAUDE_TEST_RUNTIME_POLICY,
-                    cwd,
-                  }),
-                }),
-              );
-              const settings = harness.getOpenedOptions()?.settings;
-              return typeof settings === "object" ? settings.env?.ENABLE_TOOL_SEARCH : undefined;
-            }),
-          );
-        assert.equal(yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"auto"}}'), "true");
-        assert.isUndefined(yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"false"}}'));
-        assert.isUndefined(yield* openedToolSearch("{}"));
-
-        // Claude Code keeps the local file at the repository root, the main checkout's root in a
-        // worktree, and that file beats the user's settings.
-        const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-repo-" });
-        const worktree = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-wt-" });
-        const worktreeGitDir = path.join(repo, ".git", "worktrees", "wt");
-        yield* fileSystem.makeDirectory(worktreeGitDir, { recursive: true });
-        yield* fileSystem.writeFileString(path.join(worktreeGitDir, "commondir"), "../..\n");
-        yield* fileSystem.writeFileString(
-          path.join(worktree, ".git"),
-          `gitdir: ${worktreeGitDir}\n`,
-        );
-        yield* fileSystem.makeDirectory(path.join(repo, ".claude"));
-        yield* fileSystem.makeDirectory(path.join(repo, "packages", "app"), { recursive: true });
-        const rootLocal = (value: string) =>
-          fileSystem.writeFileString(
-            path.join(repo, ".claude", "settings.local.json"),
-            `{"env":{"ENABLE_TOOL_SEARCH":"${value}"}}`,
-          );
-        const userAuto = '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}';
-        yield* rootLocal("auto");
-        assert.equal(yield* openedToolSearch("{}", worktree), "true");
-        yield* rootLocal("false");
-        assert.isUndefined(yield* openedToolSearch(userAuto, worktree));
-        assert.isUndefined(yield* openedToolSearch(userAuto, path.join(repo, "packages", "app")));
-
-        // Project settings beat user settings, and the process env applies only when no file sets it.
-        const project = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-project-" });
-        yield* fileSystem.makeDirectory(path.join(project, ".claude"));
-        yield* fileSystem.writeFileString(
-          path.join(project, ".claude", "settings.json"),
-          '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}',
-        );
-        assert.equal(
-          yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"false"}}', project),
-          "true",
-        );
-        assert.equal(
-          yield* openedToolSearch("{}", CLAUDE_TEST_RUNTIME_POLICY.cwd, {
-            ENABLE_TOOL_SEARCH: "auto",
-          }),
-          "true",
-        );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
-    );
   });
+
+  it.effect("pins tool search on when the user's Claude settings choose auto", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-claude-tool-search-",
+      });
+      const openedToolSearch = (
+        settingsJson: string,
+        cwd = CLAUDE_TEST_RUNTIME_POLICY.cwd,
+        environment?: NodeJS.ProcessEnv,
+      ) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* fileSystem.writeFileString(path.join(home, "settings.json"), settingsJson);
+            const harness = yield* makeWakeHarnessWithOptions({
+              settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: home },
+              ...(environment === undefined ? {} : { environment }),
+            });
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-tool-search"),
+                text: "Run git status.",
+                attachments: [],
+                runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                  ...CLAUDE_TEST_RUNTIME_POLICY,
+                  cwd,
+                }),
+              }),
+            );
+            const settings = harness.getOpenedOptions()?.settings;
+            return typeof settings === "object" ? settings.env?.ENABLE_TOOL_SEARCH : undefined;
+          }),
+        );
+      assert.equal(yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"auto"}}'), "true");
+      assert.isUndefined(yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"false"}}'));
+      assert.isUndefined(yield* openedToolSearch("{}"));
+
+      // Claude Code keeps the local file at the repository root, the main checkout's root in a
+      // worktree, and that file beats the user's settings.
+      const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-repo-" });
+      const worktree = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-wt-" });
+      const worktreeGitDir = path.join(repo, ".git", "worktrees", "wt");
+      yield* fileSystem.makeDirectory(worktreeGitDir, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(worktreeGitDir, "commondir"), "../..\n");
+      yield* fileSystem.writeFileString(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+      yield* fileSystem.makeDirectory(path.join(repo, ".claude"));
+      yield* fileSystem.makeDirectory(path.join(repo, "packages", "app"), { recursive: true });
+      const rootLocal = (value: string) =>
+        fileSystem.writeFileString(
+          path.join(repo, ".claude", "settings.local.json"),
+          `{"env":{"ENABLE_TOOL_SEARCH":"${value}"}}`,
+        );
+      const userAuto = '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}';
+      yield* rootLocal("auto");
+      assert.equal(yield* openedToolSearch("{}", worktree), "true");
+      yield* rootLocal("false");
+      assert.isUndefined(yield* openedToolSearch(userAuto, worktree));
+      assert.isUndefined(yield* openedToolSearch(userAuto, path.join(repo, "packages", "app")));
+
+      // Project settings beat user settings, and the process env applies only when no file sets it.
+      const project = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-project-" });
+      yield* fileSystem.makeDirectory(path.join(project, ".claude"));
+      yield* fileSystem.writeFileString(
+        path.join(project, ".claude", "settings.json"),
+        '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}',
+      );
+      assert.equal(
+        yield* openedToolSearch('{"env":{"ENABLE_TOOL_SEARCH":"false"}}', project),
+        "true",
+      );
+      assert.equal(
+        yield* openedToolSearch("{}", CLAUDE_TEST_RUNTIME_POLICY.cwd, {
+          ENABLE_TOOL_SEARCH: "auto",
+        }),
+        "true",
+      );
+    }).pipe(Effect.provide(layerAdapterTest)),
+  );
 
   describe("Plan-mode tool approval", () => {
     const openPlanTurn = Effect.fn("openPlanTurn")(function* (
@@ -5386,11 +5352,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             event.type === "turn_item.updated" && event.turnItem.type === "assistant_message",
         ),
       );
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-      ),
-    ),
+    }).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect.each([
@@ -7360,11 +7322,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             [WAKE_TASK_ID, false],
           ],
         );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -14618,12 +14576,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.role === "assistant",
           ),
         );
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
     );
   });
 

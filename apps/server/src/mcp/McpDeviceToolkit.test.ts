@@ -11,6 +11,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../config.ts";
@@ -107,24 +108,6 @@ const readiness = {
 // The thread's project exists and Agent device access is on.
 const layerProjectAccess = Layer.mock(ProjectService.ProjectService)({
   getById: (id) =>
-const layerProjectsMock = Layer.mock(ProjectService.ProjectService)({
-  getById: () => Effect.succeedNone,
-});
-
-const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
-  state: Effect.succeed(state),
-  list: Effect.succeed(state),
-  agentReadinessIfSupported: () => Effect.succeed(readiness),
-  open: (input) =>
-    Effect.succeed({
-      threadId: input.threadId,
-      hostId: "local",
-      deviceId: input.deviceId,
-      platform: input.platform,
-      openedAt: "2026-09-08T00:00:00.000Z",
-    }),
-
-  sessionsForThread: (id) =>
     Effect.succeed(
       Option.some({
         id,

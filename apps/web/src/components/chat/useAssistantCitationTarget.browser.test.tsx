@@ -1,40 +1,10 @@
-import { act, useLayoutEffect, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import type { LegendListRef } from "@legendapp/list/react";
-import { EnvironmentId, MessageId, RunId, ThreadId } from "@goat/contracts";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { TimelineEntry } from "../../session-logic";
-import {
-  deriveMessagesTimelineRows,
-  timelineTurnFoldRunIdsByEntryId,
-} from "./MessagesTimeline.logic";
-import { useAssistantCitationTarget, type CitationHistoryPage } from "./useAssistantCitationTarget";
+import { expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
+import { act, render } from "../../../test/render";
 import type { AssistantCitationRequest } from "./AssistantCitationSource";
+import { loadCitedHistory, type CitationPhase } from "./citationProcedure";
+import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
 
-const toast = vi.hoisted(() => vi.fn());
-vi.mock("../ui/toast", () => ({ toastManager: { add: toast } }));
-
-const at = "2026-01-01T00:00:00Z";
-function message(
-  id: string,
-  role: "user" | "assistant",
-  runId: RunId | null = null,
-): TimelineEntry {
-  return {
-    id,
-    kind: "message",
-    createdAt: at,
-    message: {
-      id: MessageId.make(id),
-      role,
-      text: id,
-      runId,
-      createdAt: at,
-      updatedAt: at,
-      streaming: false,
-    },
-  };
-}
 const request: AssistantCitationRequest = {
   key: "citation-1",
   citation: {
@@ -49,195 +19,133 @@ const request: AssistantCitationRequest = {
     suffix: "",
   },
 };
-const foldInput = {
-  latestRun: null,
-  runningRunId: null,
-  isWorking: false,
-  runlessWorkActive: false,
-};
-let result: ReturnType<typeof useAssistantCitationTarget>;
-let root: Root;
-let viewport: HTMLDivElement;
-const listRef = { current: {} as LegendListRef };
-const manualNavigation = vi.fn();
-const expanded = vi.fn();
-function Harness({
-  entries,
-  history = null,
-  hideRows = false,
-}: {
-  entries: readonly TimelineEntry[];
-  history?: CitationHistoryPage | null;
-  hideRows?: boolean;
-}) {
-  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
-  const onExpandTurn = (runId: RunId) => {
-    expanded(runId);
-    setExpandedRunIds((previous) =>
-      previous.has(runId) ? previous : new Set(previous).add(runId),
-    );
-  };
-  const rows = hideRows
-    ? []
-    : deriveMessagesTimelineRows({
-        ...foldInput,
-        timelineEntries: entries,
-        expandedRunIds,
-        turnDiffSummaries: [],
-        supportsConversationRollback: false,
-      });
-  const navigation = useAssistantCitationTarget({
-    request,
-    entries,
-    rows,
-    listRef,
-    viewport,
-    historyLoading: false,
-    loadEarlier: history,
-    getTurnFoldRunId: (entryId) =>
-      timelineTurnFoldRunIdsByEntryId({ ...foldInput, timelineEntries: entries }).get(entryId),
-    onExpandTurn,
-    onManualNavigation: manualNavigation,
-  });
-  useLayoutEffect(() => {
-    result = navigation;
-  });
-  return null;
-}
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  viewport = document.createElement("div");
-  toast.mockClear();
-  expanded.mockClear();
-});
-afterEach(async () => {
-  await act(async () => root?.unmount());
-  vi.unstubAllGlobals();
-});
-async function mount(props: Parameters<typeof Harness>[0]) {
-  await act(async () => {
-    root = createRoot(document.createElement("div"));
-    root.render(<Harness {...props} />);
-  });
-  await act(async () => result.onListLoad());
+const ready = { _tag: "ready", rowId: "source" } satisfies CitationPhase;
+
+function setup() {
+  const manualNavigation = vi.fn();
+  const viewport = document.createElement("div");
+  let result: ReturnType<typeof useAssistantCitationTarget>;
+  function Harness({
+    phase,
+    citation = request,
+  }: {
+    phase: CitationPhase;
+    citation?: AssistantCitationRequest | null;
+  }) {
+    result = useAssistantCitationTarget({
+      request: citation,
+      phase,
+      viewport,
+      onManualNavigation: manualNavigation,
+    });
+    return <button onClick={result.onListLoad}>List loaded</button>;
+  }
+  return { Harness, viewport, manualNavigation, read: () => result };
 }
 
-it("loads older pages until the cited response mounts and completes positioning", async () => {
-  const load = vi.fn();
-  await mount({
-    entries: [message("newest", "assistant")],
-    history: { loading: false, cursor: "page-1", onLoadEarlier: load },
+it("waits for older history and the mounted list before completing citation positioning", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "loading" }} />);
+  expect(read().target).toBeNull();
+  expect(read().positioning).toBe(true);
+  const load = vi.fn(async () => ({ _tag: "loaded" as const }));
+  let pages = 0;
+  const outcome = await loadCitedHistory({
+    signal: new AbortController().signal,
+    readThread: async () => ({ message: pages++ < 2 ? null : "assistant", hasMoreHistory: true }),
+    loadThrough: load,
   });
-  expect(load).toHaveBeenCalledTimes(1);
-  expect(toast).not.toHaveBeenCalled();
-  await act(async () =>
-    root.render(
-      <Harness
-        entries={[message("newest", "assistant")]}
-        history={{ loading: true, cursor: "page-1", onLoadEarlier: load }}
-      />,
-    ),
-  );
-  expect(load).toHaveBeenCalledTimes(1);
-  await act(async () =>
-    root.render(
-      <Harness
-        entries={[message("middle", "assistant"), message("newest", "assistant")]}
-        history={{ loading: false, cursor: "page-2", onLoadEarlier: load }}
-      />,
-    ),
-  );
   expect(load).toHaveBeenCalledTimes(2);
-  await act(async () =>
-    root.render(
-      <Harness entries={[message("source", "assistant"), message("newest", "assistant")]} />,
-    ),
-  );
-  expect(result.target?.citation.messageId).toBe("source");
-  expect(result.alwaysRender?.keys).toContain("source");
-  await act(async () => result.target?.onComplete());
-  expect(result.positioning).toBe(false);
-  expect(toast).not.toHaveBeenCalled();
+  expect(outcome).toEqual({ _tag: "found" });
+  await screen.rerender(<Harness phase={ready} />);
+  expect(read().target).toBeNull();
+  await screen.getByRole("button", { name: "List loaded" }).click();
+  expect(read().target?.citation.messageId).toBe("source");
+  expect(read().alwaysRender?.keys).toContain("source");
+  await act(() => read().target?.onComplete());
+  expect(read().positioning).toBe(false);
 });
 
-it("reports unavailable only after older history is exhausted", async () => {
-  const load = vi.fn();
-  await mount({ entries: [], history: { loading: false, cursor: "page-1", onLoadEarlier: load } });
-  expect(load).toHaveBeenCalledOnce();
-  expect(result.positioning).toBe(true);
-  expect(toast).not.toHaveBeenCalled();
-  await act(async () => root.render(<Harness entries={[message("other", "assistant")]} />));
-  expect(result.positioning).toBe(false);
-  expect(toast).toHaveBeenCalledWith(
-    expect.objectContaining({ title: "The cited response is unavailable" }),
-  );
-});
-
-it("unfolds an imported runless turn and finishes citation positioning", async () => {
-  await mount({
-    entries: [
-      message("prompt", "user"),
-      message("source", "assistant"),
-      message("answer", "assistant"),
-    ],
+it("ends positioning when exhausted history reports the response unavailable", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "loading" }} />);
+  expect(read().positioning).toBe(true);
+  const outcome = await loadCitedHistory({
+    signal: new AbortController().signal,
+    readThread: async () => ({ message: null, hasMoreHistory: false }),
+    loadThrough: vi.fn(),
   });
-  expect(expanded).toHaveBeenCalledWith(RunId.make("runless:prompt"));
-  expect(result.target?.citation.messageId).toBe("source");
-  await act(async () => result.target?.onComplete());
-  expect(result.positioning).toBe(false);
-  expect(toast).not.toHaveBeenCalled();
+  expect(outcome).toMatchObject({ _tag: "failed", title: "The cited response is unavailable" });
+  await screen.rerender(<Harness phase={{ _tag: "failed" }} />);
+  expect(read().positioning).toBe(false);
+  expect(read().target).toBeNull();
 });
 
-it("ends positioning when a hidden source has no turn fold owner", async () => {
-  await mount({ entries: [message("source", "assistant")], hideRows: true });
-  expect(expanded).not.toHaveBeenCalled();
-  expect(result.positioning).toBe(false);
-  expect(result.target).toBeNull();
-  expect(toast).toHaveBeenCalledOnce();
+it("waits for a folded turn to expand before exposing the cited response", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "expanding" }} />);
+  await screen.getByRole("button", { name: "List loaded" }).click();
+  expect(read().target).toBeNull();
+  expect(read().positioning).toBe(true);
+  await screen.rerender(<Harness phase={ready} />);
+  expect(read().target?.citation.messageId).toBe("source");
+});
+
+it("ends positioning when a hidden source cannot be revealed", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "expanding" }} />);
+  await screen.rerender(<Harness phase={{ _tag: "failed" }} />);
+  expect(read().positioning).toBe(false);
+  expect(read().target).toBeNull();
 });
 
 it("allows manual navigation to cancel citation loading", async () => {
-  await mount({
-    entries: [],
-    history: { loading: true, cursor: "page-1", onLoadEarlier: vi.fn() },
+  const { Harness, viewport, read } = setup();
+  await using _screen = await render(<Harness phase={{ _tag: "loading" }} />);
+  await act(() => {
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
   });
-  await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 })));
-  expect(result.positioning).toBe(false);
-  expect(toast).not.toHaveBeenCalled();
+  expect(read().positioning).toBe(false);
+  expect(read().target).toBeNull();
 });
 
 it("ends positioning when a history request fails", async () => {
-  const load = vi.fn();
-  await mount({ entries: [], history: { loading: false, cursor: "page-1", onLoadEarlier: load } });
-  await act(async () =>
-    root.render(
-      <Harness
-        entries={[]}
-        history={{ loading: false, cursor: "page-1", error: "offline", onLoadEarlier: load }}
-      />,
-    ),
-  );
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "loading" }} />);
+  const load = vi.fn(async () => ({ _tag: "error" as const, message: "offline" }));
+  const outcome = await loadCitedHistory({
+    signal: new AbortController().signal,
+    readThread: async () => ({ message: null, hasMoreHistory: true }),
+    loadThrough: load,
+  });
   expect(load).toHaveBeenCalledOnce();
-  expect(result.positioning).toBe(false);
-  expect(toast).toHaveBeenCalledWith(
-    expect.objectContaining({ title: "Could not load the cited response" }),
-  );
+  expect(outcome).toMatchObject({ _tag: "failed", title: "Could not load the cited response" });
+  await screen.rerender(<Harness phase={{ _tag: "failed" }} />);
+  expect(read().positioning).toBe(false);
 });
 
-it("ends positioning if a settled history request does not advance its cursor", async () => {
-  const load = vi.fn();
-  await mount({ entries: [], history: { loading: false, cursor: "page-1", onLoadEarlier: load } });
-  await act(async () =>
-    root.render(
-      <Harness entries={[]} history={{ loading: true, cursor: "page-1", onLoadEarlier: load }} />,
-    ),
-  );
-  await act(async () =>
-    root.render(
-      <Harness entries={[]} history={{ loading: false, cursor: "page-1", onLoadEarlier: load }} />,
-    ),
-  );
-  expect(load).toHaveBeenCalledOnce();
-  expect(result.positioning).toBe(false);
-  expect(toast).toHaveBeenCalledOnce();
+it("retires an earlier citation when another activation replaces it", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={ready} />);
+  await screen.getByRole("button", { name: "List loaded" }).click();
+  const earlier = read().target;
+  await screen.rerender(<Harness phase={ready} citation={{ ...request, key: "citation-2" }} />);
+  expect(earlier?.activationRef.current.dismissed).toBe(true);
+  expect(read().target?.key).toBe("citation-2");
+  expect(read().positioning).toBe(true);
+});
+
+it("ends positioning when settled history never advances to the cited response", async () => {
+  const { Harness, read } = setup();
+  await using screen = await render(<Harness phase={{ _tag: "loading" }} />);
+  const load = vi.fn(async () => ({ _tag: "loaded" as const }));
+  const outcome = await loadCitedHistory({
+    signal: new AbortController().signal,
+    readThread: async () => ({ message: null, hasMoreHistory: true }),
+    loadThrough: load,
+  });
+  expect(load).toHaveBeenCalledTimes(20);
+  expect(outcome).toMatchObject({ _tag: "failed", title: "Could not load the cited response" });
+  await screen.rerender(<Harness phase={{ _tag: "failed" }} />);
+  expect(read().positioning).toBe(false);
 });

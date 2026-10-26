@@ -39,7 +39,7 @@ export function useTerminalExitNavigation(target: {
     );
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- focus subscription for the screen's lifetime; an exit behind another screen navigates when the user returns
+  // oxlint-disable-next-line goat/react-effect-budget -- focus subscription for the screen's lifetime; an exit behind another screen navigates when the user returns
   useEffect(
     () =>
       navigation.addListener("focus", () => {

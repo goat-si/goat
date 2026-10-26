@@ -2115,6 +2115,9 @@ export default function ChatView(props: ChatViewProps) {
     threadRef: activeThreadRef,
     deviceState,
     deviceStateLoaded,
+    previewState: activePreviewState,
+    serverBrowserAvailable: activeEnvironmentServerBrowser,
+    panelSurfaces: rightPanelState.surfaces,
     miniPlayerSource: activePreviewMiniPlayer?.source ?? null,
     sheetLayout: shouldUsePlanSidebarSheet,
   });

@@ -53,7 +53,6 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
-
 /** Forgejo serves pull requests on its web host; other forges key the host from the repository. */
 function pullRequestHostOf(
   identity: {
@@ -258,7 +257,7 @@ function PullRequestSurfaceIcon({
     repository: surface.repository,
     number: surface.number,
   };
-  const sharedSummary = useSharedPullRequestSummary(resolvedEnvironmentId, reference, null);
+  const sharedSummary = useSharedPullRequestSummary(resolvedEnvironmentId, reference);
   const status = linkedSnapshot ?? newestPullRequestSummary(detail, sharedSummary) ?? seed ?? null;
   if (status === null) {
     return <PullRequestGlyph.pullRequest className="size-3 shrink-0 text-muted-foreground" />;

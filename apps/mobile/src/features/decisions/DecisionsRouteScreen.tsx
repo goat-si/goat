@@ -75,12 +75,7 @@ function FocusedDecisionsContent(props: {
           <Button
             label="Decision inbox and history"
             tone="secondary"
-            onPress={() =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: { screen: "SettingsDecisionInbox" },
-              })
-            }
+            onPress={() => navigation.navigate("SettingsDecisionInbox")}
           />
           {state.loadingRefs.length > 0 ? (
             <Text className="text-sm text-foreground-muted">

@@ -547,29 +547,48 @@ export const captureViewport = async (
   cdp: CDPSession,
   options: { readonly format: "png" | "jpeg"; readonly quality?: number },
 ) => {
-  let clip;
-  if (options.scale < 1) {
-    const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 800 };
-    let offset = options.offset;
-    if (!offset) {
-      const { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
-      const zoom = cssVisualViewport.zoom ?? 1;
-      offset = {
-        x: cssVisualViewport.pageX * zoom,
-        y: cssVisualViewport.pageY * zoom,
-      };
-    }
-    clip = {
-      ...offset,
-      ...viewport,
-      scale: options.scale,
-    };
-  }
   const { data } = await cdp.send("Page.captureScreenshot", {
     format: options.format,
     ...(options.quality === undefined ? {} : { quality: options.quality }),
   });
   return data;
+};
+
+/** Runs in the page's own isolated world, as the server has no image library. */
+const SHRINK_PNG = `async function (png, width, height) {
+  const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  // Namespaced, as an XML document's createElement makes a plain element with no getContext.
+  const canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
+}`;
+
+const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
+  const size = pngSize(png);
+  const { frameTree } = await cdp.send("Page.getFrameTree");
+  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
+    frameId: frameTree.frame.id,
+    worldName: "goat-preview-screenshot",
+  });
+  const { result, exceptionDetails } = await cdp.send("Runtime.callFunctionOn", {
+    functionDeclaration: SHRINK_PNG,
+    executionContextId,
+    arguments: [
+      { value: png },
+      { value: Math.round(size.width * scale) },
+      { value: Math.round(size.height * scale) },
+    ],
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (exceptionDetails) throw new Error("The snapshot could not shrink its screenshot.");
+  return result.value as string;
 };
 
 // Bounds, PNG checks, and scale retries adapted from Emanuele-web04/synara @ 566efb1b1.
@@ -639,8 +658,7 @@ type SnapshotInput = {
   readonly timeoutMs: number;
 };
 
-/** The scale a page renders at and its viewport in device-independent pixels, a clip's units. */
-
+/** The scale a page renders at and its viewport in device-independent pixels. */
 const renderingOf = async (input: SnapshotInput) => {
   if (input.renderScale !== "display") {
     const viewport = input.page.viewportSize() ?? { width: 1280, height: 800 };
@@ -675,13 +693,13 @@ const capture = async (
       ? Promise.resolve(undefined)
       : input.fullPage
         ? captureFullPage(input.cdp)
-        : captureViewport(input.page, input.cdp, { format: "png", scale, viewport, offset }).then(
-            (data) => ({
+        : captureViewport(input.cdp, { format: "png" })
+            .then((png) => (scale < 1 ? shrinkPng(input.cdp, png, scale) : png))
+            .then((data) => ({
               mimeType: "image/png" as const,
               data,
               ...pngSize(data),
-            }),
-          );
+            }));
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([

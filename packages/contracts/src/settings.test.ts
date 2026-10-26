@@ -616,7 +616,7 @@ describe("memory hub settings", () => {
       "https://hub.invalid#secret",
     ])
       expect(() =>
-        Schema.decodeUnknownSync(MemoryHubSettings)({
+        Schema.decodeSync(MemoryHubSettings)({
           mode: "member",
           hubEnvironmentId: "env",
           endpoint,
@@ -627,7 +627,7 @@ describe("memory hub settings", () => {
   });
   it("replaces memory hub configuration as one dedicated admin field", () => {
     expect(
-      Schema.decodeUnknownSync(MemoryHubSettingsUpdateInput)({
+      Schema.decodeSync(MemoryHubSettingsUpdateInput)({
         requestId: "00000000-0000-4000-8000-000000000001",
         expectedVersion: 0,
         action: "configure",

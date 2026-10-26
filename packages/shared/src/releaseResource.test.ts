@@ -10,7 +10,7 @@ describe("releaseResourceAttributes", () => {
     ["preview", {}, "preview", "staging"],
     [
       "stable",
-      { "deployment.environment.name": "staging", "t3code.release.channel": "" },
+      { "deployment.environment.name": "staging", "goat.release.channel": "" },
       "stable",
       "staging",
     ],
@@ -18,7 +18,7 @@ describe("releaseResourceAttributes", () => {
     "%s (operator: %o) reports %s in %s",
     (channel, operatorAttributes, expectedChannel, environment) => {
       expect(releaseResourceAttributes(channel, operatorAttributes)).toEqual({
-        "t3code.release.channel": expectedChannel,
+        "goat.release.channel": expectedChannel,
         "deployment.environment.name": environment,
       });
     },

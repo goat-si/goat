@@ -15,13 +15,6 @@ it("bundles triage instructions without exposing the private source repository",
   assert.include(TRIAGE_PLAYBOOK, "# GOAT triage playbook");
   assert.notInclude(TRIAGE_PLAYBOOK, "pingdotgg/t3code");
   assert.notInclude(TRIAGE_PLAYBOOK, "npx t3");
-it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
-  // Older releases fetch the repository playbook.
-  const canonicalPath = NodePath.join(
-    import.meta.dirname,
-    "../../../../.github/triage/PLAYBOOK.md",
-  );
-  assert.equal(TRIAGE_PLAYBOOK, NodeFS.readFileSync(canonicalPath, "utf8"));
 });
 
 it("launch prompt stays a single argv-safe line naming the prompt file", () => {

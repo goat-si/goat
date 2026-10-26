@@ -138,6 +138,8 @@ describe("DesktopSettings", () => {
         assert.isUndefined(document.updateInstallPolicy);
       }),
     ),
+  );
+
   it.effect("records one bounds operation span with its input attributes", () =>
     Effect.gen(function* () {
       const spans: Array<Tracer.Span> = [];

@@ -708,7 +708,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
   );
-  // Hands the base T3 recorded for a branch to the host, whose own tools may keep it elsewhere.
+  // Hands the base GOAT recorded for a branch to the host, whose own tools may keep it elsewhere.
   // Best-effort: nothing GOAT does reads it back from there.
   const shareBranchBase = Effect.fn("GitManager.shareBranchBase")(function* (
     cwd: string,

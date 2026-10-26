@@ -69,7 +69,9 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollViewMarker: () => null }));
 vi.mock("../settings/SettingsMemoryRouteScreen", () => ({ MemoryReportLink: () => null }));
-vi.mock("../home/home-thread-navigation", () => ({ useHomeThreadSelection: () => () => {} }));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => () => {},
+}));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
 }));

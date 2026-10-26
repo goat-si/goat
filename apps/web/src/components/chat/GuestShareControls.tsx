@@ -10,7 +10,7 @@ import {
   type ScopedThreadRef,
   type ThreadGuestShare,
 } from "@goat/contracts";
-import { CheckIcon, CopyIcon, UserIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, UserRoundIcon as UserIcon } from "~/components/solar";
 import { useState } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";

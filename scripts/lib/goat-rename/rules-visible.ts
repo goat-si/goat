@@ -35,6 +35,20 @@ const isConnectCopySurface = (path: string): boolean =>
 // and attribution before a chase merges the renamed upstream tree.
 export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "visible-agent-answer-delivery-error",
+    category: "visible-copy",
+    find: /T3 Code(?= could not confirm)/g,
+    replace: "GOAT",
+    scope: (path) => path === "apps/server/src/orchestration-v2/Orchestrator.ts",
+  },
+  {
+    id: "visible-guest-connect-search",
+    category: "visible-copy",
+    find: /\bt3 connect\b/g,
+    replace: "goat connect",
+    scope: (path) => path === "apps/web/src/components/settings/settingsSearch.ts",
+  },
+  {
     id: "visible-connect-account-copy",
     category: "visible-copy",
     find: /\bT3 (Connect|[Aa]ccount)\b/g,
@@ -95,7 +109,15 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
     find: productName,
     replace: "GOAT",
     // KDE readiness compares the installed entry byte-for-byte (ADR-0014).
-    scope: (path) => isCopySurface(path) && path !== kdeCapturePath,
+    scope: (path) =>
+      (isCopySurface(path) && path !== kdeCapturePath) ||
+      [
+        "apps/mobile/app.config.ts",
+        "apps/mobile/modules/t3-highlights/T3HighlightsNative.podspec",
+        "packages/contracts/src/orchestrationV2.ts",
+        "packages/source-control-forgejo/src/server/ForgejoPullRequestProvider.ts",
+        "scripts/mobile-e2e/review.ts",
+      ].includes(path),
   },
   {
     id: "visible-kde-copy",
@@ -127,6 +149,7 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
         "apps/server/src/cloud/pinnedRuntime.ts",
         "apps/server/src/persistence/DatabaseStorage.ts",
         "apps/server/src/serverRuntimeStartup.ts",
+        "packages/contracts/src/ipc.ts",
       ].includes(path),
   },
   {

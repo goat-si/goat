@@ -701,7 +701,7 @@ export default defineConfig({
         files: ["apps/mobile/src/**"],
         rules: {
           "goat/no-mobile-uniwind-theme-escape-hatches": "error",
-          "t3code/require-registered-list-scroll": "error",
+          "goat/require-registered-list-scroll": "error",
         },
       },
       {
@@ -716,7 +716,7 @@ export default defineConfig({
       {
         files: ["apps/mobile/src/**"],
         excludeFiles: ["**/*.test.{ts,tsx}"],
-        rules: { "t3code/no-ambiguous-detail-navigation": "error" },
+        rules: { "goat/no-ambiguous-detail-navigation": "error" },
       },
       {
         // Raw ResizeObserver state commits miss the paint; observeResize flushes derived layout together.
@@ -845,7 +845,7 @@ export default defineConfig({
       },
       {
         files: ["apps/web/src/**", "apps/mobile/src/**", "packages/*/src/**"],
-        rules: { "t3code/react-effect-budget": "error" },
+        rules: { "goat/react-effect-budget": "error" },
       },
       {
         // React Compiler caches use* functions only if they call a hook.

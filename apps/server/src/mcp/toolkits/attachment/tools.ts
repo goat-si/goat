@@ -68,6 +68,7 @@ const AttachmentDiscardTool = Tool.make(agentSurfaceRegistry["attachment.discard
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["attachment.discard"]));
 const AttachmentSendTool = Tool.make(agentSurfaceRegistry["thread.send_attachments"].name, {
   ...shared,
+  dependencies: [...shared.dependencies, DocumentText.DocumentText],
   description: agentSurfaceRegistry["thread.send_attachments"].description,
   parameters: withClientRequestId(
     Schema.Struct({

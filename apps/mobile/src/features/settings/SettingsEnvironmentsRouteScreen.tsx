@@ -9,6 +9,7 @@ import { Platform, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SettingsScreen } from "./components/SettingsScreen";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader";
 import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
@@ -42,6 +43,7 @@ export function SettingsEnvironmentsRouteScreen() {
   } = useRemoteConnections();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const headerIconColor = useUniwindTheme()["--color-icon"];
   const environmentSections = splitEnvironmentSections({
     connectedEnvironments,
     cloudEnvironments: null,
@@ -162,15 +164,12 @@ export function SettingsEnvironmentsRouteScreen() {
             accessibilityRole="button"
             disabled={!savedHub.loaded || !catalogReady}
             onPress={() =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: {
-                  screen: "SettingsEnvironmentNew",
-                  params: hubEnvironmentId
-                    ? { intent: "change-hub", replaceEnvironmentId: hubEnvironmentId }
-                    : { intent: "hub" },
-                },
-              })
+              navigation.navigate(
+                "SettingsEnvironmentNew",
+                hubEnvironmentId
+                  ? { intent: "change-hub", replaceEnvironmentId: hubEnvironmentId }
+                  : { intent: "hub" },
+              )
             }
             className="min-h-13 flex-row items-center gap-3 rounded-[24px] bg-grouped-card px-4 active:opacity-70"
           >
@@ -224,9 +223,7 @@ export function SettingsEnvironmentsRouteScreen() {
           <Text className="px-4 text-sm font-goat-medium text-foreground-muted">Advanced</Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() =>
-              navigation.navigate("SettingsEnvironmentNew", { intent: "add-server" })
-            }
+            onPress={() => navigation.navigate("SettingsEnvironmentNew", { intent: "add-server" })}
             className="min-h-13 flex-row items-center gap-3 rounded-[24px] bg-grouped-card px-4 active:opacity-70"
           >
             <Text className="flex-1 text-base text-foreground">Add another server</Text>

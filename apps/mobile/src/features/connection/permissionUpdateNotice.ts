@@ -9,7 +9,7 @@ import { projectEnvironmentPresentation } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { environmentSession } from "../../state/session";
 
-const storageKey = "t3code.permission-update.v1";
+const storageKey = "goat.permission-update.v1";
 
 const legacyPermissionEnvironmentsAtom = Atom.make((get) =>
   [...get(environmentPresentations.presentationsAtom).entries()].flatMap(

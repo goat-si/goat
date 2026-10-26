@@ -37,6 +37,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { splitStandingInstructions } from "@goat/shared/standingInstructions";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as ServerConfig from "../config.ts";
 import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -605,6 +606,10 @@ describe("GOAT bot boundary (scenario 6)", () => {
             creationSource: "web",
           },
           owner,
+        ).pipe(
+          Effect.provideService(DocumentText.DocumentText, {
+            ensure: () => Effect.succeed(undefined),
+          }),
         );
         assert.deepStrictEqual(viaIntake.storedEvents, []);
         assert.isAbove(viaIntake.sequence, 0);

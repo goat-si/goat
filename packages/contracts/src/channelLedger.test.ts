@@ -17,7 +17,7 @@ const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: u
   const json = Schema.toCodecJson(schema);
   const decoded = Schema.decodeUnknownSync(json)(value);
   const encoded = Schema.encodeSync(json)(decoded);
-  expect(Schema.decodeUnknownSync(json)(encoded)).toEqual(decoded);
+  expect(Schema.decodeSync(json)(encoded)).toEqual(decoded);
   return decoded;
 };
 

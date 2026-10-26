@@ -14,6 +14,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act, useLayoutEffect, useState, type ReactNode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { useDerivedValue } from "react-native-reanimated";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 type Snapshot = {
@@ -242,6 +243,7 @@ vi.mock("react-native-reanimated", () => ({
   FadeOutDown: { duration: () => ({ easing: () => undefined }) },
   LinearTransition: { duration: () => undefined },
   useAnimatedStyle: () => ({}),
+  useDerivedValue: (value: () => number) => ({ value: value() }),
   useSharedValue: (value: number) => ({ value }),
   withTiming: (value: number) => value,
 }));
@@ -883,11 +885,12 @@ it.each(["ios", "android"])(
         Record<string, { customAnswer?: string; selectedOptionValues?: readonly string[] }>
       >({});
       const [collapsed, setCollapsed] = useState(false);
+      const maxHeight = useDerivedValue(() => 400);
       return (
         <PendingUserInputCard
           canOperateThread
           pendingUserInput={userInput().request}
-          maxHeight={400}
+          maxHeight={maxHeight}
           collapsed={collapsed}
           onToggleCollapsed={() => setCollapsed((value) => !value)}
           drafts={drafts}

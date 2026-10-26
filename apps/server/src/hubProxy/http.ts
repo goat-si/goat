@@ -169,7 +169,9 @@ const authenticate = (request: HttpServerRequest.HttpServerRequest) =>
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     // The upgrade authenticator also reads cookies and Authorization, and accepts the hub's
     // own wsTicket for sockets and media that cannot set headers.
-    const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+    // Bound tickets name their route: node sockets take an RPC ticket, assets a media one.
+    const use = request.headers.upgrade?.toLowerCase() === "websocket" ? "rpc" : "media";
+    const session = yield* serverAuth.authenticateWebSocketUpgrade(request, use).pipe(
       Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
         failEnvironmentAuthInvalid(
           EnvironmentAuth.serverAuthCredentialReason(error),

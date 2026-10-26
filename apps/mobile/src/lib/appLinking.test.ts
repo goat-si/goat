@@ -92,23 +92,16 @@ describe("draft deep links", () => {
   });
 });
 
-describe("nested link routes", () => {
+describe("settings link routes", () => {
   const settingsLink = {
     routes: [
       { name: "Home" },
-      {
-        name: "SettingsSheet",
-        state: {
-          routes: [
-            { name: "Settings" },
-            { name: "SettingsEnvironmentNew", params: { pairingUrl: "x", autoConnect: "1" } },
-          ],
-        },
-      },
+      { name: "Settings" },
+      { name: "SettingsEnvironmentNew", params: { pairingUrl: "x", autoConnect: "1" } },
     ],
   };
 
-  it("finds a route the link opens inside a nested navigator", () => {
+  it("finds a root settings route", () => {
     expect(findLinkedRoute(settingsLink, ["SettingsEnvironmentNew"])?.params).toEqual({
       pairingUrl: "x",
       autoConnect: "1",

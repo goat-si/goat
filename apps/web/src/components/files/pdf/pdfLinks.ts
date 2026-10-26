@@ -106,7 +106,7 @@ async function resolveInternalPageNumber(
 }
 
 interface LinkCandidate {
-  rect: number[];
+  rect: [number, number, number, number];
   url: string | undefined;
   dest: unknown;
 }
@@ -150,12 +150,12 @@ export async function extractPageLinks(options: {
     if (annotation.subtype !== "Link") {
       continue;
     }
-    const rect = annotation.rect;
-    if (!rect || rect.length < 4) {
+    const [x1, y1, x2, y2] = annotation.rect ?? [];
+    if (x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) {
       continue;
     }
     candidates.push({
-      rect,
+      rect: [x1, y1, x2, y2],
       // pdf.js exposes rejected protocols separately as unsafeUrl; ignore that
       // field and keep only sanitized schemes that are safe to hand to the OS.
       url: sanitizeAnnotationUrl(annotation.url),
@@ -181,12 +181,8 @@ export async function extractPageLinks(options: {
     if (!candidate.url && targetPageNumber == null) {
       continue;
     }
-    const [x1, y1, x2, y2] = options.viewport.convertToViewportRectangle(candidate.rect) as [
-      number,
-      number,
-      number,
-      number,
-    ];
+    const [x1, y1] = options.viewport.convertToViewportPoint(candidate.rect[0], candidate.rect[1]);
+    const [x2, y2] = options.viewport.convertToViewportPoint(candidate.rect[2], candidate.rect[3]);
     links.push({
       id: `${options.page.pageNumber}:${index}`,
       left: Math.min(x1, x2),

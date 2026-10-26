@@ -4,6 +4,15 @@ import { isTest } from "./paths.ts";
 // These comments describe GOAT-owned runtime behavior. Other files also carry
 // upstream attribution and legacy protocol explanations, so they stay out.
 const COMMENT_PATHS = new Set([
+  "apps/server/src/mcp/McpInvocationContext.ts",
+  "apps/server/src/orchestration-v2/RunExecutionService.ts",
+  "apps/server/src/vcs/GitVcsDriver.ts",
+  "packages/source-control-core/src/server/SourceControlProvider.ts",
+  "packages/source-control-core/src/shared/definition.ts",
+  "packages/source-control-github/src/server/GitHubSourceControlProvider.ts",
+  "apps/web/src/guestPage.ts",
+  "apps/web/src/lib/diffRendering.ts",
+  "apps/server/src/testUtils/managedServiceEnv.setup.ts",
   "apps/desktop/gnome-extension/captureFeedback.js",
   "apps/desktop/gnome-extension/feedbackGeometry.js",
   "apps/desktop/src/app/DesktopClerk.ts",
@@ -59,6 +68,41 @@ const commentScope = (path: string) => !isTest(path) && COMMENT_PATHS.has(path);
 
 export const INTERNAL_TEXT_RULES: readonly TextRule[] = [
   {
+    id: "internal-current-branch-examples",
+    category: "comments",
+    find: /(?<=^[ \t]*\/\/[^\n]*)t3(?=\/| connect\b)/g,
+    replace: "goat",
+    scope: (path) => path === "packages/shared/src/paletteSearch.ts",
+  },
+  {
+    id: "internal-cli-runtime-comments",
+    category: "comments",
+    find: /(?<=^[ \t]*\/\/[^\n]*)(?:\bt3(?= processes\b| is absent from PATH\b)|(?<=<versionDir>\/)t3\b)/g,
+    replace: "goat",
+    scope: (path) =>
+      [
+        "apps/server/src/cli/consoleStdin.ts",
+        "apps/server/src/cloud/pinnedRuntime.ts",
+        "apps/server/src/persistence/DatabaseStorage.ts",
+        "apps/server/src/testUtils/managedServiceEnv.setup.ts",
+      ].includes(path),
+  },
+  {
+    id: "internal-command-palette-example",
+    category: "comments",
+    find: /(?<=New thread in )t3code\b/g,
+    replace: "goat",
+    scope: (path) => path === "apps/web/src/components/CommandPalette.logic.ts",
+  },
+  {
+    id: "internal-render-scenario-comment",
+    category: "comments",
+    find: /T3 Connect/g,
+    replace: "GOAT Connect",
+    scope: (path) => path === "apps/web/test/appScenarios.renders.tsx",
+  },
+
+  {
     id: "internal-masthead-artwork-comment",
     category: "comments",
     find: /T3 brand artwork/g,
@@ -82,7 +126,7 @@ export const INTERNAL_TEXT_RULES: readonly TextRule[] = [
   {
     id: "internal-owned-comments",
     category: "comments",
-    find: /(?<=^(?!.*T3 Code)(?!.*(?:[Ll]egacy T3|[Uu]pstream T3|[Cc]opyright))[ \t]*(?:: \/\/|\/\/|\/\*\*?|\*)[^\r\n]*)(?:\bT3(?='s\b| (?:server|MCP|home|runtime|process|git|wait|revert|tool|thread|database|session|turn|orchestration|composers|delegate_task|owns|may|starts|shows|restores|has|could|did|stops|keeps|answers|tracks|uses|never|raised|passes|asks|does|also|on)\b|-owned\b|-managed\b|[.:])|(?<=(?:but |normal |page ))T3$)/g,
+    find: /(?<=^(?!.*T3 Code)(?!.*(?:[Ll]egacy T3|[Uu]pstream T3|[Cc]opyright))[ \t]*(?:: \/\/|\/\/|\/\*\*?|\*)[^\r\n]*)(?:\bT3(?='s\b| (?:server|MCP|home|runtime|process|git|wait|revert|tool|thread|database|session|turn|orchestration|composers|service|caller|recorded|records|ends|kept|instructions|policy|checkpoints|IDs?|no|can|model|expired|worktree|blue|delegate_task|owns|may|starts|shows|restores|has|could|did|stops|keeps|answers|tracks|uses|never|raised|passes|asks|does|also|on)\b|-owned\b|-managed\b|[.:])|(?<=(?:but |normal |page ))T3$|T3(?=; stop))/g,
     replace: "GOAT",
     scope: commentScope,
   },

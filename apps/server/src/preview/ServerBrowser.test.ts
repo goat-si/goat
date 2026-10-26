@@ -67,64 +67,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
   },
 }));
 
-function makeFrame() {
-  const frame = {
-    copy: "",
-    detached: false,
-    isDetached: () => frame.detached,
-    recording: Promise.withResolvers<void>(),
-  };
-  return frame;
-}
-
-const PNG_HEADER = (() => {
-  const header = Buffer.alloc(24);
-  header.write("IHDR", 12);
-  header.writeUInt32BE(1280, 16);
-  header.writeUInt32BE(800, 20);
-  return header.toString("base64");
-})();
-
-function makeSession(frame?: ReturnType<typeof makeFrame>) {
-  const events = new NodeEvents.EventEmitter();
-  return {
-    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
-    detach: vi.fn(async () => {}),
-    send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
-      if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
-      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
-      if (method === "Page.captureScreenshot") {
-        // A snapshot sizes its screenshot from the PNG header; viewers get JPEG frames as-is.
-        return { data: (input as { format: string }).format === "png" ? PNG_HEADER : "ZnJhbWU=" };
-      }
-      // Snapshots shrink their screenshot in the page; the header stands in for the result.
-      if (method === "Runtime.callFunctionOn") return { result: { value: PNG_HEADER } };
-      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
-      if (method === "Page.createIsolatedWorld") {
-        return {
-          executionContextId: (input as { worldName?: string }).worldName === "t3-preview" ? 1 : 7,
-        };
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 1) {
-        return { result: { value: [] } };
-      }
-      if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
-      if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (focusedFrame) focusedFrame.copy = keyCopy || focusedFrame.copy;
-        else pageCopy = keyCopy || pageCopy;
-      }
-      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
-        const value = frame ? frame.copy : pageCopy;
-        if (frame) frame.copy = "";
-        else pageCopy = "";
-        return { result: { value } };
-      }
-      return { result: { value: "evaluated" } };
-    }),
-  };
-}
-
 function makeContext(onClose?: (context: BrowserContext) => void) {
   const events = new NodeEvents.EventEmitter();
   const nativeFileChooser = vi.fn();
@@ -550,6 +492,10 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("tells the desktop once per thread when its agent turns start and end", () =>
   Effect.gen(function* () {
     yield* ServerBrowser.ServerBrowser;

@@ -1,4 +1,9 @@
-import { LoaderCircleIcon, PauseIcon, PlayIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  LoaderCircleIcon,
+  SquareIcon as PauseIcon,
+  PlayIcon,
+  TriangleAlertIcon,
+} from "~/components/solar";
 import { createContext, useContext, useRef, useState } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";

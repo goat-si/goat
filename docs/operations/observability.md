@@ -635,7 +635,7 @@ process, and `goat-web` for web client spans the backend forwards, all in `servi
 resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging`.
 
 Each process reports its own build, not the one it talks to: the server, the desktop main process,
-the UI, and the mobile app each carry `t3code.release.channel` (`dev`, `stable`, `nightly`, or
+the UI, and the mobile app each carry `goat.release.channel` (`dev`, `stable`, `nightly`, or
 `preview`, from their own version; desktop PR builds count as `preview`, and a server not built by a
 release workflow reports `dev`) and `deployment.environment.name` (`development`, `production`, or
 `staging` for `preview`). On the server and the desktop main process either key in

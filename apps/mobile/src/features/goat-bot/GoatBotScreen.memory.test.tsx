@@ -59,12 +59,8 @@ it("opens a report's exact memory target and leaves legacy text without an actio
   await view.click("View memory details");
   expect(h.navigations).toMatchObject([
     [
-      "SettingsSheet",
-      {
-        params: {
-          params: { environmentId: nativeEnv, memorySpaceId: nativeSpace, memoryId: nativeId },
-        },
-      },
+      "SettingsMemory",
+      { environmentId: nativeEnv, memorySpaceId: nativeSpace, memoryId: nativeId },
     ],
   ]);
   await act(async () => h.revoke());

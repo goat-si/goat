@@ -64,10 +64,9 @@ const thread = (
   overrides: {
     readonly archivedAt?: DateTime.Utc;
     readonly deletedAt?: DateTime.Utc;
-    readonly title?: string;
-    readonly updatedAt?: DateTime.Utc;
     readonly subagentOf?: ThreadId;
     readonly title?: string;
+    readonly updatedAt?: DateTime.Utc;
     readonly settledAt?: DateTime.Utc;
     readonly linkedPullRequest?: ThreadLinkedPullRequest;
     readonly branchPullRequest?: ThreadLinkedPullRequest;
@@ -300,6 +299,9 @@ it.layer(layerTest)("ThreadSearch", (it) => {
         ),
         [long, elsewhere],
       );
+    }),
+  );
+
   it.effect("indexes a message when it finishes streaming and follows later edits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

@@ -62,7 +62,7 @@ const auth = {
   policy: "loopback-browser",
   bootstrapMethods: ["one-time-token"],
   sessionMethods: ["browser-session-cookie"],
-  sessionCookieName: "t3_session",
+  sessionCookieName: "goat_session",
 };
 
 const serverConfig: ServerConfig = {

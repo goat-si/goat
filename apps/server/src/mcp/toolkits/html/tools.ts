@@ -21,11 +21,6 @@ const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_0
 
 export const HtmlPreviewTool = Tool.make(agentSurfaceRegistry["html.preview"].name, {
   description: agentSurfaceRegistry["html.preview"].description,
-const PAGE_RULES =
-  "Inline <style> and <script>. Local images as absolute paths are inlined. Remote URLs load as-is.";
-
-export const HtmlPreviewTool = Tool.make("html_preview", {
-  description: `Check an HTML page before html_render. Returns PNG, contentHeight, and console output. If it says the browser is still installing, call again in a minute. ${PAGE_RULES} Theme and layout rules are in html_render.`,
   parameters: Schema.Struct({
     html: Html,
     width: Schema.optional(

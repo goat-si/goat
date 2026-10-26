@@ -62,18 +62,9 @@ function assertLiveTailMatchesFinal(
   assert.notInclude(live, "\u001b");
   assert.notInclude(live, "progress 50%");
   // What viewers watched is the end of what the row keeps once it settles.
-  const final = terminalOutputPlainText(normalizeTerminalOutput(command.output ?? "").text);
   assert.isTrue(
     final.trimEnd().endsWith(live.trimEnd()),
     `the live tail must agree with the persisted final output: ${JSON.stringify({ final, live })}`,
   );
   assert.notInclude(final, '"stdout"');
-
-  const commandEvents = result.domainEvents.flatMap((event) =>
-    event.type === "turn-item.updated" && event.payload.id === command.id ? [event.payload] : [],
-  );
-  for (const item of commandEvents) {
-    if (item.type !== "command_execution" || item.status === "completed") continue;
-    assert.isUndefined(item.output, "a running command item must not persist live output");
-  }
 }

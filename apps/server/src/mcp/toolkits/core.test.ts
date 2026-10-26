@@ -65,7 +65,6 @@ import * as SshDeviceAdd from "../../sshRemote/SshDeviceAdd.ts";
 import * as SshHostSetup from "../../sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as SshWorkspaceSync from "../../sshRemote/SshWorkspaceSync.ts";
-import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as ThreadResultService from "../../threadResults/ThreadResultService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import { newLaunchWatch } from "../launchWatch.ts";
@@ -505,13 +504,24 @@ it.effect("refuses an undeclared argument before the tool runs", () =>
     });
     const definition = server.tools.find(({ tool }) => tool.name === "goat_thread_search");
     expect(definition?.tool.inputSchema.additionalProperties).toBe(false);
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+      ),
+    ),
+  ),
+);
+
 it.effect("records only failed calls of tools that hand off no work", () => {
   // Recording runs detached from the tool response, so the first event is awaited.
   const recorded = Deferred.makeUnsafe<{ event: string; properties: object }>();
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const organize = (capabilities: McpInvocationContext.McpInvocationScope["capabilities"]) =>
-      server.callTool({ name: "t3_thread_organize", arguments: { action: "pin" } }).pipe(
+      server.callTool({ name: "goat_thread_organize", arguments: { action: "pin" } }).pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, {
           ...scope,
           capabilities,
@@ -525,18 +535,13 @@ it.effect("records only failed calls of tools that hand off no work", () => {
     // The successful call ran first, so it would be the first event if it were recorded.
     expect(yield* Deferred.await(recorded)).toMatchObject({
       event: "mcp.tool.invoked",
-      properties: { tool: "t3_thread_organize", outcome: "error" },
+      properties: { tool: "goat_thread_organize", outcome: "error" },
     });
   }).pipe(
     Effect.provide(
       layerThreadToolkit.pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
-        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
-      ),
-    ),
-  ),
-);
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
             getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),

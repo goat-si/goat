@@ -35,14 +35,10 @@ import type { MessagesTimeline } from "./chat/MessagesTimeline";
 import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import ChatView from "./ChatView";
-import * as chatViewLogic from "./ChatView.logic";
-// Browser module namespaces cannot be spied on, so expose the scheduler as a mock that keeps its real behavior.
-vi.mock("./ChatView.logic", async (original) => {
-  const actual = await original<typeof import("./ChatView.logic")>();
-  return {
-    ...actual,
-    scheduleEnvironmentReconnectWarning: vi.fn(actual.scheduleEnvironmentReconnectWarning),
-  };
+import * as disconnectDelay from "../hooks/useEnvironmentDisconnectDelay";
+vi.mock("../hooks/useEnvironmentDisconnectDelay", async (original) => {
+  const actual = await original<typeof import("../hooks/useEnvironmentDisconnectDelay")>();
+  return { ...actual, useEnvironmentStateHeldFor: vi.fn(actual.useEnvironmentStateHeldFor) };
 });
 // Keep the real ChatView controller and DOM events; replace only the virtualizer boundary.
 vi.mock("./chat/MessagesTimeline", async () => {
@@ -146,7 +142,7 @@ vi.mock("./chat/ChatComposer", async () => {
   };
 });
 async function setup() {
-  vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockReset();
+  vi.mocked(disconnectDelay.useEnvironmentStateHeldFor).mockReset();
   return setupSshComposer();
 }
 it("never calls normal launch or uploads for SSH send", async () => {
@@ -798,10 +794,7 @@ describe("timeline follow navigation", () => {
 it("uses reconciled SSH presentation in the chat banner while keeping fresh failures visible", async () => {
   await using fixture = await setup();
   const { mount, container } = fixture;
-  vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockImplementation((show) => {
-    show();
-    return () => {};
-  });
+  vi.mocked(disconnectDelay.useEnvironmentStateHeldFor).mockReturnValue(true);
   const identity = { supervisorId: "chat-fixture", attemptId: 2, routeId: "ssh-fixture-route" };
   const connection: EnvironmentConnectionPresentation = {
     phase: "reconnecting",
@@ -863,10 +856,7 @@ it("uses reconciled SSH presentation in the chat banner while keeping fresh fail
 it("removes runtime ready from chat after a shared owner invalidation", async () => {
   await using fixture = await setup();
   const { mount, container } = fixture;
-  vi.mocked(chatViewLogic.scheduleEnvironmentReconnectWarning).mockImplementation((show) => {
-    show();
-    return () => {};
-  });
+  vi.mocked(disconnectDelay.useEnvironmentStateHeldFor).mockReturnValue(true);
   const registry = AtomRegistry.make();
   const identity = { supervisorId: "chat-owner", attemptId: 2, routeId: "ssh:fixture" };
   const status = {

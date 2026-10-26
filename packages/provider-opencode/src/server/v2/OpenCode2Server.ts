@@ -1,11 +1,4 @@
-/**
- * A 2.x server serves every location from one process, so an instance shares
- * one server across all of its threads and directories.
- */
-/**
- * A 2.x server serves every location from one process, so an instance shares
- * one server across all of its threads and directories.
- */
+// One OpenCode 2 process serves all directories; share it across instance threads.
 import type { OpenCodeClient } from "@opencode/client/effect";
 import * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
@@ -60,11 +53,7 @@ const generatePassword = Effect.gen(function* () {
   return Redacted.make(Base64Url.encode(bytes), { label: "OPENCODE_PASSWORD" });
 });
 
-/**
- * `OPENCODE_PASSWORD` wins over `OPENCODE_SERVER_PASSWORD` in OpenCode 2, so
- * the inherited 1.x variable is dropped to keep the GOAT password the only one in
- * play.
- */
+/** OPENCODE_PASSWORD overrides OPENCODE_SERVER_PASSWORD; drop the inherited 1.x variable. */
 export const serverEnvironment = (
   environment: NodeJS.ProcessEnv,
   password: Redacted.Redacted,
@@ -218,8 +207,8 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
         Effect.provideService(HostProcess.Platform, platform),
         Effect.provideService(HostProcess.HomeDirectory, home),
       ),
-    withConnection: (use) =>
-      owner.withServer((server) =>
+    withConnection: Effect.fn("OpenCode2Server.withConnection")(function (use) {
+      return owner.withServer((server) =>
         latest?.url === server.url
           ? use(latest)
           : Effect.die(new Error("OpenCode 2 server was lent before verification.")),

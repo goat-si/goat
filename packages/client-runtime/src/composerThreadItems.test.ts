@@ -82,3 +82,19 @@ it("offers SSH-reachable foreign threads with their routing host", () => {
   ]);
   expect(matchComposerThreadItems(input).map((item) => item.thread.threadId)).toEqual(["local"]);
 });
+
+it("leaves out archived threads and matches nothing for a blank or absent query", () => {
+  const input = {
+    shells: [
+      shell("open", "Fix login"),
+      shell("archived", "Fix logout", { archivedAt: "2026-10-02T00:00:00.000Z" }),
+    ],
+    environmentId,
+    excludeThreadId: null,
+    query: "fix",
+    now: Date.parse("2026-10-23T00:00:00.000Z"),
+  };
+  expect(matchComposerThreadItems(input).map((item) => item.thread.threadId)).toEqual(["open"]);
+  expect(matchComposerThreadItems({ ...input, query: "  " })).toEqual([]);
+  expect(matchComposerThreadItems({ ...input, query: "absent" })).toEqual([]);
+});

@@ -7,10 +7,9 @@ import {
   type SnapShotShortcut,
 } from "@goat/contracts";
 import { PlayIcon } from "~/components/solar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useContext } from "react";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
-import { useContext, useRef, useState } from "react";
 
 import { useClientSettings, updateClientSettings } from "../../hooks/useSettings";
 import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";

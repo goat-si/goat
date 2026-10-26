@@ -68,12 +68,9 @@ describe("new scheduled task link", () => {
   const newTaskLink = {
     routes: [
       { name: "Home" },
-      {
-        name: "SettingsSheet",
-        state: {
-          routes: [{ name: "SettingsScheduledTasks" }, { name: "SettingsScheduledTaskNew" }],
-        },
-      },
+      { name: "Settings" },
+      { name: "SettingsScheduledTasks" },
+      { name: "SettingsScheduledTaskNew" },
     ],
   };
 
@@ -112,7 +109,7 @@ describe("new scheduled task link", () => {
 
   it("keeps the editor for links to other screens", () => {
     startScheduledTaskEditor(editing);
-    takeScheduledTaskNewLink({ routes: [{ name: "SettingsSheet" }] });
+    takeScheduledTaskNewLink({ routes: [{ name: "Settings" }] });
     expect(appAtomRegistry.get(scheduledTaskEditorSessionAtom)?.current).toBe(editing);
   });
 });

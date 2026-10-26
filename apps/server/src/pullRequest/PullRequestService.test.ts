@@ -14,6 +14,8 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type {
   OrchestrationProjectShell,
+  PullRequestReviewCapabilities,
+  PullRequestReviewerCapabilities,
   ProjectId,
 } from "@goat/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
@@ -38,6 +40,14 @@ import {
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
+
+const FULL_REVIEW: PullRequestReviewCapabilities = {
+  inlineComment: true,
+  reply: true,
+  resolve: true,
+  verdicts: ["comment", "approve", "request-changes"],
+};
+const FULL_REVIEWERS: PullRequestReviewerCapabilities = { request: true, listCandidates: true };
 
 function project(input: {
   readonly id: string;

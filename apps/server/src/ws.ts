@@ -77,6 +77,7 @@ import {
   servesOrchestrationProtocol,
   ThreadId,
   WS_METHODS,
+  SOURCE_CONTROL_MEDIA_ASSET,
   WsChannelRpcGroup,
   WsCoreRpcGroup,
   WsDecisionRpcGroup,
@@ -256,6 +257,7 @@ import {
 } from "./orchestration-v2/ThreadStream.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
+  makeLiveBodyDeduper,
   projectDomainEventForWire,
   projectThreadProjectionForWire,
 } from "./orchestration-v2/WireProjection.ts";
@@ -308,7 +310,6 @@ import * as SourceControlRepositoryService from "./sourceControl/SourceControlRe
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import { featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
@@ -2298,7 +2299,9 @@ export const layerWsRpc = (
                 ).pipe(Effect.provide(intakeContext)),
               ).pipe(
                 Effect.tap((result) =>
-                  result.replayed ? Effect.void : recordClientCommandAnalytics(command),
+                  "replayed" in result && result.replayed
+                    ? Effect.void
+                    : recordClientCommandAnalytics(command),
                 ),
                 Effect.map((result) => ({ sequence: result.sequence })),
                 Effect.mapError((cause) => {

@@ -1,3 +1,4 @@
+import * as ThreadHistoryArchive from "./ThreadHistoryArchive.ts";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -356,6 +357,19 @@ it.effect("paces scheduled compaction while preserving retention state and fixed
     }).pipe(
       Effect.provide(
         DatabaseStorage.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(
+            Layer.mock(ThreadHistoryArchive.ThreadHistoryArchive)({
+              stats: Effect.succeed({ threads: 0, fileBytes: 0 }),
+              runPass: () =>
+                Effect.succeed({
+                  archivedThreads: 0,
+                  archivedRawBytes: 0,
+                  archiveFileBytes: 0,
+                  deletedArchives: 0,
+                }),
+            }),
+          ),
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "compaction-" })),
           Layer.provide(NodeServices.layer),
         ),

@@ -1,6 +1,5 @@
 import { View } from "react-native";
 
-import { useVisibleAnimation } from "../../lib/use-visible-animation";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { themeColorWithAlpha, type MobileThemeVariables } from "../../lib/mobileTheme";

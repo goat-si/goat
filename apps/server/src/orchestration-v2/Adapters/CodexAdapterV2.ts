@@ -121,7 +121,6 @@ import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
   buildCodexAdditionalContext,
   buildCodexDevelopmentContext,
-  buildCodexDeveloperInstructions,
 } from "../../provider/CodexDeveloperInstructions.ts";
 import {
   describeMcpElicitation,
@@ -844,20 +843,6 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       ...appContext,
       ...memoryContext,
     };
-    const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
-      input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
-        ? undefined
-        : {
-            mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "default",
-            settings: {
-              model: input.modelSelection.model,
-              // Codex falls back to the model's default effort when this is left out.
-              ...(effort === undefined ? {} : { reasoning_effort: effort }),
-              ...(developerInstructions === undefined
-                ? {}
-                : { developer_instructions: developerInstructions }),
-            },
-          };
 
     return yield* decodeCodexTurnStartParamsWithCollaborationMode({
       threadId: input.nativeThreadId,
@@ -7770,9 +7755,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.andThen(
                 Effect.suspend(() => {
                   const goalCommand =
-                    turnInput.message.attachments.length === 0 &&
                     turnInput.restartContinuationOfRunId === undefined
-                      ? parseCodexGoalCommand(turnInput.message.text)
+                      ? parseGoalCommand(turnInput.message)
                       : null;
                   if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
                   return Effect.gen(function* () {

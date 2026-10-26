@@ -1,8 +1,8 @@
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ExternalLinkIcon, PackagePlusIcon, PaletteIcon, SearchIcon } from "~/components/solar";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { type ReactNode, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+
 import {
   importOpenVsxThemeExtension,
   searchOpenVsxThemes,

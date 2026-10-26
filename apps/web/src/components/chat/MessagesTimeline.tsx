@@ -118,7 +118,6 @@ import {
   McpAppTimelineRow,
 } from "./TimelineAssistantRows";
 import { V2EventTimelineRow } from "./TimelineV2EventRow";
-import { useTimelinePositionRestore } from "./useTimelinePositionRestore";
 import { useTimelineEndPin } from "./useTimelineEndPin";
 import { startTimelinePositionRestore } from "./useTimelinePositionRestore";
 import {

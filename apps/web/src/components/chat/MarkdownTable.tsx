@@ -5,7 +5,6 @@ import {
   Minimize as Minimize2,
 } from "~/components/solar/nodes";
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
-import { useRef, useState, type ComponentProps } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { getClientSettings } from "../../hooks/useSettings";

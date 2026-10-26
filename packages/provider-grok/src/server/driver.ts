@@ -209,24 +209,6 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv, {
       resolveEnvironment: auth.readStored.pipe(
         Effect.map((stored) => applyStoredGrokApiKey(processEnv, stored)),
-    const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv);
-
-    const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv, cwd).pipe(
-      Effect.filterOrElse(
-        (snapshot) =>
-          !(
-            effectiveConfig.enabled &&
-            snapshot.installed &&
-            snapshot.auth.status === "authenticated"
-          ),
-        (snapshot) =>
-          readGrokAccount(processEnv).pipe(
-            Effect.map(({ email, usageLimits }) => ({
-              ...snapshot,
-              auth: email ? { ...snapshot.auth, email } : snapshot.auth,
-              usageLimits,
-            })),
-          ),
       ),
       memoryRunnerContext: {
         providerInstanceId: instanceId,

@@ -854,6 +854,8 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         );
       }).pipe(Effect.provide(server), Effect.scoped);
     }).pipe(Effect.scoped),
+  );
+
   it.effect("binds a DPoP session's RPC socket ticket to its proof key", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

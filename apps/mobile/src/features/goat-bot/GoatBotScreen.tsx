@@ -9,7 +9,7 @@ import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { useReplying } from "./useReplying";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useHomeThreadSelection } from "../home/home-thread-navigation";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
@@ -276,7 +276,15 @@ export function GoatBotScreen(props: {
   const { themeAppearance } = useAppearancePreferences();
   const bodyText = useScaledTextRole("body");
   const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
-  const selectThread = useHomeThreadSelection();
+  const selectDetail = useSelectWorkspaceDetail();
+  const selectThread = useCallback(
+    (thread: ThreadSelection) =>
+      selectDetail({
+        name: "Thread",
+        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
+      }),
+    [selectDetail],
+  );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const insets = useSafeAreaInsets();
   const keyboardVisible = useKeyboardState((state) => state.isVisible);

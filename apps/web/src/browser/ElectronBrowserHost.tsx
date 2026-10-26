@@ -5,11 +5,13 @@ import {
   type DesktopPreviewBridge,
   type DesktopPreviewOpenLinkEvent,
   type DesktopPreviewPointerEvent,
+  type EnvironmentId,
   FILL_PREVIEW_VIEWPORT,
   type ScopedThreadRef,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { type ComponentProps, useEffect, useEffectEvent, useRef, useState } from "react";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
+import { type ComponentProps, useEffect, useEffectEvent, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
@@ -66,102 +68,134 @@ function hostedBrowserSessions(
   );
 }
 
-  useEffect(() => {
-    const preview = window.desktopBridge?.preview;
-    if (!preview) return;
-
-    let lastSerializedTheme = "";
-    const syncTheme = () => {
-      const theme = readPreviewAnnotationTheme();
-      const serializedTheme = JSON.stringify(theme);
-      if (serializedTheme === lastSerializedTheme) return;
-      lastSerializedTheme = serializedTheme;
-      void preview.setAnnotationTheme(theme).catch(() => {
-        lastSerializedTheme = "";
-      });
-    };
-    const frameId = window.requestAnimationFrame(syncTheme);
-    const observer = new MutationObserver(syncTheme);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "style"],
+function startAnnotationThemeSync(preview: DesktopPreviewBridge): () => void {
+  let lastSerializedTheme = "";
+  const syncTheme = () => {
+    const theme = readPreviewAnnotationTheme();
+    const serializedTheme = JSON.stringify(theme);
+    if (serializedTheme === lastSerializedTheme) return;
+    lastSerializedTheme = serializedTheme;
+    void preview.setAnnotationTheme(theme).catch(() => {
+      lastSerializedTheme = "";
     });
-    const headObserver = new MutationObserver(syncTheme);
-    headObserver.observe(document.head, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      observer.disconnect();
-      headObserver.disconnect();
-    };
-  }, []);
-
-  const reportedStackTabs = useRef(new Set<string>());
-  const avoidStackPointer = useEffectEvent((event: DesktopPreviewPointerEvent) => {
-    const bridge = window.desktopBridge?.previewSessionStack;
-    if (!bridge) return;
-    const session = sessions.find((candidate) => candidate.runtimeTabId === event.tabId);
-    const presentation = useBrowserSurfaceStore.getState().byTabId[event.tabId];
-    const webview = document.querySelector<HTMLElement>(
-      `webview[data-preview-tab="${CSS.escape(event.tabId)}"]`,
-    );
-    let point: { x: number; y: number } | null = null;
-    // Desktop helpers publish no action coordinates, and remote/server-only browsers have no
-    // local screen position. Map only a visible hosted guest, never the thumbnail or hidden guest.
-    if (
-      session &&
-      presentation?.visible &&
-      webview &&
-      webview.getAttribute("aria-hidden") !== "true"
-    ) {
-      const rect = webview.getBoundingClientRect();
-      const cssWidth = Number(webview.dataset.previewCssWidth);
-      const cssHeight = Number(webview.dataset.previewCssHeight);
-      // The guest's CSS viewport and measured rectangle include device fitting and app/guest zoom.
-      if (
-        cssWidth > 0 &&
-        cssHeight > 0 &&
-        event.x >= 0 &&
-        event.x < cssWidth &&
-        event.y >= 0 &&
-        event.y < cssHeight
-      ) {
-        point = {
-          x: rect.left + (event.x * rect.width) / cssWidth,
-          y: rect.top + (event.y * rect.height) / cssHeight,
-        };
-      }
-    }
-    if (point) reportedStackTabs.current.add(event.tabId);
-    else reportedStackTabs.current.delete(event.tabId);
-    void bridge.request({ type: "pointer", tabId: event.tabId, point }).catch((error: unknown) => {
-      console.error("Could not avoid agent pointer with the floating stack", error);
-    });
+  };
+  // App services start before the first paint, when the theme styles may not be applied yet.
+  const frameId = window.requestAnimationFrame(syncTheme);
+  const observer = new MutationObserver(syncTheme);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style"],
   });
+  const headObserver = new MutationObserver(syncTheme);
+  headObserver.observe(document.head, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+  return () => {
+    window.cancelAnimationFrame(frameId);
+    observer.disconnect();
+    headObserver.disconnect();
+  };
+}
+
+function openLinkInPreview({ tabId, url, background }: DesktopPreviewOpenLinkEvent): void {
+  const source = hostedBrowserSessions(
+    readActivePreviewSessions(),
+    appAtomRegistry.get(primaryEnvironmentIdAtom),
+  ).find((session) => session.runtimeTabId === tabId);
+  if (!source) return;
+  void openUrlInPreview({
+    threadRef: source.threadRef,
+    url,
+    openPreview: (input) => runAtomCommand(appAtomRegistry, previewEnvironment.open, input),
+    profileId: source.snapshot.profileId,
+    background,
+  });
+}
+
+/** Tabs whose agent pointer the floating stack currently avoids, so a closed tab releases it. */
+const reportedStackTabs = new Set<string>();
+
+function avoidStackPointer(event: DesktopPreviewPointerEvent): void {
+  const bridge = window.desktopBridge?.previewSessionStack;
+  if (!bridge) return;
+  const session = hostedBrowserSessions(
+    readActivePreviewSessions(),
+    appAtomRegistry.get(primaryEnvironmentIdAtom),
+  ).find((candidate) => candidate.runtimeTabId === event.tabId);
+  const presentation = useBrowserSurfaceStore.getState().byTabId[event.tabId];
+  const webview = document.querySelector<HTMLElement>(
+    `webview[data-preview-tab="${CSS.escape(event.tabId)}"]`,
+  );
+  let point: { x: number; y: number } | null = null;
+  // Desktop helpers publish no action coordinates, and remote/server-only browsers have no
+  // local screen position. Map only a visible hosted guest, never the thumbnail or hidden guest.
+  if (
+    session &&
+    presentation?.visible &&
+    webview &&
+    webview.getAttribute("aria-hidden") !== "true"
+  ) {
+    const rect = webview.getBoundingClientRect();
+    const cssWidth = Number(webview.dataset.previewCssWidth);
+    const cssHeight = Number(webview.dataset.previewCssHeight);
+    // The guest's CSS viewport and measured rectangle include device fitting and app/guest zoom.
+    if (
+      cssWidth > 0 &&
+      cssHeight > 0 &&
+      event.x >= 0 &&
+      event.x < cssWidth &&
+      event.y >= 0 &&
+      event.y < cssHeight
+    ) {
+      point = {
+        x: rect.left + (event.x * rect.width) / cssWidth,
+        y: rect.top + (event.y * rect.height) / cssHeight,
+      };
+    }
+  }
+  if (point) reportedStackTabs.add(event.tabId);
+  else reportedStackTabs.delete(event.tabId);
+  void bridge.request({ type: "pointer", tabId: event.tabId, point }).catch((error: unknown) => {
+    console.error("Could not avoid agent pointer with the floating stack", error);
+  });
+}
+
+/** App-lifetime listeners for the desktop preview bridge: annotation theme, agent pointer, links. */
+export function startElectronBrowserHost(): () => void {
+  const preview = window.desktopBridge?.preview;
+  if (!preview) return () => {};
+  const disposers = [
+    startAnnotationThemeSync(preview),
+    preview.onPointerEvent((event) => {
+      useBrowserPointerStore.getState().apply(event);
+      avoidStackPointer(event);
+    }),
+    preview.onOpenLink(openLinkInPreview),
+  ];
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
+}
+
+export function ElectronBrowserHost() {
+  const previewByThreadKey = useActivePreviewSessions();
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  useDesktopHostedPreviewSessions(primaryEnvironmentId);
+  const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
 
   const hostedTabIds = sessions.map((session) => session.runtimeTabId).join("\n");
   useEffect(() => {
     const active = new Set(hostedTabIds.split("\n"));
-    for (const tabId of reportedStackTabs.current) {
+    for (const tabId of reportedStackTabs) {
       if (active.has(tabId)) continue;
-      reportedStackTabs.current.delete(tabId);
+      reportedStackTabs.delete(tabId);
       void window.desktopBridge?.previewSessionStack
         ?.request({ type: "pointer", tabId, point: null })
         .catch((error: unknown) => console.error("Could not release stack pointer", error));
     }
   }, [hostedTabIds]);
-
-  useEffect(() => {
-    const preview = window.desktopBridge?.preview;
-    if (!preview) return;
-    return preview.onPointerEvent((event) => {
-      useBrowserPointerStore.getState().apply(event);
-      avoidStackPointer(event);
-    });
-  }, []);
 
   // An agent's screenshot of a server tab waits for a frame that a guest parked outside the window
   // never composites. Keep the guest painting, behind the app, while any capture is in flight.
@@ -202,75 +236,6 @@ function hostedBrowserSessions(
     };
   }, []);
 
-  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: true });
-  const onOpenLink = useEffectEvent(({ tabId, url, background }: DesktopPreviewOpenLinkEvent) => {
-    const source = sessions.find((session) => session.runtimeTabId === tabId);
-    if (!source) return;
-    void openUrlInPreview({
-      threadRef: source.threadRef,
-      url,
-      openPreview,
-      profileId: source.snapshot.profileId,
-      background,
-    });
-  };
-  // App services start before the first paint, when the theme styles may not be applied yet.
-  const frameId = window.requestAnimationFrame(syncTheme);
-  const observer = new MutationObserver(syncTheme);
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class", "style"],
-  });
-  const headObserver = new MutationObserver(syncTheme);
-  headObserver.observe(document.head, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-  });
-  return () => {
-    window.cancelAnimationFrame(frameId);
-    observer.disconnect();
-    headObserver.disconnect();
-  };
-}
-
-function openLinkInPreview({ tabId, url, background }: DesktopPreviewOpenLinkEvent): void {
-  const source = hostedBrowserSessions(
-    readActivePreviewSessions(),
-    appAtomRegistry.get(primaryEnvironmentIdAtom),
-  ).find((session) => session.runtimeTabId === tabId);
-  if (!source) return;
-  void openUrlInPreview({
-    threadRef: source.threadRef,
-    url,
-    openPreview: (input) => runAtomCommand(appAtomRegistry, previewEnvironment.open, input),
-    profileId: source.snapshot.profileId,
-    background,
-  });
-}
-
-/** App-lifetime listeners for the desktop preview bridge: annotation theme, agent pointer, links. */
-export function startElectronBrowserHost(): () => void {
-  const preview = window.desktopBridge?.preview;
-  if (!preview) return () => {};
-  const disposers = [
-    startAnnotationThemeSync(preview),
-    preview.onPointerEvent((event) => {
-      useBrowserPointerStore.getState().apply(event);
-    }),
-    preview.onOpenLink(openLinkInPreview),
-  ];
-  return () => {
-    for (const dispose of disposers) dispose();
-  };
-}
-
-export function ElectronBrowserHost() {
-  const previewByThreadKey = useActivePreviewSessions();
-  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
-  useDesktopHostedPreviewSessions(primaryEnvironmentId);
-  const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
-
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
@@ -310,6 +275,15 @@ export function ElectronBrowserHost() {
   );
 }
 
+function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
+  const canOperatePreview = useEnvironmentScope(
+    props.threadRef.environmentId,
+    AuthPreviewOperateScope,
+  );
+  const profileId = useTabProfileId(props.profileId);
+  return canOperatePreview ? <HostedBrowserWebview {...props} profileId={profileId} /> : null;
+}
+
 /**
  * An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
  * parked outside the window composites no frames: the agent's clicks would wait for a frame and
@@ -329,15 +303,6 @@ function AgentTabPainting(props: {
     return acquireBrowserSurfaceActivity(runtimeTabId);
   }, [runtimeTabId, working]);
   return null;
-}
-
-function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {
-  const canOperatePreview = useEnvironmentScope(
-    props.threadRef.environmentId,
-    AuthPreviewOperateScope,
-  );
-  const profileId = useTabProfileId(props.profileId);
-  return canOperatePreview ? <HostedBrowserWebview {...props} profileId={profileId} /> : null;
 }
 
 // Latch after hydration: Electron fixes the partition when the guest attaches.

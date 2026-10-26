@@ -1853,7 +1853,7 @@ const make = Effect.gen(function* () {
         instanceId: task.providerInstanceId,
         model: task.model,
       };
-    const response = {
+    const result = {
       ...(cloudTask === undefined ? {} : { cloudTask }),
       taskId: task.id,
       childThreadId: task.childThreadId,
@@ -1900,44 +1900,12 @@ const make = Effect.gen(function* () {
       waitTimedOut,
       ...(pendingRequestIds.length === 0 ? {} : { pendingRequestIds }),
     } satisfies OrchestratorMcpDelegateTaskResult;
-    if (acknowledgeTerminal)
-      yield* acknowledgeTaskResult(scope, task, parentProjection, status, acknowledgementOperation);
     const response: OrchestratorMcpDelegateTaskResult =
       endsTaskWait(result) || task.completionDelivery?.state === "disposed"
         ? result
         : { ...result, next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT };
-    if (
-      acknowledgeTerminal &&
-      isTerminalTaskStatus(status) &&
-      task.completionDelivery?.state !== "acknowledged" &&
-      task.completionDelivery?.state !== "disposed"
-    ) {
-      const observingRun = ThreadManagementService.latestActiveRun(parentProjection);
-      const acknowledgementRequestKey = yield* requestKey(undefined);
-      yield* threadManagement
-        .dispatch({
-          type: "delegated_task.completion-delivery.acknowledge",
-          commandId: stableCommandId({
-            scope,
-            requestKey: acknowledgementRequestKey,
-            operation: acknowledgementOperation,
-          }),
-          parentThreadId: scope.thread.threadId,
-          taskId,
-          observedByRunId:
-            observingRun?.providerInstanceId === scope.thread.providerInstanceId
-              ? observingRun.id
-              : null,
-        })
-        .pipe(
-          Effect.mapError((error) =>
-            failure(
-              "orchestration_error",
-              `Unable to acknowledge delegated task ${taskId}: ${errorMessage(error)}`,
-            ),
-          ),
-        );
-    }
+    if (acknowledgeTerminal)
+      yield* acknowledgeTaskResult(scope, task, parentProjection, status, acknowledgementOperation);
     return response;
   });
 

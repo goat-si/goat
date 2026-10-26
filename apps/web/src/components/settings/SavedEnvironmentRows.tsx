@@ -8,6 +8,8 @@ import {
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
+import { Button } from "../ui/button";
+import { useGoatConnectAuthPrompt } from "../clerk/useGoatConnectAuthPrompt";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";

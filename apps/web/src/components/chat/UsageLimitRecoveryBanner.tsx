@@ -7,7 +7,7 @@ import { GaugeIcon } from "~/components/solar";
 import { useEffect, useState } from "react";
 import { type TimestampFormat } from "@goat/contracts/settings";
 import { deadlineStore } from "@goat/client-runtime/clock";
-import { useState } from "react";
+
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { Button } from "../ui/button";
 import { formatUpcomingTimestamp } from "../../timestampFormat";

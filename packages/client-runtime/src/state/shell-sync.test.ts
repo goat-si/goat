@@ -88,6 +88,8 @@ const makePersistenceHarness = Effect.fn("test.makeShellPersistenceHarness")(fun
   const cache = Persistence.EnvironmentCacheStore.of({
     loadShell: () => Effect.succeedNone,
     saveShell,
+    loadShellMeta: () => Effect.succeedNone,
+    saveShellMeta: () => Effect.void,
     loadThread: () => Effect.succeedNone,
     saveThread: () => Effect.void,
     removeThread: () => Effect.void,
@@ -762,6 +764,8 @@ describe("environment shell synchronization", () => {
       const cache = Persistence.EnvironmentCacheStore.of({
         loadShell: () => Effect.succeedNone,
         saveShell: () => Effect.void,
+        loadShellMeta: () => Effect.succeedNone,
+        saveShellMeta: () => Effect.void,
         loadThread: () => Effect.succeedNone,
         saveThread: () => Effect.void,
         removeThread: () => Effect.void,
