@@ -32,11 +32,13 @@ const ScreenRunToolLimits = Schema.Struct({
   activeChildren: Schema.optionalKey(Schema.Number),
 }).check(
   Schema.makeFilter((limits) =>
-    Object.keys(limits).every((key) =>
-      limitKeys.includes(key as keyof ScreenRunLimits) &&
-      Number.isSafeInteger(limits[key as keyof ScreenRunLimits]) &&
-      (limits[key as keyof ScreenRunLimits] ?? 0) > 0 &&
-      (limits[key as keyof ScreenRunLimits] ?? 0) <= DEFAULT_SCREEN_RUN_LIMITS[key as keyof ScreenRunLimits],
+    Object.keys(limits).every(
+      (key) =>
+        limitKeys.includes(key as keyof ScreenRunLimits) &&
+        Number.isSafeInteger(limits[key as keyof ScreenRunLimits]) &&
+        (limits[key as keyof ScreenRunLimits] ?? 0) > 0 &&
+        (limits[key as keyof ScreenRunLimits] ?? 0) <=
+          DEFAULT_SCREEN_RUN_LIMITS[key as keyof ScreenRunLimits],
     ),
   ),
 );

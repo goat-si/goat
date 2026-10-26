@@ -58,10 +58,22 @@ it("a later turn replaces exact tab hints while an internal re-prepare keeps the
       browserRequested: true,
       computerRequested: false,
       appIds: [],
-      tabs: [{ mentionId: "first", environmentId: "env", browserInstanceId: "browser", tabId: "tab-one", titleAtMention: "One", urlAtMention: "https://example.test/one" }],
+      tabs: [
+        {
+          mentionId: "first",
+          environmentId: "env",
+          browserInstanceId: "browser",
+          tabId: "tab-one",
+          titleAtMention: "One",
+          urlAtMention: "https://example.test/one",
+        },
+      ],
     },
   };
-  const second = { ...turn(codex, ["browser"]), screenBindingHints: { ...first.screenBindingHints, tabs: [] } };
+  const second = {
+    ...turn(codex, ["browser"]),
+    screenBindingHints: { ...first.screenBindingHints, tabs: [] },
+  };
   assert.deepEqual(selectPrepareInput(second, false, first)?.screenBindingHints?.tabs, []);
   assert.deepEqual(selectPrepareInput(first, true, second)?.screenBindingHints?.tabs, []);
 });

@@ -31,10 +31,14 @@ describe("screen run MCP result", () => {
     });
     expect(result.isError).toBe(false);
     expect(result.content.filter((block) => block.type === "image")).toHaveLength(1);
-    expect(result.content.find((block) => block.type === "image")).toMatchObject({ mimeType: "image/png" });
+    expect(result.content.find((block) => block.type === "image")).toMatchObject({
+      mimeType: "image/png",
+    });
     const summary = JSON.stringify(result.structuredContent);
     expect(summary).not.toContain(bytes);
     expect(summary).not.toContain('"bytes"');
-    expect(JSON.stringify(result.content.find((block) => block.type === "text"))).not.toContain(bytes);
+    expect(JSON.stringify(result.content.find((block) => block.type === "text"))).not.toContain(
+      bytes,
+    );
   });
 });

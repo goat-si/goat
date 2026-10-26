@@ -9,6 +9,10 @@ import type { ComposerThreadDraftState } from "~/composerDraftStore";
 
 import { addPreviewTabsToDraftState, previewTabRecordForServerTab } from "./previewTabDraft";
 
+const decodeUnknownOrchestrationMessageContext = Schema.decodeUnknownSync(
+  OrchestrationMessageContext,
+);
+
 describe("server browser tab mentions", () => {
   it("a picked tab reaches the server as an exact tab hint even with a messy title", () => {
     const environmentId = EnvironmentId.make("environment-local");
@@ -25,7 +29,7 @@ describe("server browser tab mentions", () => {
       previewTabs: [record],
       text,
     });
-    const sent = Schema.decodeUnknownSync(OrchestrationMessageContext)(context);
+    const sent = decodeUnknownOrchestrationMessageContext(context);
     const hints = screenBindingHintsFromOrigin({ text, records: sent.records });
     expect(hints.tabs).toEqual([
       expect.objectContaining({

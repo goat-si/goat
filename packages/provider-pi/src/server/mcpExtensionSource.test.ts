@@ -55,7 +55,9 @@ async function loadHooks(commands: ReadonlyArray<SkillCommand> = []) {
 
 describe("Pi orchestration prompt section", () => {
   it("a browser-only turn installs screen-code and removes it on the next disabled turn", async () => {
-    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-pi-screen-guide-"));
+    const directory = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "goat-pi-screen-guide-"),
+    );
     try {
       const gate = NodePath.join(directory, "screen-guide");
       await NodeFSP.writeFile(gate, "on");

@@ -37,6 +37,9 @@ import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
+const isScreenRunErrorSchema = Schema.is(ScreenRunErrorSchema);
+
+const isScreenTargetRef = Schema.is(ScreenTargetRef);
 
 export interface ScreenRunInput {
   readonly runId: string;
@@ -229,9 +232,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
               )
                 return;
               const value = record(result.value);
-              const ref = Schema.is(ScreenTargetRef)(result.value)
+              const ref = isScreenTargetRef(result.value)
                 ? result.value
-                : value && Schema.is(ScreenTargetRef)(value.targetRef)
+                : value && isScreenTargetRef(value.targetRef)
                   ? value.targetRef
                   : undefined;
               if (ref === undefined) return;
@@ -416,12 +419,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         if (!run || !["preparing", "queued", "starting", "running", "waiting"].includes(run.status))
           return yield* Effect.fail(fail("stale_run"));
       }
-      let cellLimits: ScreenRunLimits;
-      try {
-        cellLimits = screenRunLimits(input.limits);
-      } catch {
-        return yield* Effect.fail(fail("invalid_argument"));
-      }
+      const cellLimits = yield* Effect.try({
+        try: () => screenRunLimits(input.limits),
+        catch: () => fail("invalid_argument"),
+      });
       if (screenBytes(input.source) > cellLimits.sourceBytes)
         return yield* Effect.fail({
           ...fail("source_limit"),
@@ -503,7 +504,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 sequence: result.journal.length + index + 1,
               })),
             ].slice(-64);
-            return result.error && Schema.is(ScreenRunErrorSchema)(result.error)
+            return result.error && isScreenRunErrorSchema(result.error)
               ? Effect.fail({
                   ...result.error,
                   receipts: journal.slice(-16).map((entry) => entry.receipt),

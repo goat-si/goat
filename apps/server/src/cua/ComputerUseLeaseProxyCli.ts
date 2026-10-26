@@ -29,6 +29,7 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Cause from "effect/Cause";
@@ -476,8 +477,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         const header = response.headers.get("x-goat-primitive-registration");
         if (proxyChannelToken !== undefined) {
           if (response.ok && header !== null && header.length > 0 && header.length <= 200)
-            await Effect.runPromise(Deferred.succeed(registration, header));
-          else await Effect.runPromise(Deferred.succeed(registration, ""));
+            Deferred.doneUnsafe(registration, Exit.succeed(header));
+          else Deferred.doneUnsafe(registration, Exit.succeed(""));
         }
         yield* responseLines(response);
       })(),
@@ -544,7 +545,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           }
         }),
       ),
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
       Effect.ensuring(
         Effect.gen(function* () {
           yield* Queue.end(updates);

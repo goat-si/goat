@@ -13,6 +13,12 @@ import {
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
+const isScreenRunError = Schema.is(ScreenRunError);
+
+const decodeUnknownScreenRunCell = Schema.decodeUnknownSync(ScreenRunCell);
+const decodeUnknownScreenHostReply = Schema.decodeUnknownSync(ScreenHostReply);
+
+const decodeUnknownScreenRunBoot = Schema.decodeUnknownSync(ScreenRunBoot);
 
 const BOOT_MAX = 16 * 1024;
 const FRAME_MAX = 96 * 1024;
@@ -69,7 +75,7 @@ export async function runScreenChild(
   const first = await iterator.next();
   if (first.done || screenBytes(first.value) > BOOT_MAX)
     throw new Error("Invalid screen child boot");
-  const boot = Schema.decodeUnknownSync(ScreenRunBoot)(JSON.parse(first.value));
+  const boot = decodeUnknownScreenRunBoot(JSON.parse(first.value));
   const limits = screenRunLimits(boot.limits);
   const { bytes } = await checkedScreenWasm(boot.wasmPath, boot.wasmSha256);
   const Wasm = Reflect.get(globalThis, "WebAssembly") as {
@@ -259,7 +265,7 @@ export async function runScreenChild(
       if (typeof frame !== "object" || frame === null || !("t" in frame))
         throw new Error("Invalid frame");
       if (frame.t === "reply") {
-        const reply = Schema.decodeUnknownSync(ScreenHostReply)(frame);
+        const reply = decodeUnknownScreenHostReply(frame);
         if (reply.runId !== boot.runId || reply.cellId !== cellId) continue;
         const promise = pending.get(reply.callId);
         if (!promise) continue;
@@ -279,7 +285,7 @@ export async function runScreenChild(
         continue;
       }
       if (frame.t !== "cell" || cellId) throw new Error("Unexpected child frame");
-      const cell = Schema.decodeUnknownSync(ScreenRunCell)(frame);
+      const cell = decodeUnknownScreenRunCell(frame);
       currentLimits = screenRunLimits(cell.limits);
       if (screenBytes(cell.source) > currentLimits.sourceBytes)
         throw new Error("Source cap exceeded");
@@ -326,7 +332,7 @@ export async function runScreenChild(
                 if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
                   try {
                     const candidate: unknown = JSON.parse(dumped);
-                    if (Schema.is(ScreenRunError)(candidate)) error = candidate;
+                    if (isScreenRunError(candidate)) error = candidate;
                   } catch {
                     /* An ordinary guest exception has no host error receipt. */
                   }

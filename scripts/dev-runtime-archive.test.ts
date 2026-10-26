@@ -24,12 +24,19 @@ import { sourceScreenWasmAsset } from "./lib/screen-wasm-asset.ts";
 
 const stageFakeScreenPackage = async (fakeRepo: string) => {
   const source = await sourceScreenWasmAsset(NodePath.resolve("."));
-  const packageDir = NodePath.join(fakeRepo, "apps/server/node_modules/@jitl/quickjs-wasmfile-release-sync");
+  const packageDir = NodePath.join(
+    fakeRepo,
+    "apps/server/node_modules/@jitl/quickjs-wasmfile-release-sync",
+  );
   await NodeFSP.mkdir(NodePath.join(packageDir, "dist"), { recursive: true });
-  await NodeFSP.writeFile(NodePath.join(packageDir, "package.json"), JSON.stringify({
-    name: "@jitl/quickjs-wasmfile-release-sync", version: "0.32.0",
-    exports: { "./wasm": "./dist/emscripten-module.wasm", "./package.json": "./package.json" },
-  }));
+  await NodeFSP.writeFile(
+    NodePath.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "@jitl/quickjs-wasmfile-release-sync",
+      version: "0.32.0",
+      exports: { "./wasm": "./dist/emscripten-module.wasm", "./package.json": "./package.json" },
+    }),
+  );
   await NodeFSP.copyFile(source.source, NodePath.join(packageDir, "dist/emscripten-module.wasm"));
   return NodePath.join(packageDir, "dist/emscripten-module.wasm");
 };

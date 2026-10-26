@@ -19,7 +19,7 @@ const authority = {
 const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
-    currentControl: () => Effect.succeed(Option.some({ controlId })),
+    currentControl: () => Effect.succeedSome({ controlId }),
     controlState: () => Effect.succeed({ _tag: "active" }),
     subscribe: PubSub.subscribe(signals),
   } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
@@ -165,7 +165,7 @@ describe("ComputerUsePrimitiveChannel", () => {
       const signals = yield* PubSub.unbounded<void>();
       let idle = false;
       const leases = ComputerUseLeases.ComputerUseLeases.of({
-        currentControl: () => Effect.succeed(Option.some({ controlId })),
+        currentControl: () => Effect.succeedSome({ controlId }),
         controlState: () => Effect.sync(() => ({ _tag: "active" as const, idle })),
         subscribe: PubSub.subscribe(signals),
       } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
@@ -275,7 +275,7 @@ describe("ComputerUsePrimitiveChannel", () => {
     Effect.gen(function* () {
       const signals = yield* PubSub.unbounded<void>();
       const leases = ComputerUseLeases.ComputerUseLeases.of({
-        currentControl: () => Effect.succeed(Option.some({ controlId })),
+        currentControl: () => Effect.succeedSome({ controlId }),
         controlState: () => Effect.succeed({ _tag: "active" }),
         subscribe: PubSub.subscribe(signals),
       } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);

@@ -137,14 +137,14 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
       }),
     );
   return TabClaims.of({
-    acquireTab: (input) => {
+    acquireTab: Effect.fn("TabClaims.acquireTab")((input) => {
       if (input.owner === "human" || (input.owner === "agent" && !input.ownedByCaller))
         return Effect.fail({ code: "unavailable" } as const);
       return claim(input, input.owner === "agent" ? "existing-agent" : "user-claimed");
-    },
-    recordOpened: (input) => claim(input, "agent-created"),
+    }),
+    recordOpened: Effect.fn("TabClaims.recordOpened")((input) => claim(input, "agent-created")),
     assertCurrent: current,
-    keep: (input, reason) =>
+    keep: Effect.fn("TabClaims.keep")((input, reason) =>
       current(input).pipe(
         Effect.flatMap(() =>
           SynchronizedRef.update(claims, (all) => {
@@ -155,7 +155,8 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
           }),
         ),
       ),
-    releaseClaim: (input) =>
+    ),
+    releaseClaim: Effect.fn("TabClaims.releaseClaim")((input) =>
       current(input).pipe(
         Effect.flatMap(() =>
           SynchronizedRef.update(claims, (all) => {
@@ -165,7 +166,8 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
           }),
         ),
       ),
-    suspendClaims: (identity, tabId) =>
+    ),
+    suspendClaims: Effect.fn("TabClaims.suspendClaims")((identity, tabId) =>
       SynchronizedRef.update(claims, (all) => {
         const next = new Map(all);
         for (const [key, claim] of all) {
@@ -180,7 +182,8 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
         }
         return next;
       }),
-    captureCleanup: (identity, options) =>
+    ),
+    captureCleanup: Effect.fn("TabClaims.captureCleanup")((identity, options) =>
       SynchronizedRef.modify(claims, (all) => {
         if (options?.fence !== false && !fencedTurns.has(turnOf(identity))) {
           fencedTurns.add(turnOf(identity));
@@ -200,6 +203,7 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
           all,
         ] as const;
       }),
+    ),
     releaseTurn: Effect.fn("TabClaims.releaseTurn")(function* (identity, authority) {
       if (authority.runId !== identity.runId || authority.turnId !== identity.turnId) return [];
       const fresh = yield* Effect.sync(() => consume(turnOf(identity), authority.epoch));

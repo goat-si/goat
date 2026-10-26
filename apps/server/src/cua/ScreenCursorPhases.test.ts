@@ -14,7 +14,9 @@ const ref = {
 describe("ScreenCursorPhases", () => {
   it("rearms thinking for each host call and never emits resting motion after end", () => {
     const events: Array<{ phase: string; sequence: number }> = [];
-    const phases = new ScreenCursorPhases((event) => events.push({ phase: event.phase, sequence: event.identity.sequence }));
+    const phases = new ScreenCursorPhases((event) =>
+      events.push({ phase: event.phase, sequence: event.identity.sequence }),
+    );
     phases.hostCallStarted(ref, 1);
     phases.hostCallSettled(ref, 1);
     phases.hostCallStarted(ref, 2);
@@ -30,7 +32,9 @@ describe("ScreenCursorPhases", () => {
 
   it("ignores a late previous generation settle", () => {
     const events: string[] = [];
-    const phases = new ScreenCursorPhases((event) => events.push(`${event.identity.generation}:${event.phase}`));
+    const phases = new ScreenCursorPhases((event) =>
+      events.push(`${event.identity.generation}:${event.phase}`),
+    );
     phases.hostCallStarted(ref, 1);
     phases.hostCallStarted({ ...ref, generation: 2 }, 2);
     phases.hostCallSettled(ref, 1);

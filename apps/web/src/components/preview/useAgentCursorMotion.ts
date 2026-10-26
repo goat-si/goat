@@ -30,6 +30,7 @@ export function useAgentCursorMotion(
     retarget: boolean;
   } | null>(null);
 
+  // oxlint-disable-next-line goat/react-effect-budget -- subscribes to the reduced-motion media query.
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReducedMotion(query.matches);
@@ -38,6 +39,7 @@ export function useAgentCursorMotion(
     return () => query.removeEventListener("change", update);
   }, []);
 
+  // oxlint-disable-next-line goat/react-effect-budget -- drives Web Animations on the committed mark node.
   useEffect(() => {
     const node = element.current;
     if (node === null) return;
@@ -81,6 +83,7 @@ export function useAgentCursorMotion(
     return () => node.getAnimations().forEach((animation) => animation.cancel());
   }, [left, top, sequence, reducedMotion]);
 
+  // oxlint-disable-next-line goat/react-effect-budget -- drives the halo's Web Animation on the committed node.
   useEffect(() => {
     const node = halo.current;
     if (node === null) return;

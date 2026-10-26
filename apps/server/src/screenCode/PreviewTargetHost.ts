@@ -107,7 +107,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         .pipe(Effect.result);
       if (status._tag === "Failure") {
         if (goneErrors.has(status.failure._tag) && (yield* gone)) return;
-        return yield* Effect.fail(status.failure);
+        return yield* status.failure;
       }
       const current = status.success;
       if (current.tabId !== tab.tabId && (yield* gone)) return;
@@ -132,7 +132,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         })
         .pipe(Effect.result);
       if (closed._tag === "Failure" && !(goneErrors.has(closed.failure._tag) && (yield* gone)))
-        return yield* Effect.fail(closed.failure);
+        return yield* closed.failure;
     }).pipe(Effect.orDie);
   };
   const tabScopes = new Map<string, ScreenHostContext["invocation"]>();

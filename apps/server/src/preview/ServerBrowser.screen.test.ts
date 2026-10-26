@@ -22,6 +22,7 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { nextPointerSequence } from "./ServerBrowserScreen.ts";
 
@@ -152,8 +153,10 @@ const layer = ServerBrowser.layer.pipe(
         attached: Stream.empty,
         isAttached: () => Effect.succeed(false),
         endpoint: () => Effect.die("no desktop here"),
+        turn: () => Effect.void,
         pointer: () => Effect.void,
       }),
+      PreviewAgentActivity.layer,
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-screen-" })),
       Layer.provideMerge(NodeServices.layer),

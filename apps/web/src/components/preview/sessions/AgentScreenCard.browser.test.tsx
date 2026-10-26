@@ -175,7 +175,12 @@ const desktopApp = (patch: Partial<PreviewSession> = {}) =>
     id: "desktop-1",
     kind: "desktop",
     threadId: ThreadId.make("thread-desk"),
-    target: { kind: "desktop", bundleId: "com.apple.TextEdit", title: "Whole screen", motionSupport: "unsupported" },
+    target: {
+      kind: "desktop",
+      bundleId: "com.apple.TextEdit",
+      title: "Whole screen",
+      motionSupport: "unsupported",
+    },
     ...patch,
   });
 

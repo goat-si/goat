@@ -1119,7 +1119,8 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.
   Layer.provide(
-    ScreenRunTurnEnd.layer.pipe(Layer.provideMerge(ScreenRunService.layerWithTabHost())).pipe(
+    ScreenRunTurnEnd.layer.pipe(
+      Layer.provideMerge(ScreenRunService.layerWithTabHost()),
       Layer.provideMerge(
         ScreenCursorPublisher.layer.pipe(
           Layer.provideMerge(

@@ -32,7 +32,12 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpIncomingMessage, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  HttpIncomingMessage,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -51,7 +56,8 @@ const decodeReservation = Schema.decodeUnknownEffect(
 const decodePrimitiveReply = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveReply),
 );
-const PRIMITIVE_REPLY_BODY_BYTES = Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
+const PRIMITIVE_REPLY_BODY_BYTES =
+  Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
 const decodeControlReady = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveControlReady),
 );
@@ -215,12 +221,9 @@ const streamLayer = HttpRouter.add(
     );
     const token = request.headers["x-goat-proxy-channel"] ?? "";
     const attachmentGeneration =
-      threadId === undefined || !primitive
+      threadId === undefined || !primitive || channel === undefined
         ? undefined
-        : yield* (
-            channel?.authenticate({ threadId, proxyChannelToken: token }) ??
-              Effect.succeed(undefined)
-          );
+        : yield* channel.authenticate({ threadId, proxyChannelToken: token });
     if (primitive && (threadId === undefined || attachmentGeneration === undefined || !instance))
       return HttpServerResponse.empty({ status: 401 });
     if (params.has("thread")) {
@@ -377,7 +380,10 @@ const primitiveReplyLayer = HttpRouter.add(
     const attachmentGeneration = yield* channel.authenticate({ threadId, proxyChannelToken });
     if (attachmentGeneration === undefined) return HttpServerResponse.empty({ status: 401 });
     const body = yield* request.text.pipe(
-      Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(PRIMITIVE_REPLY_BODY_BYTES)),
+      Effect.provideService(
+        HttpIncomingMessage.MaxBodySize,
+        ByteSize.bytes(PRIMITIVE_REPLY_BODY_BYTES),
+      ),
       Effect.flatMap(decodePrimitiveReply),
       Effect.option,
     );

@@ -19,15 +19,19 @@ export const layer = McpToolAccess.toLayer(ScreenToolkit, {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       if (scope.thread === undefined)
-        return yield* Effect.fail(refusal("permission_denied", "Run this tool from a GOAT thread."));
+        return yield* Effect.fail(
+          refusal("permission_denied", "Run this tool from a GOAT thread."),
+        );
       const threads = yield* ThreadManagementService.ThreadManagementService;
-      const shell = yield* threads.getThreadShell(scope.thread.threadId).pipe(
-        Effect.mapError(() => refusal("permission_denied", "Refresh this GOAT thread.")),
-      );
+      const shell = yield* threads
+        .getThreadShell(scope.thread.threadId)
+        .pipe(Effect.mapError(() => refusal("permission_denied", "Refresh this GOAT thread.")));
       if (shell?.activeRunId === null || shell?.activeRunId === undefined)
         return yield* Effect.fail(refusal("permission_denied", "Start a live GOAT turn."));
       const records = yield* threads
-        .getThreadRecords(scope.thread.threadId, ["runs"], { runIds: [RunId.make(shell.activeRunId)] })
+        .getThreadRecords(scope.thread.threadId, ["runs"], {
+          runIds: [RunId.make(shell.activeRunId)],
+        })
         .pipe(Effect.mapError(() => refusal("permission_denied", "Refresh this GOAT turn.")));
       const run = records.runs.find((candidate) => candidate.id === shell.activeRunId);
       if (

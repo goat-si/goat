@@ -306,8 +306,10 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     "monitor",
   );
   yield* fs.makeDirectory(path.join(resourcesDir, "screen-code"), { recursive: true });
-  yield* fs.writeFile(path.join(resourcesDir, "screen-code/quickjs.wasm"),
-    new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  yield* fs.writeFile(
+    path.join(resourcesDir, "screen-code/quickjs.wasm"),
+    new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+  );
   const appExecutableName = "t3code.exe";
   yield* fs.writeFileString(path.join(packagedAppDir, appExecutableName), "electron");
   yield* fs.writeFileString(path.join(packagedAppDir, "chrome_crashpad_handler.exe"), "crashpad");
@@ -486,8 +488,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const staged = yield* h.stage("driver");
       yield* h.fs.copy(h.path.join(staged, "cua-driver"), h.path.join(resources, "cua-driver"));
       yield* h.fs.makeDirectory(h.path.join(resources, "screen-code"), { recursive: true });
-      yield* h.fs.writeFile(h.path.join(resources, "screen-code/quickjs.wasm"),
-        new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+      yield* h.fs.writeFile(
+        h.path.join(resources, "screen-code/quickjs.wasm"),
+        new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+      );
       const result = yield* validateWindowsPackagedPayload({
         stageDistDir: fixture.stageDistDir,
         appExecutableName: fixture.appExecutableName,

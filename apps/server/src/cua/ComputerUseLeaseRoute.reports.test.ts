@@ -32,7 +32,7 @@ describe("ComputerUseLeaseRoute reports", () => {
           {} as unknown as ComputerUseLeases.ComputerUseLeases["Service"],
         ),
         Context.add(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel, {
-          authenticate: () => Effect.succeed(undefined),
+          authenticate: () => Effect.void,
         } as unknown as ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel["Service"]),
         Context.add(
           ServerSettings.ServerSettingsService,

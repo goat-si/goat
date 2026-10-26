@@ -8,18 +8,18 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 ## Snapshot
 
-| Measure                                                | Value                   |
-| ------------------------------------------------------ | ----------------------- |
-| MCP tools mounted on /mcp                              | 206                     |
-| Toolkits                                               | 25 (unmounted: storage) |
-| Mutating tools, by enforced handler access             | 132                     |
-| Mutating tools that accept clientRequestId             | 48                      |
-| Mutating tools whose clientRequestId GOAT deduplicates | 35                      |
-| Input parameters with a description                    | 115 of 791 (15%)        |
-| Tool descriptions with an example                      | 3 of 206                |
-| CLI commands, listed / unlisted                        | 60 / 19                 |
-| CLI commands with usage examples                       | 0 of 79                 |
-| Listed CLI leaf commands with --json                   | 11 of 46                |
+| Measure                                                | Value                           |
+| ------------------------------------------------------ | ------------------------------- |
+| MCP tools mounted on /mcp                              | 206                             |
+| Toolkits                                               | 25 (unmounted: screen, storage) |
+| Mutating tools, by enforced handler access             | 132                             |
+| Mutating tools that accept clientRequestId             | 48                              |
+| Mutating tools whose clientRequestId GOAT deduplicates | 35                              |
+| Input parameters with a description                    | 115 of 791 (15%)                |
+| Tool descriptions with an example                      | 3 of 206                        |
+| CLI commands, listed / unlisted                        | 60 / 19                         |
+| CLI commands with usage examples                       | 0 of 79                         |
+| Listed CLI leaf commands with --json                   | 11 of 46                        |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |

@@ -21,6 +21,8 @@ import type {
 import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 
+const isJson = Schema.is(Schema.Json);
+
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -106,7 +108,7 @@ export const createDesktopTargetHost = (deps: {
     context: ScreenHostContext,
     expectedConnectionGeneration?: string,
   ) {
-    if (!Schema.is(Schema.Json)(args)) return yield* Effect.fail(fail("invalid_argument"));
+    if (!isJson(args)) return yield* Effect.fail(fail("invalid_argument"));
     const reply = yield* deps.primitiveChannel.request({
       threadId: context.invocation.thread.threadId,
       runId: context.runId,

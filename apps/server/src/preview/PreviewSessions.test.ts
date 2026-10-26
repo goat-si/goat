@@ -58,7 +58,11 @@ describe("preview sessions", () => {
       expect(session.capabilities.controls).toEqual(["takeover", "stop", "stopAll"]);
       expect(previewSessionChip(session)).toBe("Agent controlling");
     }
-    expect(desktop.target).toEqual({ kind: "desktop", motionSupport: "supported", title: "com.apple.calculator" });
+    expect(desktop.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "com.apple.calculator",
+    });
     expect(desktop.lease?.scope).toEqual(["com.apple.calculator"]);
   });
 
@@ -198,7 +202,11 @@ describe("preview sessions", () => {
   it("keeps a stopped control's app label instead of calling it the whole screen", () => {
     const stopped = { _tag: "ended", reason: "stopped" } as const;
     const none = desktopSession(base, { ...control, scope: { apps: [] } }, stopped, detected)!;
-    expect(none.target).toEqual({ kind: "desktop", motionSupport: "supported", title: "No apps approved" });
+    expect(none.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "No apps approved",
+    });
     expect(none.lease?.scope).toEqual([]);
     const whole = desktopSession(
       base,
@@ -206,7 +214,11 @@ describe("preview sessions", () => {
       stopped,
       detected,
     )!;
-    expect(whole.target).toEqual({ kind: "desktop", motionSupport: "supported", title: "Whole screen" });
+    expect(whole.target).toEqual({
+      kind: "desktop",
+      motionSupport: "supported",
+      title: "Whole screen",
+    });
     // Never seen active: nothing says which apps it held.
     expect(desktopSession(base, control, stopped, detected)!.target).toEqual({
       kind: "desktop",

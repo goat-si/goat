@@ -46,7 +46,8 @@ export function resolveBuiltInSkills(input: BuiltInSkillActivationInput): BuiltI
       skill.anyOf === undefined
         ? named.has(skill.name) && !disabled.has(skill.name)
         : skill.anyOf.some((capability) => attached.has(capability)) &&
-          (skill.anyOf.some((capability) => requested.has(capability)) || !disabled.has(skill.name)),
+          (skill.anyOf.some((capability) => requested.has(capability)) ||
+            !disabled.has(skill.name)),
     ).map((skill) => skill.name),
     unattached: [...requested].filter((capability) => !attached.has(capability)),
   };

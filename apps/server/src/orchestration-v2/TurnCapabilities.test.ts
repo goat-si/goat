@@ -93,17 +93,24 @@ it("a restart continuation carries only its referenced exact tab hint", () => {
   const restart = run(2, { restartContinuationOfRunId: source.id });
   const restartMessage = message(restart, { creationSource: "server", text: "Continue" });
   const projection = { runs: [source, restart], messages: [sourceMessage, restartMessage] };
-  assert.deepEqual(runPrepareInput({ run: restart, message: restartMessage, projection }).screenBindingHints?.tabs, [
-    {
-      mentionId: tab.contextId,
-      environmentId: tab.environmentId,
-      browserInstanceId: tab.browserInstanceId,
-      tabId: tab.tabId,
-      titleAtMention: tab.title,
-      urlAtMention: tab.url,
-    },
-  ]);
-  assert.deepEqual(runPrepareInput({ run: source, message: { ...sourceMessage, text: "No tab" }, projection }).screenBindingHints?.tabs, []);
+  assert.deepEqual(
+    runPrepareInput({ run: restart, message: restartMessage, projection }).screenBindingHints?.tabs,
+    [
+      {
+        mentionId: tab.contextId,
+        environmentId: tab.environmentId,
+        browserInstanceId: tab.browserInstanceId,
+        tabId: tab.tabId,
+        titleAtMention: tab.title,
+        urlAtMention: tab.url,
+      },
+    ],
+  );
+  assert.deepEqual(
+    runPrepareInput({ run: source, message: { ...sourceMessage, text: "No tab" }, projection })
+      .screenBindingHints?.tabs,
+    [],
+  );
 });
 
 it("a message whose chip was deleted asks for nothing", () => {

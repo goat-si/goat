@@ -1,7 +1,10 @@
 import { GOAT_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import type { ProviderInteractionMode } from "@goat/contracts";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "./developmentInstructions.ts";
-import { GOAT_PULL_REQUEST_INSTRUCTIONS, SCREEN_CODE_INSTRUCTION_SECTIONS } from "./runtimeInstructions.ts";
+import {
+  GOAT_PULL_REQUEST_INSTRUCTIONS,
+  SCREEN_CODE_INSTRUCTION_SECTIONS,
+} from "./runtimeInstructions.ts";
 
 /**
  * Always injected, so every line is paid on every turn of every GOAT agent. A line belongs here

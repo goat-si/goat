@@ -4000,11 +4000,13 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
   const screenWasmPath = path.join(resourcesDir, "screen-code", "quickjs.wasm");
   const screenWasmValid = yield* Effect.promise(() => verifyScreenWasmFile(screenWasmPath)).pipe(
-    Effect.map(() => true), Effect.orElseSucceed(() => false),
+    Effect.map(() => true),
+    Effect.orElseSucceed(() => false),
   );
   if (!screenWasmValid) {
     return yield* new WindowsPackagedPayloadValidationError({
-      reason: "sidecar-invalid", packagedAppDir,
+      reason: "sidecar-invalid",
+      packagedAppDir,
       missingFiles: ["screen-code/quickjs.wasm"],
     });
   }
@@ -4088,8 +4090,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
         ),
       );
     }
-    const requiredMembers = [`${stem}/goat`, `${stem}/client`, `${stem}/node_modules`,
-      `${stem}/screen-code/quickjs.wasm`];
+    const requiredMembers = [
+      `${stem}/goat`,
+      `${stem}/client`,
+      `${stem}/node_modules`,
+      `${stem}/screen-code/quickjs.wasm`,
+    ];
     const missingMembers = requiredMembers.filter((member) => !members.includes(member));
     const ptyCandidates = [
       `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -4401,7 +4407,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
-  yield* stageScreenWasmAsset({ repoRoot, destination: path.join(stageProdResourcesDir, "screen-code/quickjs.wasm") });
+  yield* stageScreenWasmAsset({
+    repoRoot,
+    destination: path.join(stageProdResourcesDir, "screen-code/quickjs.wasm"),
+  });
   yield* fs.copyFile(
     path.join(repoRoot, "LICENSE"),
     path.join(stageProdResourcesDir, "LICENSE-T3CODE.txt"),

@@ -33,7 +33,12 @@ describe("turn capabilities", () => {
       computerRequested: false,
       tabs: [{ mentionId: "tab-one", browserInstanceId: "browser-one", tabId: "tab-one" }],
     });
-    expect(screenBindingHintsFromOrigin({ text: formatComposerContextReference(browser), records: [browser, tab] }).tabs).toEqual([]);
+    expect(
+      screenBindingHintsFromOrigin({
+        text: formatComposerContextReference(browser),
+        records: [browser, tab],
+      }).tabs,
+    ).toEqual([]);
   });
   it("counts only the chips still in the text", () => {
     const message = withTurnCapabilities({ text: "Open the dashboard" }, [

@@ -16,12 +16,11 @@ import {
   type TurnCapability,
 } from "@goat/contracts";
 import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
-// @effect-diagnostics nodeBuiltinImport:off -- tokens must use the host CSPRNG.
-import * as NodeCrypto from "node:crypto";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import type * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 

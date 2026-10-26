@@ -24,6 +24,12 @@ import {
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
 
+const encodeComputerUsePrimitiveReply = Schema.encodeSync(ComputerUsePrimitiveReply);
+const decodeComputerUseLeaseThreadUpdate = Schema.decodeSync(ComputerUseLeaseThreadUpdate);
+
+const decodeComputerUsePrimitiveRequest = Schema.decodeSync(ComputerUsePrimitiveRequest);
+const encodeComputerUsePrimitiveRequest = Schema.encodeSync(ComputerUsePrimitiveRequest);
+
 const decodeControlMessage = Schema.decodeUnknownSync(DesktopTelemetryControlMessage);
 const decodeTelemetryMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
 const decodeRequestResult = Schema.decodeUnknownSync(ComputerUseRequestResult);
@@ -67,13 +73,11 @@ describe("computer use on the wire", () => {
       tool: "click",
       args: { x: 1, y: 2 },
     } as const;
-    expect(
-      Schema.encodeSync(ComputerUsePrimitiveRequest)(
-        Schema.decodeUnknownSync(ComputerUsePrimitiveRequest)(request),
-      ),
-    ).toEqual(request);
+    expect(encodeComputerUsePrimitiveRequest(decodeComputerUsePrimitiveRequest(request))).toEqual(
+      request,
+    );
     expect(decodeLeaseUpdate(request)).toEqual(request);
-    expect(Schema.decodeUnknownSync(ComputerUseLeaseThreadUpdate)(request)).toEqual(request);
+    expect(decodeComputerUseLeaseThreadUpdate(request)).toEqual(request);
     expect(() =>
       decodeLeaseUpdate({ ...request, args: { text: "x".repeat(64 * 1024) } }),
     ).toThrow();
@@ -108,7 +112,7 @@ describe("computer use on the wire", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     } as const;
     const decode = Schema.decodeUnknownSync(ComputerUsePrimitiveReply);
-    expect(Schema.encodeSync(ComputerUsePrimitiveReply)(decode(reply))).toEqual(reply);
+    expect(encodeComputerUsePrimitiveReply(decode(reply))).toEqual(reply);
     expect(() => decode({ ...reply, status: "replay" })).toThrow();
     expect(() => decode({ ...reply, proxyChannelToken: "forged" })).toThrow();
   });

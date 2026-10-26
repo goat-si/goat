@@ -28,13 +28,16 @@ export const handleScreenRunEvent = Effect.fn("ScreenRunTurnEnd.handleEvent")(fu
 });
 
 /** The event stream is only a wakeup; persisted run state decides terminal cleanup. */
-export const layer = Layer.effectDiscard(Effect.gen(function* () {
-  const screen = yield* ScreenRunService;
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-    handleScreenRunEvent({ event, screen, orchestrator }).pipe(
-      Effect.catchCause((cause) => Effect.logWarning("screen turn cleanup failed", { cause })),
-    ),
-  ));
-
-}));
+export const layer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const screen = yield* ScreenRunService;
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* forkParked(
+      Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
+        handleScreenRunEvent({ event, screen, orchestrator }).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("screen turn cleanup failed", { cause })),
+        ),
+      ),
+    );
+  }),
+);

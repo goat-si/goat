@@ -19,7 +19,11 @@ import * as ScreenRunService from "../../../screenCode/ScreenRunService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import { dependencies } from "../../agentSurface.testkit.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { idleThreadProjection, layerPermissionProfilesOff, liveThreadShell } from "../../McpToolAccess.testkit.ts";
+import {
+  idleThreadProjection,
+  layerPermissionProfilesOff,
+  liveThreadShell,
+} from "../../McpToolAccess.testkit.ts";
 
 const threadId = ThreadId.make("screen-thread");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -82,7 +86,9 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
-it.effect("direct MCP and goat_call forward screen images while an outside read-only client is denied", () => {
+it.effect(
+  "direct MCP and goat_call forward screen images while an outside read-only client is denied",
+  () => {
     const calls: ScreenRunService.ScreenRunInput[] = [];
     const scope: McpInvocationContext.McpThreadInvocationScope = {
       environmentId: EnvironmentId.make("environment-one"),
@@ -95,66 +101,98 @@ it.effect("direct MCP and goat_call forward screen images while an outside read-
         browserRequested: true,
         computerRequested: false,
         appIds: [],
-        tabs: [{ mentionId: "mention-one", environmentId: "environment-one", browserInstanceId: "browser-one", tabId: "tab-one", titleAtMention: "Docs", urlAtMention: "https://example.test/docs" }],
+        tabs: [
+          {
+            mentionId: "mention-one",
+            environmentId: "environment-one",
+            browserInstanceId: "browser-one",
+            tabId: "tab-one",
+            titleAtMention: "Docs",
+            urlAtMention: "https://example.test/docs",
+          },
+        ],
       },
     };
     const screen = McpHttpServer.catalogRegistrations.screen.pipe(
       Layer.provide(layerPermissionProfilesOff),
-      Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(shell),
-        getThreadRecords: (() => Effect.succeed({
-          thread: idleThreadProjection(shell).thread,
-          runs: [run],
-        })) as ThreadManagement.ThreadManagementService["Service"]["getThreadRecords"],
-      })),
-      Layer.provide(Layer.mock(ScreenRunService.ScreenRunService)({
-        runCell: (input) => Effect.sync(() => { calls.push(input); return result; }),
-      })),
+      Layer.provide(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(shell),
+          getThreadRecords: (() =>
+            Effect.succeed({
+              thread: idleThreadProjection(shell).thread,
+              runs: [run],
+            })) as ThreadManagement.ThreadManagementService["Service"]["getThreadRecords"],
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ScreenRunService.ScreenRunService)({
+          runCell: (input) =>
+            Effect.sync(() => {
+              calls.push(input);
+              return result;
+            }),
+        }),
+      ),
     );
     const layer = Layer.mergeAll(
       McpHttpServer.catalogRegistrations.agentSurface.pipe(Layer.provide(dependencies)),
       screen,
-    ).pipe(
-      Layer.provideMerge(McpServer.McpServer.layer),
-    );
+    ).pipe(Layer.provideMerge(McpServer.McpServer.layer));
     return Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const response = yield* server.callTool({
-      name: "goat_screen_run",
-      arguments: { code: "return await screen.list_tabs({})" },
-    }).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-      Effect.provideService(McpSchema.McpServerClient, client),
-    );
-    const forwarded = yield* server.callTool({
-      name: "goat_call",
-      arguments: { path: "surface.screen_run", args: { code: "return await screen.list_tabs({})" } },
-    }).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-      Effect.provideService(McpSchema.McpServerClient, client),
-    );
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatchObject({ runId, turnId, threadId, environmentId: scope.environmentId, bindingHints: scope.screenBindingHints });
-    expect(response.isError).toBe(false);
-    expect(response.content.filter((part) => part.type === "image")).toHaveLength(1);
-    expect(forwarded.content.filter((part) => part.type === "image")).toEqual(
-      response.content.filter((part) => part.type === "image"),
-    );
-    expect(JSON.stringify(response.structuredContent)).not.toContain(bytes);
-    expect(JSON.stringify(forwarded.structuredContent)).not.toContain(bytes);
-    const outside: McpInvocationContext.McpInvocationScope = {
-      ...scope,
-      thread: undefined,
-      client: { sessionId: "outside", label: "Outside", access: "read-only" },
-    };
-    const denied = yield* server.callTool({
-      name: "goat_screen_run",
-      arguments: { code: "return await screen.list_tabs({})" },
-    }).pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, outside),
-      Effect.provideService(McpSchema.McpServerClient, client),
-    );
-    expect(denied.isError).toBe(true);
-    expect(calls).toHaveLength(2);
+      const server = yield* McpServer.McpServer;
+      const response = yield* server
+        .callTool({
+          name: "goat_screen_run",
+          arguments: { code: "return await screen.list_tabs({})" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const forwarded = yield* server
+        .callTool({
+          name: "goat_call",
+          arguments: {
+            path: "surface.screen_run",
+            args: { code: "return await screen.list_tabs({})" },
+          },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
+        runId,
+        turnId,
+        threadId,
+        environmentId: scope.environmentId,
+        bindingHints: scope.screenBindingHints,
+      });
+      expect(response.isError).toBe(false);
+      expect(response.content.filter((part) => part.type === "image")).toHaveLength(1);
+      expect(forwarded.content.filter((part) => part.type === "image")).toEqual(
+        response.content.filter((part) => part.type === "image"),
+      );
+      expect(JSON.stringify(response.structuredContent)).not.toContain(bytes);
+      expect(JSON.stringify(forwarded.structuredContent)).not.toContain(bytes);
+      const outside: McpInvocationContext.McpInvocationScope = {
+        ...scope,
+        thread: undefined,
+        client: { sessionId: "outside", label: "Outside", access: "read-only" },
+      };
+      const denied = yield* server
+        .callTool({
+          name: "goat_screen_run",
+          arguments: { code: "return await screen.list_tabs({})" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, outside),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(denied.isError).toBe(true);
+      expect(calls).toHaveLength(2);
     }).pipe(Effect.provide(layer));
-});
+  },
+);

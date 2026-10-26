@@ -12,6 +12,17 @@ import {
   ScreenTargetRef,
 } from "./screenCode.ts";
 
+const encodeScreenRunResult = Schema.encodeSync(ScreenRunResult);
+const decodeScreenRunResult = Schema.decodeSync(ScreenRunResult);
+
+const encodeScreenImage = Schema.encodeSync(ScreenImage);
+const encodeScreenRunLimits = Schema.encodeSync(ScreenRunLimits);
+
+const encodeScreenHostReply = Schema.encodeSync(ScreenHostReply);
+const encodeScreenHostCall = Schema.encodeSync(ScreenHostCall);
+
+const encodeScreenTargetRef = Schema.encodeSync(ScreenTargetRef);
+
 describe("screen code wire contracts", () => {
   const target = {
     id: "target:1",
@@ -35,9 +46,9 @@ describe("screen code wire contracts", () => {
 
   it("roundtrips an opaque target and host call without granting extra fields", () => {
     const targetDecode = Schema.decodeUnknownSync(ScreenTargetRef);
-    expect(Schema.encodeSync(ScreenTargetRef)(targetDecode(target))).toEqual(target);
+    expect(encodeScreenTargetRef(targetDecode(target))).toEqual(target);
     const decode = Schema.decodeUnknownSync(ScreenHostCall);
-    expect(Schema.encodeSync(ScreenHostCall)(decode(call))).toEqual(call);
+    expect(encodeScreenHostCall(decode(call))).toEqual(call);
     expect(() => decode({ ...call, threadId: "thread:forged" })).toThrow();
     expect(() => decode({ ...call, method: "run_script" })).toThrow();
     expect(() => targetDecode({ ...target, generation: -1 })).toThrow();
@@ -55,7 +66,7 @@ describe("screen code wire contracts", () => {
       outcome: "ok",
       value: { imageRef: "image:1" },
     };
-    expect(Schema.encodeSync(ScreenHostReply)(decodeReply(reply))).toEqual(reply);
+    expect(encodeScreenHostReply(decodeReply(reply))).toEqual(reply);
     expect(() => decodeReply({ ...reply, bytes: "AAAA" })).toThrow();
     const decodeCell = Schema.decodeUnknownSync(ScreenRunCell);
     expect(() =>
@@ -87,7 +98,7 @@ describe("screen code wire contracts", () => {
       journalEntries: 64,
       activeChildren: 4,
     };
-    expect(Schema.encodeSync(ScreenRunLimits)(decode(limits))).toEqual(limits);
+    expect(encodeScreenRunLimits(decode(limits))).toEqual(limits);
     expect(() => decode({ ...limits, pendingCalls: 5 })).toThrow();
     expect(() => decode({ ...limits, callsPerCell: 0 })).toThrow();
   });
@@ -107,7 +118,7 @@ describe("screen code wire contracts", () => {
       bytes: "AA==",
     } as const;
     const decodeImage = Schema.decodeUnknownSync(ScreenImage);
-    expect(Schema.encodeSync(ScreenImage)(decodeImage(image))).toEqual(image);
+    expect(encodeScreenImage(decodeImage(image))).toEqual(image);
     expect(() => decodeImage({ ...image, bytes: "!" })).toThrow();
     expect(() => decodeImage({ ...image, bytes: "AAAA".repeat(699_051) })).toThrow();
     const { bytes: _bytes, ...metadata } = image;
@@ -123,11 +134,11 @@ describe("screen code wire contracts", () => {
       imageMetadata: [metadata],
       images: [image],
     } as const;
-    const decoded = Schema.decodeUnknownSync(ScreenRunResult)(result);
-    expect(Schema.encodeSync(ScreenRunResult)(decoded)).toEqual(result);
+    const decoded = decodeScreenRunResult(result);
+    expect(encodeScreenRunResult(decoded)).toEqual(result);
     expect(decoded.imageMetadata[0]).not.toHaveProperty("bytes");
     expect(() =>
-      Schema.decodeUnknownSync(ScreenRunResult)({
+      decodeScreenRunResult({
         ...result,
         images: [
           { ...image, bytes: "AAAA".repeat(350_000) },

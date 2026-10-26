@@ -44,8 +44,12 @@ export const installScreenCodeSkill = Effect.gen(function* () {
   return path;
 });
 
-export const installScreenCodeSkillWhenActive = (skills: ReadonlyArray<BuiltInSkillName>) =>
-  skills.includes("screen-code") ? installScreenCodeSkill : Effect.succeed(undefined);
+export const installScreenCodeSkillWhenActive = Effect.fn(
+  "ScreenCodeSkillInstall.installWhenActive",
+)(function* (skills: ReadonlyArray<BuiltInSkillName>) {
+  if (!skills.includes("screen-code")) return undefined;
+  return yield* installScreenCodeSkill;
+});
 
 export const screenSkillPath = (path: string | undefined) =>
   path === undefined ? {} : { screenCodeSkillPath: path };

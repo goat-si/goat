@@ -2,11 +2,13 @@ import { ScreenRunResult } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
 
+const isScreenRunResult = Schema.is(ScreenRunResult);
+
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** MCP images stay in content; neither JSON channel carries their bytes. */
 export function screenRunMcpResult(encoded: unknown): McpSchema.CallToolResult {
-  if (!Schema.is(ScreenRunResult)(encoded)) {
+  if (!isScreenRunResult(encoded)) {
     return new McpSchema.CallToolResult({
       isError: true,
       content: [{ type: "text", text: encodeJsonText(encoded) }],

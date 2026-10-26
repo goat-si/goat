@@ -438,14 +438,16 @@ it.effect("a renewed credential replaces tab hints and resolves defensive copies
       browserRequested: true,
       computerRequested: false,
       appIds: ["app-one"],
-      tabs: [{
-        mentionId: "mention-one",
-        environmentId: "environment-1",
-        browserInstanceId: "browser-one",
-        tabId: "tab-one",
-        titleAtMention: "First",
-        urlAtMention: "https://example.test/first",
-      }],
+      tabs: [
+        {
+          mentionId: "mention-one",
+          environmentId: "environment-1",
+          browserInstanceId: "browser-one",
+          tabId: "tab-one",
+          titleAtMention: "First",
+          urlAtMention: "https://example.test/first",
+        },
+      ],
     };
     const request = {
       threadId,

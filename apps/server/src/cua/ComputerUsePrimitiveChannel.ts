@@ -274,7 +274,7 @@ export const make = Effect.gen(function* () {
       yield* close(previous) ?? Effect.void;
       attachments.delete(input.threadId);
     }),
-    authenticate: (input) =>
+    authenticate: Effect.fn("ComputerUsePrimitiveChannel.authenticate")((input) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => {
           const value = attachments.get(input.threadId);
@@ -285,6 +285,7 @@ export const make = Effect.gen(function* () {
             : undefined;
         }),
       ),
+    ),
     registerStream: Effect.fn("ComputerUsePrimitiveChannel.registerStream")(function* (input) {
       if (
         input.kind === "control" &&
@@ -457,18 +458,16 @@ export const make = Effect.gen(function* () {
         record.pending.delete(request.requestId);
         return yield* Effect.fail(desktopNotReady());
       }
-      return yield* Effect.raceFirst(
-        Deferred.await(answer),
-        Effect.sleep(Math.max(0, input.deadlineMillis - now)).pipe(
-          Effect.andThen(
+      return yield* Deferred.await(answer).pipe(
+        Effect.timeoutOrElse({
+          duration: Math.max(0, input.deadlineMillis - now),
+          orElse: () =>
             Effect.fail({
               code: "deadline" as const,
               effectStarted: pending.sent,
               nextStep: "Observe the desktop before any later action.",
             }),
-          ),
-        ),
-      ).pipe(
+        }),
         Effect.ensuring(
           Effect.sync(() => {
             if (record.pending.has(request.requestId)) cancelDelivered(registered, pending);
@@ -477,7 +476,7 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
-    reply: (input) =>
+    reply: Effect.fn("ComputerUsePrimitiveChannel.reply")((input) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => {
           const registered = registration(input, now);
@@ -500,7 +499,8 @@ export const make = Effect.gen(function* () {
           return true;
         }),
       ),
-    cancel: (runId, turnId) =>
+    ),
+    cancel: Effect.fn("ComputerUsePrimitiveChannel.cancel")((runId, turnId) =>
       Effect.sync(() => {
         for (const value of attachments.values())
           for (const record of value.registration?.controls.values() ?? [])
@@ -511,6 +511,7 @@ export const make = Effect.gen(function* () {
                 settle(pending);
               }
       }),
+    ),
   });
 });
 

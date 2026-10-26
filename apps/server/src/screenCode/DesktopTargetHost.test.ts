@@ -1,6 +1,5 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
@@ -97,7 +96,7 @@ const fixture = (
           }),
   } as unknown as ComputerUsePrimitiveChannel["Service"];
   const leases = {
-    currentControl: () => Effect.succeed(Option.some({ controlId: "control" })),
+    currentControl: () => Effect.succeedSome({ controlId: "control" }),
     controlState: () => Effect.succeed({ _tag: "active", idle: false }),
     releaseForeground: () => Effect.succeed(true),
   } as unknown as ComputerUseLeases["Service"];
@@ -291,7 +290,7 @@ it.effect("desktop discovery reports desktop_not_ready before a driver is bound"
     const unavailableHost = createDesktopTargetHost({
       primitiveChannel: channel,
       leases: {
-        currentControl: () => Effect.succeed(Option.none()),
+        currentControl: () => Effect.succeedNone,
       } as unknown as ComputerUseLeases["Service"],
     });
     const result = yield* unavailableHost.discover(call("list_apps"), context).pipe(Effect.result);

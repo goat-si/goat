@@ -141,7 +141,10 @@ describe("built-in skills in the skill menu", () => {
 
   it("a local provider with computer use on lists computer-use and screen-code", () => {
     const listed = withBuiltInProviderSkills([], codex, on);
-    expect(listed).toMatchObject([{ name: "computer-use", scope: "builtin", enabled: true }, { name: "screen-code", scope: "builtin", enabled: true }]);
+    expect(listed).toMatchObject([
+      { name: "computer-use", scope: "builtin", enabled: true },
+      { name: "screen-code", scope: "builtin", enabled: true },
+    ]);
     expect(getProviderSkillsForSlashMenu(listed, true).map((skill) => skill.name)).toEqual([
       "computer-use",
       "screen-code",
@@ -149,11 +152,15 @@ describe("built-in skills in the skill menu", () => {
   });
 
   it("a local provider with computer use off still lists screen-code", () => {
-    expect(names(withBuiltInProviderSkills([], codex, { ...on, enableCua: false }))).toEqual(["screen-code"]);
+    expect(names(withBuiltInProviderSkills([], codex, { ...on, enableCua: false }))).toEqual([
+      "screen-code",
+    ]);
   });
 
   it("a cloud provider lists neither screen skill", () => {
-    expect(withBuiltInProviderSkills([], { driver: ProviderDriverKind.make("muse") }, on)).toEqual([]);
+    expect(withBuiltInProviderSkills([], { driver: ProviderDriverKind.make("muse") }, on)).toEqual(
+      [],
+    );
   });
 
   it("keeps a skill switched off in Settings out of the menu", () => {
@@ -367,7 +374,12 @@ describe("the goat-discipline built-in skill in the skill menu", () => {
   });
 
   it("keeps it out of a project that switched it off and in every other project", () => {
-    expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual(["screen-code"]);
-    expect(menu("codex", { ...serving, projectId: null })).toEqual(["screen-code", "goat-discipline"]);
+    expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([
+      "screen-code",
+    ]);
+    expect(menu("codex", { ...serving, projectId: null })).toEqual([
+      "screen-code",
+      "goat-discipline",
+    ]);
   });
 });

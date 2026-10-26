@@ -17,6 +17,11 @@ import {
 } from "@goat/contracts";
 import { ScreenHostBridge, type ScreenHostContext } from "./ScreenHostBridge.ts";
 
+const isScreenGuestError = Schema.is(ScreenGuestError);
+const isScreenRunError = Schema.is(ScreenRunError);
+
+const decodeUnknownScreenHostCall = Schema.decodeUnknownSync(ScreenHostCall);
+
 export interface ScreenRunIdentity {
   readonly runId: string;
   readonly turnId: string;
@@ -43,6 +48,7 @@ export class ScreenSupervisorFailure extends Schema.TaggedError<ScreenSupervisor
     receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt)),
   },
 ) {}
+const isScreenSupervisorFailure = Schema.is(ScreenSupervisorFailure);
 const failure = (
   code: typeof SupervisorCode.Type,
   options: {
@@ -161,7 +167,7 @@ export function createScreenRunSupervisor(deps: {
       const session = yield* Effect.try({
         try: () => sessions.get(id) ?? spawnSession(identity.runId, identity.turnId),
         catch: (cause) =>
-          Schema.is(ScreenSupervisorFailure)(cause) ? cause : failure("runtime_unavailable"),
+          isScreenSupervisorFailure(cause) ? cause : failure("runtime_unavailable"),
       });
       if (session.closed || session.active) return yield* failure("pending_limit");
       const cellId = identity.context.cellId;
@@ -231,7 +237,7 @@ export function createScreenRunSupervisor(deps: {
               if (frame.t === "call") {
                 let call;
                 try {
-                  call = Schema.decodeUnknownSync(ScreenHostCall)(frame);
+                  call = decodeUnknownScreenHostCall(frame);
                 } catch {
                   return failRun("runtime_unavailable");
                 }
@@ -258,12 +264,12 @@ export function createScreenRunSupervisor(deps: {
               // The child finished inside its wall limit; only collection remains.
               cancelDeadline();
               session.lines.off("line", onLine);
-              const error = Schema.is(ScreenRunError)(result.error)
+              const error = isScreenRunError(result.error)
                 ? result.error.callId !== undefined &&
                   hostErrors.get(result.error.callId)?.code === result.error.code
                   ? hostErrors.get(result.error.callId)
                   : undefined
-                : Schema.is(ScreenGuestError)(result.error)
+                : isScreenGuestError(result.error)
                   ? result.error
                   : undefined;
               let collected: ReturnType<ScreenHostBridge["takeCellImagesNow"]> | undefined;
@@ -358,7 +364,7 @@ export function createScreenRunSupervisor(deps: {
             );
           }),
         catch: (cause) =>
-          Schema.is(ScreenSupervisorFailure)(cause) ? cause : failure("runtime_unavailable"),
+          isScreenSupervisorFailure(cause) ? cause : failure("runtime_unavailable"),
       }).pipe(
         Effect.onInterrupt(() =>
           Effect.sync(() => {

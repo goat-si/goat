@@ -1,5 +1,6 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
@@ -18,6 +19,9 @@ import {
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
+const isScreenImageSchema = Schema.is(ScreenImageSchema);
+
+const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
 
 export interface ScreenHostContext {
   readonly runId: string;
@@ -161,12 +165,9 @@ export class ScreenHostBridge {
     raw: unknown,
     context: ScreenHostContext,
   ) {
-    let call: ScreenHostCall;
-    try {
-      call = Schema.decodeUnknownSync(ScreenHostCall)(raw);
-    } catch {
-      return undefined;
-    }
+    const decoded = decodeOptionScreenHostCall(raw);
+    if (Option.isNone(decoded)) return undefined;
+    const call = decoded.value;
     const turn = `${context.runId}\u0000${context.turnId}`;
     if (this.fencedTurns.has(turn) || this.closedCells.get(turn)?.has(context.cellId))
       return refused(call, failure("stopped", call.callId));
@@ -375,7 +376,7 @@ export class ScreenHostBridge {
         image.observationId !== metadata.observationId ||
         image.regionId !== metadata.regionId ||
         image.targetId !== metadata.targetId ||
-        !Schema.is(ScreenImageSchema)(image)
+        !isScreenImageSchema(image)
       ) {
         settle("unverifiable");
         return refused(call, failure("downstream_failure", call.callId));

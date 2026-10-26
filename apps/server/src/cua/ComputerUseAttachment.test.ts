@@ -297,35 +297,36 @@ describe("computerUseAttachment", () => {
           ),
         );
       assert.deepEqual(yield* skills(optedOut), ["screen-code"]);
-      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use", "screen-code"]);
+      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), [
+        "computer-use",
+        "screen-code",
+      ]);
     }),
   );
 
-  it.effect(
-    "a project with computer-use guide off keeps the proxy and screen-code guide",
-    () =>
-      Effect.gen(function* () {
-        const projectId = ProjectId.make("project-cua-off");
-        const attached = yield* decide(fakeDriver({ enabled: true, running: true }), {
-          leases: fakeLeases({}).leases,
-          projectId,
-        }).pipe(
-          Effect.provide(
-            ServerSettings.ServerSettingsService.layerTest({
-              projectSettingsOverrides: {
-                [projectId]: { builtInSkills: { "computer-use": { enabled: false } } },
-              },
-            }),
-          ),
-        );
-        if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
-        assert.deepEqual(attached.skills, ["screen-code"]);
-        const config = ComputerUse.withComputerUse(session, attached, ROUTE);
-        assert.deepInclude(config.cuaDriver?.environment ?? [], {
-          name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken,
-          value: attached.proxyChannelToken,
-        });
-      }),
+  it.effect("a project with computer-use guide off keeps the proxy and screen-code guide", () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project-cua-off");
+      const attached = yield* decide(fakeDriver({ enabled: true, running: true }), {
+        leases: fakeLeases({}).leases,
+        projectId,
+      }).pipe(
+        Effect.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            projectSettingsOverrides: {
+              [projectId]: { builtInSkills: { "computer-use": { enabled: false } } },
+            },
+          }),
+        ),
+      );
+      if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
+      assert.deepEqual(attached.skills, ["screen-code"]);
+      const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+      assert.deepInclude(config.cuaDriver?.environment ?? [], {
+        name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken,
+        value: attached.proxyChannelToken,
+      });
+    }),
   );
 
   it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>

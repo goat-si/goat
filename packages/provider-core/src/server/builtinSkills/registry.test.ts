@@ -45,7 +45,10 @@ const PLATFORMS = ["darwin", "win32", "linux", "freebsd"] as const;
 
 describe("built-in skill activation", () => {
   it("loads the computer use skill only on turns with computer use attached", () => {
-    expect(resolveBuiltInSkills({ attached: ["computer-use"] }).active).toEqual(["computer-use", "screen-code"]);
+    expect(resolveBuiltInSkills({ attached: ["computer-use"] }).active).toEqual([
+      "computer-use",
+      "screen-code",
+    ]);
     expect(resolveBuiltInSkills({ attached: [] }).active).toEqual([]);
     expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual(["screen-code"]);
   });
@@ -69,9 +72,20 @@ describe("built-in skill activation", () => {
   });
 
   it("a disabled screen-code guide stays absent unless an attached capability was requested", () => {
-    expect(resolveBuiltInSkills({ attached: ["browser"], disabled: ["screen-code"] }).active).toEqual([]);
-    expect(resolveBuiltInSkills({ attached: [], requested: ["browser"], disabled: ["screen-code"] }).active).toEqual([]);
-    expect(resolveBuiltInSkills({ attached: ["browser"], requested: ["browser"], disabled: ["screen-code"] }).active).toEqual(["screen-code"]);
+    expect(
+      resolveBuiltInSkills({ attached: ["browser"], disabled: ["screen-code"] }).active,
+    ).toEqual([]);
+    expect(
+      resolveBuiltInSkills({ attached: [], requested: ["browser"], disabled: ["screen-code"] })
+        .active,
+    ).toEqual([]);
+    expect(
+      resolveBuiltInSkills({
+        attached: ["browser"],
+        requested: ["browser"],
+        disabled: ["screen-code"],
+      }).active,
+    ).toEqual(["screen-code"]);
   });
 
   it("reports a requested capability that is not attached instead of dropping it", () => {
@@ -132,10 +146,16 @@ describe("computer use skill text", () => {
 
   it("adds only a bounded screen tool pointer to later-turn runtime instructions", () => {
     const base = buildRuntimeInstructions({ harness: "Cursor" });
-    const withScreen = buildRuntimeInstructions({ harness: "Cursor", screenCode: true, screenCodeCompact: true });
+    const withScreen = buildRuntimeInstructions({
+      harness: "Cursor",
+      screenCode: true,
+      screenCodeCompact: true,
+    });
     expect(withScreen).toContain("Screen: goat_screen_run");
     expect(withScreen).not.toContain("<screen_code>");
-    expect(new TextEncoder().encode(withScreen).byteLength - new TextEncoder().encode(base).byteLength).toBeLessThanOrEqual(24);
+    expect(
+      new TextEncoder().encode(withScreen).byteLength - new TextEncoder().encode(base).byteLength,
+    ).toBeLessThanOrEqual(24);
   });
 });
 
@@ -314,7 +334,10 @@ describe("the goat-discipline skill loads only when a message names it", () => {
         disabled: ["goat-discipline"],
       }).active,
     ).toEqual([]);
-    expect(resolveBuiltInSkills({ attached: ["computer-use"] }).active).toEqual(["computer-use", "screen-code"]);
+    expect(resolveBuiltInSkills({ attached: ["computer-use"] }).active).toEqual([
+      "computer-use",
+      "screen-code",
+    ]);
   });
 
   it("puts the skill before the request once, and never in front of a native command", () => {
