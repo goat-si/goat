@@ -76,6 +76,8 @@ describe("layersHeader", () => {
       /^@layers blocking=dialog "Accept 'all' cookies x+" coverage=84% hint=#consent$/,
     );
     expect(header.split('"')[1]).toHaveLength(80);
+    const hostile = layersHeader(report(candidate({ role: "dialog\nx", selectorHint: "#a\nb" })));
+    expect(hostile.split("\n")).toHaveLength(1);
   });
 });
 
@@ -157,6 +159,14 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
       '<div id="root" style="position:absolute;inset:0">' + article + "</div>",
     );
     expect(layersHeader(root)).toBe("@layers none");
+  });
+
+  it("reports a dialog inside a click-through wrapper, not the wrapper", async () => {
+    const report = await layers(
+      article +
+        '<div id="portal" style="position:fixed;inset:0;z-index:5;pointer-events:none"><div role="dialog" aria-label="Verify age" id="age" style="position:absolute;inset:0;z-index:1;pointer-events:auto;background:#fff">Are you 18?</div></div>',
+    );
+    expect(report.blocking).toMatchObject({ role: "dialog", selectorHint: "#age" });
   });
 
   it("ignores a decorative overlay that lets clicks through", async () => {

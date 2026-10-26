@@ -96,6 +96,9 @@ describe("redactSecrets", () => {
     expect(text).not.toMatch(/dXNlcjpwYXNz|username=x|a=b|eyJhbGciOi|t0k3n|c5rf/);
     expect(text).toContain('"user":"jane"');
     expect(text).toContain('"author":"Kim"');
+    expect(redactSecrets("See Basic usage and Bearer of bad news", [])).toBe(
+      "See Basic usage and Bearer of bad news",
+    );
   });
 });
 
@@ -168,11 +171,18 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       return route.fulfill({
         contentType: "text/plain",
         headers: { "set-cookie": "fresh=SetCookieValue99", "x-auth": "XAuthHeader88" },
-        body: `Cookie: ${route.request().headers()["cookie"]}\nAuthorization: Basic dXNlcjpwYXNz\nsid is ab12\n{"sid":"ab12","token":"tok-value-6","user":"jane"}\n`,
+        body: `Cookie: ${route.request().headers()["cookie"]}\nAuthorization: Basic dXNlcjpwYXNz\nsid is ab12\ncopied LongHttpOnlyValue123 here\n{"sid":"ab12","token":"tok-value-6","user":"jane"}\n`,
       });
     }
     if (url.pathname === "/logo.png")
       return route.fulfill({ contentType: "image/png", body: Buffer.from([137, 80, 78, 71]) });
+    if (url.pathname === "/korean") {
+      // "한국어" in EUC-KR.
+      return route.fulfill({
+        contentType: "text/plain; charset=euc-kr",
+        body: Buffer.from([0xc7, 0xd1, 0xb1, 0xb9, 0xbe, 0xee]),
+      });
+    }
     if (url.pathname === "/long")
       return route.fulfill({ contentType: "text/plain", body: "word ".repeat(1000) });
     return route.fulfill({ status: 404, body: "missing" });
@@ -226,6 +236,9 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(result.text).not.toMatch(
       /LongHttpOnlyValue123|ab12|dXNlcjpwYXNz|tok-value-6|SetCookieValue99|XAuthHeader88/,
     );
+    // The bare copy is caught only through the browser's cookie list, HttpOnly included.
+    expect(result.text).toContain("copied [redacted] here");
+    expect(result.text).not.toMatch(/set-cookie|x-auth/i);
   });
 
   it("returns no content for a body that is not text, and bounds long text", async () => {
@@ -234,6 +247,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       text: "",
       contentType: "image/png",
     });
+    expect((await inPageFetch(page, control, { url: "/korean" })).text).toBe("한국어");
     const long = await inPageFetch(page, control, { url: "/long", maxChars: 50 });
     expect(long.truncated).toBe(true);
     expect(long.text).toHaveLength(50);

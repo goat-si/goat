@@ -3,10 +3,12 @@
  * its text or Markdown, so an agent can read a signed-in page without a navigation.
  *
  * It gives an agent nothing it could not already reach by evaluating script in the tab, and it
- * keeps the session itself out of the result: it never reads document.cookie, returns no response
- * header but content-type (so no Set-Cookie or authorization values), sends cookies only to the
- * same origin, and drops form fields (hidden CSRF tokens included), scripts, templates and hidden
- * subtrees before anything leaves the page. A body that itself contains a token is page content.
+ * keeps the session out of the result. Response headers other than content-type never leave the
+ * page, cookies go only to the same origin, and form fields (hidden CSRF tokens included),
+ * scripts, templates and hidden subtrees are dropped in the page. Every result is then redacted
+ * (see redactSecrets): no cookie the browser holds for the request or the tab appears as
+ * name=value, no cookie value of three or more characters appears as a token, and no echoed
+ * authorization or cookie header value, bearer token or credential-like JSON field survives.
  *
  * @module inPageFetch
  */
@@ -103,7 +105,14 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
       bytes.set(part, offset);
       offset += part.byteLength;
     }
-    const body = new TextDecoder().decode(bytes);
+    const charset = (/charset=\\s*"?([^";]+)/i.exec(contentType) || [])[1];
+    let decoder;
+    try {
+      decoder = new TextDecoder(charset ? charset.trim() : "utf-8");
+    } catch {
+      decoder = new TextDecoder();
+    }
+    const body = decoder.decode(bytes);
     if (!html) {
       return { ...head, kind: "text", text: body.slice(0, maxChars), truncated: cut || body.length > maxChars };
     }
@@ -151,7 +160,7 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
       if (tag === "td" || tag === "th") return inner.trim() + " ";
       if (tag === "a" && markdown) {
         const label = inner.trim().replace(/[[\\]]/g, "");
-        const href = hrefOf(node).replace(/[()]/g, encodeURIComponent);
+        const href = hrefOf(node).replaceAll("(", "%28").replaceAll(")", "%29");
         return label && href ? "[" + label + "](" + href + ")" : inner;
       }
       return blocks.has(tag) ? "\\n\\n" + inner + "\\n\\n" : inner;
@@ -227,13 +236,16 @@ export const redactSecrets = (
             );
     }
   }
-  return result
-    .replace(
-      /("((?:[^"\\]|\\.)*)"\s*:\s*)"(?:[^"\\]|\\.)*"/g,
-      (pair, prefix: string, key: string) =>
-        SECRET_NAME.test(key) ? `${prefix}"${REDACTED}"` : pair,
-    )
-    .replace(/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, `$1 ${REDACTED}`);
+  return (
+    result
+      .replace(
+        /("((?:[^"\\]|\\.)*)"\s*:\s*)"(?:[^"\\]|\\.)*"/g,
+        (pair, prefix: string, key: string) =>
+          SECRET_NAME.test(key) ? `${prefix}"${REDACTED}"` : pair,
+      )
+      // Case-sensitive and token-shaped, so prose such as "Basic usage" stays.
+      .replace(/\b(Bearer|Basic)[ \t]+[\w.~+/-]{8,}=*/g, `$1 ${REDACTED}`)
+  );
 };
 
 /** Only http(s) URLs, resolved against the tab's page so relative paths work. */

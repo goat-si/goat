@@ -74,8 +74,9 @@ const fakePage = (
         });
       }),
     },
-    waitForTimeout: () =>
+    waitForTimeout: vi.fn(() =>
       deadlines === "immediate" ? Promise.resolve() : new Promise<void>(() => undefined),
+    ),
   } satisfies CollectorPage;
   return { page, listeners };
 };
@@ -133,6 +134,13 @@ describe("collectWhileScrolling", () => {
     );
   });
 
+  it("keeps going while items arrive in a feed that scrolls inside its own container", async () => {
+    const { page } = fakePage((scroll, emit) => emit(response(pageOf(scroll))), { grow: false });
+    expect(
+      await collectWhileScrolling(page, new SessionControl("agent"), open, { maxScrolls: 4 }),
+    ).toMatchObject({ items: [0, 1, 2, 3, 4, 5, 6, 7], stoppedBecause: "maxScrolls" });
+  });
+
   it("ignores other requests, oversized bodies and responses past the budget", async () => {
     const huge = response([99], { length: 50 });
     const { page } = fakePage(
@@ -164,7 +172,14 @@ describe("collectWhileScrolling", () => {
       { deadlines: "immediate", grow: false },
     );
     const result = await collectWhileScrolling(page, new SessionControl("agent"), open);
-    expect(result).toMatchObject({ items: [], responses: 16, stoppedBecause: "noGrowth" });
+    expect(result).toMatchObject({
+      items: [],
+      rounds: 2,
+      responses: 16,
+      stoppedBecause: "noGrowth",
+    });
+    // One deadline per scroll, and one for the stalled bodies: later rounds stop waiting on them.
+    expect(page.waitForTimeout).toHaveBeenCalledTimes(3);
     expect(listeners.size).toBe(0);
   });
 

@@ -125,6 +125,8 @@ const collect = async (
 
   const items: Array<unknown> = [];
   const pending = new Set<Promise<void>>();
+  /** Reads that outlived a deadline; later rounds stop waiting on them. */
+  const abandoned = new Set<Promise<void>>();
   const parsed: Array<unknown> = [];
   let responses = 0;
   let closed = false;
@@ -146,14 +148,20 @@ const collect = async (
     responses += 1;
     const work = read(response).catch(() => undefined);
     pending.add(work);
-    void work.then(() => pending.delete(work));
+    void work.then(() => {
+      pending.delete(work);
+      abandoned.delete(work);
+    });
     arrived?.();
   };
   // A body that never finishes must not hold the collection open, so each wait has a deadline.
   // An abandoned body keeps its slot until it settles, so outstanding reads never pass the cap.
   const drain = async () => {
-    if (pending.size > 0)
-      await Promise.race([Promise.allSettled(pending), page.waitForTimeout(bodyTimeoutMs)]);
+    const waiting = [...pending].filter((work) => !abandoned.has(work));
+    if (waiting.length > 0) {
+      await Promise.race([Promise.allSettled(waiting), page.waitForTimeout(bodyTimeoutMs)]);
+      for (const work of waiting) if (pending.has(work)) abandoned.add(work);
+    }
     for (const json of parsed.splice(0)) {
       for (const item of extract(json)) {
         if (items.length >= maxItems) return;
@@ -179,6 +187,7 @@ const collect = async (
     let rounds = 0;
     let lastHeight: number | undefined;
     let unchanged = 0;
+    let lastCount = 0;
     for (;;) {
       await drain();
       if (control.isPrivate) throw wentPrivate();
@@ -186,8 +195,10 @@ const collect = async (
       if (items.length >= minItems) return { items, rounds, responses, stoppedBecause: "minItems" };
       if (rounds >= maxScrolls) return { items, rounds, responses, stoppedBecause: "maxScrolls" };
       const height = Number(await page.evaluate(HEIGHT_SCRIPT));
-      unchanged = height === lastHeight ? unchanged + 1 : 0;
+      // A feed that scrolls inside its own container keeps the document's height; new items count.
+      unchanged = height === lastHeight && items.length === lastCount ? unchanged + 1 : 0;
       lastHeight = height;
+      lastCount = items.length;
       if (unchanged >= 2) return { items, rounds, responses, stoppedBecause: "noGrowth" };
       const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
       const next = arm();

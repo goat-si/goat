@@ -75,6 +75,8 @@ const LAYERS_SCRIPT = `(gridSize) => {
     const rect = element.getBoundingClientRect();
     if (rect.width * rect.height < 0.5 * width * height) return false;
     const style = getComputedStyle(element);
+    // A click-through wrapper holds an overlay without being one; the overlay inside decides.
+    if (style.pointerEvents === "none") return false;
     return (
       style.position === "fixed" ||
       (style.position === "absolute" && style.zIndex !== "auto") ||
@@ -184,6 +186,9 @@ const isBlocking = (candidate: LayerCandidate) => {
 export const pickBlocking = (candidates: ReadonlyArray<LayerCandidate>) =>
   candidates.toSorted((left, right) => right.coverage - left.coverage).find(isBlocking) ?? null;
 
+/** Page-controlled text, kept to one line so it cannot add lines to the header. */
+const oneLine = (text: string) => text.replace(/\s+/g, " ").replaceAll('"', "'").trim();
+
 export const layersHeader = (report: LayersReport) => {
   const blocking = report.blocking;
   if (blocking === null) return "@layers none";
@@ -193,7 +198,8 @@ export const layersHeader = (report: LayersReport) => {
     .trim()
     .slice(0, MAX_NAME_LENGTH);
   const coverage = Math.round(blocking.coverage * 100);
-  return `@layers blocking=${blocking.role || blocking.tagName} "${name}" coverage=${coverage}% hint=${blocking.selectorHint}`;
+  const kind = oneLine(blocking.role || blocking.tagName);
+  return `@layers blocking=${kind} "${name}" coverage=${coverage}% hint=${oneLine(blocking.selectorHint)}`;
 };
 
 export const describeLayers = async (
