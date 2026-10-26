@@ -7,10 +7,12 @@ import type { KeepRule, PathRule, TextRule } from "./engine.ts";
  * "goat-rename: legacy".
  */
 const MODULES =
-  "agent-notifications|composer-editor|native-controls|review-diff|source-text|subscription-widget|terminal|widget-expiry";
+  "highlights|agent-notifications|composer-editor|native-controls|review-diff|source-text|subscription-widget|terminal|widget-expiry";
 const PACKAGES =
-  "agentnotifications|composereditor|nativecontrols|reviewdiff|terminal|widgetexpiry";
+  "highlights|agentnotifications|composereditor|nativecontrols|reviewdiff|terminal|widgetexpiry";
 const CLASS_NAMES = [
+  "Highlights",
+  "ScrollEdgeBleed",
   "SourceText",
   "ComposerEditor",
   "ComposerClipboard",
@@ -47,6 +49,8 @@ const CLASS_NAMES = [
 ].join("|");
 
 const OUTSIDE = new Set([
+  ".macroscope/ignore.md",
+  "scripts/effect-budget.json",
   "knip.jsonc",
   "vite.config.ts",
   "pnpm-workspace.yaml",
@@ -81,7 +85,7 @@ export const MOBILE_TEXT_RULES: readonly TextRule[] = [
   rule("stream-globals", /T3(?=\$\{name\}Stream)/g, "Goat"),
   rule(
     "resources",
-    /(?<![A-Za-z0-9])t3_(?=chats|menu|new_thread|pull_requests|settings|usage|subscription_widget_enabled|terminal)/g,
+    /(?<![A-Za-z0-9])t3_(?=chats|menu|new_thread|pull_requests|settings|usage|subscription_widget_enabled|terminal|highlights)/g,
     "goat_",
   ),
   rule("first-responder", /\bt3FirstResponder\b/g, "goatFirstResponder"),
@@ -100,7 +104,7 @@ export const MOBILE_PATH_RULES: readonly PathRule[] = [
   {
     id: "mobile:java-packages",
     category: "mobile",
-    find: new RegExp("(?<=/java/expo/modules/)t3(?=(?:" + PACKAGES + ")/)", "g"),
+    find: new RegExp("(?<=/(?:java|kotlin)/expo/modules/)t3(?=(?:" + PACKAGES + ")/)", "g"),
     replace: "goat",
     scope: inMobilePath,
   },
@@ -114,7 +118,7 @@ export const MOBILE_PATH_RULES: readonly PathRule[] = [
   {
     id: "mobile:resource-files",
     category: "mobile",
-    find: /(?<=\/)t3_(?=(?:terminal_jni\.cpp|chats|menu|new_thread|pull_requests|settings|usage)[^/]*$)/g,
+    find: /(?<=\/)t3_(?=(?:(?:terminal_jni\.cpp|highlights(?:_jni)?\.[ch])|chats|menu|new_thread|pull_requests|settings|usage)[^/]*$)/g,
     replace: "goat_",
     scope: inMobilePath,
   },

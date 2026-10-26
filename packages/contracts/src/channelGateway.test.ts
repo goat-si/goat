@@ -36,7 +36,7 @@ describe("channel ingest", () => {
       intent: "message" as const,
     };
     expect(
-      Schema.decodeUnknownSync(json(ChannelIngestInput))(
+      Schema.decodeSync(json(ChannelIngestInput))(
         Schema.encodeSync(json(ChannelIngestInput))(inbound),
       ),
     ).toEqual(inbound);
@@ -50,7 +50,7 @@ describe("channel ingest", () => {
       grantedScopes: ["orchestration:operate" as const],
     };
     expect(
-      Schema.decodeUnknownSync(json(ChannelRequester))(
+      Schema.decodeSync(json(ChannelRequester))(
         Schema.encodeSync(json(ChannelRequester))(requester),
       ),
     ).toEqual(requester);
@@ -61,7 +61,7 @@ describe("channel ingest", () => {
       text: "hello",
     };
     expect(
-      Schema.decodeUnknownSync(json(ChannelOutboundMessage))(
+      Schema.decodeSync(json(ChannelOutboundMessage))(
         Schema.encodeSync(json(ChannelOutboundMessage))(outbound),
       ),
     ).toEqual(outbound);
@@ -87,7 +87,7 @@ describe("channel ingest", () => {
   };
 
   it("round-trips an inbound message and its durable receipt", () => {
-    const decoded = Schema.decodeUnknownSync(json(ChannelIngestInput))(input);
+    const decoded = Schema.decodeSync(json(ChannelIngestInput))(input);
     expect(Schema.encodeSync(json(ChannelIngestInput))(decoded)).toEqual(input);
     const receipt = {
       inputId: "input-1",
@@ -98,9 +98,9 @@ describe("channel ingest", () => {
       acceptedAt: "2026-10-12T00:00:00.050Z",
       taskIds: [],
     };
-    expect(Schema.decodeUnknownSync(json(ChannelIngestResult))(receipt)).toEqual(receipt);
+    expect(Schema.decodeSync(json(ChannelIngestResult))(receipt)).toEqual(receipt);
     expect(
-      Schema.decodeUnknownSync(json(ChannelInputSnapshot))({
+      Schema.decodeSync(json(ChannelInputSnapshot))({
         ...receipt,
         state: "replied",
         readAt: "2026-10-12T00:00:00.100Z",
@@ -146,7 +146,7 @@ describe("channel ingest", () => {
       retryAfterSeconds: 30,
     });
     expect(() =>
-      Schema.decodeUnknownSync(json(ChannelGatewayError))({
+      Schema.decodeSync(json(ChannelGatewayError))({
         _tag: "ChannelGatewayError",
         reason: "delivery_failed",
         deliveryErrorCode: "slack_said_no",

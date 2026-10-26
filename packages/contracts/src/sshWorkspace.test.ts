@@ -73,9 +73,8 @@ describe("SSH workspace schemas", () => {
       for (const code of SshWorkspaceCode.literals) {
         const codec = Schema.toCodecJson(SshWorkspaceError);
         expect(
-          Schema.decodeUnknownSync(codec)(
-            Schema.encodeSync(codec)(new SshWorkspaceError({ stage, code })),
-          ).code,
+          Schema.decodeSync(codec)(Schema.encodeSync(codec)(new SshWorkspaceError({ stage, code })))
+            .code,
         ).toBe(code);
       }
   });
@@ -130,7 +129,7 @@ describe("SSH workspace schemas", () => {
     ]) {
       const codec = Schema.toCodecJson(SshWorkspaceError);
       const encoded = Schema.encodeSync(codec)(error);
-      expect(Schema.decodeUnknownSync(codec)(encoded)).toMatchObject({
+      expect(Schema.decodeSync(codec)(encoded)).toMatchObject({
         stage: error.stage,
         code: error.code,
         operationId: error.operationId,
@@ -140,7 +139,7 @@ describe("SSH workspace schemas", () => {
   });
   it("round trips project_not_repo_root and actionable message", () => {
     const codec = Schema.toCodecJson(SshWorkspaceError);
-    const decoded = Schema.decodeUnknownSync(codec)(
+    const decoded = Schema.decodeSync(codec)(
       Schema.encodeSync(codec)(
         new SshWorkspaceError({ stage: "validate", code: "project_not_repo_root" }),
       ),
@@ -149,7 +148,7 @@ describe("SSH workspace schemas", () => {
   });
   it("round trips an actionable caller authorization refusal", () => {
     const codec = Schema.toCodecJson(SshWorkspaceError);
-    const decoded = Schema.decodeUnknownSync(codec)(
+    const decoded = Schema.decodeSync(codec)(
       Schema.encodeSync(codec)(
         new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
       ),

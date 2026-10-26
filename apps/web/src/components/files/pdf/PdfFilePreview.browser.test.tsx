@@ -40,13 +40,13 @@ vi.mock("./pdfEngine", () => ({
 function makeDocument(firstPageText = ["Page 1 needle"]) {
   return {
     numPages: 30,
-    destroy: vi.fn(async () => {}),
+    loadingTask: { destroy: vi.fn(async () => {}) },
     getPage: vi.fn(async (number: number) => ({
       pageNumber: number,
       getViewport: () => ({
         width: 600,
         height: 800,
-        convertToViewportRectangle: (rect: number[]) => rect,
+        convertToViewportPoint: (x: number, y: number) => [x, y],
       }),
       getAnnotations: async () =>
         number === 1
@@ -278,7 +278,7 @@ describe("integrated PDF surface", () => {
       "2",
     );
     await open("/b.pdf");
-    expect(first.destroy).toHaveBeenCalledOnce();
+    expect(first.loadingTask.destroy).toHaveBeenCalledOnce();
     await open("/a.pdf");
     expect(load).toHaveBeenCalledTimes(3);
     expect(host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')?.value).toBe(

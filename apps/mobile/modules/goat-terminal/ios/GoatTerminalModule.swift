@@ -8,9 +8,14 @@ public class GoatTerminalModule: Module {
     // logs so a stale native binary is distinguishable from a broken key pipeline.
     Constants([
       "hardwareKeyRevision": 3,
+      "outputRevision": 1,
     ])
 
     View(GoatTerminalView.self) {
+      AsyncFunction("writeOutput") { (view: GoatTerminalView, data: String, reset: Bool) in
+        view.writeOutput(data, reset: reset)
+      }
+
       Prop("terminalKey") { (view: GoatTerminalView, terminalKey: String) in
         view.terminalKey = terminalKey
       }

@@ -13,7 +13,8 @@ vi.mock("../preview/sessions/AgentScreenCardsToggle", () => ({
 vi.mock("~/hooks/useThreadActionMenu", () => ({
   useThreadActionMenu: () => ({ openMenu: () => {}, closeMenu: () => {} }),
 }));
-vi.mock("../../state/session", () => ({
+vi.mock("../../state/session", async (original) => ({
+  ...(await original<typeof import("../../state/session")>()),
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
 }));

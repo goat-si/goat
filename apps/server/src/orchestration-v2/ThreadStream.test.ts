@@ -258,7 +258,6 @@ describe("decideThreadResume", () => {
     expect(snapshot.historyCursor).not.toBeNull();
     expect(snapshot.hasMoreHistory).toBe(true);
     expect(snapshot.latestLocalTurnOrdinal).toBe(80);
-    expect(snapshot.payloadBudgetExceeded).toBe(false);
   });
 
   it("rejects a 10 MiB raw replay even when its projected form fits the wire budget", () => {
@@ -414,8 +413,18 @@ describe("compact bounded snapshots", () => {
         projection: projectThreadProjectionForWire(projection),
         snapshotSequence: 44,
       });
-      const fields = boundedSnapshotResponseFields({ bounded, compactTurnItems: true });
-      const fullFields = boundedSnapshotResponseFields({ bounded, compactTurnItems: false });
+      const fields = boundedSnapshotResponseFields({
+        bounded,
+        compactTurnItems: true,
+        dedupeBodies: false,
+        compactIds: false,
+      });
+      const fullFields = boundedSnapshotResponseFields({
+        bounded,
+        compactTurnItems: false,
+        dedupeBodies: false,
+        compactIds: false,
+      });
       expect(fields.historyCursor).toBe(full.historyCursor);
       expect(fullFields.historyCursor).toBe(full.historyCursor);
       expect(fields.hasMoreHistory).toBe(true);

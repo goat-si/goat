@@ -16,8 +16,7 @@ export function reloadOnceForChunkLoadError(
     alreadyReloaded = storage.getItem(CHUNK_RELOAD_GUARD_KEY) === "1";
     if (!alreadyReloaded) storage.setItem(CHUNK_RELOAD_GUARD_KEY, "1");
   } catch {
-    // Without storage the guard cannot survive a reload, so a persistent
-    // failure would loop forever. Let the error surface instead.
+    // Without storage, the reload guard cannot prevent an infinite loop.
     return false;
   }
   if (alreadyReloaded) return false;

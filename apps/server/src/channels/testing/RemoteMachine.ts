@@ -299,7 +299,6 @@ export class RemoteMachine {
   readonly layer: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch> = this.makeLayer();
 
   private makeLayer() {
-    // oxlint-disable-next-line typescript/no-this-alias -- the fake's handlers close over it.
     const network = this;
     const machineFor = (host: string | undefined) =>
       [network, ...network.peers].find((candidate) => candidate.host === host) ?? network;

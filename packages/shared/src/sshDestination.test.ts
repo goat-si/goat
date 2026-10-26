@@ -36,7 +36,7 @@ describe("parseSshDestination", () => {
       { host: "box:0" },
       { host: "box:65536" },
       { host: "box", port: "1e3" },
-      { host: "box", port: "22 " + "x" },
+      { host: "box", port: "22 x" },
       { host: "[fd7a::1]:" },
       { host: "-oProxyCommand=evil" },
       { host: "jun@" },

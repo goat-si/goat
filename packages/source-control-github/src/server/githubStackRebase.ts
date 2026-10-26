@@ -105,8 +105,7 @@ export const cascadeRebaseStack = Effect.fn("cascadeRebaseStack")(function* (inp
   let parentOld = `origin/${input.base}`;
   let parentNew = `origin/${input.base}`;
   for (const [index, layer] of input.layers.entries()) {
-    // The bottom layer's old parent is where it forked from the base; above that it is the
-    // reviewed head of the layer below, which is exactly the commits this layer must not replay.
+    // Exclude old parents: the base fork point for the bottom, the reviewed lower head above it.
     const upstream =
       index === 0
         ? (yield* git(["merge-base", parentOld, layer.headSha]).pipe(

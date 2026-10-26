@@ -11,6 +11,7 @@ import { describe, it } from "vite-plus/test";
 
 import {
   buildCodexAdditionalContext,
+  buildCodexDevelopmentContext,
   CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES,
 } from "./CodexDeveloperInstructions.ts";
 
@@ -64,7 +65,7 @@ describe("buildCodexAdditionalContext", () => {
   });
 
   it("delivers the development discipline even when GOAT tools are unavailable", () => {
-    const context = buildCodexAdditionalContext({ model: "gpt-5.3-codex" }, false);
+    const context = buildCodexDevelopmentContext();
     NodeAssert.deepEqual(context.goat_code_development, {
       kind: "application",
       value: GOAT_DEVELOPMENT_INSTRUCTIONS,
@@ -92,7 +93,20 @@ describe("buildCodexAdditionalContext", () => {
   });
 });
 
-describe("buildCodexDeveloperInstructions", () => {
+describe("Codex runtime context", () => {
+  it("describes GOAT Markdown media support in the runtime context", () => {
+    {
+      const instructions = runtimeInstructions({
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+      });
+      NodeAssert.match(
+        instructions,
+        /<runtime_info>.*Markdown can embed images and videos by absolute file path\.<\/runtime_info>/,
+      );
+    }
+  });
+
   it("flattens multiline metadata into single-line runtime info", () => {
     const instructions = runtimeInstructions({
       model: "gpt\n5.3\ncodex",
@@ -101,6 +115,33 @@ describe("buildCodexDeveloperInstructions", () => {
 
     NodeAssert.match(instructions, /as gpt 5\.3 codex with high effort reasoning effort/);
     NodeAssert.doesNotMatch(instructions, /<runtime_info>[^<]*\n/);
+  });
+});
+
+describe("Codex orchestration context", () => {
+  it("routes native subagents within the provider and GOAT tasks with model options", () => {
+    const orchestration = Object.entries(buildCodexAdditionalContext({ model: "gpt-6.1-sol" }))
+      .filter(([key]) => key.startsWith("goat_code_orchestration_"))
+      .map(([, entry]) => entry.value)
+      .join("\n");
+
+    NodeAssert.ok(
+      orchestration.includes(
+        "Use native subagents only for same-provider work here without model options",
+      ),
+    );
+    NodeAssert.ok(
+      orchestration.includes("otherwise `task.create` with the options in its `target`"),
+    );
+    NodeAssert.ok(
+      orchestration.includes(
+        "Each review round needs a new task with the brief, prior findings, and open objections",
+      ),
+    );
+    NodeAssert.ok(!orchestration.includes("inheritedOptions"));
+    NodeAssert.ok(!orchestration.includes("Prefer native"));
+    // The ACP terminal fallback is ACP-only; Codex agents never need it.
+    NodeAssert.ok(!orchestration.includes("acp-mcp-call"));
   });
 });
 

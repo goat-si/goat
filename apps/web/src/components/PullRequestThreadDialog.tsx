@@ -4,7 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   readCachedPullRequestResolution,
@@ -17,7 +17,7 @@ import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useEnvironmentQuery } from "~/state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { vcsEnvironment } from "~/state/vcs";
-import { OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST } from "./pullRequest/pullRequestCheckoutToast";
+import { offHeadPullRequestCheckoutToast } from "./pullRequest/pullRequestCheckoutToast";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -86,17 +86,6 @@ export function PullRequestThreadDialog({
   const terminology = sourceControlPresentation.terminology;
   const SourceControlIcon = sourceControlPresentation.Icon;
 
-  useEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(() => {
-      referenceInputRef.current?.focus();
-      referenceInputRef.current?.select();
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [open]);
-
   const parsedReference = parsePullRequestReference(reference);
   const parsedDebouncedReference = parsePullRequestReference(debouncedReference);
   const pullRequestResolution = usePullRequestResolution({
@@ -110,7 +99,6 @@ export function PullRequestThreadDialog({
       cwd,
       reference: parsedReference,
     })?.pullRequest ?? null;
-  // The prepare action keys on this scope object, so it only ever reaches the hook.
   const preparePullRequestThreadAction = usePreparePullRequestThreadAction({ environmentId, cwd });
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
 
@@ -170,7 +158,7 @@ export function PullRequestThreadDialog({
       worktreePath: result.value.worktreePath,
     });
     if (!result.value.isOnPullRequestHead) {
-      toastManager.add(OFF_HEAD_PULL_REQUEST_CHECKOUT_TOAST);
+      toastManager.add(offHeadPullRequestCheckoutToast(terminology));
     }
     onOpenChange(false);
   };
@@ -202,7 +190,14 @@ export function PullRequestThreadDialog({
         }
       }}
     >
-      <DialogPopup className="max-w-xl">
+      <DialogPopup
+        className="max-w-xl"
+        initialFocus={() => {
+          referenceInputRef.current?.focus();
+          referenceInputRef.current?.select();
+          return false;
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center">
             <SourceControlIcon className="me-2 size-4" />

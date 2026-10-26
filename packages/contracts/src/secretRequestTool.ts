@@ -5,25 +5,25 @@ import { needsHumanFields } from "./humanStepResult.ts";
 
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   label: TrimmedNonEmptyString.annotate({
-    description: "What you need, shown as the card's title, e.g. 'GitHub webhook secret'.",
+    description: "Card title, such as 'GitHub webhook secret'.",
   }),
   reason: TrimmedNonEmptyString.annotate({
-    description:
-      "One or two sentences on what it is for and where the user gets or also enters it.",
+    description: "What it is for and where to get it.",
   }),
-  placeholder: Schema.optional(TrimmedNonEmptyString).annotate({
-    description: "Hint inside the input, e.g. 'Paste your GitHub token'.",
+  placeholder: Schema.optional(TrimmedNonEmptyString),
+  delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
+    description:
+      'secretRef (default) for a GOAT tool. file for a shell CLI: read the path in your command, e.g. TOKEN="$(cat <file>)" wrangler whoami.',
   }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
-  ).annotate({ description: "How long to wait for the user. Default 10 minutes." }),
+  ).annotate({ description: "Default 10 min." }),
   clientRequestId: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(256)).annotate({
       description: "Stable idempotency key to reuse when retrying this mutation.",
     }),
   ).annotate({
-    description:
-      "Reuse when retrying a call that lost its result, so the user sees one card and its answer is returned again. Use a new id to ask again after timed_out or cancelled.",
+    description: "Retry key for this ask. New key after a timeout or cancel.",
   }),
   wait: Schema.optional(Schema.Boolean).annotate({
     description:
@@ -34,10 +34,16 @@ export type OrchestratorMcpRequestSecretInput = typeof OrchestratorMcpRequestSec
 
 export const OrchestratorMcpRequestSecretResult = Schema.Union([
   Schema.Struct({
-    status: Schema.Literal("saved").annotate({ description: "secretRef holds the value." }),
+    status: Schema.Literal("saved"),
     secretRef: SecretRef.annotate({
+      description: "One-use. Pass to a tool that accepts a secretRef. You never see the value.",
+    }),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("saved").annotate({ description: "file holds the value." }),
+    file: Schema.String.annotate({
       description:
-        "Pass it to a tool that accepts a secretRef; it works once, and you never see the value.",
+        "Owner-only file with the value. Read it inside commands and never print it. Deleted after 24 hours.",
     }),
   }),
   Schema.Struct({
@@ -49,7 +55,7 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literals(["declined", "cancelled", "timed_out"]).annotate({
       description:
-        "declined: the user chose not to. cancelled: the request ended with the run. timed_out: the user did not answer in time; the card is closed, so ask again with a new clientRequestId if still needed.",
+        "declined: user chose not to. cancelled: ended with the run. timed_out: no answer in time. Ask again with a new `clientRequestId` if still needed.",
     }),
   }),
 ]);

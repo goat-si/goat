@@ -65,6 +65,7 @@ export const DesktopConfig = Config.all({
   otlpProtocol: Config.schema(OtlpProtocol, "GOAT_OTLP_PROTOCOL").pipe(
     Config.withDefault("http/json"),
   ),
+  desktopLauncherPath: trimmedString("GOAT_DESKTOP_LAUNCHER_PATH"),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("GOAT_DISABLE_AUTO_UPDATE"),
   insecureDevSecretStorage: optionalTruthyFlag("GOAT_DEV_INSECURE_SECRET_STORAGE"),

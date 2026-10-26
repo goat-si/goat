@@ -12,13 +12,10 @@ const babel: {
 const metroConfig: Promise<{ transformer: { babelTransformerPath: string } }> =
   requireFromMobile("./metro.config.js");
 
-// Files the compiler skips today. A skipped file still ships, just unmemoized.
-// This list only shrinks: the test fails when a file here starts compiling, so
-// delete its entry (and its manual useMemo/useCallback/memo) in the same change.
+// Remove bailout entries and manual memoization when compilation starts; this check rejects stale entries.
 const KNOWN_BAILOUTS: Record<string, string> = {
   "src/components/ComposerAttachmentStrip.tsx": "unsupported syntax",
   "src/components/MediaVideoPlayer.tsx": "??=",
-  "src/components/ui/AndroidAnchoredMenu.tsx": "ref read during render",
   "src/components/ui/Menu.tsx": "ref read during render",
   "src/features/connection/ConnectionsNewRouteScreen.tsx": "try/finally",
   "src/features/decisions/useDecisionInbox.ts": "optional chain in a condition",
@@ -30,21 +27,17 @@ const KNOWN_BAILOUTS: Record<string, string> = {
   "src/features/settings/MemoryProjectSettings.tsx": "try/finally",
   "src/features/settings/MemorySharingSettings.tsx": "try/finally",
   "src/features/settings/SettingsMemoryRouteScreen.tsx": "try/finally",
-  "src/features/terminal/ThreadTerminalRouteScreen.tsx": "ref read during render",
   "src/features/threads/HumanHandoffCard.tsx": "try without catch",
-  "src/features/threads/PendingUserInputCard.tsx": "mutates a frozen value",
   "src/features/threads/ThreadArrangementSheet.tsx": "ref read during render",
   "src/features/threads/ThreadMarkdownImage.tsx": "try/finally",
   "src/features/threads/ThreadRouteScreen.tsx": "try without catch",
   "src/features/voice-input/VoiceInputProvider.tsx": "ref read during render",
   "src/features/voice-input/useVoiceInputController.ts": "ref read during render",
-  "src/native/StackHeader.tsx": "ref read during render",
   "src/native/GoatComposerEditor.ios.tsx": "ref read during render",
   "src/native/GoatComposerEditor.native.tsx": "ref read during render",
 };
 
-// Caller flags Metro passes for an iOS release bundle. supportsReactCompiler is
-// what `experiments.reactCompiler` in app.config.ts turns on.
+// Use Metro's iOS release flags; experiments.reactCompiler enables supportsReactCompiler.
 const metroCaller = {
   name: "metro",
   bundler: "metro",

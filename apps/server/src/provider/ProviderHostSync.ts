@@ -16,7 +16,6 @@ import {
   type ProviderHostSyncDriver,
   type ProviderInstanceId,
   type ProviderSyncCancelInput,
-  type ProviderSyncHostState,
   type ProviderSyncInput,
   type ProviderSyncLogin,
   ProviderSyncResultJson,

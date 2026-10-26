@@ -25,7 +25,7 @@ export interface McpAppModelContextEntry {
 export class McpAppModelContext extends Context.Service<
   McpAppModelContext,
   {
-    /** Replaces the app's context; empty text removes it. */
+    /** Empty text removes the app's context. */
     readonly set: (input: {
       readonly threadId: ThreadId;
       readonly itemId: TurnItemId;
@@ -96,5 +96,12 @@ export const layer = Layer.effect(
 
 export const layerEmpty = Layer.succeed(
   McpAppModelContext,
-  McpAppModelContext.of({ set: () => Effect.void, forThread: () => Effect.succeed([]) }),
+  McpAppModelContext.of({
+    set: Effect.fn("McpAppModelContext.set")(function () {
+      return Effect.void;
+    }),
+    forThread: Effect.fn("McpAppModelContext.forThread")(function () {
+      return Effect.succeed([]);
+    }),
+  }),
 );

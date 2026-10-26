@@ -990,15 +990,7 @@ describe("native sharing workflow", () => {
     view = renderNative(h, <MemoryEnvironmentEntry environmentId={nativeEnv} />);
     await view.render();
     await view.click("Memory · Test hub");
-    expect(h.navigations).toMatchObject([
-      [
-        "SettingsSheet",
-        {
-          screen: "SettingsContent",
-          params: { screen: "SettingsMemory", params: { environmentId: nativeEnv } },
-        },
-      ],
-    ]);
+    expect(h.navigations).toMatchObject([["SettingsMemory", { environmentId: nativeEnv }]]);
     expect(h.calls).toHaveLength(0);
   });
 });

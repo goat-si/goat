@@ -29,7 +29,11 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { makeEnvironmentShellState, offlineSnapshotCapturedAt } from "./shell.ts";
+import {
+  EMPTY_SHELL_STATE,
+  makeEnvironmentShellState,
+  offlineSnapshotCapturedAt,
+} from "./shell.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { hydrateHubProxySnapshot } from "./hubProxySnapshot.ts";
 import { v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
@@ -230,6 +234,7 @@ describe("hub shell hydration", () => {
   it("exposes age only for metadata belonging to the displayed sequence", () => {
     expect(
       offlineSnapshotCapturedAt({
+        ...EMPTY_SHELL_STATE,
         snapshot: Option.some(snapshot(2)),
         status: "cached",
         error: Option.none(),
@@ -238,6 +243,7 @@ describe("hub shell hydration", () => {
     ).toBeNull();
     expect(
       offlineSnapshotCapturedAt({
+        ...EMPTY_SHELL_STATE,
         snapshot: Option.some(snapshot(2)),
         status: "cached",
         error: Option.none(),

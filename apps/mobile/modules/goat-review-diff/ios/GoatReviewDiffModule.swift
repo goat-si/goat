@@ -61,6 +61,10 @@ public class GoatReviewDiffModule: Module {
         view.setInitialRowIndex(initialRowIndex)
       }
 
+      Prop("initialFileId") { (view: GoatReviewDiffView, fileId: String) in
+        view.setInitialFileId(fileId)
+      }
+
       Prop("scrollEnabled") { (view: GoatReviewDiffView, enabled: Bool) in
         view.setScrollEnabled(enabled)
       }
@@ -106,8 +110,10 @@ public class GoatReviewDiffModule: Module {
         view.setTokensJson(tokensJson)
       }
 
-      AsyncFunction("setTokensPatchJson") { (view: GoatReviewDiffView, tokensPatchJson: String) in
-        view.setTokensPatchJson(tokensPatchJson)
+      AsyncFunction("setTokensPatchJson") { (view: GoatReviewDiffView, tokensPatchJson: String, promise: Promise) in
+        view.setTokensPatchJson(tokensPatchJson) { accepted in
+          promise.resolve(accepted)
+        }
       }
     }
   }

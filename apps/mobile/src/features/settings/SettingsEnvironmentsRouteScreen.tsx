@@ -9,11 +9,12 @@ import { Platform, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SettingsScreen } from "./components/SettingsScreen";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader";
 import { CloudEnvironmentRows } from "../connection/CloudEnvironmentRows";
 import { LocalEnvironmentList } from "../connection/LocalEnvironmentList";
-import { GitHubRoutingSettings } from "../connection/GitHubRoutingSettings";
+import { PullRequestRoutingSettings } from "../connection/PullRequestRoutingSettings";
 import { splitEnvironmentSections } from "../connection/environmentSections";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -42,6 +43,7 @@ export function SettingsEnvironmentsRouteScreen() {
   } = useRemoteConnections();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const headerIconColor = useUniwindTheme()["--color-icon"];
   const environmentSections = splitEnvironmentSections({
     connectedEnvironments,
     cloudEnvironments: null,
@@ -76,10 +78,7 @@ export function SettingsEnvironmentsRouteScreen() {
   }
 
   const openEnvironment = (environmentId: EnvironmentId) => {
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "SettingsEnvironmentDetail", params: { environmentId } },
-    });
+    navigation.navigate("SettingsEnvironmentDetail", { environmentId });
   };
   const handleUpdateEnvironment = (
     environmentId: EnvironmentId,
@@ -133,6 +132,14 @@ export function SettingsEnvironmentsRouteScreen() {
           </AndroidAnchoredMenu>
         ) : undefined
       }
+      actions={[
+        {
+          accessibilityLabel: "Add environment",
+          icon: "plus",
+          tintColor: headerIconColor,
+          onPress: () => navigation.navigate("SettingsEnvironmentNew"),
+        },
+      ]}
     >
       <ScrollView
         alwaysBounceVertical
@@ -157,15 +164,12 @@ export function SettingsEnvironmentsRouteScreen() {
             accessibilityRole="button"
             disabled={!savedHub.loaded || !catalogReady}
             onPress={() =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: {
-                  screen: "SettingsEnvironmentNew",
-                  params: hubEnvironmentId
-                    ? { intent: "change-hub", replaceEnvironmentId: hubEnvironmentId }
-                    : { intent: "hub" },
-                },
-              })
+              navigation.navigate(
+                "SettingsEnvironmentNew",
+                hubEnvironmentId
+                  ? { intent: "change-hub", replaceEnvironmentId: hubEnvironmentId }
+                  : { intent: "hub" },
+              )
             }
             className="min-h-13 flex-row items-center gap-3 rounded-[24px] bg-grouped-card px-4 active:opacity-70"
           >
@@ -202,9 +206,7 @@ export function SettingsEnvironmentsRouteScreen() {
           />
         ) : null}
 
-        {/* Always mounted: already-connected relay environments must stay
-            visible (and removable) even when cloud config is missing or the
-            user is signed out — the component gates discovery itself. */}
+        {/* Keep connected relays visible and removable without cloud config or sign-in; this component gates discovery. */}
         <CloudEnvironmentRows
           connectedCloudEnvironments={connectedCloudEnvironments}
           onOpenEnvironment={openEnvironment}
@@ -221,12 +223,7 @@ export function SettingsEnvironmentsRouteScreen() {
           <Text className="px-4 text-sm font-goat-medium text-foreground-muted">Advanced</Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: { screen: "SettingsEnvironmentNew", params: { intent: "add-server" } },
-              })
-            }
+            onPress={() => navigation.navigate("SettingsEnvironmentNew", { intent: "add-server" })}
             className="min-h-13 flex-row items-center gap-3 rounded-[24px] bg-grouped-card px-4 active:opacity-70"
           >
             <Text className="flex-1 text-base text-foreground">Add another server</Text>
@@ -239,7 +236,7 @@ export function SettingsEnvironmentsRouteScreen() {
             />
           </Pressable>
         </View>
-        <GitHubRoutingSettings />
+        <PullRequestRoutingSettings />
       </ScrollView>
     </SettingsScreen>
   );

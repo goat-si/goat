@@ -22,6 +22,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import packageJson from "../../package.json" with { type: "json" };
+import { ServiceLauncherHostProcess } from "../cloud/serviceLauncherClient.ts";
+import {
+  SERVICE_LAUNCHER_CONTEXT_ENV,
+  SERVICE_LAUNCHER_PROTOCOL,
+} from "../cloud/serviceProtocol.ts";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
@@ -125,8 +131,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     yield* fs.writeFileString(filePath, `${encoded}\n`);
     return yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.openSync(filePath, "r")),
-      // Without a /proc or /dev/fd path to reopen, the reader consumes the fd
-      // itself (autoClose), so on Windows it is already closed here.
+      // Windows cannot reopen the fd through /proc or /dev/fd, so the reader closes it.
       (fd) =>
         Effect.sync(() => {
           try {
@@ -925,5 +930,53 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         expect(resolved.otlpMetricsUrl).toBeUndefined();
         expect(resolved.otlpLogsUrl).toBeUndefined();
       }),
+  );
+
+  it.effect("listens on private networks only under the service launcher with no host set", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-service-host");
+      const resolveHost = (input: {
+        readonly connected: boolean;
+        readonly env?: Record<string, string>;
+      }) =>
+        resolveServerConfig(minimalWebFlags(baseDir), Option.none()).pipe(
+          Effect.map(({ host, privateNetworkOnly }) => ({ host, privateNetworkOnly })),
+          Effect.provide(
+            Layer.mergeAll(
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: input.env ?? {} })),
+              NetService.layer,
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, {
+            [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify({
+              protocol: SERVICE_LAUNCHER_PROTOCOL,
+              childVersion: packageJson.version,
+            }),
+          }),
+          Effect.provideService(ServiceLauncherHostProcess, {
+            connected: input.connected,
+            send: () => false,
+            on: () => undefined,
+            off: () => undefined,
+          }),
+        );
+
+      expect(yield* resolveHost({ connected: true })).toEqual({
+        host: "0.0.0.0",
+        privateNetworkOnly: true,
+      });
+      // `service.env` reaches the server as its environment.
+      expect(yield* resolveHost({ connected: true, env: { GOAT_HOST: "127.0.0.1" } })).toEqual({
+        host: "127.0.0.1",
+        privateNetworkOnly: undefined,
+      });
+      // Without the launcher's IPC channel the context was inherited, e.g. by
+      // `t3 serve` started from an agent inside the service.
+      expect(yield* resolveHost({ connected: false })).toEqual({
+        host: undefined,
+        privateNetworkOnly: undefined,
+      });
+    }),
   );
 });

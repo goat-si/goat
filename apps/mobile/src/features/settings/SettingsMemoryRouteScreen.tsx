@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { RegistryContext, useAtomValue, useAtomSet } from "@effect/atom-react";
 import { useNavigation, useFocusEffect, type StaticScreenProps } from "@react-navigation/native";
 import {
@@ -60,7 +61,6 @@ import { serverEnvironment } from "../../state/server";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
-import { useHomeThreadSelection } from "../home/home-thread-navigation";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
@@ -198,10 +198,7 @@ export function useMemoryNavigation(
   );
   const open = useCallback(() => {
     if (environmentId === null) return;
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "SettingsMemory", params: destination as MemoryScreenParams },
-    });
+    navigation.navigate("SettingsMemory", destination as MemoryScreenParams);
   }, [navigation, environmentId, destination]);
   return { visible, open };
 }
@@ -331,12 +328,7 @@ function MemoryConnectionHelp({
       <SettingsRow
         icon="desktopcomputer"
         label="Open environment connection"
-        onPress={() =>
-          navigation.navigate("SettingsSheet", {
-            screen: "SettingsContent",
-            params: { screen: "SettingsEnvironmentDetail", params: { environmentId } },
-          })
-        }
+        onPress={() => navigation.navigate("SettingsEnvironmentDetail", { environmentId })}
       />
       <SettingsRow
         icon="desktopcomputer"
@@ -1592,7 +1584,7 @@ function MemorySource({
 
 function MemoryReport({ report }: { readonly report: Parameters<typeof presentMemoryReport>[0] }) {
   const view = presentMemoryReport(report);
-  const onSelectThread = useHomeThreadSelection();
+  const selectDetail = useSelectWorkspaceDetail();
   const target = view.reportTarget;
   const config = useAtomValue(serverEnvironment.configValueAtom(target?.environmentId ?? null));
   const allowed = useEnvironmentScope(target?.environmentId ?? null, AuthOrchestrationReadScope);
@@ -1607,7 +1599,13 @@ function MemoryReport({ report }: { readonly report: Parameters<typeof presentMe
           disabled={!config || !allowed}
           onPress={() => {
             if (readEnvironmentScope(target.environmentId, AuthOrchestrationReadScope))
-              onSelectThread({ environmentId: target.environmentId, id: target.threadId });
+              selectDetail({
+                name: "Thread",
+                params: {
+                  environmentId: target.environmentId,
+                  threadId: target.threadId,
+                },
+              });
           }}
         />
       ) : null}

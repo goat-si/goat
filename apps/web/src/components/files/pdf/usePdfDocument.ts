@@ -104,7 +104,7 @@ function destroySessionDocument(session: PdfLoadSession): void {
   const document = session.loadedDocument;
   session.loadedDocument = null;
   if (document) {
-    void document.destroy();
+    void document.loadingTask.destroy();
   }
 }
 

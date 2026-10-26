@@ -318,7 +318,7 @@ describe("prefix-preserving client URLs", () => {
         }).pipe(Effect.provide(layerRemoteHttpClient(fetchFn)));
         expect(calls).toEqual([
           `${normalized}.well-known/goat/environment`,
-          `${normalized}api/auth/websocket-ticket`,
+          `${normalized}api/auth/websocket-ticket/rpc`,
         ]);
         expect(new URL(result).pathname).toBe(`${new URL(base).pathname.replace(/\/$/, "")}/ws`);
       }),

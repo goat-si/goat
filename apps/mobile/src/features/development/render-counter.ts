@@ -77,8 +77,7 @@ function changedStateSlot(alternate: Fiber, node: Fiber): number {
   for (let index = 0; a && b && index < 800; index++) {
     const before = a.memoizedState;
     const after = b.memoizedState;
-    // Memo, callback and ref slots change because something upstream did; only a
-    // state update is a cause of its own.
+    // Only state updates cause renders; memo, callback and ref changes are consequences.
     if (b.queue !== null && !isEffect(after) && !Object.is(before, after)) return index;
     a = a.next;
     b = b.next;

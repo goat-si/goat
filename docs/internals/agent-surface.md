@@ -78,6 +78,9 @@ Verbs come from a small standard set when one fits:
 | `run`               | Trigger a resource that already exists (a schedule, a check) | write        |
 | `cancel`            | Ask running work to stop; cooperative                        | write        |
 
+`background.wait` keeps the standard verb but records waiting state, so its effect is write;
+the registry's effect class, not the verb, decides how a path is gated.
+
 A domain verb (`thread.send`, `preview.click`, `decision.answer`) is allowed when
 no standard verb fits, and the registry records its effect class. `forget` stays
 distinct from `cancel` and `delete`: it stops GOAT observing something and leaves

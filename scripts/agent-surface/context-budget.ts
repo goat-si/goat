@@ -43,6 +43,7 @@ const modelFacing = (tool: ListedTool) =>
 interface Builders {
   readonly orchestration: {
     readonly GOAT_ORCHESTRATION_INSTRUCTIONS: string;
+    readonly GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS: string;
     readonly GOAT_BROWSER_TOOL_INSTRUCTIONS: string;
     readonly goatAcpPromptWithInstructions: (input: {
       readonly prompt: string;
@@ -69,7 +70,6 @@ interface Builders {
       runtime: { readonly model: string; readonly reasoningEffort: string },
       tools: { readonly browser: boolean; readonly device: boolean; readonly computerUse: boolean },
     ) => Record<string, { readonly value: string }>;
-    readonly buildCodexDeveloperInstructions: (mode: "default") => string;
   };
 }
 
@@ -105,10 +105,10 @@ const harnesses: ReadonlyArray<Harness> = [
   {
     name: "Codex (code mode)",
     carrier:
-      "turn additionalContext + collaboration-mode developer instructions; resent on change or after compaction",
+      "turn additionalContext; Codex supplies its own collaboration-mode instructions; resent on change or after compaction",
     delivery: "harness may defer",
     composedIn: "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
-    mustContain: ["buildCodexAdditionalContext(", "developer_instructions: developerInstructions"],
+    mustContain: ["buildCodexAdditionalContext(", "buildCodexDevelopmentContext()"],
     firstTurn: (b) =>
       Object.values(
         b.codex.buildCodexAdditionalContext(
@@ -117,7 +117,7 @@ const harnesses: ReadonlyArray<Harness> = [
         ),
       )
         .map((entry) => entry.value)
-        .join("") + b.codex.buildCodexDeveloperInstructions("default"),
+        .join(""),
     laterTurn: () => "",
   },
   {
@@ -128,14 +128,15 @@ const harnesses: ReadonlyArray<Harness> = [
     mustContain: [
       'harness: "Claude Code"',
       "MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER",
-      'GOAT_DEVELOPMENT_INSTRUCTIONS +\n          (input.mcpServers === undefined ? "" : GOAT_ORCHESTRATION_INSTRUCTIONS)',
+      "GOAT_ORCHESTRATION_INSTRUCTIONS + GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS",
     ],
     firstTurn: (b) =>
       [
         b.runtime.buildRuntimeInstructions({ harness: "Claude Code" }),
         b.memory.MEMORY_DATA_BOUNDARY_REMINDER,
         b.development.GOAT_DEVELOPMENT_INSTRUCTIONS +
-          b.orchestration.GOAT_ORCHESTRATION_INSTRUCTIONS,
+          b.orchestration.GOAT_ORCHESTRATION_INSTRUCTIONS +
+          b.orchestration.GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS,
       ].join("\n\n"),
     laterTurn: () => "",
   },

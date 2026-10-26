@@ -42,6 +42,8 @@ import * as Schema from "effect/Schema";
 const bridge = vi.hoisted(() => ({
   current: null as unknown,
   platform: "ios",
+  projectRevision: 0,
+  projectListeners: new Set<() => void>(),
   navigations: [] as unknown[],
   focus: new Map<() => void | (() => void), void | (() => void)>(),
   active: new Set<(state: string) => void>(),
@@ -212,7 +214,16 @@ vi.mock("@goat/client-runtime/state/session", () => ({
 vi.mock("../state/entities", () => ({
   useThreadShell: () => null,
   useProject: () => null,
-  useProjects: () => bridge.projects,
+  useProjects: () => {
+    React.useSyncExternalStore(
+      (listener) => {
+        bridge.projectListeners.add(listener);
+        return () => bridge.projectListeners.delete(listener);
+      },
+      () => bridge.projectRevision,
+    );
+    return [...bridge.projects];
+  },
   useEnvironmentServerConfig: () => null,
 }));
 vi.mock("../state/use-remote-environment-registry", () => ({
@@ -227,6 +238,10 @@ vi.mock("../state/use-remote-environment-registry", () => ({
       { environmentId: nativeDevice, isEnabled: true, connectionState: "connected" },
     ],
   }),
+}));
+vi.mock("../features/workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => (detail: { name: string; params: unknown }) =>
+    bridge.navigations.push([detail.name, detail.params]),
 }));
 vi.mock("../features/home/home-thread-navigation", () => ({
   useHomeThreadSelection: () => (thread: unknown) => bridge.navigations.push(thread),
@@ -715,11 +730,13 @@ export function renderNative(harness: NativeMemoryHarness, element: ReactNode) {
   document.body.append(container);
   const root = createRoot(container);
   const render = async (element: ReactNode) => {
-    await act(async () =>
+    await act(async () => {
+      bridge.projectRevision++;
+      for (const listener of bridge.projectListeners) listener();
       root.render(
         <RegistryContext.Provider value={harness.registry}>{element}</RegistryContext.Provider>,
-      ),
-    );
+      );
+    });
   };
   return {
     container,

@@ -11,8 +11,9 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 // at 61 before the sync that added PullRequestReviewGuides, at 62 before the one that
 // added ThreadFailureLookupIndex, at 63 before the one that added DropUnusedV1Projections, at 64
 // before the one that added CanonicalizeThreadPullRequestLinks, at 65 before the one that
-// added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe, and at 68
-// before the one that added ShellStopRequestIndex.
+// added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe, at 68
+// before the one that added ShellStopRequestIndex, and at 69 before the one that added
+// ThreadMessageSearch.
 const seedGoatLedger = (names: ReadonlyArray<string>, firstGoatId = 61) =>
   Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: firstGoatId - 1 });
@@ -57,40 +58,41 @@ const skippedUpstreamMigrations = [
   [66, "RepairClientSettlementTimestamps"],
   [67, "WebhookDedupe"],
   [68, "ShellStopRequestIndex"],
+  [69, "ThreadMessageSearch"],
 ] as const;
 const laterGoatMigrations = [
-  [77, "Memory"],
-  [78, "MemoryHubSync"],
-  [79, "MemorySearchCounters"],
-  [80, "MemoryTaskGrantCeiling"],
-  [81, "MemoryImportLineage"],
-  [82, "MemoryCheckpointAccounting"],
-  [83, "MemoryReportLifecycle"],
-  [84, "MemoryUsageCounters"],
-  [85, "MemoryRevertResults"],
-  [86, "HandoffLookupIndex"],
-  [87, "MemoryLastReadySpace"],
-  [88, "MemoryHubAdministered"],
-  [89, "MemoryCheckpointLifecycle"],
-  [90, "FleetGoals"],
-  [91, "FleetHealth"],
-  [92, "ThreadRunObservedChecks"],
-  [93, "RemoteDispatchObservation"],
-  [94, "MemoryRevisionCheckpointSize"],
-  [95, "HubNodes"],
-  [96, "MemorySummaryWorkThreadIndex"],
-  [97, "ThreadHistoryArchives"],
-  [98, "PermissionProfiles"],
-  [99, "DecisionInbox"],
-  [100, "HumanStepRecords"],
-  [101, "McpRequestReservations"],
-  [102, "RemoteReportInboxRunId"],
-  [103, "RemoteReportReceipts"],
-  [104, "PendingAttachmentUploads"],
-  [105, "ScheduledTaskWebhookSecretRef"],
-  [106, "RemoteReportFences"],
-  [107, "HubProvisionedLinks"],
-  [108, "ScheduledTaskRuns"],
+  [78, "Memory"],
+  [79, "MemoryHubSync"],
+  [80, "MemorySearchCounters"],
+  [81, "MemoryTaskGrantCeiling"],
+  [82, "MemoryImportLineage"],
+  [83, "MemoryCheckpointAccounting"],
+  [84, "MemoryReportLifecycle"],
+  [85, "MemoryUsageCounters"],
+  [86, "MemoryRevertResults"],
+  [87, "HandoffLookupIndex"],
+  [88, "MemoryLastReadySpace"],
+  [89, "MemoryHubAdministered"],
+  [90, "MemoryCheckpointLifecycle"],
+  [91, "FleetGoals"],
+  [92, "FleetHealth"],
+  [93, "ThreadRunObservedChecks"],
+  [94, "RemoteDispatchObservation"],
+  [95, "MemoryRevisionCheckpointSize"],
+  [96, "HubNodes"],
+  [97, "MemorySummaryWorkThreadIndex"],
+  [98, "ThreadHistoryArchives"],
+  [99, "PermissionProfiles"],
+  [100, "DecisionInbox"],
+  [101, "HumanStepRecords"],
+  [102, "McpRequestReservations"],
+  [103, "RemoteReportInboxRunId"],
+  [104, "RemoteReportReceipts"],
+  [105, "PendingAttachmentUploads"],
+  [106, "ScheduledTaskWebhookSecretRef"],
+  [107, "RemoteReportFences"],
+  [108, "HubProvisionedLinks"],
+  [109, "ScheduledTaskRuns"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -105,6 +107,7 @@ const preMemoryGoatNames = [
 
 describe("GOAT migration ids", () => {
   it.effect.each([
+    ["ledger before ThreadMessageSearch", 69, goatNames, skippedUpstreamMigrations.slice(8)],
     ["ledger before ShellStopRequestIndex", 68, goatNames, skippedUpstreamMigrations.slice(7)],
     ["ledger before WebhookDedupe", 65, goatNames, skippedUpstreamMigrations.slice(4)],
     [
@@ -126,11 +129,11 @@ describe("GOAT migration ids", () => {
       ["ServerActivityIndexes", "RemoteReports", "RemoteDispatches"],
       [
         ...skippedUpstreamMigrations,
-        [72, "ChannelLedger"],
-        [73, "RemoteDispatchQuestions"],
-        [74, "ThreadRunResults"],
-        [75, "RemoteReportRelay"],
-        [76, "ProjectionTurnItemRequestIndex"],
+        [73, "ChannelLedger"],
+        [74, "RemoteDispatchQuestions"],
+        [75, "ThreadRunResults"],
+        [76, "RemoteReportRelay"],
+        [77, "ProjectionTurnItemRequestIndex"],
         ...laterGoatMigrations,
       ],
     ],
@@ -158,13 +161,13 @@ describe("GOAT migration ids", () => {
 describe("unreleased memory DB", () => {
   it.effect("rejects an old memory ledger before moving any GOAT ids", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 76 });
+      yield* runMigrations({ toMigrationInclusive: 77 });
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 174 WHERE name = 'RemoteReportRelay'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (76 + 100, 'Memory')`;
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = 175 WHERE name = 'RemoteReportRelay'`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (77 + 100, 'Memory')`;
       // The old Memory id may collide with dev's index, so model the actual pre-sync ledger.
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 76 WHERE name = 'Memory'`;
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = 77 WHERE name = 'Memory'`;
       const before = yield* history;
       const result = yield* Effect.flip(runMigrations());
       assert.strictEqual(result._tag, "MigrationError");
@@ -177,10 +180,10 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects old memory when other GOAT ids already match", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 76 });
+      yield* runMigrations({ toMigrationInclusive: 77 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (76, 'Memory')`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (77, 'Memory')`;
       const before = yield* history;
       const result = yield* Effect.flip(reconcileGoatMigrationIds(migrationEntries));
       if (result._tag !== "MigrationError") return yield* result;
@@ -209,7 +212,7 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects unrecorded memory tables in an ordinary dev ledger", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 76 });
+      yield* runMigrations({ toMigrationInclusive: 77 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE memory_payloads (body TEXT)`;
       const before = yield* history;
@@ -222,13 +225,13 @@ describe("unreleased memory DB", () => {
 
   it.effect("upgrades an ordinary dev DB without memory and restarts normally", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 76 });
+      yield* runMigrations({ toMigrationInclusive: 77 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE unrelated_state (value TEXT)`;
       yield* sql`INSERT INTO unrelated_state VALUES ('keep')`;
       assert.deepStrictEqual(
         yield* runMigrations(),
-        migrationManifest.filter(([id]) => id > 76),
+        migrationManifest.filter(([id]) => id > 77),
       );
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT value FROM unrelated_state`, [{ value: "keep" }]);
@@ -257,8 +260,8 @@ it.effect("validates later Memory migrations against the registry without a fixe
 
 // WP5 names are stable registration keys; old ordinals must never migrate data.
 it.effect.each([
-  { name: "MemoryImportLineage", oldId: 79 },
-  { name: "MemoryCheckpointAccounting", oldId: 80 },
+  { name: "MemoryImportLineage", oldId: 80 },
+  { name: "MemoryCheckpointAccounting", oldId: 81 },
 ] as const)(
   "rejects the old $name ordinal $oldId without changing schema or ledger",
   ({ name, oldId }) =>
@@ -288,18 +291,18 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`;
     const schema = yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`;
     assert.deepStrictEqual(
-      migrationManifest.filter(([id]) => id >= 81),
+      migrationManifest.filter(([id]) => id >= 82),
       [
-        [81, "MemoryImportLineage"],
-        [82, "MemoryCheckpointAccounting"],
-        [83, "MemoryReportLifecycle"],
-        [84, "MemoryUsageCounters"],
-        [85, "MemoryRevertResults"],
-        [86, "HandoffLookupIndex"],
-        [87, "MemoryLastReadySpace"],
-        [88, "MemoryHubAdministered"],
-        [89, "MemoryCheckpointLifecycle"],
-        ...migrationManifest.filter(([id]) => id > 89),
+        [82, "MemoryImportLineage"],
+        [83, "MemoryCheckpointAccounting"],
+        [84, "MemoryReportLifecycle"],
+        [85, "MemoryUsageCounters"],
+        [86, "MemoryRevertResults"],
+        [87, "HandoffLookupIndex"],
+        [88, "MemoryLastReadySpace"],
+        [89, "MemoryHubAdministered"],
+        [90, "MemoryCheckpointLifecycle"],
+        ...migrationManifest.filter(([id]) => id > 90),
       ],
     );
     assert.deepStrictEqual(yield* runMigrations(), []);
@@ -314,7 +317,8 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
 
 // Nightly 0.1.2-nightly.20261023.256 (5e16fe96a1) and every GOAT build before cycle 261024
 // recorded GOAT's migrations at 68-101. Upstream 068 (ShellStopRequestIndex) took 68, so GOAT's
-// rows move to 69-102. These cases pin what installs that ran 256 see when they upgrade.
+// rows move up; since cycle 261026 (upstream 069 ThreadMessageSearch) they sit at 70-103. These cases
+// pin what installs that ran 256 see when they upgrade.
 const NIGHTLY_256_GOAT_LEDGER = [
   [68, "ServerActivityIndexes"],
   [69, "RemoteReports"],
@@ -403,6 +407,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       // GOAT bodies such as ServerActivityIndexes' ALTER TABLE fail if run twice.
       assert.deepStrictEqual(yield* runMigrations(), [
         [68, "ShellStopRequestIndex"],
+        [69, "ThreadMessageSearch"],
         ...GOAT_SINCE_256,
       ]);
       assert.isTrue(yield* hasShellStopIndex);
@@ -419,6 +424,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER.slice(0, recorded));
       assert.deepStrictEqual(yield* runMigrations(), [
         [68, "ShellStopRequestIndex"],
+        [69, "ThreadMessageSearch"],
         ...NIGHTLY_256_GOAT_LEDGER.slice(recorded).map(([, name]) => currentGoatRow(name)),
         ...GOAT_SINCE_256,
       ]);
@@ -444,11 +450,11 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       const sql = yield* SqlClient.SqlClient;
       const before = yield* history;
       const schema = yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`;
-      // 256's manifest: no upstream 068, GOAT one id lower.
+      // 256's manifest: no upstream 068 or 069, GOAT two ids lower.
       const nightly256Entries = migrationEntries.flatMap(([id, name, migration]) =>
-        name === "ShellStopRequestIndex"
+        name === "ShellStopRequestIndex" || name === "ThreadMessageSearch"
           ? []
-          : [[GOAT_MIGRATION_NAMES.has(name) ? id - 1 : id, name, migration] as const],
+          : [[GOAT_MIGRATION_NAMES.has(name) ? id - 2 : id, name, migration] as const],
       );
       const failure = yield* Effect.flip(reconcileGoatMigrationIds(nightly256Entries));
       assert.strictEqual(failure._tag, "MigrationError");
@@ -459,10 +465,29 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
   );
 });
 
+// GOAT 0.1.1 and every build before cycle 261026 recorded GOAT's migrations at 69-107. Upstream 069
+// (ThreadMessageSearch) took 69, so those rows move to 70-108 and the search index is built once.
+describe("upgrading a 0.1.1 ledger past upstream 069", () => {
+  it.effect("builds the message search index and moves GOAT rows without rerunning them", () =>
+    Effect.gen(function* () {
+      yield* seedGoatLedger(goatNames, 69);
+      const sql = yield* SqlClient.SqlClient;
+      const searchTable = sql`
+        SELECT name FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
+      `;
+      assert.deepStrictEqual(yield* searchTable, []);
+      assert.deepStrictEqual(yield* runMigrations(), [[69, "ThreadMessageSearch"]]);
+      assert.lengthOf(yield* searchTable, 1);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
+
 it.effect("relocates ScheduledTaskRuns without changing populated receipts or associations", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* seedGoatLedger(goatNames, 68);
+    yield* seedGoatLedger(goatNames, 69);
     yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count,last_firing_id)
       VALUES ('task','Synthetic','Synthetic',1,'{}','project','{}','{}','full-access','default','user','web','2026-10-15','2026-10-15','running',1,'firing')`;
     yield* sql`INSERT INTO scheduled_task_runs (firing_id,task_id,task_created_at,message_id,trigger_kind,admitted_next_run_at,admitted_schedule_digest,admitted_enabled,dispatch_status,status,requested_at,snapshot_json)
@@ -473,7 +498,7 @@ it.effect("relocates ScheduledTaskRuns without changing populated receipts or as
     yield* runMigrations();
     assert.deepStrictEqual(yield* sql`SELECT * FROM scheduled_task_runs`, receipts);
     assert.deepStrictEqual(yield* sql`SELECT last_firing_id FROM scheduled_tasks`, tasks);
-    assert.includeDeepMembers(yield* history, [[108, "ScheduledTaskRuns"]]);
+    assert.includeDeepMembers(yield* history, [[109, "ScheduledTaskRuns"]]);
     assert.deepStrictEqual(yield* runMigrations(), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

@@ -7,10 +7,10 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/070_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
-import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
-import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
+import migration from "../persistence/Migrations/071_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/072_RemoteDispatches.ts";
+import relayMigration from "../persistence/Migrations/076_RemoteReportRelay.ts";
+import inboxRunIdMigration from "../persistence/Migrations/103_RemoteReportInboxRunId.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const lane = ThreadId.make("local-lane");

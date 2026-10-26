@@ -3,10 +3,7 @@ import * as Schema from "effect/Schema";
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import { goatCallText } from "./agentSurface/callText.ts";
 
-/**
- * A saved value is kept by the server under a one-use SecretRef; the thread
- * learns only the status.
- */
+/** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
   turnItemId: TurnItemId,
@@ -29,6 +26,8 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
   ref_unavailable: `That secretRef was already used or does not exist. Ask the user again with ${goatCallText("handoff.create")}.`,
   ref_expired: `That secretRef expired. Ask the user again with ${goatCallText("handoff.create")}.`,
   consume_failed: "Could not use that secretRef. Try again.",
+  not_a_file_request:
+    'The user did not save this secret for shell use. Ask again with goat_handoff_create and delivery: "file".',
 } as const;
 
 export const SecretRequestFailureReason = Schema.Literals(

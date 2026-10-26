@@ -32,14 +32,10 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 
 const GENERATION_TIMEOUT = "3 minutes";
 
-/**
- * Denying `shell` or `read` outright gets the whole session refused on
- * OpenCode's free models, and an ask that is never answered would hang, so asks
- * are rejected as they arrive.
- */
+// Free models refuse denied read/shell permissions; ask and reject requests as they arrive.
 const GENERATION_PERMISSIONS = [{ action: "*", resource: "*", effect: "ask" }] as const;
 
-/** A failure's cause is the provider's own error, kept out of `detail`. */
+// Provider error text stays in cause, outside detail.
 type Outcome =
   | { readonly _tag: "text"; readonly text: string }
   | { readonly _tag: "failed"; readonly detail: string; readonly cause?: unknown };

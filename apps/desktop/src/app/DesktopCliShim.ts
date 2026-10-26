@@ -6,8 +6,7 @@ import * as Option from "effect/Option";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
-// An AppImage mounts somewhere new each run, so its launcher mounts the
-// AppImage itself instead of pointing into it.
+// AppImage mounts change each run; the launcher must mount the image itself.
 const { logInfo, logWarning } = makeComponentLogger("desktop-cli-shim");
 
 export const MARKER = "Written by GOAT: runs the desktop app's bundled goat CLI.";
@@ -48,9 +47,7 @@ export const renderCliShim = (input: {
       `rem ${MARKER}`,
       // Delayed expansion would rewrite `!name!` in paths and arguments.
       "setlocal EnableExtensions DisableDelayedExpansion",
-      // Only a non-ASCII path needs the console switched to UTF-8 to read it; a
-      // Ctrl-C that ends the batch skips the restore, so the switch is left out
-      // for the common all-ASCII install.
+      // Ctrl-C skips codepage restoration, so switch to UTF-8 only for non-ASCII install paths.
       ...(utf8
         ? [
             `for /f "tokens=2 delims=:." %%c in ('chcp') do set "goat_codepage=%%c"`,
@@ -105,8 +102,7 @@ export const renderCliShim = (input: {
     ...header,
     // Extract-and-run would make the runtime start the app instead of mounting it.
     "unset APPIMAGE_EXTRACT_AND_RUN",
-    // The AppImage runtime prints its mount point, then stays mounted until
-    // killed. Background jobs ignore Ctrl-C, so the traps unmount it on any exit.
+    // The runtime stays mounted until killed; traps unmount it because background jobs ignore Ctrl-C.
     "work=$(mktemp -d) || exit 1",
     '"$app" --appimage-mount >"$work/mount" 2>/dev/null &',
     "mounter=$!",

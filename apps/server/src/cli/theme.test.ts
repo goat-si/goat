@@ -13,8 +13,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { cli } from "../binCli.ts";
 
-// These force a failure with chmod, which Windows ignores for directories and
-// cannot use to make a file unreadable, so the failure never happens there.
+// Windows chmod cannot force these directory or file permission failures.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const runCli = (args: ReadonlyArray<string>) =>

@@ -173,12 +173,12 @@ it.effect("applies scope middleware to SSH workspace RPCs", () =>
           ),
         ),
       );
-      const fetch = yield* Schema.decodeUnknownEffect(SshWorkspaceFetchBackInput)({
+      const fetch = yield* Schema.decodeEffect(SshWorkspaceFetchBackInput)({
         target: { alias: "box", hostname: "box", username: null, port: null },
         remoteWorkspaceRoot: "/repo",
         branch: "main",
       });
-      const launch = yield* Schema.decodeUnknownEffect(SshWorkspaceLaunchInput)({
+      const launch = yield* Schema.decodeEffect(SshWorkspaceLaunchInput)({
         sourceProjectId: "p",
         destination: { connectionId: "c", expectedEnvironmentId: "e", target: fetch.target },
         title: "Work",
@@ -207,7 +207,7 @@ describe("memory RPC groups", () => {
     const upsert = WsMemoryCoreRpcGroup.requests.get("memory.upsert")!;
     const importProvider = WsMemoryImportRpcGroup.requests.get("memory.importProvider")!;
     expect(() =>
-      Schema.decodeUnknownSync(upsert.payloadSchema)({
+      Schema.decodeSync(upsert.payloadSchema)({
         memorySpaceId: "00000000-0000-4000-8000-000000000001",
         operationId: "00000000-0000-4000-8000-000000000004",
         memoryId: "00000000-0000-4000-8000-000000000002",
@@ -224,7 +224,7 @@ describe("memory RPC groups", () => {
       }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(Schema.toCodecJson(importProvider.payloadSchema))({
+      Schema.decodeSync(Schema.toCodecJson(importProvider.payloadSchema))({
         memorySpaceId: "00000000-0000-4000-8000-000000000001",
         action: "discover",
         format: "codex",
@@ -234,7 +234,7 @@ describe("memory RPC groups", () => {
   });
   it("bounds source and history output", () => {
     expect(() =>
-      Schema.decodeUnknownSync(Memory.MemorySourcePage)({
+      Schema.decodeSync(Memory.MemorySourcePage)({
         sourceThread: { environmentId: "env", threadId: "thread" },
         watermark: { fromEventId: "e1", toEventId: "e2", throughSequence: 1 },
         messages: [{ messageId: "m1", text: "x".repeat(65536) }],
@@ -242,7 +242,7 @@ describe("memory RPC groups", () => {
       }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(Memory.MemoryHistoryInput)({
+      Schema.decodeSync(Memory.MemoryHistoryInput)({
         memorySpaceId: "00000000-0000-4000-8000-000000000001",
         memoryId: "00000000-0000-4000-8000-000000000002",
         limit: 101,
@@ -257,7 +257,7 @@ it("memory changes is a typed authorized stream", () => {
   if (RpcSchema.isStreamSchema(rpc.successSchema)) {
     const element = rpc.successSchema.success;
     expect(
-      Schema.decodeUnknownSync(element)({
+      Schema.decodeSync(element)({
         kind: "reset",
         memorySpaceId: "00000000-0000-4000-8000-000000000001",
         projectionWatermark: 1,
@@ -277,12 +277,12 @@ it("binding commands have exact input result and errors", () => {
   for (const method of ["memory.projectBinding.get", "memory.projectBinding.update"]) {
     const rpc = WsMemoryCoreRpcGroup.requests.get(method)!;
     expect(() =>
-      Schema.decodeUnknownSync(rpc.payloadSchema)({
+      Schema.decodeSync(rpc.payloadSchema)({
         memorySpaceId: "00000000-0000-4000-8000-000000000001",
       }),
     ).toThrow();
     expect(
-      Schema.decodeUnknownSync(rpc.errorSchema)({
+      Schema.decodeSync(rpc.errorSchema)({
         _tag: "MemoryRpcError",
         code: "revision_changed",
       }),
@@ -302,12 +302,12 @@ it("binding commands have exact input result and errors", () => {
 it("import transport retains both typed import refusal and authorization errors", () => {
   const rpc = WsMemoryImportRpcGroup.requests.get("memory.importProvider")!;
   for (const issue of ["source_unreadable", "source_changed", "operation_id_reused"] as const) {
-    expect(
-      Schema.decodeUnknownSync(rpc.errorSchema)({ _tag: "MemoryImportRpcError", issue }),
-    ).toEqual(new Memory.MemoryImportRpcError({ issue }));
+    expect(Schema.decodeSync(rpc.errorSchema)({ _tag: "MemoryImportRpcError", issue })).toEqual(
+      new Memory.MemoryImportRpcError({ issue }),
+    );
   }
   expect(
-    Schema.decodeUnknownSync(rpc.errorSchema)({ _tag: "MemoryRpcError", code: "unavailable" }),
+    Schema.decodeSync(rpc.errorSchema)({ _tag: "MemoryRpcError", code: "unavailable" }),
   ).toEqual(new Memory.MemoryRpcError({ code: "unavailable" }));
 });
 
@@ -342,7 +342,7 @@ it("hub node RPCs decode authorization errors and stream snapshots", () => {
       ? rpc.successSchema.error
       : rpc.errorSchema;
     expect(
-      Schema.decodeUnknownSync(errorSchema)({
+      Schema.decodeSync(errorSchema)({
         _tag: "EnvironmentAuthorizationError",
         message: "Denied",
         requiredScope: "settings:write",

@@ -341,7 +341,6 @@ describe("createEnvironmentThreadStateAtoms", () => {
           historyCursor: "socket-older-1",
           hasMoreHistory: true,
           latestLocalTurnOrdinal: 4,
-          payloadBudgetExceeded: false,
         });
         yield* Queue.offer(subscription.events, { kind: "synchronized" });
         yield* observeState(

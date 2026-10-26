@@ -212,16 +212,10 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   const openProviderSetup = () => {
     if (human === null) return;
     const setup = human.providerSetup;
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: {
-        screen: "SettingsProviderAccounts",
-        params: {
-          environmentId: handoff.target.environmentId,
-          ...(setup?.driver ? { driver: setup.driver } : {}),
-          ...(setup?.instanceId ? { instanceId: setup.instanceId } : {}),
-        },
-      },
+    navigation.navigate("SettingsProviderAccounts", {
+      environmentId: handoff.target.environmentId,
+      ...(setup?.driver ? { driver: setup.driver } : {}),
+      ...(setup?.instanceId ? { instanceId: setup.instanceId } : {}),
     });
   };
   return (

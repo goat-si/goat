@@ -26,6 +26,10 @@ vi.mock("@react-navigation/native", () => ({
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({ entries: mocks.entries }) }));
 vi.mock("../../connection/catalog", () => ({ environmentCatalog: { catalogValueAtom: {} } }));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => (detail: { name: string; params: unknown }) =>
+    mocks.navigate(detail.name, detail.params),
+}));
 vi.mock("../../state/entities", () => ({ useThreadShell: mocks.shell }));
 vi.mock("../../components/ui/Button", () => ({
   Button: ({ label, onPress }: { label: string; onPress: () => void }) => (

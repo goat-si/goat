@@ -13,7 +13,6 @@ public final class GoatWorkspaceOrientationSubscriber: ExpoAppDelegateSubscriber
 
   public func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
     if UIDevice.current.userInterfaceIdiom == .pad {
-      // Keep iPad orientation policy, including portrait-only showcase captures.
       let orientations = Bundle.main.object(forInfoDictionaryKey: "UISupportedInterfaceOrientations~ipad") as? [String] ?? []
       return orientations == ["UIInterfaceOrientationPortrait"] ? .portrait : .all
     }

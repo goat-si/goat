@@ -246,7 +246,6 @@ const DOWN = "\u001b[B";
 
 /** Text a redraw leaves on screen, without cursor movement or erasing spaces. */
 const visible = (raw: string) =>
-  // eslint-disable-next-line no-control-regex -- Strip the native PTY's control sequences.
   raw.replace(/\u001b\[[0-9;?>]*[A-Za-z]|\u001b\][^\u0007]*\u0007/g, "").replace(/\s+/g, "");
 
 /**

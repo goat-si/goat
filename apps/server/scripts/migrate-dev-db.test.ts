@@ -94,6 +94,12 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
           created_at, updated_at, last_run_status, run_count)
         VALUES ('task-1', 'Nightly', 'Run it', 1, '{}', 'project-kept', '{}', '{}',
           'full-access', 'default', 'user', 'user', '2026-08-01', '2026-08-01', 'never', 0)`;
+      yield* sql`INSERT INTO scheduled_task_webhook_replay_keys
+        (task_id, replay_key, delivery_id, expires_at)
+        VALUES ('task-1', 'replay-1', 'delivery-1', 1900000000000)`;
+      yield* sql`INSERT INTO scheduled_task_webhook_pending
+        (delivery_id, task_id, coalesce_key, due_at, task_json, request_json, delivery_ids_json)
+        VALUES ('delivery-1', 'task-1', 'key-1', 1900000000000, '{}', '{}', '[]')`;
       yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at)
         VALUES ('session-1', 'user', '[]', 'pairing', '2026-08-01', '2027-08-01')`;
       for (const threadId of ["stopped-thread", "running-thread", "settled-thread"] as const) {
@@ -373,6 +379,25 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-src-" });
       const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-dest-" });
       const source = yield* createFixtureSource(sourceDir);
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          for (const [rowid, threadId, role, streaming, createdBy] of [
+            [7, "stopped-thread", "user", 0, "user"],
+            [42, "fork-thread", "assistant", 0, "agent"],
+            [101, "archived-thread", "assistant", 0, "agent"],
+            [130, "running-thread", "assistant", 0, "agent"],
+            [177, "fork-thread", "assistant", 1, "agent"],
+            [200, "fork-thread", "user", 0, "agent"],
+          ] as const) {
+            yield* sql`INSERT INTO orchestration_v2_projection_messages
+              (rowid, message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+              VALUES (${rowid}, ${`message-${rowid}`}, ${threadId}, ${role}, ${streaming},
+                '2026-08-01', '2026-08-01', ${JSON.stringify({ text: "searchable message", createdBy })})`;
+          }
+        }),
+      );
 
       const result = yield* runMigrateDevDb(
         { baseDir: destDir, source, projects: 5, threadsPerProject: 2 },
@@ -388,6 +413,25 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             yield* sql`SELECT rowid, body FROM memory_items_fts WHERE memory_items_fts MATCH 'searchable'`,
             [{ rowid: 42, body: "synthetic searchable memory" }],
           );
+          const indexedMessages = () => sql<{ message_id: string }>`
+            SELECT messages.message_id FROM orchestration_v2_message_search AS search
+            JOIN orchestration_v2_projection_messages AS messages ON messages.rowid = search.rowid
+            WHERE orchestration_v2_message_search MATCH 'searchable'
+            ORDER BY messages.message_id`;
+          assert.deepStrictEqual(yield* indexedMessages(), [
+            { message_id: "message-42" },
+            { message_id: "message-7" },
+          ]);
+          assert.deepStrictEqual(
+            yield* sql`SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+              WHERE orchestration_v2_message_search MATCH 'searchable'`,
+            [{ count: 2 }],
+          );
+          yield* sql`UPDATE orchestration_v2_projection_messages
+            SET payload_json = '{"text":"revised message"}' WHERE message_id = 'message-42'`;
+          assert.deepStrictEqual(yield* indexedMessages(), [{ message_id: "message-7" }]);
+          yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'message-7'`;
+          assert.deepStrictEqual(yield* indexedMessages(), []);
           const threads = yield* sql<{ thread_id: string }>`
             SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
           const events = yield* sql<{ stream_id: string }>`
@@ -396,10 +440,17 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             SELECT provider_session_id FROM orchestration_v2_projection_provider_sessions`;
           const reports = yield* sql<{ correlation_id: string }>`
             SELECT correlation_id FROM remote_reports ORDER BY correlation_id`;
-          const [leftovers] = yield* sql<{ auth: number; tasks: number; transfers: number }>`
+          const [leftovers] = yield* sql<{
+            auth: number;
+            tasks: number;
+            webhooks: number;
+            transfers: number;
+          }>`
             SELECT
               (SELECT COUNT(*) FROM auth_sessions) AS auth,
               (SELECT COUNT(*) FROM scheduled_tasks) AS tasks,
+              (SELECT COUNT(*) FROM scheduled_task_webhook_replay_keys) +
+                (SELECT COUNT(*) FROM scheduled_task_webhook_pending) AS webhooks,
               (SELECT COUNT(*) FROM orchestration_v2_projection_context_transfers) AS transfers`;
           const [roster] = yield* sql<{ has_pending_background_work: number }>`
             SELECT has_pending_background_work
@@ -438,7 +489,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         kept.reports.map((row) => row.correlation_id),
         ["corr-settled-thread", "corr-stopped-thread"],
       );
-      assert.deepStrictEqual(kept.leftovers, { auth: 0, tasks: 0, transfers: 0 });
+      assert.deepStrictEqual(kept.leftovers, { auth: 0, tasks: 0, webhooks: 0, transfers: 0 });
       assert.equal(kept.pending, 1);
       assert.equal(kept.cleared, 0);
     }),

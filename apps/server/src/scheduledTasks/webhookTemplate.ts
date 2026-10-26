@@ -1,14 +1,5 @@
-/**
- * Anyone who can call the URL chooses these values, so each one is wrapped in
- * `<webhook-data-ID>` tags and a closing note marks the tagged text as
- * untrusted request data. The caller picks a fresh random ID per request, so a
- * request can't close its own frame. Mentions inside a value are broken so
- * they never act; the template's own mentions still do.
- *
- * Credential-looking headers and query parameters are redacted wherever the
- * whole set renders (`{{request}}`, `{{headers}}`, `{{query}}`), as in the
- * delivery log. Naming one (`{{headers.authorization}}`) gives its raw value.
- */
+// Frame untrusted values with unpredictable per-request tags and break their mentions, preserving template mentions.
+// Whole-set placeholders redact credentials; named placeholders return raw values.
 
 export interface WebhookRequest {
   readonly method: string;
@@ -75,8 +66,7 @@ function parseBody(request: WebhookRequest): unknown {
   if (contentType.includes("application/x-www-form-urlencoded")) {
     return Object.fromEntries(new URLSearchParams(request.bodyText));
   }
-  // Senders are inconsistent about content types, so any body that parses
-  // as JSON is addressable.
+  // Senders mislabel content types; accept any parseable JSON body.
   try {
     return JSON.parse(request.bodyText) as unknown;
   } catch {
@@ -184,7 +174,6 @@ export function renderWebhookPrompt(
       if (!missing.includes(expression)) missing.push(expression);
       return "";
     }
-    // An empty value carries no request data, so it needs no frame or note.
     if (text === "") return "";
     if (raw) return text;
     framed = true;

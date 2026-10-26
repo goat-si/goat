@@ -15,7 +15,7 @@ vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: () => null,
   useKeyboardState: () => false,
 }));
-vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollViewMarker: () => null }));
+vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
@@ -59,12 +59,8 @@ it("opens a report's exact memory target and leaves legacy text without an actio
   await view.click("View memory details");
   expect(h.navigations).toMatchObject([
     [
-      "SettingsSheet",
-      {
-        params: {
-          params: { environmentId: nativeEnv, memorySpaceId: nativeSpace, memoryId: nativeId },
-        },
-      },
+      "SettingsMemory",
+      { environmentId: nativeEnv, memorySpaceId: nativeSpace, memoryId: nativeId },
     ],
   ]);
   await act(async () => h.revoke());

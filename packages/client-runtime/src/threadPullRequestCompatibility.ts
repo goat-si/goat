@@ -4,7 +4,7 @@ import type {
   ThreadId,
   ThreadPullRequestKey,
 } from "@goat/contracts";
-import { normalizeThreadPullRequestKey } from "@goat/shared/threadPullRequests";
+import { normalizeThreadPullRequestKey } from "./threadPullRequests.ts";
 
 type LinkingCapabilities = Pick<
   ExecutionEnvironmentCapabilities,

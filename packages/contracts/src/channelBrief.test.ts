@@ -27,7 +27,7 @@ const decode = Schema.decodeUnknownSync(ChannelTaskBrief);
 describe("ChannelTaskBrief", () => {
   it("round-trips the exact delivered instruction and nullable criteria", () => {
     const codec = Schema.fromJsonString(ChannelTaskBrief);
-    expect(Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decode(brief)))).toEqual(brief);
+    expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(decode(brief)))).toEqual(brief);
     expect(
       decode({ ...brief, target: { ...brief.target, hostId: "mac-studio" } }).target.hostId,
     ).toBe("mac-studio");

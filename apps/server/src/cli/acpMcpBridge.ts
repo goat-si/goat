@@ -5,9 +5,7 @@ import { runAcpMcpBridgeFastPath } from "../mcp/AcpMcpStdioBridge.ts";
 import { agentSurfaceInvocation, nodeInputReader } from "./agentSurfaceCommand.ts";
 import { runAgentSurfaceCliMain } from "./agentSurfaceCli.ts";
 
-/**
- * The credential stays in the environment, never on the command line.
- */
+/** The credential stays in the environment, never on the command line. */
 export const acpMcpBridgeCommand = Command.make("acp-mcp-bridge").pipe(
   Command.withDescription("Bridge GOAT's MCP endpoint to stdio for ACP agents."),
   Command.unlisted,

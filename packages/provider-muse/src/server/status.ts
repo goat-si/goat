@@ -133,8 +133,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     });
   }
   const models = catalog.success.value;
-  // MSP has no auth signal, and model/list answers from Muse's cache even when logged out.
-  // Auth failures surface on the first turn instead.
+  // MSP has no auth signal and serves cached models while logged out; failures surface on first turn.
   return snapshot(
     {
       installed: true,

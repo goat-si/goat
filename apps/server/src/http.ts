@@ -41,7 +41,7 @@ import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
-import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
+import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -76,8 +76,7 @@ export const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsaf
 export const HTML_CONTENT_SECURITY_POLICY =
   "sandbox allow-scripts allow-forms allow-popups allow-downloads";
 
-// Types a browser may render as a document if a proxy strips the disposition
-// header. Downloads of these fall back to octet-stream.
+// Proxies may strip disposition; force document-capable downloads to octet-stream.
 const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
@@ -247,6 +246,9 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   let status = 200;
   let offset = 0n;
   let bytesToRead: bigint | undefined;
+  let rangeSize = mediaInfo?.size;
+  let ifRangeMatches = ifRangeHeader === undefined;
+  headers["Accept-Ranges"] = "bytes";
   if (isMedia) {
     const fs = yield* FileSystem.FileSystem;
     const info = mediaInfo
@@ -277,7 +279,6 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
       remainingSeconds > 0
         ? `private, max-age=${remainingSeconds}, must-revalidate`
         : "private, no-store";
-    headers["Accept-Ranges"] = "bytes";
     // A guarded descriptor pins the inode, and its size, mtime and ctime identify the bytes it
     // serves, so that ETag is strong. Unguarded metadata stays weak: revalidation only.
     if (mtime !== null) {
@@ -291,31 +292,36 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     }
     // If-Range joins bytes from two reads, so it needs an exact strong ETag match. Dates and weak
     // ETags fall back to the full body.
-    const ifRangeMatches =
+    rangeSize = info.size;
+    ifRangeMatches =
       ifRangeHeader === undefined ||
       (info.strong && headers.ETag !== undefined && ifRangeHeader.trim() === headers.ETag);
-    if (method === "GET" && rangeHeader && ifRangeMatches) {
-      const range = assetByteRange(rangeHeader, info.size);
-      if (range?._tag === "Unsatisfiable") {
-        return HttpServerResponse.empty({
-          status: 416,
-          headers: {
-            ...headers,
-            "Cache-Control": "private, no-store",
-            "Content-Range": `bytes */${info.size}`,
-          },
-        });
-      }
-      if (range?._tag === "Range") {
-        status = 206;
-        offset = range.offset;
-        bytesToRead = range.bytesToRead;
-        headers["Content-Range"] = range.contentRange;
-      }
-    }
     if (method === "HEAD") {
       headers["Content-Length"] = String(info.size);
       return HttpServerResponse.empty({ status, headers });
+    }
+  }
+  if (method === "GET" && rangeHeader && ifRangeMatches) {
+    if (rangeSize === undefined) {
+      const fs = yield* FileSystem.FileSystem;
+      rangeSize = (yield* fs.stat(asset.path)).size;
+    }
+    const range = assetByteRange(rangeHeader, rangeSize);
+    if (range?._tag === "Unsatisfiable") {
+      return HttpServerResponse.empty({
+        status: 416,
+        headers: {
+          ...headers,
+          "Cache-Control": "private, no-store",
+          "Content-Range": `bytes */${rangeSize}`,
+        },
+      });
+    }
+    if (range?._tag === "Range") {
+      status = 206;
+      offset = range.offset;
+      bytesToRead = range.bytesToRead;
+      headers["Content-Range"] = range.contentRange;
     }
   }
   if (mediaFile && mediaInfo) {
@@ -358,8 +364,7 @@ export const layerBrowserApiCors = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
-    // Dev uses credentialed requests from Vite or the Electron custom origin, so both must be
-    // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin.
+    // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
     return HttpRouter.cors({
       ...(devOrigin
         ? {
@@ -475,8 +480,7 @@ class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecor
   readonly cause: unknown;
 }> {}
 
-// Renderers export up to once a second while they have spans buffered, so
-// tracing this proxy would add more server spans than it forwards.
+// Tracing once-per-second renderer exports would create more spans than it forwards.
 export const layerOtlpTracesProxyRoute = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
@@ -533,9 +537,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
 
 const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
 
-// TracerDisabledWhen is one predicate for the whole server, and
-// HttpRouter.serve builds its routes privately, so it is provided to the served
-// layer, never merged into the routes.
+// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
 const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
@@ -574,10 +576,15 @@ export const layerAssetRoute = HttpRouter.add(
         headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
       });
     }
-    if (asset.kind === "github-media") {
-      return yield* githubMediaResponse(asset, request.headers).pipe(
+    if (asset.kind === "source-control-media") {
+      return yield* sourceControlMediaResponse(asset, request.headers).pipe(
         Effect.tapError((cause) =>
-          Effect.logWarning("Failed to fetch GitHub media.", { url: asset.url, cause }),
+          // The URL can carry a token in its query string, and the error keeps the request it
+          // failed on; the host and the failure kind are enough to diagnose.
+          Effect.logWarning("Failed to fetch source control media.", {
+            host: URL.canParse(asset.url) ? new URL(asset.url).host : undefined,
+            reason: cause.reason._tag,
+          }),
         ),
         Effect.orElseSucceed(() =>
           HttpServerResponse.empty({
@@ -815,8 +822,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     const etag = headers.ETag;
     const lastModified = headers["Last-Modified"];
 
-    // If-None-Match takes precedence over dates and uses weak comparison for
-    // GET/HEAD, including when compression changes the transferred bytes.
+    // If-None-Match precedes dates and uses weak GET/HEAD comparison even across compression.
     const ifNoneMatch = request.headers["if-none-match"];
     const ifModifiedSince = request.headers["if-modified-since"];
     const unchanged =

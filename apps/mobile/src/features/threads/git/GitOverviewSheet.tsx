@@ -1,3 +1,4 @@
+import { useSelectWorkspaceDetail } from "../../workspace/useSelectWorkspaceDetail";
 import * as Dialog from "../../../components/ui/Dialog";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { useOpenPullRequest } from "../../../native/useOpenPullRequest";
@@ -9,6 +10,7 @@ import {
   requiresDefaultBranchConfirmation,
 } from "@goat/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import {
   CommonActions,
   StackActions,
@@ -77,6 +79,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
 }
 
 function GitOverviewSheetGuard(props: GitOverviewSheetProps) {
+  const selectDetail = useSelectWorkspaceDetail();
   const navigation = useNavigation();
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
@@ -93,8 +96,8 @@ function GitOverviewSheetGuard(props: GitOverviewSheetProps) {
   useEffect(() => {
     if (showLocalWorkspace || isInspector) return;
     if (navigation.canGoBack()) navigation.goBack();
-    else navigation.navigate("Thread", { environmentId, threadId });
-  }, [environmentId, isInspector, navigation, showLocalWorkspace, threadId]);
+    else selectDetail({ name: "Thread", params: { environmentId, threadId } });
+  }, [environmentId, isInspector, navigation, selectDetail, showLocalWorkspace, threadId]);
   return showLocalWorkspace ? <GitOverviewSheetContent {...props} /> : null;
 }
 
@@ -159,14 +162,18 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
           }),
   }));
 
+  const { shortLabel, singular } = sourceControlClients.get(
+    gitStatus.data?.sourceControlProvider?.kind,
+  ).changeRequest;
+
   const openExistingPr = async () => {
     const prUrl = gitStatus.data?.pr?.state === "open" ? gitStatus.data.pr.url : null;
     if (!prUrl) {
-      Dialog.alert("No open PR", "This branch does not have an open pull request.");
+      Dialog.alert(`No open ${shortLabel}`, `This branch does not have an open ${singular}.`);
       return;
     }
     if (!(await openPullRequest(prUrl))) {
-      Dialog.alert("Unable to open PR", "The pull request could not be opened.");
+      Dialog.alert(`Unable to open ${shortLabel}`, `The ${singular} could not be opened.`);
     }
   };
 
@@ -239,15 +246,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       return `${ahead} commit${ahead === 1 ? "" : "s"} ahead`;
     }
     if (item.kind === "open_pr" && status.pr?.number != null) {
-      return `PR #${status.pr.number} ${status.pr.state ?? "open"}`;
+      return `${shortLabel} #${status.pr.number} ${status.pr.state ?? "open"}`;
     }
     return undefined;
   };
 
   const behindCount = gitStatus.data?.behindCount ?? 0;
 
-  // Tying RefreshControl to the query's isPending flag left the spinner stuck
-  // (the status query reports pending during quiet background refreshes too).
+  // Background refreshes also report pending; using that query flag would stick the RefreshControl spinner.
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -331,15 +337,15 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         {linkedPrActions.canLink ? (
           <ListRow
             icon="link"
-            label="Link pull request"
-            description="Attach a pull request by URL or number"
+            label={`Link ${linkedPrActions.terminology.singular}`}
+            description={`Attach a ${linkedPrActions.terminology.singular} by URL or number`}
             onPress={linkedPrActions.promptLink}
           />
         ) : null}
       </ListSection>
 
       {linkedPrLines.length > 0 ? (
-        <ListSection title="Linked pull requests">
+        <ListSection title={`Linked ${linkedPrActions.terminology.plural}`}>
           {linkedPrLines.map((line, index) => (
             <LinkedPullRequestRow
               key={linkedPullRequestKey(line)}

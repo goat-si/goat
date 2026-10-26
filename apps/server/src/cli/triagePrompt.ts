@@ -102,11 +102,7 @@ in the report: API keys, tokens, pairing credentials, and the user's home direct
 path. When in doubt, leave it out. Let the user review the final text before sharing.
 `;
 
-/**
- * The one-line argument the agent session is launched with. The real
- * instructions live in `prompt.md` on disk: Windows `.cmd` shims run through
- * cmd.exe, which cannot carry a multiline, multi-kilobyte argv string.
- */
+/** Windows .cmd shims cannot carry a multiline playbook in argv; point to the file instead. */
 export const buildTriageLaunchPrompt = (promptFilePath: string) =>
   `Read the file "${promptFilePath}" and follow its instructions exactly: it is your GOAT triage playbook, and it starts with asking the user what went wrong.`;
 

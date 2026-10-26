@@ -158,7 +158,6 @@ const liveRead = Effect.gen(function* () {
   const home = yield* HostProcess.HomeDirectory;
   const platform = yield* HostProcess.Platform;
   const seenStallAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
-  // @effect-diagnostics-next-line returnEffectInGen:off - the read effect is the result.
   return Effect.gen(function* () {
     const snapshot = yield* resources.read;
     const stall = yield* loop.latestStall;

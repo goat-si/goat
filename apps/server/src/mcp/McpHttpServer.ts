@@ -155,11 +155,7 @@ const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
     Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
   );
 
-/**
- * Agents GOAT launched carry a registry token and must never be sent into an
- * OAuth flow when it dies: they cannot open a browser, and a sign-in would mint
- * a credential that outlives their session.
- */
+/** Launched agents cannot open OAuth browsers; OAuth would mint credentials outliving their session. */
 const unauthorized = (input: {
   readonly request: HttpServerRequest.HttpServerRequest;
   readonly presentedToken: boolean;
@@ -491,8 +487,7 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
     actionTimeline: tail(metadata.actionTimeline, "action timeline entries"),
   };
 
-  // Per-field caps do not sum below the ceiling: three log arrays of 40 capped
-  // entries alone can pass 60 KB, and the caps count characters, not bytes.
+  // Per-field character caps can still exceed the total byte ceiling.
   const shedOrder = [
     "actionTimeline",
     "networkEntries",
@@ -541,7 +536,6 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
     } else {
       const keep = Math.floor(lists[key].length / 2);
       dropped[key] += lists[key].length - keep;
-      // slice(-0) keeps everything, so spell out the empty case.
       lists[key] =
         keep === 0
           ? []
@@ -610,15 +604,6 @@ const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
   );
   return screenshotPath;
 });
-
-/**
- * Tool input schemas are advertised through each schema's JSON codec, which
- * offers `null` for every `Schema.optional` field, but Toolkit decodes with the
- * schema itself and rejects that `null`. Decoding through the same codec makes
- * a tool accept what it advertises.
- * Tools that advertise a raw JSON Schema (the memory tools) decode their strict
- * contracts in the handler, so they keep that schema.
- */
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
@@ -735,10 +720,6 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
-/**
- * `McpServer.toolkit` serializes every result as JSON text, which is the wrong
- * shape for a screenshot: the model needs image content.
- */
 const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function* <
   T extends Tool.Any,
   E,
@@ -998,14 +979,7 @@ const handoffTargetIds = (
   return typeof threadId === "string" ? [threadId] : [];
 };
 
-/**
- * Runs a tool registration against a server that records one anonymous
- * `mcp.tool.invoked` event per call: the tool, the calling agent's provider,
- * the outcome with its failure code, and the duration. A handoff tool also
- * reports the caller's model, origin, and delegation depth, the settings the
- * agent chose, and the provider, model, and modes of each thread that received
- * the work. Ids, prompts, and free text are never recorded.
- */
+/** Tool analytics must never include IDs, prompts or free text. */
 const withToolAnalytics =
   /* Request instrumentation already owns the span; keep this helper in that context. */
   Effect.fnUntraced(function* <A, E, R>(registration: Effect.Effect<A, E, R>) {
@@ -1066,6 +1040,11 @@ const withToolAnalytics =
           durationMs: number,
         ) {
           const toolName = tool.replace(/^t3_/, "goat_");
+          const handoff = HANDOFF_TOOLS.has(toolName);
+          const outcome = toolOutcome(result);
+          // Agents call status, read, and preview tools in tight loops, so an
+          // event per successful call floods analytics. Only failures count there.
+          if (!handoff && outcome.outcome === "ok") return;
           // Client credentials (no calling thread) report an unknown caller.
           const invocation = Option.getOrUndefined(
             yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
@@ -1073,7 +1052,6 @@ const withToolAnalytics =
           const providers = Option.isSome(registry) ? yield* registry.value.getProviders : [];
           // Only handoff tools pay for thread lookups; the rest report the
           // caller's provider from the credential.
-          const handoff = HANDOFF_TOOLS.has(toolName);
           const caller =
             handoff && invocation !== undefined
               ? ((yield* shellOf(invocation.threadId)) ?? undefined)
@@ -1101,7 +1079,7 @@ const withToolAnalytics =
                   ),
                 }),
             targets: targets.filter((thread) => thread !== null),
-            outcome: toolOutcome(result),
+            outcome,
             ...(handoff
               ? { settings: handoffSettings(toolName, args, result?.structuredContent) }
               : {}),
@@ -1114,8 +1092,8 @@ const withToolAnalytics =
       );
     const recordingServer = McpServer.McpServer.of({
       ...server,
-      addTool: (options) =>
-        server.addTool({
+      addTool: Effect.fn("McpServer.addTool")(function (options) {
+        return server.addTool({
           ...options,
           handle:
             /* Request instrumentation already owns the span; keep this helper in that context. */
@@ -1137,7 +1115,8 @@ const withToolAnalytics =
                 }),
               );
             }),
-        }),
+        });
+      }),
     });
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });

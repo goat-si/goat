@@ -74,8 +74,7 @@ function IndexDraftLanding() {
     return session.promotedTo != null ? "promoted" : "unpromoted";
   });
   const router = useRouter();
-  // Read at effect time: this page stays mounted while a navigation away from
-  // "/" is still loading, but the router already points at the new location.
+  // Read at effect time; this page can stay mounted while the router is already navigating away.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
   // One start per attempt; a retry request opens the next attempt, and a failed or
   // projectless run releases it (null) so a later input change can start again.

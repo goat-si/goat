@@ -22,15 +22,15 @@ describe("channel addresses", () => {
       chatGuid: "iMessage;-;+15550000000",
     };
     const codec = Schema.toCodecJson(ChannelReplyAddress);
-    expect(Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(address))).toEqual(address);
+    expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(address))).toEqual(address);
     expect(
       decodeMeta({ conversationId: "conv", originKind: "imessage", kind: "inbound" }).originKind,
     ).toBe("imessage");
   });
   it("keeps the Slack thread root and external timestamps as strings", () => {
     const json = Schema.toCodecJson(ChannelReplyAddress);
-    const address = Schema.decodeUnknownSync(json)(
-      Schema.encodeSync(json)(Schema.decodeUnknownSync(json)(slackAddress)),
+    const address = Schema.decodeSync(json)(
+      Schema.encodeSync(json)(Schema.decodeSync(json)(slackAddress)),
     );
     expect(address).toEqual(slackAddress);
     expect(() => decodeAddress({ ...slackAddress, rootTs: 1760000000.0001 })).toThrow();

@@ -96,7 +96,7 @@ describe("persisted task memory ceiling", () => {
       currentMemoryAccess: assessment,
     });
     expect(
-      Schema.decodeUnknownSync(Schema.fromJsonString(ScheduledTask))(
+      Schema.decodeSync(Schema.fromJsonString(ScheduledTask))(
         Schema.encodeSync(Schema.fromJsonString(ScheduledTask))(current),
       ).currentMemoryAccess,
     ).toEqual(assessment);
@@ -113,24 +113,24 @@ describe("persisted task memory ceiling", () => {
       }),
     ).toThrow();
     expect(
-      Schema.decodeUnknownSync(Schema.fromJsonString(ScheduledTask))(
+      Schema.decodeSync(Schema.fromJsonString(ScheduledTask))(
         Schema.encodeSync(Schema.fromJsonString(ScheduledTask))(persisted),
       ).memoryGrantCeiling,
     ).toBe("none");
     expect(() =>
-      Schema.decodeUnknownSync(ScheduledTaskUpsertInput)({
+      Schema.decodeSync(ScheduledTaskUpsertInput)({
         ...row,
         memoryGrantCeiling: "read_write",
       }),
     ).toThrow();
     const codec = Schema.Struct({ memoryGrantCeiling: MemoryTaskGrantCeilingField });
-    expect(Schema.decodeUnknownSync(codec)({})).toEqual({ memoryGrantCeiling: "none" });
+    expect(Schema.decodeSync(codec)({})).toEqual({ memoryGrantCeiling: "none" });
     expect(Schema.encodeSync(codec)({})).toEqual({});
     expect(
       JSON.parse(Schema.encodeSync(Schema.fromJsonString(ScheduledTask))(persisted)),
     ).not.toHaveProperty("memoryGrantCeiling");
     for (const memoryGrantCeiling of ["none", "read", "read_write"] as const) {
-      expect(Schema.decodeUnknownSync(codec)({ memoryGrantCeiling })).toEqual({
+      expect(Schema.decodeSync(codec)({ memoryGrantCeiling })).toEqual({
         memoryGrantCeiling,
       });
       expect(Schema.encodeSync(codec)({ memoryGrantCeiling })).toEqual(
@@ -144,7 +144,7 @@ describe("persisted task memory ceiling", () => {
       } else {
         expect(JSON.parse(encoded)).toHaveProperty("memoryGrantCeiling", memoryGrantCeiling);
       }
-      expect(Schema.decodeUnknownSync(json)(encoded).memoryGrantCeiling).toBe(memoryGrantCeiling);
+      expect(Schema.decodeSync(json)(encoded).memoryGrantCeiling).toBe(memoryGrantCeiling);
     }
     const rpc = WsRpcGroup.requests.get(WS_METHODS.scheduledTasksUpsert)!;
     const decodeRpc = Schema.decodeUnknownSync(Schema.fromJsonString(rpc.payloadSchema));

@@ -106,6 +106,8 @@ const threadsLayer = (
   Layer.succeed(
     ThreadManagementService.ThreadManagementService,
     ThreadManagementService.ThreadManagementService.of({
+      listOlderSettledThreads: unused,
+      awaitBackgroundTasks: unused,
       getLaunchedPendingQuestions: unused,
       assertReviewTaskSendAllowed: unused,
       listActiveSubagentThreadIds: unused,

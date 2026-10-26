@@ -525,7 +525,6 @@ const probeLinux = Effect.fnUntraced(function* () {
   const user = (yield* HostProcess.Username) ?? "this user";
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
 
-  const preferred = localDisplayNumber(environment.DISPLAY);
   // The Wayland session this server belongs to, named or the one its session type implies. It
   // is settled before any X socket is tried: a server in a Wayland session never looks for X.
   const waylandName =

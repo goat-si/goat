@@ -11,10 +11,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
 
-/**
- * The agent gates each write behind `session/request_permission`, so only
- * path containment is checked here.
- */
+/** The agent requests permission for every write; check only path containment here. */
 const CLIENT_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 function isInsideRoot(path: Path.Path, root: string, candidate: string): boolean {

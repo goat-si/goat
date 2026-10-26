@@ -13,7 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
-import Migration0087 from "../../persistence/Migrations/091_FleetHealth.ts";
+import Migration0087 from "../../persistence/Migrations/092_FleetHealth.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { Placement, PlacementHostConditions } from "../resources/Placement.ts";
 import { place } from "../resources/placementRules.ts";

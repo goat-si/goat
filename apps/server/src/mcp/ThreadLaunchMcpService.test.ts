@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as ThreadLaunchMcp from "./ThreadLaunchMcpService.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
@@ -156,6 +157,7 @@ function fixture(
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
   let routes = 0;
   const deps = Layer.mergeAll(
+    DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
     NodeServices.layer,
     ServerSettings.layerTest({
       goatclaw: {

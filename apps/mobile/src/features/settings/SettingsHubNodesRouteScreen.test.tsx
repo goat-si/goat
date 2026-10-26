@@ -1,5 +1,5 @@
 import { EnvironmentId, type HostStatusEntry, type HubNode } from "@goat/contracts";
-import { act, type ReactNode } from "react";
+import { useSyncExternalStore, act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -9,6 +9,8 @@ type Target = {
   serverConfig?: { settings: { hub: { enabled: boolean; autoJoinCloudMachines: boolean } } };
 };
 const state = vi.hoisted(() => ({
+  revision: 0,
+  listeners: new Set<() => void>(),
   environments: [] as Target[],
   selectedTargets: [] as Target[],
   selectedIds: null as Set<string> | null,
@@ -98,7 +100,16 @@ vi.mock("../../state/server", async () => {
   };
 });
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (target: unknown) => state.query(target),
+  useEnvironmentQuery: (target: unknown) => {
+    useSyncExternalStore(
+      (listener) => {
+        state.listeners.add(listener);
+        return () => state.listeners.delete(listener);
+      },
+      () => state.revision,
+    );
+    return state.query(target);
+  },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 
@@ -159,7 +170,12 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
 });
-const render = () => act(async () => root.render(<SettingsHubNodesRouteScreen />));
+const render = () =>
+  act(async () => {
+    state.revision++;
+    for (const listener of state.listeners) listener();
+    root.render(<SettingsHubNodesRouteScreen />);
+  });
 function button(name: string) {
   const match = container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
   if (!match) throw new Error(`Missing button ${name}`);

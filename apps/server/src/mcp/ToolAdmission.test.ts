@@ -26,6 +26,7 @@ import {
   type RuntimeMode,
   ProviderInstanceId,
   ProjectId,
+  SourceControlProviderKind,
   ThreadId,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -888,7 +889,7 @@ it.effect.each([
                 remoteName: "origin",
                 remoteUrl: "https://github.com/example/repo.git",
               },
-              provider: "github",
+              provider: SourceControlProviderKind.make("github"),
               displayName: "example/repo",
               owner: "example",
               name: "repo",

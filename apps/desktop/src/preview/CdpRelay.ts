@@ -10,16 +10,18 @@ export interface CdpRelayTarget {
     method: string,
     params: Record<string, unknown>,
     sessionId: string | undefined,
+    /** The extra session that sent it, such as a viewer's; the main connection has none. */
+    owner?: string,
   ) => Promise<unknown>;
+  readonly sessionDetached?: (owner: string) => void;
+  /** Shared native starts omit owners; report each viewer before its input can arrive. */
+  readonly screencastRequested?: (owner: string) => void;
   /** The page's own CDP target id; Playwright keys the main frame by it. */
   readonly targetId: () => Promise<string>;
   readonly url: () => string;
   readonly title: () => string;
   readonly userAgent: () => string;
-  /**
-   * The desktop app and the server it launched share a disk, so the server's
-   * Playwright reads the file where it asked for it.
-   */
+  /** The desktop and its server share a disk; download paths need no translation. */
   readonly setDownloadDirectory: (directory: string | null) => void;
 }
 
@@ -60,11 +62,7 @@ export function createCdpRelayConnection(
 ): CdpRelayConnection {
   const send = (message: Record<string, unknown>) => write(JSON.stringify(message));
   let attached = false;
-  /**
-   * Sessions this relay invented. Extra page sessions (Playwright's
-   * `newCDPSession`) all reach the one real debugger session, so each gets the
-   * page's events; other ids are the page's own child sessions, such as iframes.
-   */
+  /** Relay-created page sessions share one real debugger; child frame sessions retain their own ids. */
   const sessions = new Map<string, "browser" | "page">([[PAGE_SESSION_ID, "page"]]);
   let sessionSequence = 0;
   const screencast = createSharedScreencast((method, params) =>
@@ -131,6 +129,7 @@ export function createCdpRelayConnection(
         if (typeof sessionId === "string" && sessionId !== PAGE_SESSION_ID) {
           sessions.delete(sessionId);
           screencast.leave(sessionId);
+          target.sessionDetached?.(sessionId);
         }
         return {};
       }
@@ -153,6 +152,7 @@ export function createCdpRelayConnection(
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
     const viewer = command.sessionId ?? PAGE_SESSION_ID;
     const child = sessions.get(viewer) === "page" ? undefined : viewer;
+    const owner = child === undefined && viewer !== PAGE_SESSION_ID ? viewer : undefined;
     // The page itself is already running, but its child frames are not:
     // Playwright auto-attaches with waitForDebuggerOnStart, so Chromium pauses
     // every new cross-site iframe and worker until this reaches it. Swallowing
@@ -163,6 +163,7 @@ export function createCdpRelayConnection(
     if (child === undefined) {
       switch (command.method) {
         case "Page.startScreencast":
+          if (owner !== undefined) target.screencastRequested?.(owner);
           return screencast.start(viewer, command.params ?? {}).then(() => ({}));
         case "Page.stopScreencast":
           return screencast.stop(viewer).then(() => ({}));
@@ -171,7 +172,8 @@ export function createCdpRelayConnection(
           return Promise.resolve({});
       }
     }
-    return target.send(command.method, command.params ?? {}, child);
+    if (command.method === "Emulation.setFocusEmulationEnabled") return Promise.resolve({});
+    return target.send(command.method, command.params ?? {}, child, owner);
   };
 
   return {
@@ -188,8 +190,7 @@ export function createCdpRelayConnection(
           ? browserCommand(command)
           : pageCommand(command);
       const route = command.sessionId === undefined ? {} : { sessionId: command.sessionId };
-      // Replies leave as commands finish, as Chromium's do, so a slow command
-      // such as a screenshot never holds up the ones behind it.
+      // Reply as commands finish so slow commands cannot block later replies.
       void result.then(
         (value) => {
           const announce =

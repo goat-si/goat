@@ -31,6 +31,8 @@ import * as ServerConfig from "../../../config.ts";
 import { CodexProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CloudSource from "../../../orchestration-v2/CloudTaskSourceService.ts";
 import * as ProviderAdapters from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
+
+import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
@@ -63,6 +65,7 @@ const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
 /** Launch handlers resolve their service from the tool invocation context. */
 const withLaunchService = <A, E, R>(dependencies: Layer.Layer<A, E, R>) =>
   ThreadLaunchMcpService.layer.pipe(
+    Layer.provideMerge(DocumentText.layer.pipe(Layer.provide(NodeServices.layer))),
     Layer.provideMerge(Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({})),
     Layer.provide(
       Layer.mock(ProviderAdapters.ProviderAdapterRegistryV2)({
@@ -755,6 +758,7 @@ const clientLaunchHarness = (input: {
             thread: {
               id: launch.threadId,
               projectId: launch.projectId,
+              title: launch.title,
               modelSelection: launch.modelSelection,
             },
             runs: [],
@@ -778,6 +782,7 @@ const clientLaunchHarness = (input: {
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(RemoteReportService.RemoteReportService)({}),
     NodeServices.layer,
+    DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer)),
   ).pipe(
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),

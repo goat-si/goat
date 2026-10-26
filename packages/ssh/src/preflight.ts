@@ -57,7 +57,6 @@ const methodList = (stderr: string) => {
 const safeLine = (text: string) =>
   text
     // SSH and local proxy stderr can contain terminal escape sequences.
-    // oxlint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
     .split(/\r?\n/u)
     .find((line) => line.trim())

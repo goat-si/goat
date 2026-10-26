@@ -142,6 +142,7 @@ vi.mock("../state/entities", () => ({
   useProjects: () => [],
   useThreadShell: () => null,
 }));
+vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
 vi.mock("../state/server", () => ({ environmentServerConfigsAtom: {} }));
 vi.mock("../uiStateStore", () => ({
   legacyProjectCwdPreferenceKey: () => "remote-project",

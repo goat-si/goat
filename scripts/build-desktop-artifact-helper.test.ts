@@ -21,7 +21,7 @@ it.effect("places the signed Nightly computer use helper under Contents/Helpers"
       "/tmp/goat-computer-use/GOAT Computer Use.app",
     );
     assert.deepStrictEqual(config.extraResources, [
-      ...DESKTOP_EXTRA_RESOURCES,
+      ...DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
       {
         from: "/tmp/goat-computer-use/GOAT Computer Use.app",
         to: "../Helpers/GOAT Computer Use.app",

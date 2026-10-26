@@ -243,8 +243,8 @@ export const make = Effect.gen(function* () {
     get: readClientSettings(fileSystem, environment.clientSettingsPath).pipe(
       Effect.withSpan("desktop.clientSettings.get"),
     ),
-    set: (settings) =>
-      crypto.randomUUIDv4().pipe(
+    set: Effect.fn("desktop.clientSettings.set")(function (settings) {
+      return crypto.randomUUIDv4().pipe(
         Effect.map((uuid) => uuid.replace(/-/g, "")),
         Effect.mapError(
           (cause) =>
@@ -266,8 +266,8 @@ export const make = Effect.gen(function* () {
         Effect.flatMap(committed.publish),
         Effect.uninterruptible,
         semaphore.withPermits(1),
-        Effect.withSpan("desktop.clientSettings.set"),
-      ),
+      );
+    }),
   });
 });
 
@@ -283,12 +283,13 @@ export const layerTest = (initialSettings: Option.Option<ClientSettings> = Optio
       return DesktopClientSettings.of({
         onCommitted: committed.onCommitted,
         get: Ref.get(settingsRef),
-        set: (settings) =>
-          Ref.set(settingsRef, Option.some(settings)).pipe(
+        set: Effect.fn("DesktopClientSettings.set")(function (settings) {
+          return Ref.set(settingsRef, Option.some(settings)).pipe(
             Effect.andThen(committed.publish(settings)),
             Effect.uninterruptible,
             semaphore.withPermits(1),
-          ),
+          );
+        }),
       });
     }),
   );

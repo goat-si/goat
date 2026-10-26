@@ -56,8 +56,8 @@ function LinuxSetupGuide({ setup }: { setup: ComputerUseSetup }) {
     >
       <h4 className="text-sm font-medium">Set up on Linux</h4>
       <ul className="space-y-3">
-        {setup.steps.map((step, index) => (
-          <li key={`${step.id}:${index}`} className="space-y-1">
+        {setup.steps.map((step) => (
+          <li key={step.id} className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm">{step.title}</span>
               <Badge variant={setupPresentation[step.status].variant}>

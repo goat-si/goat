@@ -1,26 +1,12 @@
 import { secretSettingsFields } from "@goat/contracts";
-import * as AzureDevOps from "@goat/source-control-azure-devops/client/definition";
-import * as Bitbucket from "@goat/source-control-bitbucket/client/definition";
-import type { SourceControlClientDefinition } from "@goat/source-control-core/client/definition";
-import * as Forgejo from "@goat/source-control-forgejo/client/definition";
-import * as GitCafe from "@goat/source-control-gitcafe/client/definition";
-import * as GitHub from "@goat/source-control-github/client/definition";
-import * as GitLab from "@goat/source-control-gitlab/client/definition";
 
-const definitions: ReadonlyArray<SourceControlClientDefinition> = [
-  GitHub.definition,
-  GitLab.definition,
-  AzureDevOps.definition,
-  Bitbucket.definition,
-  Forgejo.definition,
-  GitCafe.definition,
-];
+import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
 
 export const SOURCE_CONTROL_HOST_SECRET_FIELDS: ReadonlyMap<
   string,
   ReadonlyArray<string>
 > = new Map(
-  definitions.flatMap((definition) => {
+  sourceControlDefinitions.definitions.flatMap((definition) => {
     const fields = definition.settings ? secretSettingsFields(definition.settings) : [];
     return fields.length > 0 ? [[definition.kind, fields] as const] : [];
   }),

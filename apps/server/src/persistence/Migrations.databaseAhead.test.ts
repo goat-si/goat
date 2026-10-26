@@ -22,7 +22,7 @@ describe("runMigrations database ahead of this build", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* runMigrations({ toMigrationInclusive: 60 });
-        // ServerActivityIndexes belongs at 68. A newer build already recorded
+        // ServerActivityIndexes belongs at 70. A newer build already recorded
         // its own migration on that id, so reconciliation cannot move it.
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
@@ -30,7 +30,7 @@ describe("runMigrations database ahead of this build", () => {
         `;
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (69, 'FutureUpstreamMigration')
+          VALUES (70, 'FutureUpstreamMigration')
         `;
 
         const exit = yield* Effect.exit(runMigrations());

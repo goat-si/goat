@@ -501,16 +501,10 @@ describe("provider setup request", () => {
     await click("Review request");
     expect(container.textContent).toContain("Sign in to Claude on vps");
     await click("Open setup");
-    expect(harness.navigate).toHaveBeenCalledWith("SettingsSheet", {
-      screen: "SettingsContent",
-      params: {
-        screen: "SettingsProviderAccounts",
-        params: {
-          environmentId: EnvironmentId.make("vps"),
-          driver: "claudeAgent",
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-        },
-      },
+    expect(harness.navigate).toHaveBeenCalledWith("SettingsProviderAccounts", {
+      environmentId: EnvironmentId.make("vps"),
+      driver: "claudeAgent",
+      instanceId: ProviderInstanceId.make("claudeAgent"),
     });
     expect(harness.respond).not.toHaveBeenCalled();
   });

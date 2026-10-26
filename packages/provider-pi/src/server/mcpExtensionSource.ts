@@ -27,10 +27,7 @@ export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
  */
 export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
 
-/**
- * Pi tools whose confirmations the bridge raises as file-change approvals.
- * Auto-accept edits skips them; the adapter keys the approval kind off them.
- */
+// These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
 /**

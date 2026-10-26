@@ -50,6 +50,7 @@ import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
+import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
@@ -136,8 +137,7 @@ export function useNewThreadHandler() {
     // up again and finding whichever draft it happens to hold.
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
-    // Read at call time: every provider status push replaces the config map, and
-    // subscribing would hand every sidebar row a new handler.
+    // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
       environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
@@ -217,11 +217,16 @@ export function useNewThreadHandler() {
         projectSettings: finalProjectSettings,
         workspaceRoot: project?.workspaceRoot ?? null,
         newProjectsRoot: environmentServerConfigs.get(projectRef.environmentId)?.newProjectsRoot,
-        projectHasThreads: readThreadShells().some(
-          (thread) =>
-            thread.environmentId === projectRef.environmentId &&
-            thread.projectId === projectRef.projectId,
-        ),
+        projectHasThreads:
+          readThreadShells().some(
+            (thread) =>
+              thread.environmentId === projectRef.environmentId &&
+              thread.projectId === projectRef.projectId,
+          ) ||
+          readUnloadedThreadCount(
+            [{ environmentId: projectRef.environmentId, id: projectRef.projectId }],
+            [],
+          ) > 0,
       });
       return resolveNewThreadEnvModeWithLastWork({
         resolvedSource: finalProjectSettings.sources.defaultThreadEnvMode,
@@ -366,10 +371,7 @@ export function useNewThreadHandler() {
             });
           }
         }
-        // The workspace context must also ride along here: when projectRef
-        // targets a different physical member of the logical project,
-        // createDraftThreadState treats the remap as a project change and
-        // would otherwise wipe branch/worktree, undoing the write above.
+        // Remapping physical projects clears workspace context; preserve the branch and worktree.
         setLogicalProjectDraftThreadId(
           logicalProjectKey,
           projectRef,

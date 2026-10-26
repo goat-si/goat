@@ -12,11 +12,6 @@ import {
   projectionFor,
 } from "../shared.ts";
 
-/**
- * A command that prints for a few seconds streams its output live, and that
- * output never becomes an orchestration event: the command item is persisted
- * while running with no output, then once with its final output.
- */
 export function assertCommandOutputStreamingOutput(
   result: OrchestratorV2ScenarioResult,
   transcript: ProviderReplayTranscript,
@@ -59,12 +54,10 @@ function assertLiveTailMatchesFinal(
   assert.isAbove(streamed?.chunks ?? 0, 0);
   const liveText = streamed?.output.text ?? "";
   const live = terminalOutputPlainText(liveText);
-  // Codex never streams what a command prints before its first yield (the recorded
-  // session has no delta, and no aggregatedOutput, for line 1), so it is not asserted.
+  // Codex omits pre-yield command output; the recording has no delta or aggregatedOutput for line 1.
   for (const line of ["stream line 2", "stream line 3", "stream line 4", "progress 100%"]) {
     assert.include(live, line);
   }
-  // The command's green survives as a canonical colour code; nothing else does.
   assert.include(liveText, "\u001b[0;32mstream line 2\u001b[0m");
   assert.notInclude(live, "\u001b");
   assert.notInclude(live, "progress 50%");
@@ -73,4 +66,5 @@ function assertLiveTailMatchesFinal(
     final.trimEnd().endsWith(live.trimEnd()),
     `the live tail must agree with the persisted final output: ${JSON.stringify({ final, live })}`,
   );
+  assert.notInclude(final, '"stdout"');
 }

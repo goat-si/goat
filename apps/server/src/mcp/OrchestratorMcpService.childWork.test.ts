@@ -150,7 +150,7 @@ const parentProjection = {
 } as unknown as OrchestrationV2ThreadProjection;
 
 const childProjection = {
-  thread: { id: ThreadId.make("thread:oms-cw-child") },
+  thread: { id: ThreadId.make("thread:oms-cw-child"), title: "Delegated child" },
   runs: [],
   contextTransfers: [],
   messages: [],

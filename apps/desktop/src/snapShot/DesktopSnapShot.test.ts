@@ -796,7 +796,6 @@ it.effect.each(["darwin", "win32"] as const)(
 
         for (const finish of heldFlights) finish();
         yield* Fiber.join(landing);
-        // Landing releases the guard even before the first capture is acknowledged.
         yield* Effect.promise(fixture.trigger);
         assert.equal(fixture.state.snapshots, 2);
         assert.lengthOf(fixture.readyIds, 2);
@@ -1047,9 +1046,15 @@ it.effect("matches Windows accessibility windows on a scaled display", () => {
   );
 });
 
-it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
-  "persists %s text without inventing AT-SPI screen coordinates",
-  (backend) => {
+it.effect.each([
+  { backend: "gnome", screenshot: "PNG" },
+  { backend: "niri", screenshot: "PNG" },
+  { backend: "kde", screenshot: "PNG" },
+  { backend: "hyprland", screenshot: "PNG" },
+  { backend: "gnome", screenshot: "invalid" },
+] as const)(
+  "persists $backend accessibility text with a $screenshot screenshot",
+  ({ backend, screenshot }) => {
     vi.stubEnv("XDG_SESSION_TYPE", "wayland");
     flashWindows.length = 0;
     const window = {
@@ -1066,7 +1071,16 @@ it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
       ...(backend === "niri" ? { accessibilityBoundsReliable: false } : {}),
       ...(backend === "kde" ? { clientBounds: { x: 479, y: 371, width: 700, height: 520 } } : {}),
     };
-    linuxCaptureMock.mockResolvedValueOnce({ png: Buffer.from([1, 2, 3]), window });
+    // The captured pixels differ from the compositor's logical window bounds.
+    const imageSize = screenshot === "PNG" ? { width: 1400, height: 1040 } : window.bounds;
+    const png =
+      screenshot === "PNG"
+        ? Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAABXgAAAQQAQAAAABwoA4ZAAAAyElEQVR4nO3BMQEAAADCoPVPbQwfoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHgYyx4AAepc/c0AAAAASUVORK5CYII=",
+            "base64",
+          )
+        : Buffer.from([1, 2, 3]);
+    linuxCaptureMock.mockResolvedValueOnce({ png, window });
     activeWindowMock.mockClear();
     getSourcesMock.mockClear();
     accessibilityByPidMock.mockReset().mockResolvedValue({
@@ -1106,7 +1120,7 @@ it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
         assert.deepInclude(saved.source.accessibility, {
           format: "element-tree",
           coordinateSpace: "captured-image",
-          imageSize: { width: 700, height: window.bounds.height },
+          imageSize: { width: imageSize.width, height: imageSize.height },
           truncated: false,
         });
         assert.deepInclude(
@@ -1116,7 +1130,7 @@ it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
           {
             role: "window",
             name: "Editor",
-            bounds: { x: 0, y: 0, width: 700, height: window.bounds.height },
+            bounds: { x: 0, y: 0, width: imageSize.width, height: imageSize.height },
             state: { active: true },
           },
         );

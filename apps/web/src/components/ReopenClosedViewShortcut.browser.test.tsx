@@ -50,7 +50,6 @@ vi.mock(import("../state/preview"), async (original) => {
     previewEnvironment: { ...actual.previewEnvironment, open: state.openPreview as never },
   };
 });
-// The remote environment is catalogued and its shell is live.
 vi.mock(import("../connection/catalog"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
@@ -97,7 +96,10 @@ vi.mock("./sidebar/SidebarChrome", () => ({
   SidebarCollapsedBrand: () => null,
 }));
 vi.mock("../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
-vi.mock("./sidebar/mainAppLocation", () => ({ MainAppLocationTracker: () => null }));
+vi.mock("./sidebar/mainAppLocation", async (original) => ({
+  ...(await original<typeof import("./sidebar/mainAppLocation")>()),
+  MainAppLocationTracker: () => null,
+}));
 vi.mock("./sidebar/DestinationRail", async () => {
   const { createContext } = await import("react");
   return { DestinationRail: () => null, DestinationRailVisibleContext: createContext(false) };

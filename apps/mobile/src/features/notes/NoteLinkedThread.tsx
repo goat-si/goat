@@ -1,7 +1,7 @@
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionRoutes } from "@goat/client-runtime/connection";
 import type { EnvironmentId, NoteThreadLink } from "@goat/contracts";
-import { useNavigation } from "@react-navigation/native";
 import * as Option from "effect/Option";
 import { View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -17,7 +17,7 @@ export function NoteLinkedThread({
   readonly environmentId: EnvironmentId;
   readonly link: NoteThreadLink;
 }) {
-  const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const destination =
     link.host === null
@@ -47,7 +47,10 @@ export function NoteLinkedThread({
           label="Open thread"
           tone="secondary"
           onPress={() =>
-            navigation.navigate("Thread", { environmentId: destination, threadId: link.threadId })
+            selectDetail({
+              name: "Thread",
+              params: { environmentId: destination, threadId: link.threadId },
+            })
           }
         />
       ) : null}

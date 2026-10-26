@@ -1,6 +1,7 @@
 included:
   - ios/T3Code
   - modules/goat-composer-editor/ios
+  - modules/goat-highlights/ios
   - modules/goat-native-controls/ios
   - modules/goat-terminal/ios
   - modules/goat-review-diff/ios

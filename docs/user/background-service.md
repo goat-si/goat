@@ -50,6 +50,16 @@ downloaded versions after showing you the list and asking once. Your projects,
 threads, and settings under `~/.goat/userdata` are kept, along with `service.env`
 under GOAT home. Pass `--yes` from a script.
 
+## Local network access
+
+The service listens on your local network and Tailscale addresses, so the
+desktop and mobile apps on the same network connect directly instead of through
+GOAT Connect. The hosted web app at app.t3.codes stays on GOAT Connect, because
+browsers block plain HTTP from an HTTPS page. The service does not answer on
+public addresses, and every device still needs to pair or sign in. To keep the service reachable from this machine only, set
+`GOAT_HOST=127.0.0.1` in `service.env` (below). Any `GOAT_HOST` value
+replaces this default.
+
 ## Configure the service environment
 
 Put custom environment variables in `service.env` under the service's GOAT home

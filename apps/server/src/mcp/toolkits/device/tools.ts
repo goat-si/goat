@@ -67,9 +67,7 @@ export const DeviceScreenshotTool = Tool.make(agentSurfaceRegistry["device.scree
 const DeviceCloseTool = Tool.make(agentSurfaceRegistry["device.close"].name, {
   description: agentSurfaceRegistry["device.close"].description,
   parameters: DeviceToolCloseInput,
-  success: Schema.Record(Schema.String, Schema.Never).annotate({
-    description: "The device was closed.",
-  }),
+  success: Schema.Record(Schema.String, Schema.Never),
   failure: DeviceToolFailure,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["device.close"]));

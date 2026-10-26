@@ -60,7 +60,7 @@ describe("redactGoatCredentials", () => {
   });
 
   it("redacts a token another server minted from its variable name and shape", () => {
-    const foreign = "otherrun" + "ForeignSyntheticTokenNotARealCredential0000";
+    const foreign = "otherrunForeignSyntheticTokenNotARealCredential0000";
     expect(redactGoatCredentials(`GOAT_MCP_BEARER_TOKEN=${foreign}`)).toBe(
       `GOAT_MCP_BEARER_TOKEN=${REDACTED_CREDENTIAL}`,
     );

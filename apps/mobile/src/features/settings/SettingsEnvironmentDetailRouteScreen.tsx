@@ -47,7 +47,6 @@ export function SettingsEnvironmentDetailRouteScreen({
 }: StaticScreenProps<{
   readonly environmentId: EnvironmentId;
 }>) {
-  // Key local request state to the host even when navigation reuses this screen.
   return (
     <EnvironmentDetail
       key={route.params.environmentId}
@@ -221,13 +220,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               environmentId={environmentId}
               connected={connected}
               onAddRoute={() =>
-                navigation.navigate("SettingsSheet", {
-                  screen: "SettingsContent",
-                  params: {
-                    screen: "SettingsEnvironmentNew",
-                    params: { routeFor: environmentId },
-                  },
-                })
+                navigation.navigate("SettingsEnvironmentNew", { routeFor: environmentId })
               }
             />
             {outdated ? (
@@ -414,10 +407,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                                 if (selectedIds !== null && !selectedIds.has(environmentId)) {
                                   toggleEnvironment(environmentId);
                                 }
-                                navigation.navigate("SettingsSheet", {
-                                  screen: "SettingsContent",
-                                  params: { screen: "SettingsProviderAccounts" },
-                                });
+                                navigation.navigate("SettingsProviderAccounts");
                               }}
                             />
                           ) : null}

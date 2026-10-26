@@ -6,7 +6,7 @@ import { builtInSkillSections } from "./builtinSkills/registry.ts";
  */
 export const GOAT_PULL_REQUEST_INSTRUCTIONS = `## GOAT pull requests
 
-Register every pull request you create or work on, each layer of a stack included, with \`pull_request.link\` and its full URL; gh and other CLIs do not register it. Before finishing PR work, check \`pull_request.list\` and link what is missing, and report a failed link instead of claiming it. A delegated task returns PR URLs, head SHA, and check state to its parent instead of watching. Asked to monitor a PR, run \`pull_request.watch\` and end the turn; GOAT wakes you on its events. Run \`pull_request.unwatch\` when you hand the work back.`;
+Link each PR you create, take over, or push to with goat_pull_request_link (full URL, each stack layer). If linking fails, say so. Skip PRs you only read or review. Call goat_pull_request_watch when asked to monitor, or when your work (a merge) waits on checks or reviews: push, then watch and end your turn. Otherwise act now or hand back. Children never watch, even if told to; their last line: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. Never poll or sleep. At handback, call goat_pull_request_unwatch.`;
 
 /**
  * GOAT's built-in computer use skill for this host, attached only when the turn actually has the
@@ -15,9 +15,7 @@ Register every pull request you create or work on, each layer of a stack include
 export const COMPUTER_USE_INSTRUCTION_SECTIONS = builtInSkillSections(["computer-use"]);
 export const COMPUTER_USE_INSTRUCTIONS = COMPUTER_USE_INSTRUCTION_SECTIONS.join("\n\n");
 
-/**
- * Shared runtime context; omit model and effort when the harness manages them dynamically.
- */
+/** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
   readonly model?: string | undefined;

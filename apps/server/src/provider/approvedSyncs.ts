@@ -268,6 +268,7 @@ export const makeApprovedSyncs = Effect.fn("ProviderHostSync.makeApprovedSyncs")
   );
 
   const resume = Effect.gen(function* () {
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Settling yields and removes pending entries; process only the entries present when resuming.
     for (const { handoff, result } of [...unsettled.values()]) yield* settle(handoff, result);
     for (const entry of yield* handoffs.completedProviderContinuations(HOST_SYNC_PATH))
       yield* resumeOne(entry);

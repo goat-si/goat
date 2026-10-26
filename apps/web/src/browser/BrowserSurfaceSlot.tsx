@@ -1,4 +1,5 @@
-import { useEffectEvent, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
+import { useStableCallback } from "../hooks/useStableCallback";
 
 import {
   acquireBrowserSurface,
@@ -33,16 +34,13 @@ export function BrowserSurfaceSlot(props: {
     fitSourceContent = false,
     passive = false,
   } = props;
-  const elementRef = useRef<HTMLDivElement | null>(null);
   const presentationRef = useRef({ visible, cornerRadius, zIndex });
   const updateRef = useRef<(() => void) | null>(null);
-  const presentedChange = useEffectEvent((presented: boolean) =>
+  const presentedChange = useStableCallback((presented: boolean) =>
     props.onPresentedChange?.(presented),
   );
 
-  useLayoutEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
+  const attachSurface = (element: HTMLDivElement) => {
     const measure = () => {
       const rect = element.getBoundingClientRect();
       return {
@@ -121,13 +119,10 @@ export function BrowserSurfaceSlot(props: {
     updateRef.current = update;
     update();
     const observed: Element[] = [element];
-    // Inline panels animate their outer width while keeping the content at
-    // full width. The slot moves without resizing, so measure on shell resizes too.
+    // Inline shells animate without resizing the slot, so observe the shell too.
     const panel = element.closest('[data-preview-panel-mode="inline"]');
     if (panel) observed.push(panel);
-    // A sidebar opening or closing shifts the whole column, so a slot that keeps
-    // its size and its offset inside the column (the mini player on the left)
-    // still moves on screen. The gap element carries the sidebar's width.
+    // Sidebar width changes move the slot without changing its size or column offset.
     observed.push(...document.querySelectorAll('[data-slot="sidebar-gap"]'));
     const stopObserving = observeResize(observed, update);
     window.addEventListener("resize", update);
@@ -139,7 +134,7 @@ export function BrowserSurfaceSlot(props: {
       if (updateRef.current === update) updateRef.current = null;
       lease.release();
     };
-  }, [fitSourceContent, passive, tabId]);
+  };
 
   useLayoutEffect(() => {
     presentationRef.current = { visible, cornerRadius, zIndex };
@@ -152,5 +147,5 @@ export function BrowserSurfaceSlot(props: {
     zIndex,
   ]);
 
-  return <div ref={elementRef} className={className} data-browser-surface-slot={tabId} />;
+  return <div ref={attachSurface} className={className} data-browser-surface-slot={tabId} />;
 }

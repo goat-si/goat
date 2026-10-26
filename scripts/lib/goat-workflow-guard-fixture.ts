@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds real git repositories and hook layouts on disk.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";

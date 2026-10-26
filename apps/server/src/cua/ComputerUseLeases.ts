@@ -682,7 +682,7 @@ const make = Effect.gen(function* () {
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
         let endedAny = false;
-        for (const record of [...controls.values()]) {
+        for (const record of Array.from(controls.values())) {
           if (record.ended !== undefined || record.handoffId === undefined) continue;
           const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
           // The lookup yields: a newer control for the thread is not judged by this grant.

@@ -18,10 +18,11 @@ const joinWindowsPath = (...segments: ReadonlyArray<string>) =>
   segments
     .join("\\")
     .split(/[\\/]+/)
-    .reduce<ReadonlyArray<string>>(
-      (parts, part) => (part === ".." ? parts.slice(0, -1) : [...parts, part]),
-      [],
-    )
+    .reduce<string[]>((parts, part) => {
+      if (part === "..") parts.pop();
+      else parts.push(part);
+      return parts;
+    }, [])
     .join("\\");
 
 it.layer(NodeServices.layer)("root CLI commands", (it) => {
@@ -55,7 +56,6 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
         `sudo npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat browser setup`,
       );
-      // nvm, fnm, and tarball installs are dropped by sudo's PATH reset.
       expect(
         yield* rootCommand({ node: "/home/sam/.nvm/versions/node/v24/bin/node", entry: npx }),
       ).toBe(
@@ -203,8 +203,6 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
           Effect.provideService(HostProcess.Platform, platform),
           Effect.provideService(HostProcess.Environment, { PATH: "", ...env }),
         );
-      // The desktop shim is called through `&`, and each argument is quoted
-      // the PowerShell way: no POSIX single quotes anywhere.
       expect((yield* hostCommand("win32", { GOAT_CLI_PATH: shim })).command).toBe(
         `& "${shim}" doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"`,
       );
@@ -212,7 +210,6 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
       expect((yield* hostCommand("win32", {})).command).toBe(
         'goat doctor "--base-dir" "C:\\Users\\Jane Doe\\.t3"',
       );
-      // Typographic quotes also delimit PowerShell strings; doubling keeps them.
       expect(
         (yield* resolveHostCliCommand("doctor", ["--base-dir", "C:\\T3\\\u201CArchive\u201D"]).pipe(
           Effect.provideService(HostProcess.Platform, "win32"),
@@ -390,8 +387,6 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         Effect.provideService(HostProcess.Platform, "linux"),
         Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: launcher }),
       );
-      // A launcher for another version is some other `t3` the server spawned
-      // (the variable is inherited), not the install this executable runs from.
       for (const [version, expected] of [
         ["0.0.1", null],
         [packageJson.version, { kind: "npm-global", prefix }],

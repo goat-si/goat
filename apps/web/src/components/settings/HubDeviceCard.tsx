@@ -33,7 +33,8 @@ import {
   type HubPhoneQrTarget,
 } from "./ConnectionsSettings.logic";
 import { searchableSetting } from "./settingsSearch";
-import { SettingsRow, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { useDeadlinePassed } from "../../hooks/useDeadline";
 
 type HubDeviceCardProps = {
   readonly primaryEnvironmentId: EnvironmentId | null;
@@ -54,8 +55,8 @@ type IssuedPhoneQr = {
 };
 
 function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
-  const nowMs = useRelativeTimeTick();
-  if (DateTime.toEpochMillis(issued.result.expiresAt) <= nowMs) {
+  const expired = useDeadlinePassed(DateTime.toEpochMillis(issued.result.expiresAt));
+  if (expired) {
     return <p role="status">This QR has expired. Close this dialog and show a new QR.</p>;
   }
   return (

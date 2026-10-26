@@ -26,8 +26,7 @@ export function clearSnapShotSetupResume(): void {
   }
 }
 
-// Check once per renderer startup so opening System Settings does not redirect
-// subsequent navigation in the current session.
+// Check once per startup so opening System Settings cannot redirect later navigation.
 export function shouldResumeSnapShotSetupOnStartup(): boolean {
   if (startupChecked) return false;
   startupChecked = true;

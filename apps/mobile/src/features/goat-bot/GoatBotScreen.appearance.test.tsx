@@ -67,9 +67,11 @@ vi.mock("react-native-keyboard-controller", () => ({
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0, top: 0 }),
 }));
-vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollViewMarker: () => null }));
+vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
 vi.mock("../settings/SettingsMemoryRouteScreen", () => ({ MemoryReportLink: () => null }));
-vi.mock("../home/home-thread-navigation", () => ({ useHomeThreadSelection: () => () => {} }));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => () => {},
+}));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
 }));

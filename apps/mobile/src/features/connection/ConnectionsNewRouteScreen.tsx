@@ -47,6 +47,8 @@ import { selectHubEnvironmentId } from "./hubEnvironment";
 import { useStoredHubEnvironment } from "./useStoredHubEnvironment";
 import { useConnectionsReady } from "../../state/workspace";
 import { PairingDiagnostics } from "./PairingDiagnostics";
+import { leaveSettingsPage } from "../settings/settings-navigation";
+import { workspaceHasColumns } from "../workspace/workspace-selection-store";
 
 type ConnectionsNewRouteParams = {
   readonly mode?: string;
@@ -142,6 +144,7 @@ export function ConnectionsNewRouteScreen({
   useEffect(() => {
     if (!connectionPairingUrl) return;
     const { host, code } = parsePairingUrl(connectionPairingUrl);
+    // oxlint-disable-next-line react/set-state-in-effect -- A new pairing URL reseeds the editable host and code fields.
     setHostInput(host);
     setCodeInput(code);
   }, [connectionPairingUrl]);
@@ -152,9 +155,17 @@ export function ConnectionsNewRouteScreen({
     }
 
     const { host, code } = parsePairingUrl(routePairingUrl);
+    // oxlint-disable-next-line react/set-state-in-effect -- A pairing URL from the route reseeds the editable host and code fields.
     setHostInput(host);
     setCodeInput(code);
   }, [routePairingUrl]);
+
+  useEffect(() => {
+    if (pairingConnectionError) {
+      // oxlint-disable-next-line react/set-state-in-effect -- A pairing failure reported by the connection runtime ends the submit.
+      setIsSubmitting(false);
+    }
+  }, [pairingConnectionError]);
 
   const handleHostChange = (value: string) => {
     setHostInput(value);
@@ -269,7 +280,8 @@ export function ConnectionsNewRouteScreen({
       if (!navigation.canGoBack()) {
         navigation.dispatch(StackActions.replace("Home"));
       } else {
-        navigation.goBack();
+        // Added from the Settings list, the new environment shows on Environments.
+        leaveSettingsPage(navigation, workspaceHasColumns(), "SettingsEnvironments");
       }
     } catch (error) {
       setCompletionError(error instanceof Error ? error.message : "Couldn't save the new hub.");
@@ -553,7 +565,7 @@ function GoatConnectSection() {
           label="Sign in to GOAT Connect"
           description="Reach your machines from anywhere, no network setup."
           disabled={!isLoaded}
-          onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}
+          onPress={() => navigation.navigate("SettingsAuth")}
         />
       )}
     </View>

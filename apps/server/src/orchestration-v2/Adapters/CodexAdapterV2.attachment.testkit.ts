@@ -177,6 +177,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
+    goalUpdates: Stream.fromQueue(goalTokens),
     subagentStatuses,
     nodeStatuses,
     runtime,
@@ -332,11 +333,12 @@ export const fixture = (scenario: string) => {
     computerUse: boolean,
     deferred = false,
     thread = nativeThreadId,
+    text = `turn-${ordinal}`,
   ) =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: thread,
-        codexInput: [{ type: "text", text: `turn-${ordinal}` }],
+        codexInput: [{ type: "text", text }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         hasGoatMcp: true,

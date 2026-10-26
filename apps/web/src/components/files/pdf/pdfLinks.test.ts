@@ -32,7 +32,7 @@ import { extractPageLinks } from "./pdfLinks";
 // Identity viewport: returns the rect unchanged so the test asserts the
 // min/width/height math without depending on pdf.js matrix internals.
 const viewport = {
-  convertToViewportRectangle: (rect: number[]) => rect,
+  convertToViewportPoint: (x: number, y: number) => [x, y],
 } as unknown as PageViewport;
 
 function makePage(annotations: unknown[], pageNumber = 1): PDFPageProxy {

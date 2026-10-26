@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { act, useState } from "react";
+import { act, useState, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult } from "effect/reactivity";
@@ -10,6 +10,8 @@ import { document as noteDocument, row } from "./test-fixtures";
 const { mocks, Children } = vi.hoisted(() => ({
   Children: ({ children }: { children?: ReactNode }) => children,
   mocks: {
+    revision: 0,
+    listeners: new Set<() => void>(),
     rows: [] as ReadonlyArray<NoteOutboxRow>,
     connected: false,
     taskIndex: 0,
@@ -96,7 +98,16 @@ vi.mock("./notes-state", () => ({
   notesCommandOptions: {},
   notesError: String,
   useNotesFeed: () => AsyncResult.success({ notes: [] }),
-  useNotesOutbox: () => mocks.rows,
+  useNotesOutbox: () => {
+    useSyncExternalStore(
+      (listener) => {
+        mocks.listeners.add(listener);
+        return () => mocks.listeners.delete(listener);
+      },
+      () => mocks.revision,
+    );
+    return mocks.rows;
+  },
   useNoteDraftAccess: () => ({
     canEdit: true,
     canStart: mocks.connected,
@@ -118,7 +129,11 @@ let container: HTMLDivElement;
 const props = {
   route: { params: { environmentId: "hub", path: "note.md" } },
 } satisfies ComponentProps<typeof NoteRouteScreen>;
-const render = () => root.render(<NoteRouteScreen {...props} />);
+const render = () => {
+  mocks.revision++;
+  for (const listener of mocks.listeners) listener();
+  root.render(<NoteRouteScreen {...props} />);
+};
 function button(label: string) {
   const found = Array.from(container.querySelectorAll("button")).find(
     (entry) => entry.textContent === label,

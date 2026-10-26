@@ -15,13 +15,13 @@ GlobalWorkerOptions.workerSrc = new URL(
 ).href;
 let document: PDFDocumentProxy | undefined;
 afterEach(async () => {
-  await document?.destroy();
+  await document?.loadingTask.destroy();
 });
 
 describe("real PDF fixture", () => {
   it("reads mixed page sizes, searches the last page and resolves internal and external links", async () => {
     const data = new TextEncoder().encode(fixture);
-    document = await getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
+    document = await getDocument({ data, useSystemFonts: true }).promise;
     const sizes = await Promise.all(
       [1, 2, 3].map(async (number) => {
         const page = await document!.getPage(number);

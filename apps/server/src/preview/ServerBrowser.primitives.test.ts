@@ -23,6 +23,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
+import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
@@ -173,7 +174,9 @@ const dependencies = Layer.mergeAll(
     isAttached: () => Effect.succeed(false),
     endpoint: () => Effect.die("unused endpoint"),
     pointer: () => Effect.void,
+    turn: () => Effect.void,
   }),
+  PreviewAgentActivity.layer,
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-primitives-" })),
   Layer.provideMerge(NodeServices.layer),

@@ -120,3 +120,12 @@ export function goatOrchestrationPromptForFirstRun(input: {
 export function goatOrchestrationSystemPrompt(hasGoatMcp: boolean): string {
   return goatInstructionsText(hasGoatMcp);
 }
+
+// Claude Code defers MCP tools behind ToolSearch, so the agent only finds
+// goat_background_wait when the system prompt says when to reach for it.
+export const GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
+
+### Background work you wait on
+
+To wait for a background command or Monitor you started (tests, a build), call \`goat_background_wait\` with its task ID before you end your turn. Do not mark work you leave running, or PRs. GOAT MCP tools are deferred: load one with ToolSearch before you call it.
+`;

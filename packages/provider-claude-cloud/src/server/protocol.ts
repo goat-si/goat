@@ -144,7 +144,6 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
 
 function rawCells(raw: string): Cell[] {
   const jumps = new Set<number>();
-  // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
   for (const match of raw.matchAll(/\u001b\[\d*[GC]/g))
     for (let offset = 0; offset < match[0].length; offset++) jumps.add(match.index + offset);
   return Array.from({ length: raw.length }, (_, index) => ({
@@ -284,7 +283,6 @@ export function readStartReceipt(raw: string) {
 
 function trustText(raw: string) {
   // Native trust options use absolute cursor columns as word spacing; preserve those boundaries.
-  // eslint-disable-next-line no-control-regex -- Match the native PTY's ESC cursor-column sequence.
   return cleanOutput(raw.replace(/\u001b\[\d+G/g, " ")).replace(
     /^\s*(?:Created cloud session:|View:|Resume with:).*$/gm,
     "",

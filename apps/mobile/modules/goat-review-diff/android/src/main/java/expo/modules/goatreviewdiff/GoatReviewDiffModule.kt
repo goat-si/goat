@@ -1,5 +1,6 @@
 package expo.modules.goatreviewdiff
 
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -49,6 +50,9 @@ class GoatReviewDiffModule : Module() {
       Prop("initialRowIndex") { view: GoatReviewDiffView, initialRowIndex: Double ->
         view.setInitialRowIndex(initialRowIndex)
       }
+      Prop("initialFileId") { view: GoatReviewDiffView, fileId: String ->
+        view.setInitialFileId(fileId)
+      }
 
       Events(
         "onDebug",
@@ -71,8 +75,12 @@ class GoatReviewDiffModule : Module() {
       AsyncFunction("setTokensJson") { view: GoatReviewDiffView, tokensJson: String ->
         view.setTokensJson(tokensJson)
       }
-      AsyncFunction("setTokensPatchJson") { view: GoatReviewDiffView, tokensPatchJson: String ->
-        view.setTokensPatchJson(tokensPatchJson)
+      AsyncFunction("setTokensPatchJson") {
+          view: GoatReviewDiffView,
+          tokensPatchJson: String,
+          promise: Promise
+        ->
+        view.setTokensPatchJson(tokensPatchJson) { accepted -> promise.resolve(accepted) }
       }
 
       OnViewDestroys { view: GoatReviewDiffView ->

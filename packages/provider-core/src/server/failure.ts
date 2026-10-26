@@ -94,6 +94,7 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeBackgroundWorkBlocksQueryReplacementError":
         case "ClaudeAppendSystemPromptFileError":
         case "ClaudeAppendSystemPromptMissingValueError":
+        case "ClaudeMcpRegistrationTimeoutError":
         case "CursorModelUnavailableError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
         // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.

@@ -1,5 +1,5 @@
 import { addDevice } from "../ssh/addDevice.ts";
-import { type ConnectionCatalogOperation, OrchestratorMcpFailure } from "@goat/contracts";
+import { type ConnectionCatalogOperation } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";

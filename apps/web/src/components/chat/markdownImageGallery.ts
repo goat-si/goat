@@ -1,4 +1,4 @@
-import { mediaKindFromPath } from "@goat/shared/filePreview";
+import { mediaKindFromPath } from "@goat/shared/mediaPreview";
 import { mediaUrlReference } from "@goat/client-runtime/media-reference";
 import type { ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { resolveExternalWebLinkHost } from "./externalLinkContextMenu";

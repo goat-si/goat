@@ -22,6 +22,7 @@ import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
@@ -116,6 +117,7 @@ const layer = ServerBrowser.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       Broker.layer,
+      PreviewAgentActivity.layer,
       Manager.layer,
       Layer.succeed(ServerEnvironment.ServerEnvironment, {
         getEnvironmentId: Effect.succeed(scope.environmentId),
@@ -133,6 +135,7 @@ const layer = ServerBrowser.layer.pipe(
         isAttached: () => Effect.succeed(false),
         endpoint: () => Effect.die("no desktop here"),
         pointer: () => Effect.void,
+        turn: () => Effect.void,
       }),
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-capture-lock-" })),

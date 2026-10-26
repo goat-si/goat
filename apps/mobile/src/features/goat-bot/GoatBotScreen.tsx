@@ -5,11 +5,11 @@ import { goatBotReceiptLabel, type GoatBotRow } from "@goat/client-runtime/goatB
 import { memo, useCallback, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
-import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useReplying } from "./useReplying";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useHomeThreadSelection } from "../home/home-thread-navigation";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
@@ -276,7 +276,15 @@ export function GoatBotScreen(props: {
   const { themeAppearance } = useAppearancePreferences();
   const bodyText = useScaledTextRole("body");
   const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
-  const selectThread = useHomeThreadSelection();
+  const selectDetail = useSelectWorkspaceDetail();
+  const selectThread = useCallback(
+    (thread: ThreadSelection) =>
+      selectDetail({
+        name: "Thread",
+        params: { environmentId: String(thread.environmentId), threadId: String(thread.id) },
+      }),
+    [selectDetail],
+  );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const insets = useSafeAreaInsets();
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
@@ -349,26 +357,25 @@ export function GoatBotScreen(props: {
           {homeSettings.error}
         </Text>
       ) : null}
-      <NativeScrollViewMarker style={{ flex: 1 }}>
-        <LegendList
-          style={{ flex: 1 }}
-          data={session.rows}
-          keyExtractor={rowKey}
-          renderItem={renderItem}
-          maintainScrollAtEnd
-          alignItemsAtEnd
-          keyboardShouldPersistTaps="handled"
-          contentInsetAdjustmentBehavior="never"
-          contentInset={{ top: hasBanner ? 0 : topInset }}
-          contentContainerStyle={{ padding: 16 }}
-          ListEmptyComponent={
-            <Text className="py-6 text-center text-foreground-muted">
-              Ask GOAT Bot for anything. It answers here and starts work in its own threads.
-            </Text>
-          }
-          ListFooterComponent={replying ? <GoatBotTypingIndicator /> : null}
-        />
-      </NativeScrollViewMarker>
+      <LegendList
+        renderScrollComponent={NativeScrollView}
+        style={{ flex: 1 }}
+        data={session.rows}
+        keyExtractor={rowKey}
+        renderItem={renderItem}
+        maintainScrollAtEnd
+        alignItemsAtEnd
+        keyboardShouldPersistTaps="handled"
+        contentInsetAdjustmentBehavior="never"
+        contentInset={{ top: hasBanner ? 0 : topInset }}
+        contentContainerStyle={{ padding: 16 }}
+        ListEmptyComponent={
+          <Text className="py-6 text-center text-foreground-muted">
+            Ask GOAT Bot for anything. It answers here and starts work in its own threads.
+          </Text>
+        }
+        ListFooterComponent={replying ? <GoatBotTypingIndicator /> : null}
+      />
       <View
         className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
         style={{ paddingBottom: bottomInset }}

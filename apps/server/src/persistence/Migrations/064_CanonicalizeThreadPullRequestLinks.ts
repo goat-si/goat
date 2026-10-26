@@ -1,5 +1,5 @@
 import { ThreadLinkedPullRequest, ThreadPullRequestLink } from "@goat/contracts";
-import { legacyThreadPullRequestKey } from "@goat/shared/threadPullRequests";
+import { legacyThreadPullRequestKey } from "./legacyThreadPullRequestKey.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
