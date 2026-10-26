@@ -29,7 +29,7 @@ const COMPUTER_USE_APP_NOTES: Readonly<
     ].join("\n"),
     KakaoTalk: [
       "KakaoTalk: the chat list is a table whose rows can be selected in the background. Click the chat's cell by its `element_token` (it selects the row), then `press_key` Return to open the chat; a point click on the list is ignored in the background.",
-      'In a chat, the message field is the `AXTextArea` labelled "Enter a message" (or its translation). Message bubbles are `AXTextArea` rows too, so pick the field by that label, `type_text` into it by its token and `press_key` Return to send. Older history shows as one "(offscreen rows: N ...)" line; if a read still misses the field, read again with `max_depth: 2`.',
+      'In a chat, the message field is the `AXTextArea` labelled "Enter a message" ("Enter public message" in open chats, or a translation). Message bubbles are `AXTextArea` rows too, so pick the field by that label, `type_text` into it by its token and `press_key` Return to send. Older history shows as one "(offscreen rows: N ...)" line; if a read still misses the field, read again with `max_depth: 2`.',
       "After sending, read the chat again: the field is empty and the newest bubble shows your exact text. Otherwise say you could not confirm it was sent instead of sending again.",
       "Sending a message goes to other people: confirm the recipient and the text with the person first.",
     ].join("\n"),
