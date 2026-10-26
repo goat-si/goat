@@ -38,12 +38,17 @@ export const machine = {
   archiveKeys: ["archives"] as Array<string | null>,
   /** Runs on the listing of running processes after this many listings, once. */
   onProcessListing: null as { after: number; run: Effect.Effect<unknown, SqlError> } | null,
+  afterFileRemoved: null as ((path: string) => Effect.Effect<void>) | null,
 };
 
 export const layer = (tempRoot: string) =>
   StorageReclaim.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.succeed(
+          StorageReclaim.StorageFileRemovalHook,
+          (removedPath) => machine.afterFileRemoved?.(removedPath) ?? Effect.void,
+        ),
         Layer.succeed(LocalGoatServers, {
           otherServers: () => Effect.sync(() => machine.others),
           workingDirectories: Effect.suspend(() => {
@@ -113,6 +118,7 @@ export const setup = Effect.gen(function* () {
   machine.archived = new Set();
   machine.archiveKeys = ["archives"];
   machine.onProcessListing = null;
+  machine.afterFileRemoved = null;
   const worktrees = yield* fs
     .realPath(config.worktreesDir)
     .pipe(

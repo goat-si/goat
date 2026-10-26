@@ -75,10 +75,10 @@ export class StorageConsent extends Context.Service<
 /** What the person is shown: every path and size the approval covers. */
 export const storageApprovalText = (items: ReadonlyArray<StorageItem>) => {
   const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
-  const lines = items.map(
-    (item) =>
-      "- " + item.kind.replaceAll("_", " ") + ": " + item.path + " (" + formatGiB(item.bytes) + ")",
-  );
+  const lines = items.flatMap((item) => [
+    "- " + item.kind.replaceAll("_", " ") + ": " + item.path + " (" + formatGiB(item.bytes) + ")",
+    ...(item.files?.map((file) => "  - " + file.path + " (" + file.bytes + " bytes)") ?? []),
+  ]);
   return {
     title:
       "Delete " + items.length + (items.length === 1 ? " item" : " items") + " of GOAT storage",

@@ -19,6 +19,60 @@ import {
 } from "./StorageReclaim.testkit.ts";
 
 describe("StorageReclaim", () => {
+  it.live("reports removed files and bytes when a later group file changes during removal", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+           created_at, updated_at, deleted_at, payload_json)
+        VALUES ('thread-group', 'project', 'group', 'codex', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          '2026-01-02T00:00:00.000Z', '{}')
+      `;
+      yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+      const files = ["1", "2", "3"].map((digit) =>
+        path.join(
+          config.attachmentsDir,
+          `thread-group-${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}.png`,
+        ),
+      );
+      for (const file of files) {
+        yield* fs.writeFileString(file, "image\n");
+        yield* fs.utimes(file, LONG_AGO, LONG_AGO);
+      }
+      const item = (yield* reclaim.usage({ rescan: true })).items.find(
+        (candidate) => candidate.kind === "attachments" && candidate.state === "removable",
+      )!;
+      expect(item.files?.map((file) => file.path)).toEqual(files);
+      machine.afterFileRemoved = (removed) =>
+        removed === files[0]
+          ? fs
+              .remove(files[1]!)
+              .pipe(Effect.andThen(fs.writeFileString(files[1]!, "replacement\n")), Effect.orDie)
+          : Effect.void;
+      const result = yield* reclaim.clean({
+        items: [{ id: item.id, token: item.token }],
+        actor: "test",
+      });
+      expect(result.results[0]).toMatchObject({
+        outcome: "failed",
+        bytes: 6,
+        removedFiles: 1,
+        reason: expect.stringContaining("Removed 1 of 3 files, then stopped:"),
+      });
+      expect(result.freedBytes).toBe(6);
+      expect(yield* fs.exists(files[0]!)).toBe(false);
+      expect(yield* fs.exists(files[1]!)).toBe(true);
+      expect(yield* fs.exists(files[2]!)).toBe(true);
+      expect(
+        (yield* reclaim.usage({ rescan: false })).items.find(
+          (candidate) => candidate.kind === "attachments",
+        )?.label,
+      ).toContain("1 files");
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
   it.live(
     "deletes a confirmed leftover folder, logs it, and refuses a token from another state",
     () =>

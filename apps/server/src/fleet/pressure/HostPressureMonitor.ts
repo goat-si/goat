@@ -1,4 +1,6 @@
 import type { HostDiskPressure, HostPressure } from "@goat/contracts";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFSP from "node:fs/promises";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -41,6 +43,13 @@ const sameDiskReading = (left: HostDiskPressure | null, right: HostDiskPressure 
       left.totalBytes === right.totalBytes &&
       Math.abs(left.availableBytes - right.availableBytes) < DISK_CHANGE_BYTES;
 
+const diskVolumeKey = (sample: PressureSample) =>
+  sample.diskDeviceId !== undefined && sample.diskDeviceId > 0
+    ? `device:${sample.diskDeviceId}`
+    : sample.diskPath === undefined
+      ? null
+      : `path:${sample.diskPath}`;
+
 export interface HostPressureMonitorShape {
   /** This machine's pressure; undefined when fleet.pressure is off or before the first sample. */
   readonly current: Effect.Effect<HostPressure | undefined>;
@@ -66,6 +75,7 @@ export const make = Effect.fn("HostPressureMonitor.make")(function* (
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const state = yield* Ref.make<PressureState | undefined>(undefined);
   const diskState = yield* Ref.make<PressureState | undefined>(undefined);
+  const diskVolume = yield* Ref.make<string | null | undefined>(undefined);
   const disk = yield* SubscriptionRef.make<HostDiskPressure | null>(null);
   const settings = settingsService.getSettings.pipe(
     Effect.map((value) => resolvePressureSettings(value.fleet.pressure)),
@@ -76,11 +86,20 @@ export const make = Effect.fn("HostPressureMonitor.make")(function* (
     if (!resolved.enabled) {
       yield* Ref.set(state, undefined);
       yield* Ref.set(diskState, undefined);
+      yield* Ref.set(diskVolume, undefined);
       if ((yield* SubscriptionRef.get(disk)) !== null) yield* SubscriptionRef.set(disk, null);
       return undefined;
     }
     const reading = yield* read;
     const now = yield* Clock.currentTimeMillis;
+    const volume = diskVolumeKey(reading);
+    const previousVolume = yield* Ref.get(diskVolume);
+    if (previousVolume !== undefined && previousVolume !== volume) {
+      // A recovery hold belongs to one volume, not the next disk chosen by mostPressedDisk.
+      yield* Ref.set(state, undefined);
+      yield* Ref.set(diskState, undefined);
+    }
+    yield* Ref.set(diskVolume, volume);
     const next = stepPressure(
       (yield* Ref.get(state)) ?? initialPressureState(now),
       reading,
@@ -159,7 +178,19 @@ const liveRead = Effect.gen(function* () {
       disks,
       resolvePressureSettings(settings._tag === "Some" ? settings.value.fleet.pressure : undefined),
     );
-    return sampleFromCapacity({ ...snapshot, disk }, fresh ? stall.delayMs : null);
+    const deviceId =
+      disk === null
+        ? undefined
+        : yield* Effect.promise(() =>
+            NodeFSP.stat(disk.path).then(
+              (stats) => stats.dev,
+              () => undefined,
+            ),
+          );
+    return {
+      ...sampleFromCapacity({ ...snapshot, disk }, fresh ? stall.delayMs : null),
+      diskDeviceId: deviceId,
+    };
   });
 });
 

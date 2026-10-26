@@ -89,6 +89,12 @@ export class StorageReclaim extends Context.Service<
   }
 >()("goat/storage/StorageReclaim") {}
 
+/** A deterministic milestone for a file-group deletion test. Absent in production. */
+export class StorageFileRemovalHook extends Context.Service<
+  StorageFileRemovalHook,
+  (removedPath: string) => Effect.Effect<void>
+>()("goat/storage/StorageReclaim/StorageFileRemovalHook") {}
+
 /** A scan this recent answers usage without scanning again. */
 const FRESH_MS = 5 * 60_000;
 
@@ -121,6 +127,10 @@ const make = Effect.gen(function* () {
   } | null>(null);
   const sizes = new Map<string, { readonly bytes: number; readonly at: number }>();
   const lock = yield* Semaphore.make(1);
+  const fileRemovalHook = yield* Effect.serviceOption(StorageFileRemovalHook);
+  const fileProgress = yield* Ref.make<{ removed: number; bytes: number; total: number } | null>(
+    null,
+  );
 
   /** stampOnly: the items being cleaned, the only folders whose contents need re-reading. */
   const scanNow = Effect.fn("StorageReclaim.scan")(function* (
@@ -594,6 +604,7 @@ const make = Effect.gen(function* () {
     actor: string,
   ) {
     // A group's log line names only its folder, so each file gets its own intent and outcome.
+    yield* Ref.set(fileProgress, { removed: 0, bytes: 0, total: target.files.length });
     for (const file of target.files) {
       const intent = yield* log({
         event: "intent",
@@ -615,9 +626,18 @@ const make = Effect.gen(function* () {
             ? {}
             : { reason: done.success }),
       }).pipe(Effect.ignore);
-      if (done._tag === "Failure") return yield* done.failure;
+      if (done._tag === "Failure") return failureMessage(done.failure);
       if (done.success !== null && done.success !== "it is already gone")
         return file.path + ": " + done.success;
+      if (done.success === null) {
+        yield* Ref.update(fileProgress, (progress) =>
+          progress === null
+            ? null
+            : { ...progress, removed: progress.removed + 1, bytes: progress.bytes + file.bytes },
+        );
+      }
+      if (done.success === null && Option.isSome(fileRemovalHook))
+        yield* fileRemovalHook.value(file.path);
     }
     return null;
   });
@@ -661,6 +681,7 @@ const make = Effect.gen(function* () {
               continue;
             }
             const target = scan.targets.get(item.id);
+            yield* Ref.set(fileProgress, null);
             // The confirming scan measured sizes; this one does not.
             const bytes = previous?.scan.items.find((known) => known.id === item.id)?.bytes ?? null;
             // Started, an item runs to its outcome line: an interrupt (its client went away) lands
@@ -682,14 +703,39 @@ const make = Effect.gen(function* () {
                     "Could not write the cleanup log, so nothing was deleted",
                   );
                 const done = yield* act(item, target, input.actor).pipe(Effect.result);
+                const removed = yield* Ref.get(fileProgress);
+                const partial = removed !== null && removed.removed > 0;
                 const finished =
                   done._tag === "Failure"
-                    ? outcome("failed", failureMessage(done.failure), bytes)
+                    ? partial
+                      ? {
+                          ...outcome(
+                            "failed",
+                            `Removed ${removed.removed} of ${removed.total} files, then stopped: ${failureMessage(done.failure)}. The rest were kept.`,
+                            removed.bytes,
+                          ),
+                          removedFiles: removed.removed,
+                        }
+                      : outcome("failed", failureMessage(done.failure), bytes)
                     : done.success === null
-                      ? outcome("removed", item.reason, bytes)
-                      : outcome("skipped", sentenceCase(done.success));
+                      ? removed !== null
+                        ? {
+                            ...outcome("removed", item.reason, removed.bytes),
+                            removedFiles: removed.removed,
+                          }
+                        : outcome("removed", item.reason, bytes)
+                      : partial
+                        ? {
+                            ...outcome(
+                              "failed",
+                              `Removed ${removed.removed} of ${removed.total} files, then stopped: ${done.success}. The rest were kept.`,
+                              removed.bytes,
+                            ),
+                            removedFiles: removed.removed,
+                          }
+                        : outcome("skipped", sentenceCase(done.success));
                 // What was removed is gone from the cached scan; the next read scans again.
-                if (finished.outcome === "removed") yield* Ref.set(latest, null);
+                if (finished.outcome === "removed" || partial) yield* Ref.set(latest, null);
                 yield* log({
                   event: finished.outcome,
                   actor: input.actor,
@@ -706,7 +752,8 @@ const make = Effect.gen(function* () {
                 return finished;
               }),
             );
-            if (result.outcome === "removed") freedBytes += bytes ?? 0;
+            if (result.outcome === "removed" || result.removedFiles !== undefined)
+              freedBytes += result.bytes ?? 0;
             results.push(result);
           }
           return { results, freedBytes, logPath } satisfies StorageCleanResult;

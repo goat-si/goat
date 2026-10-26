@@ -167,6 +167,20 @@ it("the person is shown every path an approval covers, however many", () => {
   for (const listedItem of many) expect(shown).toContain(listedItem.path + " (");
 });
 
+it("an agent's grouped storage approval names every file and its size", () => {
+  const files = [
+    { path: "/logs/a.log", bytes: 3 },
+    { path: "/logs/b.log", bytes: 4 },
+  ];
+  const shown = storageApprovalText([
+    { ...item("/logs", "group-token"), kind: "rotated_logs", files },
+  ]).location;
+  for (const file of files) {
+    expect(shown).toContain(file.path);
+    expect(shown).toContain(`${file.bytes} bytes`);
+  }
+});
+
 it.effect("a decision approves a deletion only for a person who may delete GOAT storage", () =>
   withConsent(({ consent, inbox }) =>
     Effect.gen(function* () {

@@ -78,6 +78,8 @@ export interface PressureSample {
   readonly diskTotalBytes: number | null;
   /** A path on that volume. */
   readonly diskPath?: string | undefined;
+  /** Filesystem device when it can be read; paths identify volumes otherwise. */
+  readonly diskDeviceId?: number | undefined;
   /** The longest GOAT server event-loop stall since the previous sample. */
   readonly eventLoopDelayMs: number | null;
 }

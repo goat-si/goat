@@ -7,7 +7,7 @@ import { OrchestratorMcpHost } from "./orchestratorMcp.ts";
 
 /**
  * What GOAT's own folders hold on one machine, and the person-confirmed cleanup of the parts that
- * are safe to remove (docs/user, Storage). Every item names the exact path a cleanup would delete.
+ * are safe to remove (docs/user, Storage). Grouped items list each file a cleanup would delete.
  */
 
 export const StorageItemKind = Schema.Literals([
@@ -59,6 +59,10 @@ export const StorageItem = Schema.Struct({
   token: TrimmedNonEmptyString,
   /** Worktrees: what their build outputs hold, such as "node_modules 1.2 GB". */
   detail: Schema.optional(Schema.String),
+  /** Exact members of a grouped cleanup; optional for older clients. */
+  files: Schema.optional(
+    Schema.Array(Schema.Struct({ path: TrimmedNonEmptyString, bytes: NonNegativeInt })),
+  ),
 });
 export type StorageItem = typeof StorageItem.Type;
 
@@ -95,8 +99,10 @@ export const StorageCleanOutcome = Schema.Struct({
   path: TrimmedNonEmptyString,
   outcome: Schema.Literals(["removed", "skipped", "failed"]),
   reason: Schema.String,
-  /** What the item measured before it was removed; null when unknown. */
+  /** Bytes actually removed for grouped files; measured size for other removed items. */
   bytes: Schema.NullOr(NonNegativeInt),
+  /** Number of files actually removed from a grouped item. */
+  removedFiles: Schema.optional(NonNegativeInt),
 });
 export type StorageCleanOutcome = typeof StorageCleanOutcome.Type;
 

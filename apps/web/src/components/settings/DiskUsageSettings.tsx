@@ -24,6 +24,7 @@ import {
 } from "../ui/dialog";
 import {
   cleanupBatches,
+  confirmationFiles,
   diskSummary,
   initialSelection,
   largestWorktrees,
@@ -301,6 +302,16 @@ function StorageCleanupDialog(props: {
                             {STORAGE_STATE_LABELS[item.state]} · {item.reason}
                             {item.detail === undefined ? "" : " · " + item.detail}
                           </span>
+                          {confirmationFiles(item).length > 0 && (
+                            <span className="max-h-32 overflow-y-auto text-muted-foreground">
+                              {confirmationFiles(item).map((file) => (
+                                <span key={file.path} className="flex gap-2">
+                                  <span className="min-w-0 flex-1 break-all">{file.path}</span>
+                                  <span className="shrink-0 tabular-nums">{file.size}</span>
+                                </span>
+                              ))}
+                            </span>
+                          )}
                         </span>
                         <span className="w-16 shrink-0 text-right tabular-nums">
                           {item.bytes === null ? "–" : formatBytes(item.bytes)}

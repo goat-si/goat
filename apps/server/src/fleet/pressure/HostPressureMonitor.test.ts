@@ -141,6 +141,78 @@ describe("HostPressureMonitor", () => {
       });
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
+
+  it.effect("clears disk and overall critical pressure when the sampled device changes", () => {
+    const volume = (deviceId: number, path: string, freeGiB: number) => ({
+      ...reading(0.1),
+      diskDeviceId: deviceId,
+      diskPath: path,
+      diskAvailableBytes: freeGiB * GIB,
+      diskTotalBytes: 1000 * GIB,
+    });
+    return Effect.gen(function* () {
+      const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+      yield* every30s(7);
+      expect((yield* monitor.current)?.level).toBe("critical");
+      const before = yield* monitor.disk.pipe(Stream.runHead);
+      expect(before._tag === "Some" ? before.value?.level : null).toBe("critical");
+
+      const sameDevice = yield* monitor.sample;
+      expect(sameDevice?.level).toBe("critical");
+
+      const next = yield* monitor.sample;
+      const disk = yield* monitor.disk.pipe(Stream.runHead);
+      expect(next?.level).toBe("ok");
+      expect((yield* monitor.current)?.level).toBe("ok");
+      expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
+        level: "ok",
+        path: "/volume-b/worktrees",
+        availableBytes: 400 * GIB,
+      });
+    }).pipe(
+      Effect.provide(
+        layer([
+          ...Array.from({ length: 7 }, () => volume(1, "/volume-a/home", 10)),
+          volume(1, "/volume-a/other-path", 400),
+          volume(2, "/volume-b/worktrees", 400),
+        ]),
+      ),
+    );
+  });
+
+  it.effect(
+    "clears disk and overall critical pressure on a new path when device identity is unknown",
+    () => {
+      const volume = (path: string, freeGiB: number) => ({
+        ...reading(0.1),
+        diskPath: path,
+        diskAvailableBytes: freeGiB * GIB,
+        diskTotalBytes: 1000 * GIB,
+      });
+      return Effect.gen(function* () {
+        const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+        yield* every30s(7);
+        expect((yield* monitor.current)?.level).toBe("critical");
+
+        const next = yield* monitor.sample;
+        const disk = yield* monitor.disk.pipe(Stream.runHead);
+        expect(next?.level).toBe("ok");
+        expect((yield* monitor.current)?.level).toBe("ok");
+        expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
+          level: "ok",
+          path: "/volume-b/worktrees",
+          availableBytes: 400 * GIB,
+        });
+      }).pipe(
+        Effect.provide(
+          layer([
+            ...Array.from({ length: 7 }, () => volume("/volume-a/home", 10)),
+            volume("/volume-b/worktrees", 400),
+          ]),
+        ),
+      );
+    },
+  );
 });
 
 const GIB = 1024 ** 3;

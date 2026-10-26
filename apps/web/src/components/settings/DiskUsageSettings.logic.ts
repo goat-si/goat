@@ -33,6 +33,10 @@ export interface StorageKindTotal {
   readonly removableBytes: number;
 }
 
+/** Paths shown below a grouped item before the person confirms deletion. */
+export const confirmationFiles = (item: StorageItem) =>
+  item.files?.map((file) => ({ path: file.path, size: formatBytes(file.bytes) })) ?? [];
+
 export function storageTotals(items: ReadonlyArray<StorageItem>): ReadonlyArray<StorageKindTotal> {
   return (Object.keys(STORAGE_KIND_LABELS) as ReadonlyArray<StorageItemKind>).flatMap((kind) => {
     const ofKind = items.filter((item) => item.kind === kind);

@@ -74,7 +74,11 @@ export type StorageTarget =
   | {
       readonly kind: "files";
       readonly root: string;
-      readonly files: ReadonlyArray<{ readonly path: string; readonly identity: FileIdentity }>;
+      readonly files: ReadonlyArray<{
+        readonly path: string;
+        readonly identity: FileIdentity;
+        readonly bytes: number;
+      }>;
     }
   | { readonly kind: "none" };
 
@@ -705,11 +709,16 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
             (yield* inCheckout(config.logsDir)) ??
             state("removable", "Older than the " + logsAfterDays + " days logs are kept", true)),
           bytes: expired.reduce((sum, file) => sum + file.size, 0),
+          files: expired.map((file) => ({ path: file.path, bytes: file.size })),
         },
         {
           kind: "files",
           root: config.logsDir,
-          files: expired.map(({ path: file, identity }) => ({ path: file, identity })),
+          files: expired.map(({ path: file, identity, size }) => ({
+            path: file,
+            identity,
+            bytes: size,
+          })),
         },
         expired.map((file) => file.path + ":" + file.identity.ino).toSorted(),
       );
@@ -773,11 +782,16 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
             (yield* inCheckout(config.attachmentsDir)) ??
             state("removable", "No surviving thread or task mentions their threads" + kept)),
           bytes: leftovers.removable.reduce((sum, file) => sum + file.size, 0),
+          files: leftovers.removable.map((file) => ({ path: file.path, bytes: file.size })),
         },
         {
           kind: "files",
           root: config.attachmentsDir,
-          files: leftovers.removable.map(({ path: file, identity }) => ({ path: file, identity })),
+          files: leftovers.removable.map(({ path: file, identity, size }) => ({
+            path: file,
+            identity,
+            bytes: size,
+          })),
         },
         leftovers.removable.map((file) => file.path + ":" + file.identity.ino).toSorted(),
       );

@@ -3,6 +3,7 @@ import { StorageCleanItems, type StorageCleanOutcome, type StorageItem } from "@
 import * as Schema from "effect/Schema";
 
 import {
+  confirmationFiles,
   cleanupBatches,
   diskSummary,
   initialSelection,
@@ -25,6 +26,21 @@ const item = (overrides: Partial<StorageItem> & Pick<StorageItem, "id" | "kind">
 const decodeCleanItems = Schema.decodeUnknownExit(StorageCleanItems);
 
 describe("storage cleanup selection", () => {
+  it("models each grouped file path and size for the confirmation", () => {
+    const group = item({
+      id: "rotated_logs:/logs",
+      kind: "rotated_logs",
+      path: "/logs",
+      files: [
+        { path: "/logs/a.log", bytes: 3 },
+        { path: "/logs/b.log", bytes: 4 },
+      ],
+    });
+    expect(confirmationFiles(group)).toEqual([
+      { path: "/logs/a.log", size: "3 B" },
+      { path: "/logs/b.log", size: "4 B" },
+    ]);
+  });
   const items = [
     item({ id: "a", kind: "worktree", bytes: 3 * 1024 }),
     item({ id: "b", kind: "worktree", state: "needs_attention", selected: false }),
