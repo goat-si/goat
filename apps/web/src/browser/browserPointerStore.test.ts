@@ -1,7 +1,12 @@
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { reduceBrowserPointer } from "./browserPointerStore";
+import {
+  attachBrowserPointer,
+  clearBrowserPointer,
+  detachBrowserPointer,
+  reduceBrowserPointer,
+} from "./browserPointerStore";
 
 const identity = {
   environmentId: EnvironmentId.make("environment"),
@@ -100,5 +105,35 @@ describe("browser pointer ownership", () => {
       cursor,
     });
     expect(pointed.byTabId["runtime-tab"]?.cursor).toEqual(cursor);
+  });
+
+  it("draws again after navigation clears the point, and drops late pointers once the tab closes", () => {
+    const pointer = (sequence: number, x: number) =>
+      ({
+        tabId: "runtime-tab",
+        phase: "move",
+        x,
+        y: 20,
+        sequence,
+        createdAt: "now",
+        cursor: { identity: { ...identity, sequence }, phase: "moving" },
+      }) as const;
+    const navigated = clearBrowserPointer(
+      reduceBrowserPointer(state, pointer(1, 10)),
+      "runtime-tab",
+    );
+    expect(navigated.byTabId).toEqual({});
+    const redrawn = reduceBrowserPointer(navigated, pointer(2, 30));
+    expect(redrawn.byTabId["runtime-tab"]?.x).toBe(30);
+
+    const closed = detachBrowserPointer(redrawn, "runtime-tab");
+    expect(closed.byTabId).toEqual({});
+    expect(closed.ownerByTabId).toEqual({});
+    expect(reduceBrowserPointer(closed, pointer(3, 50))).toBe(closed);
+    expect(
+      reduceBrowserPointer(attachBrowserPointer(closed, "runtime-tab"), pointer(4, 70)).byTabId[
+        "runtime-tab"
+      ]?.x,
+    ).toBe(70);
   });
 });

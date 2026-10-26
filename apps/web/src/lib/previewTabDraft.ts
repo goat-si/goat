@@ -12,11 +12,12 @@ import {
   ensureInlineContextReferences,
   removeInlineContextReference,
 } from "./composerContextReferences";
-import { randomUUID } from "./utils";
-
 type DraftState = { draftsByThreadKey: Record<string, ComposerThreadDraftState> };
 
-/** The typed record the composer inserts for a live server browser tab. */
+/**
+ * The typed record the composer inserts for a live server browser tab. The @ menu rebuilds this
+ * on every recompute, so the id comes from the tab: picking one tab twice reuses its chip.
+ */
 export function previewTabRecordForServerTab(
   environmentId: EnvironmentId,
   tab: { readonly tabId: string; readonly title: string; readonly url: string },
@@ -24,7 +25,10 @@ export function previewTabRecordForServerTab(
   return {
     version: 1,
     kind: "preview-tab",
-    contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
+    contextId: toKindScopedComposerContextId(
+      "preview-tab",
+      `${environmentId}:${SERVER_BROWSER_AUTOMATION_CLIENT_ID}:${tab.tabId}`,
+    ),
     label: sanitizeComposerContextLabel(tab.title || tab.url, "browser tab"),
     environmentId,
     browserInstanceId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,

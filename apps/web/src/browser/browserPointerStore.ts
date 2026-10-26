@@ -35,6 +35,37 @@ const newer = (previous: AgentCursorSnapshot | undefined, next: AgentCursorSnaps
 const isCursorState = (event: DesktopPreviewCursorEvent): event is DesktopPreviewCursorStateEvent =>
   "type" in event && event.type === "cursor-state";
 
+// Closed tabs stay tombstoned so a late event cannot redraw them; the oldest fall off first.
+const MAX_DETACHED_TABS = 256;
+
+/** Navigation removes the drawn point; the tab keeps its owner and draws the next pointer. */
+export function clearBrowserPointer(state: BrowserPointerData, tabId: string): BrowserPointerData {
+  if (!(tabId in state.byTabId)) return state;
+  const { [tabId]: _removed, ...byTabId } = state.byTabId;
+  return { ...state, byTabId };
+}
+
+/** A closed tab drops its point and owner, and ignores every later event until it is attached. */
+export function detachBrowserPointer(state: BrowserPointerData, tabId: string): BrowserPointerData {
+  const { [tabId]: _point, ...byTabId } = state.byTabId;
+  const { [tabId]: _owner, ...ownerByTabId } = state.ownerByTabId;
+  const detached = new Set(state.detached);
+  detached.delete(tabId);
+  detached.add(tabId);
+  for (const oldest of detached) {
+    if (detached.size <= MAX_DETACHED_TABS) break;
+    detached.delete(oldest);
+  }
+  return { byTabId, ownerByTabId, detached };
+}
+
+export function attachBrowserPointer(state: BrowserPointerData, tabId: string): BrowserPointerData {
+  if (!state.detached.has(tabId)) return state;
+  const detached = new Set(state.detached);
+  detached.delete(tabId);
+  return { ...state, detached };
+}
+
 /** Keep a terminal owner as a tombstone so a late previous-run pointer cannot redraw it. */
 export function reduceBrowserPointer(
   state: BrowserPointerData,
@@ -100,6 +131,7 @@ export function reduceBrowserPointer(
 interface BrowserPointerStoreState extends BrowserPointerData {
   readonly apply: (event: DesktopPreviewCursorEvent) => void;
   readonly clear: (tabId: string) => void;
+  readonly detach: (tabId: string) => void;
   readonly attach: (tabId: string) => void;
 }
 
@@ -108,16 +140,7 @@ export const useBrowserPointerStore = create<BrowserPointerStoreState>()((set) =
   ownerByTabId: {},
   detached: new Set(),
   apply: (event) => set((state) => reduceBrowserPointer(state, event)),
-  clear: (tabId) =>
-    set((state) => {
-      const { [tabId]: _removed, ...byTabId } = state.byTabId;
-      return { byTabId, detached: new Set(state.detached).add(tabId) };
-    }),
-  attach: (tabId) =>
-    set((state) => {
-      if (!state.detached.has(tabId)) return state;
-      const detached = new Set(state.detached);
-      detached.delete(tabId);
-      return { detached };
-    }),
+  clear: (tabId) => set((state) => clearBrowserPointer(state, tabId)),
+  detach: (tabId) => set((state) => detachBrowserPointer(state, tabId)),
+  attach: (tabId) => set((state) => attachBrowserPointer(state, tabId)),
 }));

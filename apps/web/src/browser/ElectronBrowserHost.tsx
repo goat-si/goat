@@ -192,7 +192,7 @@ export function ElectronBrowserHost() {
   useEffect(() => {
     const active = new Set(hostedTabIds.split("\n").filter(Boolean));
     const store = useBrowserPointerStore.getState();
-    for (const tabId of pointerTabs.current) if (!active.has(tabId)) store.clear(tabId);
+    for (const tabId of pointerTabs.current) if (!active.has(tabId)) store.detach(tabId);
     for (const tabId of active) if (!pointerTabs.current.has(tabId)) store.attach(tabId);
     pointerTabs.current = active;
   }, [hostedTabIds]);

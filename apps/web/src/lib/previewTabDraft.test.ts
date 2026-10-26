@@ -5,7 +5,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildMessageContext } from "./composerContextRecords";
 import { formatInlineContextReference } from "./composerContextReferences";
-import { previewTabRecordForServerTab } from "./previewTabDraft";
+import type { ComposerThreadDraftState } from "~/composerDraftStore";
+
+import { addPreviewTabsToDraftState, previewTabRecordForServerTab } from "./previewTabDraft";
 
 describe("server browser tab mentions", () => {
   it("a picked tab reaches the server as an exact tab hint even with a messy title", () => {
@@ -33,5 +35,25 @@ describe("server browser tab mentions", () => {
         tabId: "tab-7",
       }),
     ]);
+  });
+
+  it("picking the same tab twice from a recomputed @ menu leaves one chip", () => {
+    const environmentId = EnvironmentId.make("environment-local");
+    const tab = { tabId: "tab-7", title: "Orders", url: "https://example.test/orders" };
+    const first = previewTabRecordForServerTab(environmentId, tab);
+    const again = previewTabRecordForServerTab(environmentId, tab);
+    const emptyDraft = { prompt: "", previewTabs: [] } as unknown as ComposerThreadDraftState;
+    const once = addPreviewTabsToDraftState(
+      { draftsByThreadKey: {} },
+      "thread",
+      [first],
+      false,
+      true,
+      emptyDraft,
+    );
+    expect(addPreviewTabsToDraftState(once, "thread", [again], false, true, emptyDraft)).toBe(once);
+    expect(
+      previewTabRecordForServerTab(environmentId, { ...tab, tabId: "tab-8" }).contextId,
+    ).not.toBe(first.contextId);
   });
 });

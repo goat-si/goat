@@ -375,7 +375,9 @@ it("keeps the readiness list and skill switch in Advanced, closed by default and
     expect(screen.getByRole("switch", { name: "Computer Use skill" }).query()).toBeNull();
     await screen.getByRole("button", { name: "Details" }).click();
     await expect.element(screen.getByText("1. OS grants")).toBeVisible();
-    await expect.element(screen.getByRole("switch", { name: "Screen Code skill" })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("switch", { name: "Screen Code skill" }))
+      .toBeInTheDocument();
     expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBe("true");
     await clickSwitch("Computer Use skill");
     expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });
@@ -388,18 +390,22 @@ it("keeps the readiness list and skill switch in Advanced, closed by default and
   expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBe("false");
 });
 
-it("a settings search for the Computer Use skill opens Advanced without remembering it", async () => {
-  const target = "computer-use-skill";
-  const name = "Computer Use skill";
-  const f = setup({ enabled: true });
-  state.searchTargetId = target;
-  await using screen = await render(panel(f));
-  await expect.element(screen.getByRole("switch", { name })).toBeInTheDocument();
-  expect(document.getElementById(target)).not.toBeNull();
-  expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBeNull();
-  await clickSwitch(name);
-  expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });
-});
+it.each([
+  ["computer-use-skill", "Computer Use skill", "computer-use"],
+  ["screen-code-skill", "Screen Code skill", "screen-code"],
+])(
+  "a settings search for %s opens Advanced without remembering it",
+  async (target, name, skill) => {
+    const f = setup({ enabled: true });
+    state.searchTargetId = target;
+    await using screen = await render(panel(f));
+    await expect.element(screen.getByRole("switch", { name })).toBeInTheDocument();
+    expect(document.getElementById(target)).not.toBeNull();
+    expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBeNull();
+    await clickSwitch(name);
+    expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: [skill] });
+  },
+);
 it("the pointer switch is off by default and saves the host's pointer choice", async () => {
   const name = "Let agents move my pointer";
   const f = setup({ enabled: true });
