@@ -155,7 +155,13 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
         wasmPath,
         wasmSha256: wasmResult.success,
       },
-      { t: "cell", cellId: "smoke", source: "return 7;", resetValues: false },
+      {
+        t: "cell",
+        cellId: "smoke",
+        source: "return 7;",
+        resetValues: false,
+        limits: DEFAULT_SCREEN_RUN_LIMITS,
+      },
     ]
       .map((frame) => JSON.stringify(frame))
       .join("\n") + "\n";
