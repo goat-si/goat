@@ -250,7 +250,10 @@ export function createScreenRunSupervisor(deps: {
                       if (reply && !session.closed && session.active === cellId)
                         session.child.stdin.write(`${JSON.stringify(reply)}\n`);
                     },
-                    () => failRun("runtime_unavailable"),
+                    // Aborting unawaited calls after a result is ours; it is not a runtime failure.
+                    () => {
+                      if (!callAbort.signal.aborted) failRun("runtime_unavailable");
+                    },
                   );
                 return;
               }
