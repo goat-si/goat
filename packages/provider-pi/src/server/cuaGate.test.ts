@@ -7,9 +7,9 @@ import * as FileSystem from "effect/FileSystem";
 
 import { openPiCuaGate, writePiCuaGate } from "./cuaGate.ts";
 
-const proxy = (control: string): CuaDriverMcpConfiguration => ({
+const proxy = (fingerprint: string): CuaDriverMcpConfiguration => ({
   command: "/goat/node",
-  args: ["cua-lease-proxy", "--control", control],
+  args: ["cua-lease-proxy", "--thread", "thread:fixture", "--driver-fingerprint", fingerprint],
   environment: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }],
 });
 
@@ -17,7 +17,7 @@ it.effect("tells Pi to keep, swap to, or close the driver each turn (#1564)", ()
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* openPiCuaGate(fileSystem);
-    const gate = { path, key: McpProviderSession.cuaDriverKey(proxy("control:launch")) };
+    const gate = { path, key: McpProviderSession.cuaDriverKey(proxy("driver:launch")) };
     const session = (cuaDriver?: CuaDriverMcpConfiguration) =>
       ({
         ...(cuaDriver === undefined ? {} : { cuaDriver }),
@@ -27,12 +27,19 @@ it.effect("tells Pi to keep, swap to, or close the driver each turn (#1564)", ()
         Effect.andThen(fileSystem.readFileString(path)),
       );
 
-    assert.equal(yield* turn(proxy("control:launch")), "on");
-    // Stop minted a new control: Pi gets its descriptor in the shape the launch env carries.
-    assert.equal(yield* turn(proxy("control:after-stop")), "driver");
+    assert.equal(yield* turn(proxy("driver:launch")), "on");
+    // A new control keeps this launch identity; only a different driver swaps the extension.
+    assert.equal(yield* turn(proxy("driver:launch")), "on");
+    assert.equal(yield* turn(proxy("driver:changed")), "driver");
     assert.deepEqual(JSON.parse(yield* fileSystem.readFileString(path + ".driver")), {
       command: "/goat/node",
-      args: ["cua-lease-proxy", "--control", "control:after-stop"],
+      args: [
+        "cua-lease-proxy",
+        "--thread",
+        "thread:fixture",
+        "--driver-fingerprint",
+        "driver:changed",
+      ],
       env: { ELECTRON_RUN_AS_NODE: "1" },
     });
     assert.equal(yield* turn(undefined), "off");

@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- synchronous hash for the pure launch descriptor.
+import * as NodeCrypto from "node:crypto";
+
 import {
   BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
@@ -16,7 +19,6 @@ import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/r
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -238,23 +240,49 @@ export const LEASE_PROXY_ENV = {
 
 /**
  * The stdio server a thread's provider spawns. It carries the thread's own GOAT MCP credential
- * to read its control, and the driver descriptor it forwards to. The control id is in the
- * arguments, so a new control changes the attachment key and adapters respawn it.
+ * to follow its controls, and the driver descriptor it forwards to. Only the underlying driver's
+ * identity belongs in the arguments: Stop and re-approval must not reload the provider (#1629).
  */
 function leaseProxyDescriptor(
   config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader">,
   attachment: Extract<ComputerUseAttachment, { readonly _tag: "proxied" }>,
   leaseRoute: string,
 ): CuaDriverMcpConfiguration {
+  const driver = attachment.mcp;
+  const environment = Object.fromEntries(
+    driver.environment.map(({ name, value }) => [name, value]),
+  );
+  // Never hash arbitrary environment values: credentials must stay out of the public launch key.
+  const driverFingerprint = NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify([
+        driver.command,
+        driver.args,
+        driver.socketPath ?? null,
+        [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "XDG_RUNTIME_DIR",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "CUA_DRIVER_RS_TELEMETRY_ENABLED",
+          "CUA_TELEMETRY_ENABLED",
+          "CUA_DRIVER_RS_UPDATE_CHECK",
+        ].map((name) => [name, environment[name] ?? null]),
+        attachment.x11Display?.DISPLAY ?? null,
+        attachment.x11Display?.XAUTHORITY ?? null,
+      ]),
+    )
+    .digest("hex");
   return {
     command: attachment.proxy.command,
     args: [
       ...selfInvocationArgs(attachment.proxy, [
         LEASE_PROXY_COMMAND,
-        "--control",
-        attachment.control.controlId,
-        "--expires",
-        DateTime.formatIso(attachment.control.expiresAt),
+        "--thread",
+        attachment.control.threadId,
+        "--driver-fingerprint",
+        driverFingerprint,
       ]),
     ],
     environment: [

@@ -5,7 +5,7 @@ import type * as FileSystem from "effect/FileSystem";
 /**
  * Pi's driver starts from its launch descriptor, so each turn tells the extension through this
  * file whether it may use it: "on" keeps the launch driver, "driver" names the current one in a
- * file beside it (a new control minted after Stop, #1564), "off" closes it (a Plan or read-only
+ * file beside it (a real driver change), "off" closes it (a Plan or read-only
  * turn). An extension from an older build treats "driver" as closed. Another file beside it says
  * whether the turn carries the computer use skill.
  */

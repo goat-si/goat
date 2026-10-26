@@ -51,7 +51,9 @@ export const threadLeaseUpdates = (input: {
         Effect.forkScoped,
       );
       let previous: string | undefined;
-      let lastEnded: string | undefined;
+      // A control this stream ended is never advertised again, even when a later read of it
+      // succeeds: the proxy has already ended it for good.
+      const fenced = new Set<string>();
       let waiting = false;
       // inspect, unlike resolve, never renews the credential: watching is not using it.
       const authorized = Effect.map(registry.inspect(input.token), (credential) =>
@@ -66,23 +68,23 @@ export const threadLeaseUpdates = (input: {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
           return yield* Queue.end(queue);
         }
-        const enabled = yield* settings.getSettings.pipe(
+        const readEnabled = settings.getSettings.pipe(
           Effect.map((value) => value.enableCua),
           Effect.orElseSucceed(() => false),
         );
-        if (!enabled) {
-          yield* Queue.offer(queue, { state: "ended", reason: "disabled" });
-          return yield* Queue.end(queue);
-        }
+        const enabled = yield* readEnabled;
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-        const state =
-          current === undefined
+        const value = !enabled
+          ? { _tag: "ended" as const, reason: "disabled" as const }
+          : current === undefined
             ? undefined
-            : yield* leases.controlState(input.threadId, current.controlId).pipe(Effect.option);
-        if (state !== undefined && Option.isNone(state)) {
-          yield* Queue.offer(queue, { state: "ended", reason: "revoked" });
-          return yield* Queue.end(queue);
-        }
+            : yield* leases.controlState(input.threadId, current.controlId).pipe(
+                // A failed authority read fences this control; a later control can recover.
+                Effect.orElseSucceed(() => ({
+                  _tag: "ended" as const,
+                  reason: "revoked" as const,
+                })),
+              );
         // controlState can suspend on grant reads. A revocation during that read must win.
         if ((yield* authorized) === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
@@ -90,24 +92,30 @@ export const threadLeaseUpdates = (input: {
         }
         const latest = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
         if (current?.controlId !== latest?.controlId || current?.ended !== latest?.ended) continue;
+        // A disable during that read must win too.
+        if (enabled && !(yield* readEnabled)) continue;
         if (previous !== undefined && previous !== current?.controlId) {
           yield* Queue.offer(queue, {
             state: "control-ended",
             controlId: previous,
-            reason: current === undefined ? "revoked" : "replaced",
+            reason: !enabled ? "disabled" : current === undefined ? "revoked" : "replaced",
           });
-          lastEnded = previous;
+          fenced.add(previous);
           previous = undefined;
         }
-        const value = state === undefined ? undefined : Option.getOrUndefined(state);
-        if (current === undefined || value === undefined || value._tag === "ended") {
-          if (current !== undefined && value?._tag === "ended" && current.controlId !== lastEnded) {
+        if (
+          current === undefined ||
+          value === undefined ||
+          value._tag === "ended" ||
+          fenced.has(current.controlId)
+        ) {
+          if (current !== undefined && value?._tag === "ended" && !fenced.has(current.controlId)) {
             yield* Queue.offer(queue, {
               state: "control-ended",
               controlId: current.controlId,
               reason: value.reason,
             });
-            lastEnded = current.controlId;
+            fenced.add(current.controlId);
           }
           previous = undefined;
           if (!waiting) yield* Queue.offer(queue, { state: "waiting" });
