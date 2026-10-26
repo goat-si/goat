@@ -354,8 +354,6 @@ describe("ChatMarkdown code block actions", () => {
     toggle.focus();
     await userEvent.keyboard("{Enter}");
     // The toolbar remounts for the source view; focus must follow so the actions stay revealed.
-    await vi.waitFor(() =>
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Show diagram"),
-    );
+    await expect.element(screen.getByRole("button", { name: "Show diagram" })).toHaveFocus();
   });
 });
