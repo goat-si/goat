@@ -1,7 +1,6 @@
 // @effect-diagnostics globalDate:off globalTimers:off preferSchemaOverJson:off - This isolated child uses a hard wall deadline and JSON pipe frames.
 import * as NodeReadline from "node:readline";
-import { newQuickJSWASMModuleFromVariant, newVariant } from "quickjs-emscripten-core";
-import BellardSync from "@jitl/quickjs-wasmfile-release-sync";
+import * as NodeModule from "node:module";
 import * as Schema from "effect/Schema";
 import {
   ScreenRunBoot,
@@ -13,6 +12,17 @@ import {
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
+
+// Both packages stay external; a single-executable resolves them from disk only through require.
+const requireForQuickJS = NodeModule.createRequire(import.meta.url);
+const { newQuickJSWASMModuleFromVariant, newVariant } = requireForQuickJS(
+  "quickjs-emscripten-core",
+) as typeof import("quickjs-emscripten-core");
+const BellardSync = (
+  requireForQuickJS("@jitl/quickjs-wasmfile-release-sync") as {
+    default: typeof import("@jitl/quickjs-wasmfile-release-sync").default;
+  }
+).default;
 const isScreenRunError = Schema.is(ScreenRunError);
 
 const decodeUnknownScreenRunCell = Schema.decodeUnknownSync(ScreenRunCell);
