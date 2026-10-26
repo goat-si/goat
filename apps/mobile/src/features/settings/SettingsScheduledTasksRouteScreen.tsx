@@ -1,3 +1,4 @@
+import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { scheduledMemoryAccess } from "./scheduledTaskPresentation";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -92,7 +93,6 @@ type ScheduledTaskRoutes = {
   SettingsScheduledTaskModel: undefined;
   SettingsScheduledTaskBranch: undefined;
 };
-
 const DAYS = [
   { index: 1, label: "Mon" },
   { index: 2, label: "Tue" },
@@ -1337,7 +1337,7 @@ function EnvironmentTasks({
                 {task.title}
               </Text>
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
-                {describeSchedule(task)}
+                {`${describeSchedule(task)} · ${scheduledTaskRunPresentation(task).label}`}
                 {!task.enabled
                   ? " · Paused"
                   : task.nextRunAt
@@ -1349,7 +1349,7 @@ function EnvironmentTasks({
               ) : null}
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
-                  Last run failed: {task.lastRunError}
+                  Run: {task.lastRunError}
                 </Text>
               ) : null}
             </Pressable>

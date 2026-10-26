@@ -96,6 +96,11 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+A run first shows Dispatching or Queued, then Running. Completed means the agent finished;
+Failed, Interrupted and Cancelled report how that run ended. Pausing stops future scheduled
+runs; stop an active run from its thread. Older environments may show Dispatched (legacy)
+because they did not record the final outcome.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**

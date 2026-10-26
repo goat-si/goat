@@ -1,3 +1,4 @@
+import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
@@ -30,11 +31,12 @@ import {
   THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
 } from "./threadDetailsPanelStyles";
 
-const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
-  never: "bg-muted-foreground/40",
-  running: "bg-sky-500",
-  succeeded: "bg-emerald-500",
-  failed: "bg-destructive",
+const STATUS_DOT_CLASS = {
+  outline: "bg-muted-foreground/40",
+  info: "bg-sky-500",
+  success: "bg-emerald-500",
+  error: "bg-destructive",
+  warning: "bg-amber-500",
 };
 
 function taskScheduleLine(task: ScheduledTask) {
@@ -175,7 +177,7 @@ export function ThreadAutomationsPanel(props: {
               <span
                 className={cn(
                   "absolute -right-1 -top-1 size-1.5 rounded-full",
-                  STATUS_DOT_CLASS[task.lastRunStatus],
+                  STATUS_DOT_CLASS[scheduledTaskRunPresentation(task).tone],
                 )}
                 aria-hidden
               />
@@ -185,11 +187,15 @@ export function ThreadAutomationsPanel(props: {
                 <span className="block truncate text-sm font-medium text-foreground/80">
                   {task.title}
                 </span>
-                <p className="truncate text-2xs text-muted-foreground">{taskScheduleLine(task)}</p>
+                <p className="truncate text-2xs text-muted-foreground">
+                  {taskScheduleLine(task)} · {scheduledTaskRunPresentation(task).label}
+                </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
-                <p className="text-muted-foreground">{taskScheduleLine(task)}</p>
+                <p className="text-muted-foreground">
+                  {taskScheduleLine(task)} · {scheduledTaskRunPresentation(task).label}
+                </p>
               </TooltipPopup>
             </Tooltip>
             <Tooltip>
@@ -224,7 +230,11 @@ export function ThreadAutomationsPanel(props: {
                       part="icon"
                       aria-label={`Run ${task.title} now`}
                       disabled={
-                        !canOperate || busyTaskId !== null || task.lastRunStatus === "running"
+                        !canOperate ||
+                        busyTaskId !== null ||
+                        (task.lastRun === undefined
+                          ? task.lastRunStatus === "running"
+                          : task.lastRun.dispatchStatus === "dispatching")
                       }
                       onClick={() => void runNow(task)}
                     >

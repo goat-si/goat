@@ -1,3 +1,4 @@
+import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
@@ -345,13 +346,6 @@ function deliveryOutcomeVariant(outcome: string) {
     return "warning";
   }
   if (outcome === "dispatch_failed" || outcome === "rejected_signature") return "error";
-  return "outline";
-}
-
-function statusVariant(status: ScheduledTask["lastRunStatus"]) {
-  if (status === "failed") return "error";
-  if (status === "succeeded") return "success";
-  if (status === "running") return "info";
   return "outline";
 }
 
@@ -730,8 +724,10 @@ function ScheduledTaskRow({
               "Not scheduled"
             )}
           </span>
-          {task.lastRunStatus !== "never" ? (
-            <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
+          {task.lastRunStatus !== "never" || task.lastRun !== undefined ? (
+            <Badge variant={scheduledTaskRunPresentation(task).tone}>
+              {scheduledTaskRunPresentation(task).label}
+            </Badge>
           ) : null}
           <MemoryRunAccessLabel {...task} />
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
