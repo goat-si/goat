@@ -266,7 +266,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                   ...(opened.tabId ? { tabId: opened.tabId } : {}),
                 })
                 .pipe(
-                  Effect.ignore,
+                  // A refused close (a person viewing it, or a focused secret field) leaves the
+                  // tab to the browser's idle sweep, which closes unviewed agent tabs.
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("screen code could not close an unclaimed new tab", {
+                      cause,
+                    }),
+                  ),
                   Effect.andThen(
                     Effect.fail({ ...fail("unknown_outcome", nextStep), effectStarted: true }),
                   ),
