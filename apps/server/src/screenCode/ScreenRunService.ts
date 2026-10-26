@@ -15,7 +15,12 @@ import type {
   ScreenRunError,
   ScreenJournalEntry,
 } from "@goat/contracts";
-import { ScreenRunError as ScreenRunErrorSchema, ScreenTargetRef, ThreadId } from "@goat/contracts";
+import {
+  CommandId,
+  ScreenRunError as ScreenRunErrorSchema,
+  ScreenTargetRef,
+  ThreadId,
+} from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -75,6 +80,12 @@ export class ScreenRunService extends Context.Service<
       reason: string;
     }) => Effect.Effect<void, ScreenRunError>;
     readonly resetValues: (input: { runId: string; turnId: string }) => Effect.Effect<void>;
+    /** Cuts matching cells and targets synchronously; controlChanged does the slower cleanup. */
+    readonly fence: (input: {
+      readonly threadId?: string;
+      readonly tabId?: string;
+      readonly controlId?: string;
+    }) => Effect.Effect<void>;
     readonly controlChanged: (input: {
       readonly kind:
         | "stop"
@@ -294,6 +305,29 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       if (oldest !== undefined) cleanupJournal.delete(oldest);
     }
   };
+  // Cleanup runs after the tool reply, so a thread notice is where a person learns a tab stayed open.
+  const noticeCleanupFailure = (threadId: string, runId: string, turnId: string, count: number) =>
+    orchestrator
+      ? orchestrator
+          .dispatch({
+            type: "thread.notice.record",
+            commandId: CommandId.make(`server:screen-code-cleanup:${runId}:${turnId}:${count}`),
+            threadId: ThreadId.make(threadId),
+            recordKey: `screen-code-cleanup:${runId}`,
+            message:
+              count === 1
+                ? "Screen code could not close a tab it opened. Close it by hand if it is still open."
+                : `Screen code could not close ${count} tabs it opened. Close them by hand if they are still open.`,
+            severity: "warning",
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("screen code cleanup notice failed", { cause }),
+            ),
+            Effect.forkDetach,
+            Effect.asVoid,
+          )
+      : Effect.void;
   const releaseForeground = Effect.fn("ScreenRunService.releaseForeground")(function* (
     threadId: string,
     targets: readonly string[],
@@ -307,9 +341,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     for (const controlId of controls)
       yield* options.leases.releaseForeground({ threadId: ThreadId.make(threadId), controlId });
   });
-  const fenceNow = (change: { threadId: string; tabId?: string; controlId?: string }) => {
+  const fenceNow = (change: { threadId?: string; tabId?: string; controlId?: string }) => {
     for (const [id, turn] of turns) {
-      if (turn.threadId !== change.threadId) continue;
+      if (change.threadId !== undefined && turn.threadId !== change.threadId) continue;
       const [runId, turnId] = id.split("\u0000");
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
@@ -327,6 +361,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         touched = true;
         bridge.invalidateTargetNow(runId, turnId, targetId);
         options.desktopHost?.invalidateTarget(targetId);
+        options.tabHost?.invalidateTarget(targetId);
       }
       if (touched) resetNext.add(id);
     }
@@ -385,6 +420,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         });
       if (input.bindingHints) options.tabHost?.setBindingHints(input, input.bindingHints);
       activeCells.set(id, cellId);
+      // A cutoff or new message killed the child, so values the agent stored are gone; say so.
+      const contextReset = input.resetValues !== true && resetNext.delete(id);
       return yield* running
         .runCell(
           {
@@ -402,7 +439,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             },
           },
           input.source,
-          input.resetValues === true || resetNext.delete(id),
+          input.resetValues === true || contextReset,
         )
         .pipe(
           Effect.mapError((cause) => ({
@@ -432,7 +469,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   ...result.error,
                   receipts: journal.slice(-16).map((entry) => entry.receipt),
                 })
-              : Effect.succeed({ ...result, journal });
+              : Effect.succeed({
+                  ...result,
+                  journal,
+                  ...(contextReset
+                    ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }
+                    : {}),
+                });
           }),
           Effect.ensuring(
             Effect.sync(() => {
@@ -465,6 +508,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       routes.delete(input.targetId);
       deliveries.delete(input.targetId);
       options.desktopHost?.invalidateTarget(input.targetId);
+      options.tabHost?.invalidateTarget(input.targetId);
     }),
     finishTurn: Effect.fn("ScreenRunService.finishTurn")(function* (input: {
       runId: string;
@@ -512,19 +556,28 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       for (const outcome of failed) recordCleanupFailure(input.runId, input.turnId, outcome.tabId);
       if (cleanup && !Exit.isSuccess(cleanup)) recordCleanupFailure(input.runId, input.turnId);
       const notices = cleanupJournal.get(id) ?? [];
-      if (notices.length)
+      if (notices.length) {
+        yield* noticeCleanupFailure(input.threadId, input.runId, input.turnId, notices.length);
         return yield* Effect.fail({
           code: "cleanup_failed",
           effectStarted: true,
           receipts: notices.slice(-16).map((entry) => entry.receipt),
           nextStep: "Inspect the affected tab and close it manually if needed.",
         } satisfies ScreenRunError);
+      }
     }),
     resetValues: Effect.fn("ScreenRunService.resetValues")(function* (input: {
       runId: string;
       turnId: string;
     }) {
       resetNext.add(turnKey(input.runId, input.turnId));
+    }),
+    fence: Effect.fn("ScreenRunService.fence")(function* (input: {
+      threadId?: string;
+      tabId?: string;
+      controlId?: string;
+    }) {
+      fenceNow(input);
     }),
     controlChanged: Effect.fn("ScreenRunService.controlChanged")(function* (input: {
       kind:
@@ -577,6 +630,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           options.tabHost &&
           (input.kind === "stop" || input.kind === "stopAll" || input.kind === "credentialRevoked")
         ) {
+          const before = cleanupFailures;
           const cleanup = yield* Effect.exit(
             options.tabHost.releaseControl({
               runId,
@@ -594,6 +648,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             recordCleanupFailure(runId, turnId);
             cleanupFailures++;
           }
+          if (cleanupFailures > before)
+            yield* noticeCleanupFailure(turn.threadId, runId, turnId, cleanupFailures - before);
         }
         // An authority cutoff closes the child, so computation values reset even if the
         // changed target is unrelated to the active cell; the next cell must rebind.
@@ -603,6 +659,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           if (route.runId !== runId || route.turnId !== turnId) continue;
           yield* bridge.invalidateTarget(runId, turnId, targetId, input.kind);
           options.desktopHost?.invalidateTarget(targetId);
+          options.tabHost?.invalidateTarget(targetId);
         }
         resetNext.add(id);
       }

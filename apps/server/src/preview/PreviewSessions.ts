@@ -232,6 +232,23 @@ const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
+  type ScreenChange = Parameters<ScreenRunService.ScreenRunService["Service"]["controlChanged"]>[0];
+  const fenceScreen = (
+    change: Parameters<ScreenRunService.ScreenRunService["Service"]["fence"]>[0],
+  ) => (Option.isSome(screen) ? screen.value.fence(change) : Effect.void);
+  // Tab cleanup reads and closes pages a stuck page can hold up, so it runs after control is back
+  // and never delays a Stop; the fence has already cut every affected cell.
+  const cleanupScreen = (change: ScreenChange) =>
+    Option.isSome(screen)
+      ? screen.value.controlChanged(change).pipe(
+          Effect.timeout("45 seconds"),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("screen cleanup after stop failed", { cause }),
+          ),
+          Effect.forkDetach,
+          Effect.asVoid,
+        )
+      : Effect.void;
   const desktopFrames = yield* DesktopFrames.DesktopFrames;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const handoffs = yield* Handoffs.Handoffs;
@@ -285,10 +302,11 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     if (input.control === "stopAll") {
-      if (Option.isSome(screen)) yield* screen.value.controlChanged({ kind: "stopAll" });
+      yield* fenceScreen({});
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
       const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
+      yield* cleanupScreen({ kind: "stopAll" });
       // A grant left alive lets its thread take the screen again on its next turn.
       return failed === 0
         ? { applied: true }
@@ -301,12 +319,14 @@ const make = Effect.gen(function* () {
     if (tab !== undefined) {
       if (Option.isNone(browser)) return { applied: false, reason: "not_found" } as const;
       if (input.control === "takeover") return { applied: false, reason: "unsupported" } as const;
-      if (input.control === "stop" && Option.isSome(screen))
-        yield* screen.value.controlChanged({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
+      if (input.control === "stop")
+        yield* fenceScreen({ threadId: tab.threadId, tabId: tab.tabId });
       const applied = yield* browser.value.controlSession({
         ...tab,
         control: input.control === "stop" ? "stop" : "handBack",
       });
+      if (input.control === "stop")
+        yield* cleanupScreen({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
       return applied ? { applied } : ({ applied, reason: "not_found" } as const);
     }
     if (!id.startsWith(DESKTOP_PREFIX) || Option.isNone(leases))
@@ -316,18 +336,26 @@ const make = Effect.gen(function* () {
       ({ control }) => control.controlId === controlId,
     );
     if (live === undefined) return { applied: false, reason: "not_found" } as const;
-    if (Option.isSome(screen) && (input.control === "takeover" || input.control === "stop"))
-      yield* screen.value.controlChanged({ kind: input.control, threadId: live.control.threadId,
-        controlId: live.control.controlId });
+    const cutoff =
+      input.control === "takeover" || input.control === "stop"
+        ? {
+            kind: input.control,
+            threadId: live.control.threadId,
+            controlId: live.control.controlId,
+          }
+        : undefined;
+    if (cutoff) yield* fenceScreen(cutoff);
     // The pause is the host's: a person on the desktop holds every agent there.
     if (input.control === "takeover") yield* leases.value.pause("takeover");
     else if (input.control === "handBack") yield* leases.value.resume;
     else {
       const threadId = ThreadId.make(live.control.threadId);
       const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);
+      if (cutoff) yield* cleanupScreen(cutoff);
       // A grant left alive keeps the thread's apps from every other thread until it ends.
       if (failed > 0) return { applied: false, reason: "not_allowed" } as const;
     }
+    if (input.control === "takeover" && cutoff) yield* cleanupScreen(cutoff);
     return { applied: true };
   });
 
