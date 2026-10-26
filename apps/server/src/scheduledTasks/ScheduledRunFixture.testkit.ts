@@ -1,3 +1,6 @@
+import { ScheduledTaskUpsertInput } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import { SecretRequestError, type ScheduledTaskWebhookUrlUnavailableReason } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
@@ -123,6 +126,8 @@ export const syntheticLaunchLayer = (
     readonly failLaunches?: { remaining: number };
     readonly defectLaunches?: { remaining: number };
     readonly runStatus?: OrchestrationV2Run["status"];
+    readonly failAfterAcceptance?: boolean;
+    readonly returnOnly?: boolean;
     readonly gate?: Deferred.Deferred<void>;
     readonly gateForTask?: (input: LaunchInput) => Deferred.Deferred<void> | undefined;
   },
@@ -153,7 +158,22 @@ export const syntheticLaunchLayer = (
                   projectId: input.projectId,
                   cause: "Synthetic pre-command failure.",
                 });
+              if (options.returnOnly) {
+                const threadId = ThreadId.make("synthetic:return-only");
+                return {
+                  threadId,
+                  resumed: false,
+                  projection: idleThreadProjection(liveThreadShell(threadId)),
+                };
+              }
               const result = yield* launch(input, options.runStatus);
+              if (options.failAfterAcceptance)
+                return yield* new Launch.ThreadLaunchError({
+                  operation: "dispatch-message",
+                  commandId,
+                  projectId: input.projectId,
+                  cause: "Synthetic error after commit.",
+                });
               completed.set(commandId, result);
               options.completedLaunches?.add(commandId);
               return result;
@@ -192,6 +212,8 @@ export const withWebhookService = <A, E>(
     readonly failLaunches?: { remaining: number };
     readonly defectLaunches?: { remaining: number };
     readonly runStatus?: OrchestrationV2Run["status"];
+    readonly failAfterAcceptance?: boolean;
+    readonly returnOnly?: boolean;
     readonly gate?: Deferred.Deferred<void>;
     readonly gateForTask?: (input: LaunchInput) => Deferred.Deferred<void> | undefined;
     readonly relayHookBaseUrl?: string;
@@ -275,3 +297,63 @@ export const withWebhookService = <A, E>(
         : Layer.succeed(SqlClient.SqlClient, options.sql),
     ),
   );
+
+const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
+export const waitForSpan = <A, E, R>(work: Effect.Effect<A, E, R>, name: string) =>
+  Effect.gen(function* () {
+    const done = yield* Deferred.make<void>();
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (...args) => {
+          end(...args);
+          if (span.name === name) Deferred.doneUnsafe(done, Effect.void);
+        };
+        return span;
+      },
+    });
+    const result = yield* work.pipe(Effect.withTracer(tracer));
+    yield* Deferred.await(done);
+    return result;
+  });
+
+export const drainPendingDispatch = (workers: Map<string, Effect.Effect<void>>) =>
+  waitForSpan(
+    workers.get("webhook-coalescing") ?? Effect.die("Synthetic coalescing worker missing"),
+    "ScheduledTaskService.dispatchPendingWebhook",
+  );
+
+export const webhookTaskInput = (overrides: Record<string, unknown> = {}) =>
+  decodeUpsertInput({
+    id: "scheduled-task:hook",
+    title: "Review PRs",
+    prompt: "Review this PR: {{body.pull_request.url}}",
+    enabled: true,
+    schedule: { type: "webhook" },
+    projectId: "project-webhook",
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    ...overrides,
+  });
+
+export const pullRequestBody = new TextEncoder().encode(
+  JSON.stringify({ pull_request: { url: "https://github.com/org/repo/pull/45" } }),
+);
+
+export const requestFor = (
+  task: { readonly id: string; readonly webhook?: { readonly path: string } | undefined },
+  overrides: Partial<ScheduledTaskService.WebhookTriggerRequest> = {},
+): ScheduledTaskService.WebhookTriggerRequest => ({
+  hookId: task.id,
+  token: task.webhook?.path.split("/").at(-1) ?? "",
+  method: "POST",
+  path: `/api/hooks/${task.id}`,
+  query: "",
+  headers: { "content-type": "application/json" },
+  body: pullRequestBody,
+  bodyText: new TextDecoder().decode(pullRequestBody),
+  ...overrides,
+});
