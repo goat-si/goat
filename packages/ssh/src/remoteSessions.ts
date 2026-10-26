@@ -3,11 +3,13 @@ import { AuthEnvironmentScopes } from "@goat/contracts";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 import * as SshAuth from "./auth.ts";
+import { appServerSessionRequest, issueAppServerCredential } from "./appServer.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -19,7 +21,7 @@ import {
   type PreparedRemoteRuntime,
   type RemoteGoatRunnerOptions,
 } from "./remoteRuntime.ts";
-import { REMOTE_RUNTIME_STATE_KEY, runSshCommand } from "./command.ts";
+import { getLastNonEmptyOutputLine, REMOTE_RUNTIME_STATE_KEY, runSshCommand } from "./command.ts";
 import {
   SshCommandError,
   SshInvalidTargetError,
@@ -122,6 +124,22 @@ DEFAULT_SERVER_HOME="$HOME/.goat"
 recheck_selected_before_use
 "$RUNNER_FILE" auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject @@GOAT_SUBJECT@@ @@GOAT_SCOPES@@ --ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
 `;
+
+const REMOTE_PAIRING_SCRIPT = `set -eu
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
+DEFAULT_SERVER_HOME="$HOME/.goat"
+@@GOAT_RUNNER_SETUP@@
+PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"
+recheck_selected_before_use
+"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json
+`;
+
+const RemotePairingResult = Schema.Struct({
+  credential: Schema.String,
+});
+const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
+const decodeRemotePairingOutput = (stdout: string) =>
+  decodeRemoteJsonOutput(stdout, decodeRemotePairingResult);
 
 export const decodeRemoteClientSessionOutput = Effect.fn(
   "ssh/tunnel.decodeRemoteClientSessionOutput",
@@ -270,6 +288,53 @@ export function makeRemoteSessions({
       ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
     > {
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
+      if (prepared?.appServerPort !== undefined) {
+        const request = appServerSessionRequest({
+          subject: "mcp-client",
+          scopes: [
+            "orchestration:read",
+            "orchestration:operate",
+            ...(sessionOptions.approvals === true ? ["orchestration:approve"] : []),
+            ...(sessionOptions.providersManage === true ? ["providers:manage"] : []),
+            ...(sessionOptions.settingsWrite === true ? ["settings:write"] : []),
+            ...(sessionOptions.memoryScopes ?? []),
+          ],
+          ttl: sessionOptions.ttl,
+          label: sessionOptions.label,
+          runtimeModeCeiling: sessionOptions.runtimeModeCeiling,
+        });
+        if (Option.isNone(request))
+          return yield* new SshPairingError({
+            message: `The MCP session requested for ${target.alias} has a scope or runtime mode GOAT cannot grant.`,
+            stdout: "",
+          });
+        const body = yield* issueAppServerCredential(
+          target,
+          prepared.appServerPort,
+          request.value,
+          input,
+        );
+        const session = yield* decodeRemoteMcpSessionOutput(body).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SshPairingError({
+                message: "The GOAT app server did not return an MCP session.",
+                stdout: body,
+                cause,
+              }),
+          ),
+        );
+        if (session.token.trim().length === 0)
+          return yield* new SshPairingError({
+            message: "The GOAT app server returned an empty MCP session token.",
+            stdout: body,
+          });
+        // The app server applies a requested ceiling; without one it keeps its default.
+        return {
+          ...session,
+          runtimeModeCeilingApplied: sessionOptions.runtimeModeCeiling !== null,
+        };
+      }
       const selected =
         prepared ??
         (yield* prepareRemoteRuntime(
@@ -348,6 +413,28 @@ export function makeRemoteSessions({
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
     const stateKey = REMOTE_RUNTIME_STATE_KEY;
+    if (prepared?.appServerPort !== undefined) {
+      const request = appServerSessionRequest({
+        subject: sessionOptions.subject,
+        scopes: sessionOptions.scopes,
+        ttl: sessionOptions.ttl,
+        label: sessionOptions.label,
+      });
+      if (Option.isNone(request))
+        return yield* new SshPairingError({
+          message: `The client session requested for ${target.alias} has a scope GOAT cannot grant.`,
+          stdout: "",
+        });
+      if (sessionOptions.subject === "mcp-client")
+        throw new Error("The mcp-client subject cannot access client HTTP or WebSocket endpoints.");
+      const body = yield* issueAppServerCredential(
+        target,
+        prepared.appServerPort,
+        request.value,
+        input,
+      );
+      return yield* decodeRemoteClientSessionOutput(body, sessionOptions.scopes);
+    }
     const selected =
       prepared ??
       (yield* prepareRemoteRuntime(
@@ -381,10 +468,123 @@ export function makeRemoteSessions({
     return session;
   });
 
+  function buildRemotePairingScript(
+    stateKey: string,
+    input?: RemoteGoatRunnerOptions,
+    selection = requestedRuntime(input),
+  ): string {
+    return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
+      GOAT_STATE_KEY: stateKey,
+      GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
+        ...selection,
+        mayUpgradeOwnedServer: false,
+      }),
+    });
+  }
+
+  const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingToken")(function* (
+    target: DesktopSshEnvironmentTarget,
+    input?: SshAuth.SshAuthOptions,
+    runner?: RemoteGoatRunnerOptions,
+    prepared?: PreparedRemoteRuntime,
+  ): Effect.fn.Return<
+    {
+      readonly credential: string;
+    },
+    SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
+    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  > {
+    const stateKey = REMOTE_RUNTIME_STATE_KEY;
+    yield* Effect.logDebug("ssh.remoteServer.pairingToken.start", {
+      ...sshTargetLogFields(target),
+      stateKey,
+    });
+    if (prepared?.appServerPort !== undefined) {
+      const body = yield* issueAppServerCredential(
+        target,
+        prepared.appServerPort,
+        { kind: "pairing" },
+        input,
+      );
+      const pairing = yield* decodeRemotePairingOutput(body).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SshPairingError({
+              message: "The GOAT app server returned an unreadable pairing credential.",
+              stdout: body,
+              cause,
+            }),
+        ),
+      );
+      if (pairing.credential.trim().length === 0)
+        return yield* new SshPairingError({
+          message: "The GOAT app server returned an empty pairing credential.",
+          stdout: body,
+        });
+      return { credential: pairing.credential };
+    }
+    const selected =
+      prepared ??
+      (yield* prepareRemoteRuntime(
+        target,
+        input ?? {},
+        { ...runner, keepExistingRunner: true },
+        stateKey,
+      ));
+    const result = yield* runSshCommand(target, {
+      remoteCommandArgs: ["sh", "-s"],
+      timeoutStage: "pairing",
+      stdin: buildRemotePairingScript(stateKey, selected.runner, {
+        ...selected,
+        mayUpgradeOwnedServer: false,
+      }),
+      ...(isNodeScriptRunner(selected.runner)
+        ? {}
+        : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
+      ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
+      ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
+      ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
+    });
+    if (!getLastNonEmptyOutputLine(result.stdout)) {
+      return yield* new SshPairingError({
+        message: "SSH pairing did not return a credential.",
+        stdout: result.stdout,
+      });
+    }
+    const parsed = yield* decodeRemotePairingOutput(result.stdout).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SshPairingError({
+            message: "SSH pairing returned unparseable output.",
+            stdout: result.stdout,
+            cause,
+          }),
+      ),
+    );
+    if (parsed.credential.trim().length === 0) {
+      return yield* new SshPairingError({
+        message: "SSH pairing command returned an invalid credential.",
+        stdout: result.stdout,
+      });
+    }
+    yield* Effect.logDebug("ssh.remoteServer.pairingToken.created", {
+      selectedVersion: selected.version,
+      requestedVersion: selected.requestedVersion,
+      source: selected.source,
+      ...sshTargetLogFields(target),
+      stateKey,
+    });
+    return {
+      credential: parsed.credential,
+    };
+  });
+
   return {
     buildRemoteMcpSessionScript,
     buildRemoteClientSessionScript,
     issueRemoteMcpClientSession,
     issueRemoteClientSession,
+    buildRemotePairingScript,
+    issueRemotePairingToken,
   };
 }

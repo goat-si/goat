@@ -357,6 +357,7 @@ export class ProviderAdapterEventStreamError extends Schema.TaggedError<Provider
   {
     driver: ProviderDriverKind,
     providerSessionId: ProviderSessionId,
+    source: Schema.optional(Schema.Literal("provider_process_exit")),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {

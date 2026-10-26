@@ -21,9 +21,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -45,6 +43,8 @@ import {
 } from "@goat/provider-core/server/handoffBudget";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
+import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
+import { refusedBeforePrompt } from "./PromptRefusal.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -57,6 +57,7 @@ import {
   makeProviderFailure,
 } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
+import { settledBeforeStartRun } from "./runTerminationCause.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
@@ -84,20 +85,6 @@ export class WorkspaceLeaseBusyError extends Schema.TaggedError<WorkspaceLeaseBu
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
 const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError);
-
-/**
- * Claude refuses these before it reads the prompt: replacing a process running background work,
- * or launch arguments whose appended system prompt cannot be read.
- */
-const PROMPT_REFUSAL_TAGS = [
-  "ClaudeBackgroundWorkBlocksQueryReplacementError",
-  "ClaudeAppendSystemPromptFileError",
-  "ClaudeAppendSystemPromptMissingValueError",
-] as const;
-
-const refusedBeforePrompt = (error: unknown): boolean =>
-  PROMPT_REFUSAL_TAGS.some((tag) => Predicate.isTagged(error, tag)) ||
-  (Predicate.hasProperty(error, "cause") && refusedBeforePrompt(error.cause));
 
 export interface ProviderTurnStartServiceV2Shape {
   /**
@@ -449,7 +436,7 @@ export const layer: Layer.Layer<
           };
           const eventPayloads = [
             { type: "turn-item.updated", payload: item },
-            { type: "run.updated", payload: { ...run, status, ...started, completedAt: now } },
+            { type: "run.updated", payload: settledBeforeStartRun(run, input, started) },
             {
               type: "run-attempt.updated",
               payload: { ...attempt, status, ...started, completedAt: now },
@@ -1261,9 +1248,10 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
+      const userText = yield* builtInSkillProviderText(Option.some(serverSettings), {
+        message,
+        driver: session.driver,
+        project: Effect.succeed(projection.thread.projectId),
       });
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.

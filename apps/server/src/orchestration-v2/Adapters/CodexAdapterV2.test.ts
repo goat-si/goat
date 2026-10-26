@@ -7311,36 +7311,59 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             codexErrorInfo: "other",
             additionalDetails: null,
           };
+          const restoredItems = Object.entries(buildCodexDevelopmentContext()).map(
+            ([key, entry]) => ({
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
+            }),
+          );
+          const compactionEvents = (
+            [
+              { method: "item/started", id: "completed-item", startedAtMs: 1782622441000 },
+              { method: "item/completed", id: "completed-item", completedAtMs: 1782622442000 },
+              { method: "item/started", id: "unfinished-item", startedAtMs: 1782622443000 },
+            ] as const
+          ).map(({ method, id, ...timestamps }) => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method,
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                item: { type: "contextCompaction", id },
+                ...timestamps,
+              },
+            },
+          }));
           const transcript = makeCodexReplayTranscript({
             scenario: `automatic-compaction-${outcome}`,
             entries: [
               ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
-              ...(
-                [
-                  { method: "item/started", id: "completed-item", startedAtMs: 1782622441000 },
-                  { method: "item/completed", id: "completed-item", completedAtMs: 1782622442000 },
-                  { method: "item/started", id: "unfinished-item", startedAtMs: 1782622443000 },
-                ] as const
-              ).map(({ method, id, ...timestamps }) => ({
-                type: "emit_inbound" as const,
-                label: `${method}/${id}`,
-                frame: {
-                  method,
-                  params: {
-                    threadId: nativeThreadId,
-                    turnId: nativeTurnId,
-                    item: { type: "contextCompaction", id },
-                    ...timestamps,
-                  },
-                },
-              })),
+              ...compactionEvents,
+              ...(outcome === "Stop"
+                ? [
+                    {
+                      type: "expect_outbound" as const,
+                      frame: {
+                        id: 4,
+                        method: "thread/inject_items",
+                        params: { threadId: nativeThreadId, items: restoredItems },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      frame: { id: 4, result: {} },
+                    },
+                  ]
+                : []),
               ...(outcome === "Stop"
                 ? [
                     {
                       type: "expect_outbound" as const,
                       label: "turn/interrupt",
                       frame: {
-                        id: 4,
+                        id: 5,
                         method: "turn/interrupt",
                         params: { threadId: nativeThreadId, turnId: nativeTurnId },
                       },
@@ -7348,7 +7371,29 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     {
                       type: "emit_inbound" as const,
                       label: "turn/interrupt/failed",
-                      frame: { id: 4, error: { code: -32_000, message: "Interrupt failed" } },
+                      frame: { id: 5, error: { code: -32_000, message: "Interrupt failed" } },
+                    },
+                    {
+                      type: "expect_outbound" as const,
+                      frame: {
+                        id: 6,
+                        method: "turn/interrupt",
+                        params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      frame: { id: 6, result: {} },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      frame: {
+                        method: "turn/completed",
+                        params: {
+                          threadId: nativeThreadId,
+                          turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
+                        },
+                      },
                     },
                   ]
                 : [
@@ -7370,13 +7415,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ],
           });
           const compactionStarted = yield* Deferred.make<ProviderTurnId>();
-          const harness = yield* makeCodexReplayHarness(transcript, (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId === "unfinished-item" &&
-            event.turnItem.status === "running" &&
-            event.turnItem.providerTurnId !== null
-              ? Deferred.succeed(compactionStarted, event.turnItem.providerTurnId)
-              : Effect.void,
+          const injectionRequested = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "unfinished-item" &&
+              event.turnItem.status === "running" &&
+              event.turnItem.providerTurnId !== null
+                ? Deferred.succeed(compactionStarted, event.turnItem.providerTurnId)
+                : Effect.void,
+            (method) =>
+              method === "thread/inject_items"
+                ? Deferred.succeed(injectionRequested, undefined)
+                : Effect.void,
           );
           yield* TestClock.setTime(1782622445000);
           yield* harness.runtime.startTurn(
@@ -7390,10 +7442,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           );
           if (outcome === "Stop") {
             const providerTurnId = yield* Deferred.await(compactionStarted);
+            yield* Deferred.await(injectionRequested);
             const interrupt = yield* harness.runtime
               .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
               .pipe(Effect.exit);
             assert.equal(interrupt._tag, "Failure");
+            yield* harness.runtime.interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId,
+            });
           }
           yield* harness.firstTerminal;
           const items = harness.events.flatMap((event) =>
@@ -7414,10 +7471,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           );
           assert.equal(unfinished[0]?.id, unfinished[1]?.id);
           assert.deepEqual(unfinished[1]?.startedAt, DateTime.makeUnsafe(1782622443000));
-          assert.deepEqual(
-            unfinished[1]?.completedAt,
-            DateTime.makeUnsafe(outcome === "Stop" ? 1782622445000 : 1782622450000),
-          );
+          assert.deepEqual(unfinished[1]?.completedAt, DateTime.makeUnsafe(1782622450000));
           assert.deepEqual(
             completed.map((item) => item.status),
             ["running", "completed"],

@@ -122,9 +122,8 @@ trycua/cua `main`에 별도 PR로 보내며, 드라이버 문제는 upstream에 
 - 경로: 릴리스 태그, `typescript/` (SDK와 Node runtime)
 - upstream: 해당 없음
 - 상태: 계획
-- 정책: 릴리스 태그는 `cua-driver-rs-v<upstream version>-goat.<N>`다. upstream 버전을 올리면 N을 새로 센다. SDK와 실행 파일은
-  비공개 프로토콜을 공유하므로 같은 커밋에서 빌드하고 함께 낸다. GOAT가 지금 쓰는 npm `@trycua/cua-driver`는 0.37.0에서 멈췄다.
-  포크 SDK의 패키지 이름과 게시처는 #1590에서 정하고 [20.001](./20.001_cua_chase_fork_bootstrap.md)에 적는다.
+- 정책: 릴리스 태그는 `cua-driver-rs-v<upstream version>-goat.<N>`다. upstream 버전을 올리면 N을 새로 센다. 포크는 npm SDK를 발행하지 않는다.
+  GOAT는 계약 필드 0.8.0과 호환되는 npm `@trycua/cua-driver` 0.37.0을 유지한다.
 
 ## 깨끗하게 머지되고도 깨지는 것
 

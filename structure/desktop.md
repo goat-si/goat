@@ -77,8 +77,8 @@ verified installed generation of it from the state directory
 (`apps/desktop/src/cua/ComputerUseHelperInstall.ts`). Development builds need
 `GOAT_CUA_HELPER_PATH` to a helper built by `scripts/build-computer-use-helper.ts`, and a helper
 that is present but unusable keeps computer use off. A release helper
-(`apps/desktop/native/computer-use-helper/main.swift`) serves only a parent signed by GOAT's team
-with the GOAT app identifier; a development or ad-hoc helper, built with
+(`apps/desktop/native/computer-use-helper/main.swift`) serves any parent signed by GOAT's Developer ID
+team, whatever its identifier; a development or ad-hoc helper, built with
 `GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
 with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver mcp --direct --embedded` as its direct child (no socket), so macOS attributes

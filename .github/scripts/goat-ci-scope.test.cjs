@@ -123,7 +123,7 @@ describe("selectTasks", () => {
   it("runs every dependent task for contracts", () => {
     assert.deepEqual(
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
-      TASKS.filter((task) => task !== "test-memory-growth"),
+      TASKS.filter((task) => task !== "test-memory-growth" && task !== "test-ingest"),
     );
   });
 
@@ -176,6 +176,18 @@ describe("selectTasks", () => {
     assert.deepEqual(tasksFor("infra/relay/src/index.ts"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
+  });
+
+  it("runs the ingest suite for its SQL and config and for the shared allowlist", () => {
+    for (const file of [
+      "infra/ingest/migrations/0001_batches.sql",
+      "infra/ingest/wrangler.jsonc",
+      "infra/ingest/src/store.ts",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-ingest"], file);
+    }
+    assert.ok(tasksFor("packages/shared/src/analyticsAllowlist.ts").includes("test-ingest"));
+    assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-ingest"));
   });
 
   it("always includes check", () => {
@@ -357,8 +369,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists fifteen jobs for a full run: eleven tasks and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 15);
+  it("lists sixteen jobs for a full run: twelve tasks and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 16);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -418,16 +430,32 @@ describe("planRun", () => {
     assert.equal((await plan(pr(), labels([FULL_LABEL]))).full, true);
   });
 
-  it("runs a quick run by default: check, typecheck and the tests beside the changes", async () => {
+  it("runs a quick run by default: check, typecheck and selected tests", async () => {
     const result = await plan(pr(), labels([]));
     assert.equal(result.full, false);
     assert.equal(result.quick, true);
     assert.deepEqual(result.tasks, ["check", "typecheck", "test-changed"]);
-    assert.deepEqual(result.changedTests, {
-      vitest: ["apps/server/src/channels/ChannelDispatcher.test.ts"],
-      node: [],
-    });
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelDispatcher.test.ts"),
+    );
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelBotTurns.test.ts"),
+    );
+    assert.equal(new Set(result.changedTests.vitest).size, result.changedTests.vitest.length);
+    assert.deepEqual(result.changedTests.node, []);
     assert.equal(result.server.mode, "none");
+  });
+
+  it("quick PR includes cross-package importing tests (#1705)", async () => {
+    const result = await plan(pr(), labels([]), [
+      "packages/provider-opencode/src/server/v2/textGeneration.ts",
+    ]);
+    assert.ok(
+      result.changedTests.vitest.includes(
+        "apps/server/src/textGeneration/OpenCode2TextGeneration.test.ts",
+      ),
+    );
+    assert.ok(result.tasks.includes("test-changed"));
   });
 
   it("runs the same quick scope for a draft and for a ready pull request", async () => {

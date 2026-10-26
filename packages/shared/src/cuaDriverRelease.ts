@@ -1,6 +1,7 @@
-// The SDK and executable use a private protocol; bump the catalog pin with this manifest, and the
-// Cua Driver notice version and files in third-party-licenses.config.json with both.
-const CUA_DRIVER_VERSION = "0.37.0";
+// GOAT's Cua Driver fork (goat-si/cua-driver): unsigned release archives with build-provenance
+// attestations; GOAT signs the driver inside its helper. The daemon reports this version, and
+// hosts compare it exactly. Bump it with the archive pins and third-party-licenses.config.json.
+export const CUA_DRIVER_VERSION = "0.37.0-goat.3";
 
 /** The macOS helper app that owns computer use's TCC identity (Contents/Helpers in GOAT.app). */
 export const COMPUTER_USE_HELPER_NAME = "GOAT Computer Use";
@@ -10,29 +11,29 @@ export const computerUseHelperBundleId = (desktopAppId: string) => `${desktopApp
 
 const archives = {
   "darwin-universal": {
-    archiveName: "cua-driver-rs-0.37.0-darwin-universal-binary.tar.gz",
-    bytes: 53_254_204,
-    sha256: "7d491f67f54be5f3b380ffd85c64b242eaefd05dad6df78012cde227c95aee2a",
+    archiveName: "cua-driver-rs-0.37.0-goat.3-darwin-universal-binary.tar.gz",
+    bytes: 54_087_962,
+    sha256: "e4da734e972d08de07b0e6fc77ea5df85f2e9485cf8c3d3ecda90116201fa9b6",
   },
   "linux-x64": {
-    archiveName: "cua-driver-rs-0.37.0-linux-x86_64-binary.tar.gz",
-    bytes: 36_941_258,
-    sha256: "c7ac376b10da7c207e510b2d90b88a9588bec9852a237962c273fe81b9cd5623",
+    archiveName: "cua-driver-rs-0.37.0-goat.3-linux-x86_64-binary.tar.gz",
+    bytes: 37_058_222,
+    sha256: "858df9e2e365e9078122f501da7cac22769b84e16f12000cefd7f544f03e0696",
   },
   "linux-arm64": {
-    archiveName: "cua-driver-rs-0.37.0-linux-arm64-binary.tar.gz",
-    bytes: 36_518_124,
-    sha256: "879e8040a4ce24caeee34b2e4ac6119be01661082202919db1bcc1ab0b97e4c8",
+    archiveName: "cua-driver-rs-0.37.0-goat.3-linux-arm64-binary.tar.gz",
+    bytes: 36_713_467,
+    sha256: "a54cf71d1e0c81dd1839e03110ca8beb7a138ad48bf6ad48480b6baa242006b4",
   },
   "win32-x64": {
-    archiveName: "cua-driver-rs-0.37.0-windows-x86_64-binary.zip",
-    bytes: 35_838_756,
-    sha256: "40481b55073f1225b0010235b30217bd640ef1f323e982aec0a5f6131d3e4a99",
+    archiveName: "cua-driver-rs-0.37.0-goat.3-windows-x86_64-binary.zip",
+    bytes: 35_796_186,
+    sha256: "b561b966a4fce93c117bdf5f1f4d55f09bce35542f9305878c0b392da0fbaff0",
   },
   "win32-arm64": {
-    archiveName: "cua-driver-rs-0.37.0-windows-arm64-binary.zip",
-    bytes: 33_606_104,
-    sha256: "0fce682b251775e25fd76bf29ff856f7f5ab5aae5759d6b76a40f8312a194a5a",
+    archiveName: "cua-driver-rs-0.37.0-goat.3-windows-arm64-binary.zip",
+    bytes: 33_556_251,
+    sha256: "c28f510e23b2dc30aa253b20d6913e8eed56d273d7a3957f1c8496c65f0cf2b7",
   },
 } as const;
 
@@ -61,7 +62,7 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
     version: CUA_DRIVER_VERSION,
     ...archive,
     format: platform === "win32" ? "zip" : "tar.gz",
-    url: `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
+    url: `https://github.com/goat-si/cua-driver/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
     executable,
     requiredFiles: [
       executable,
@@ -81,13 +82,13 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
   };
 }
 
-// The embedded host clears the driver's environment and rejects names outside its allowlist, so
-// DO_NOT_TRACK and CUA_TELEMETRY cannot be forwarded. These allowlisted switches override any
-// inherited value and turn off the driver's default-on telemetry and GitHub update check.
+// Direct launches force these values over inherited tuning, including the fork's switch that
+// prevents Apple's screencapture tool from requesting audio access under the helper's identity.
 const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
   { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
+  { name: "CUA_DRIVER_DISABLE_SCREENCAPTURE", value: "1" },
 ] as const;
 
 /**
@@ -104,6 +105,8 @@ export const CUA_DRIVER_PROBED_SESSION_NAMES = ["DBUS_SESSION_BUS_ADDRESS"] as c
  * launcher that reviewed the file it just wrote.
  * `display` carries the screen a server started over SSH must reach (DISPLAY, XAUTHORITY, the
  * D-Bus session bus), all on the embedded allowlist. The privacy switches always win.
+ * npm SDK 0.37.0 rejects CUA_DRIVER_DISABLE_SCREENCAPTURE at construction, so it is dropped here;
+ * an embedded driver keeps screencapture off when the variable is unset (goat-si/cua-driver#19).
  * `withheld` names the daemon must not inherit when `display` does not set them.
  */
 export function cuaDriverHostOptions(
@@ -133,7 +136,7 @@ export function cuaDriverHostOptions(
         .filter((name) => !supplied.has(name.toUpperCase()))
         .map((name) => ({ name, value: "" })),
       ...CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
-    ],
+    ].filter((variable) => variable.name.toUpperCase() !== "CUA_DRIVER_DISABLE_SCREENCAPTURE"),
     inheritStderr: true,
     noOverlay: false,
   };

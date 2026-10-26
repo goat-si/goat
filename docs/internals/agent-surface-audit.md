@@ -156,12 +156,12 @@ Only 21% of input parameters carry a description. 135 tools describe none of the
 
 | Tool                     | Characters | Declared at                                             |
 | ------------------------ | ---------- | ------------------------------------------------------- |
+| `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts     |
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts      |
-| `delegate_task`          | 398        | packages/contracts/src/agentSurface/entries/task.ts     |
 | `goat_describe`          | 393        | packages/contracts/src/agentSurface/surfaceEntries.ts   |
+| `goat_worktree_handoff`  | 390        | packages/contracts/src/agentSurface/entries/worktree.ts |
 | `schedule_task`          | 383        | packages/contracts/src/agentSurface/entries/schedule.ts |
 | `goat_thread_launch`     | 376        | packages/contracts/src/agentSurface/entries/thread.ts   |
-| `goat_worktree_handoff`  | 364        | packages/contracts/src/agentSurface/entries/worktree.ts |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
@@ -222,7 +222,7 @@ CLI invocations in the docs that do not resolve:
 | `goat thread read -f threadId=$id` | no subcommand `read` under `goat thread`   | docs/user/outside-agents.md                             |
 | `goat cua-lease-proxy --control`   | `goat` has no `--control`                  | structure/decisions/ADR-0022-cua-driver-computer-use.md |
 
-98 of 200 tools are never named in any Markdown doc, and 93 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_html_list`, `goat_hub_device_join`, `goat_hub_device_leave`, and 69 more. Agents learn these only from the MCP catalog.
+96 of 200 tools are never named in any Markdown doc, and 91 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_html_list`, `goat_hub_device_join`, `goat_hub_device_leave`, and 67 more. Agents learn these only from the MCP catalog.
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`.
 
@@ -232,7 +232,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (159 `return`, 41 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Serve the full tool reference from the registry.** 93 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
+3. **Serve the full tool reference from the registry.** 91 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
 4. **Describe every parameter.** 601 of 763 parameters have no description, and 135 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
 5. **Publish the real argument contract.** 180 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 80 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
@@ -243,5 +243,5 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 11. **`--json` on every listed leaf command.** Only 11 of 46 offer it; agents parse human tables otherwise.
 12. **Examples in help and tool descriptions, executed in tests.** 0 CLI commands use `Command.withExamples` and 3 tool descriptions show a call. Keep examples as data, render them into help and docs, and run them in a smoke test so they cannot rot.
 13. **Uniform pagination.** Use one cursor shape everywhere and add it to list tools that lack one (`device_list`, `goat_attachment_pending_list`, `goat_cloud_machine_list`, `goat_connection_list`, `goat_host_link_list`, `goat_note_list`, `goat_pending_request_list`, `goat_provider_addable_list`, `goat_ssh_host_list`, `goat_thread_watch_list`, `list_scheduled_tasks`, `list_thread_pull_requests`).
-14. **Move routing policy out of tool descriptions.** The longest description is 399 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
+14. **Move routing policy out of tool descriptions.** The longest description is 400 characters, mostly when-to-use guidance. Keep descriptions to what the tool does and its contract, and put policy in the orchestration prompt once.
 15. **Group tools by resource.** Move queue and pending request tools out of the thread toolkit and thread launch out of the project toolkit, and give scheduled tasks one toolkit, so permissions, docs, and discovery follow the resource an agent is working on.

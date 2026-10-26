@@ -10,6 +10,14 @@ export interface Availability {
 }
 
 /**
+ * What this host knows now that no scope or profile shows: agent computer use connections that
+ * keep failing (ComputerUseAgentConnections), which no request can get past.
+ */
+export interface HostConditions {
+  readonly computerUseFailure?: string;
+}
+
+/**
  * Device access is a person's grant: no agent path may turn it on (#1196), so the refusal says who
  * can and where.
  */
@@ -63,8 +71,11 @@ export const availability = (
   scope: McpInvocationContext.McpInvocationScope,
   served: boolean,
   profile?: CallerProfile,
+  host: HostConditions = {},
 ): Availability => {
   if (!served) return { now: false, reason: "This GOAT server does not serve it." };
+  if (entry.resource === "computer_use" && host.computerUseFailure !== undefined)
+    return { now: false, reason: host.computerUseFailure };
   if (entry.resource === "surface") return { now: true };
   if (entry.requires === "thread" && scope.thread === undefined)
     return { now: false, reason: "Needs an agent running inside a GOAT thread." };

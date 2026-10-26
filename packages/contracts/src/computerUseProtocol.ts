@@ -105,7 +105,9 @@ export const ComputerUseReadiness = Schema.Struct({
    * What stops computer use right now even when every step above is ready, typed so clients
    * can choose the remedy: screenLocked (unlock the screen), noInteractiveDesktop (a service or
    * SSH session with no desktop, such as Windows Session 0), otherUserAtConsole, restartRequired
-   * (a grant changed and the helper must start again to see it). A person's takeover is not a
+   * (a grant changed and the helper must start again to see it), accessibilityStale (macOS says
+   * Accessibility is on, but a real tree read under it failed: a switch left from an earlier
+   * build that macOS no longer honors, cleared by switching it off and on). A person's takeover is not a
    * readiness blocker: it pauses every agent on the host until they hand control back, and
    * shows as the userIntervened stop reason on each card (#1560).
    */
@@ -115,6 +117,7 @@ export const ComputerUseReadiness = Schema.Struct({
       "noInteractiveDesktop",
       "otherUserAtConsole",
       "restartRequired",
+      "accessibilityStale",
     ]),
   ),
   /** Written for the person setting it up, one per step that is not ready. */

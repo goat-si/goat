@@ -4,10 +4,11 @@
 // job its matrix.
 //
 // A pull request, draft or ready, gets a quick run: check, typecheck (unless only documents
-// changed), and test-changed, the test files beside its changes that check:changed runs before a
-// push (scripts/lib/changed-tests.ts). The full suite runs on request: the ci:full label, or a
-// manual run of the branch, whose lane is all by default. The integrated lane=all runs on dev that
-// gate the nightly are manual runs, so they stay full.
+// changed), and test-changed: changed, companion, and importing tests (directly or through
+// testkit/fixture files), plus special suites, as check:changed runs before a push
+// (scripts/lib/changed-tests.ts). Production chains belong to broader lanes. The full suite runs
+// on request: the ci:full label, or a manual run of the branch, whose lane is all by default.
+// The integrated lane=all runs on dev that gate the nightly are manual runs, so they stay full.
 //
 // The ci:affected label runs the tasks the changes reach instead: a change reaches a task when it
 // touches a workspace package the task tests or builds, directly or through workspace dependencies
@@ -23,14 +24,14 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { buildImportGraph, dependents, isSource, mentionsOf } = require("./goat-ci-imports.cjs");
 // Node strips the types, so CI picks the same files check:changed runs before every push.
-const { testsForChanges } = require("../../scripts/lib/changed-tests.ts");
+const { INGEST_SUITE_TRIGGER, testsForChanges } = require("../../scripts/lib/changed-tests.ts");
 
 const FULL_LABEL = "ci:full";
 const AFFECTED_LABEL = "ci:affected";
 const SERVER_LABEL = "ci:server";
 const MEMORY_LABEL = "ci:memory";
 const LANES = ["all", "server", "memory-growth", "quick"];
-/** The quick run's test task: the test files beside the changed files. */
+/** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
 const NODE_TEST_RE = /^\.github\/scripts\/[^/]+\.test\.cjs$/;
@@ -85,6 +86,7 @@ const TASKS = [
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-ingest",
   "test-memory-growth",
   "build",
   "test-server",
@@ -320,6 +322,8 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
     if (isDocument(file)) continue;
     // A dependency change can move any task, and the release version check reads every manifest.
     if (path.posix.basename(file) === "package.json") return everything(file);
+    // The ingest Worker's suite covers its SQL and config and the shared allowlist.
+    if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -502,7 +506,7 @@ function quickRun(changed, root) {
   const placed = changed.find((file) => !isDocument(file));
   if (placed !== undefined) reasons.set("typecheck", placed);
   const code = changed.filter((file) => CODE_RE.test(file));
-  const tests = [...testsForChanges(root, code)].sort();
+  const tests = [...testsForChanges(root, code, changed)].sort();
   const changedTests = {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),

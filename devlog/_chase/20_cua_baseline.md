@@ -18,8 +18,8 @@ upstream과 GOAT 저장소가 git 히스토리를 공유하지 않는다. upstre
 | 포크 저장소                 | `goat-si/cua-driver` (2026-10-25 생성, public). `upstream` = subtree split만, `main` = `upstream` + GOAT 변경(PR로만)                                  |
 | reviewed-through (split)    | 포크 `upstream` `0c0ffa5bc32e`, 태그 `upstream-v0.37.0`. trycua/cua `2d2f99228d`의 split이다                                                           |
 | 포크 `main`                 | `ec339be454a5`: split 위에 GOAT 커밋 2개 (`64ba7cd62620` standalone 빌드·`vendor/`·`LICENSE.md`, `ec339be454a5` GOAT.md). PR goat-si/cua-driver#1 열림 |
-| 포크 릴리스                 | 없음. 태그 규약 `cua-driver-rs-v<upstream version>-goat.<N>` (포크 GOAT.md). CI·아티팩트·호환성 테스트는 #1590                                         |
-| GOAT가 실제로 쓰는 드라이버 | upstream 공식 0.37.0 릴리스 바이너리. 포크 아티팩트로의 전환은 #1591                                                                                   |
+| 포크 릴리스                 | `cua-driver-rs-v0.37.0-goat.2` (포크 `main` `fed205570015`, 2026-10-25). 서명 없음 + attestation. 태그 규약은 포크 GOAT.md                             |
+| GOAT가 실제로 쓰는 드라이버 | 포크 `0.37.0-goat.2` 아카이브를 크기·SHA-256으로 pin (#1591). 헬퍼 빌드가 Developer ID로 서명                                                          |
 | upstream 앞섬               | 0.38.0 (`85e2b1318bd7`, 2026-10-21) 경로 커밋 29개, `main` 기준 44개 (2026-10-25)                                                                      |
 
 reviewed-through는 포크 `upstream` 브랜치 tip과 그것이 split한 trycua/cua 커밋의 쌍이다. split 커밋은 upstream SHA와 다르므로
@@ -35,14 +35,14 @@ split `a10bf063f35a`는 그것을 조상으로 가진다. 그래서 다음 사�
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | 드라이버 버전                         | `packages/shared/src/cuaDriverRelease.ts:3` `CUA_DRIVER_VERSION`                                                                    |
 | 플랫폼별 아카이브 이름·바이트·SHA-256 | `packages/shared/src/cuaDriverRelease.ts:11-37`                                                                                     |
-| 다운로드 URL                          | `packages/shared/src/cuaDriverRelease.ts:64` (지금은 `github.com/trycua/cua/releases/download/cua-driver-rs-v…`)                    |
+| 다운로드 URL                          | `packages/shared/src/cuaDriverRelease.ts` (`github.com/goat-si/cua-driver/releases/download/cua-driver-rs-v…`)                      |
 | 아카이브 안의 필수 파일               | `packages/shared/src/cuaDriverRelease.ts:66-79` `requiredFiles`                                                                     |
 | 텔레메트리·업데이트 확인 끄기         | `packages/shared/src/cuaDriverRelease.ts:85-91`, `:140-148`                                                                         |
 | SDK                                   | `pnpm-workspace.yaml:58` catalog `@trycua/cua-driver: 0.37.0`, 사용처 `apps/server/package.json:58`, `apps/desktop/package.json:24` |
 | 고지                                  | `third-party-licenses.config.json:265-274` `Cua Driver` 항목, `apps/desktop/src/cua/notices/`                                       |
 | 검증 후 사용                          | `scripts/build-computer-use-helper{,-windows,-linux}.ts`, `scripts/desktop-artifact-computer-use.ts`                                |
 
-`cuaDriverRelease.ts:1-2`의 주석대로 SDK와 실행 파일은 비공개 프로토콜을 공유하므로 버전을 함께 올린다. 결정 근거는
+포크는 npm SDK를 발행하지 않는다. npm `@trycua/cua-driver`는 계약 필드 0.8.0을 검사하므로 0.37.0을 유지한다. 결정 근거는
 [ADR-0022](../../structure/decisions/ADR-0022-cua-driver-computer-use.md)와
 [ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md)이고, 포크 결정에 맞춘 개정은 #1594다.
 `devlog/_chase/scan.sh --cua`가 이 선언들과 upstream·포크의 최신 태그를 한 번에 출력한다.

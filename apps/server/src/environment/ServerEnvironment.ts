@@ -32,6 +32,7 @@ import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import { makeAppServerLive } from "./hostAppServer.ts";
 import {
   detectServerEnvironmentMachineKind,
   detectServerMachineIdentity,
@@ -222,6 +223,7 @@ export const make = Effect.gen(function* () {
 
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+  const appServerLive = yield* makeAppServerLive();
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -274,6 +276,7 @@ export const make = Effect.gen(function* () {
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
+      devDisciplineSkill: true,
       threadSnooze: true,
       threadPromotion: true,
       environmentThemes: true,
@@ -307,6 +310,7 @@ export const make = Effect.gen(function* () {
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,
+      runtimeSessions: true,
       channelLedger: true,
       goatBotHome: true,
       goatBotStatus: true,
@@ -333,6 +337,7 @@ export const make = Effect.gen(function* () {
         hubSettings.success.memoryHub.memorySpaceId !== null;
       return {
         ...descriptor,
+        ...((yield* appServerLive) ? { appServerLive: true } : {}),
         capabilities: {
           ...descriptor.capabilities,
           ...(hubReady && Option.isSome(hubRoutes)

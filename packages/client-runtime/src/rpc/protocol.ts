@@ -33,6 +33,7 @@ export const PING_TIMEOUT = "15 seconds";
 // so one late timer per received frame grants the resumed reader a full budget.
 export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
   onTimeout: Effect.Effect<void>,
+  silenceTimeout: Duration.Duration = Duration.fromInputUnsafe(PING_TIMEOUT),
 ) {
   const socket = yield* Socket.Socket;
   const serialization = yield* RpcSerialization.RpcSerialization;
@@ -54,7 +55,7 @@ export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
           if (now - deadline > 2_000 && !freezeGraceUsed) {
             lastFrame = now;
             freezeGraceUsed = true;
-          } else if (now - lastFrame > Duration.toMillis(PING_TIMEOUT)) {
+          } else if (now - lastFrame > Duration.toMillis(silenceTimeout)) {
             yield* onTimeout;
             yield* Deferred.fail(
               expired,

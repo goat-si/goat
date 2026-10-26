@@ -13,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 
 /** What a desktop that answers app listing requests says in its helper readiness (#1567). */
 const readiness = (appsListing: boolean | undefined): DesktopCuaReadinessReport => ({
@@ -39,7 +40,7 @@ const fixture = Effect.fnUntraced(function* (
 ) {
   const reports = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const requests = yield* Queue.unbounded<string>();
-  const listing = yield* CuaDriver.makeDesktopAppsListing().pipe(
+  const request = yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
     Effect.provide(
       Layer.mergeAll(
         NodeCrypto.layer,
@@ -66,7 +67,8 @@ const fixture = Effect.fnUntraced(function* (
       ),
     ),
   );
-  return { listing, requests, reports };
+  const listing = request.pipe(Effect.map(Option.map((listed) => listed.apps)));
+  return { listing, request, requests, reports };
 });
 
 it.effect("subscribes before requesting a fresh list, including synchronous desktop replies", () =>
@@ -159,3 +161,45 @@ it.effect.each([
       expect(yield* Queue.size(f.requests)).toBe(0);
     }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "passes on the desktop's names and icons, and an empty catalog from a desktop that sends none",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const named = yield* f.request.pipe(Effect.forkChild);
+      const first = yield* Queue.take(f.requests);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: first,
+        status: "listed",
+        apps: ["com.apple.finder"],
+        catalog: [{ id: "com.apple.finder", name: "Finder", icon: "data:image/png;base64,AA==" }],
+      });
+      expect(yield* Fiber.join(named)).toEqual(
+        Option.some({
+          apps: ["com.apple.finder"],
+          catalog: [{ id: "com.apple.finder", name: "Finder", icon: "data:image/png;base64,AA==" }],
+        }),
+      );
+      const unnamed = yield* f.request.pipe(Effect.forkChild);
+      const second = yield* Queue.take(f.requests);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: second,
+        status: "listed",
+        apps: ["com.apple.finder"],
+      });
+      expect(yield* Fiber.join(unnamed)).toEqual(
+        Option.some({ apps: ["com.apple.finder"], catalog: [] }),
+      );
+    }).pipe(Effect.scoped),
+);
+
+it("names an executable-path app by its file name", () => {
+  expect(CuaDriver.catalogName("C:\\Apps\\Editor.exe")).toBe("Editor");
+  expect(CuaDriver.catalogName("/usr/bin/gedit")).toBe("gedit");
+  expect(CuaDriver.catalogName("com.apple.finder")).toBe("com.apple.finder");
+});

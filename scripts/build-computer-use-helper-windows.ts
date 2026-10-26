@@ -250,7 +250,7 @@ export const buildWindowsComputerUseHelper = Effect.fn("buildWindowsComputerUseH
       ...sources,
       buildInfo,
     ]);
-    // Cua Driver's MIT notices travel with every copy of the driver (#667).
+    // Cua Driver's MIT and MPL-2.0 notices travel with every copy of the driver (#1605).
     const notices = path.join(input.repoRoot, "apps/desktop/src/cua/notices");
     for (const name of yield* fs.readDirectory(notices))
       yield* fs.copyFile(path.join(notices, name), path.join(noticesDir, name));

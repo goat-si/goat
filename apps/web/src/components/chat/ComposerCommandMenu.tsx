@@ -221,7 +221,15 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
       ) : null}
       {props.item.type === "capability" ? (
-        props.item.capability === "computer-use" ? (
+        props.item.app?.icon !== undefined ? (
+          <img
+            alt=""
+            aria-hidden="true"
+            className="size-4 shrink-0 rounded-xs"
+            draggable={false}
+            src={props.item.app.icon}
+          />
+        ) : props.item.capability === "computer-use" ? (
           <MonitorIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
         ) : (
           <GlobeIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />

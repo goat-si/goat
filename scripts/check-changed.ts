@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off
 // Runs CI's fast checks for this branch's changes: format and lint of the
 // changed files, knip, generated GraphQL operations, typecheck of the affected
-// packages and their dependents, and the test files beside the changed files.
+// packages and their dependents, and changed, companion, and importing tests (directly or through
+// testkit/fixture files), plus special suites. Production chains belong to broader CI lanes.
 // A change to prompt text also runs the provider replay suites that record it. A dependency change
 // also gets the unused-patch install check below.
 // A pull request's goat-ci run picks the same test files; the full suites and the jobs listed in
@@ -144,7 +145,7 @@ const changedCode = files.filter((file) => CODE.test(file));
 const packages = readWorkspace();
 const { affected, outputs } = decide(files, packages, false);
 
-const tests = testsForChanges(root, changedCode);
+const tests = testsForChanges(root, changedCode, files);
 
 // knip:check cannot be scoped to a package. Any code change can leave a file,
 // export, or dependency unused (removing the last import of a helper does), so

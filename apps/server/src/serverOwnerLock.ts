@@ -6,9 +6,11 @@
  * server that ran on the same data between an update's backup and its rollback keeps its
  * writes (see `serviceLauncher.ts`). A server only appears in the log if it takes the lock here.
  */
+import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 
 import {
@@ -30,6 +32,10 @@ class ServerOwnerConflictError extends Schema.TaggedError<ServerOwnerConflictErr
     origin: Schema.optional(Schema.String),
   },
 ) {
+  // A supervisor such as the desktop app restarts any other exit code, so without this a
+  // second app on the same data respawns its server every few seconds forever.
+  override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
+
   override get message(): string {
     const holder =
       this.pid === undefined

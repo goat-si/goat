@@ -1,6 +1,9 @@
 import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
 import type { EnvironmentId, ModelSelection } from "@goat/contracts";
-import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
+import {
+  appCapabilityContextRecord,
+  turnCapabilityContextRecord,
+} from "@goat/shared/turnCapabilities";
 
 import { formatInlineContextReference } from "../../lib/composerContextReferences";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -37,7 +40,10 @@ export function selectComposerCapability(input: {
 }): void {
   const { availability } = input.item;
   if (availability.state === "available") {
-    const record = turnCapabilityContextRecord(input.item.capability);
+    const record =
+      input.item.app === undefined
+        ? turnCapabilityContextRecord(input.item.capability)
+        : appCapabilityContextRecord(input.item.app);
     if (input.replaceTriggerWith(`${formatInlineContextReference(record)} `)) input.onReplaced();
     return;
   }

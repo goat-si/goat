@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The fake driver speaks raw JSON-RPC lines.
 /** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
 import {
+  type ComputerUseAgentCursor,
   type ComputerUseHumanInputSource,
   type ComputerUseCallReservation,
   type ComputerUseCallAdmission,
@@ -81,6 +82,10 @@ export const harness = Effect.fn(function* (
     readonly kill?: Effect.Effect<void> | ((index: number) => Effect.Effect<void>);
     readonly acquire?: (index: number) => Effect.Effect<void>;
     readonly restartFailure?: string;
+    /** Records each cursor the proxy reports for the preview in `cursors`. */
+    readonly cursors?: boolean;
+    /** The exit code each driver reports once its output ends; unknown by default. */
+    readonly exitCode?: number;
     /** Holds every window report until it is done, as a slow server would. */
     readonly targetGate?: Deferred.Deferred<void>;
     /**
@@ -108,12 +113,15 @@ export const harness = Effect.fn(function* (
     readonly agentInputGate?: Deferred.Deferred<void>;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
     readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
+    /** Decorates each line for the provider, as the CLI's app guide does. */
+    readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
   const output = yield* Queue.unbounded<string>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
   const drivers: Array<FakeDriver> = [];
+  const cursors: Array<ComputerUseAgentCursor | null> = [];
   const started = yield* Queue.unbounded<FakeDriver>();
   const dispatched = yield* Queue.unbounded<{ index: number; line: string }>();
   const revokeCalled = yield* Deferred.make<void>();
@@ -156,7 +164,14 @@ export const harness = Effect.fn(function* (
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
-    output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
+    output: (line, reply) =>
+      Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
+    ...(options.cursors
+      ? {
+          onCursor: (cursor: ComputerUseAgentCursor | null) =>
+            Effect.sync(() => cursors.push(cursor)).pipe(Effect.as(true)),
+        }
+      : {}),
     ...(options.onTarget === undefined
       ? {}
       : {
@@ -250,6 +265,7 @@ export const harness = Effect.fn(function* (
             Effect.as(Stream.fromQueue(driver.fromDriver)),
           ),
         ),
+        ...(options.exitCode === undefined ? {} : { exitCode: Effect.succeed(options.exitCode) }),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
           Effect.andThen(
             typeof options.kill === "function"
@@ -321,6 +337,7 @@ export const harness = Effect.fn(function* (
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
     drivers,
+    cursors,
     nextDispatch: Queue.take(dispatched).pipe(
       Effect.map(({ index, line }) => ({ index, message: json(line) })),
     ),

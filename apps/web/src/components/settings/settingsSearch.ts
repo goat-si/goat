@@ -809,6 +809,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "goat-discipline-skill",
+    title: "Development discipline",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["goat discipline skill built in code changes guidance inherit on off"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
@@ -842,6 +849,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "computer",
     searchTerms: [
       "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions setup set up retry full access approval without asking every app",
+    ],
+  },
+  {
+    id: "computer-use-move-pointer",
+    title: "Let agents move my pointer",
+    to: "/settings/integrations",
+    searchTerms: [
+      "computer use pointer mouse cursor move foreground background click steal focus advanced",
     ],
   },
   {
@@ -1020,6 +1035,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["turn off on disable enable local server agents remote only restart"],
+    desktopOnly: true,
+  },
+  {
+    id: "headless-server",
+    title: "Headless server on this Mac",
+    to: "/settings/connections",
+    targetId: "connections-environment",
+    searchTerms: [
+      "hide show headless server ssh goat serve ~/.goat background environment restart",
+    ],
     desktopOnly: true,
   },
   {

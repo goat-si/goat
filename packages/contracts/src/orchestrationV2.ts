@@ -10,6 +10,8 @@ import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaTransformation from "effect/SchemaTransformation";
+import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
+export { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 
 import {
   CheckpointId,
@@ -650,6 +652,7 @@ export const OrchestrationV2Run = Schema.Struct({
   rootNodeId: Schema.NullOr(NodeId),
   activeAttemptId: Schema.NullOr(RunAttemptId),
   status: OrchestrationV2RunStatus,
+  terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   queueHeld: Schema.optional(Schema.Boolean),
   requestedAt: Schema.DateTimeUtc,

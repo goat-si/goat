@@ -22,6 +22,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { ingestDrops, type Recorded } from "../telemetry/ingestAllowlist.testkit.ts";
 import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
 
 const assertSameCallback = (actual: string | null, expected: string | null) => {
@@ -211,10 +212,7 @@ const makeHarnessFor = Effect.fnUntraced(function* (
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("mock address");
   origin = `http://127.0.0.1:${address.port}`;
-  const analyticsEvents: {
-    event: string;
-    properties: Readonly<Record<string, unknown>> | undefined;
-  }[] = [];
+  const analyticsEvents: Array<Recorded> = [];
   const analytics = AnalyticsService.AnalyticsService.of({
     record: (event, properties) =>
       failAnalytics
@@ -1487,6 +1485,7 @@ it.effect("primary completes OAuth and destination imports and owns the refresh 
       assert.strictEqual(h.analyticsEvents[1]?.properties?.intent, "different_account");
       assert.strictEqual(h.analyticsEvents[3]?.properties?.connectedAccountCount, 1);
       assert.strictEqual(h.analyticsEvents[3]?.properties?.savedConnectionCount, 1);
+      assert.deepStrictEqual(ingestDrops(h.analyticsEvents), []);
       const saved = Option.getOrThrow(yield* destination.auth.read);
       assert.strictEqual(saved.clientId, result.profile.registration.clientId);
       assert.strictEqual(saved.refreshToken, "initial-refresh");

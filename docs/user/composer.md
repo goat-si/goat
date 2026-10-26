@@ -254,6 +254,16 @@ and your next message starts the agent again with the new setup.
 Provider commands must start the message to run. GOAT commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
+GOAT also ships built-in skills, marked **Built in** in the `$` menu. **Development
+discipline** (`$goat-discipline`) gives the agent GOAT's longer guidance for code changes: how
+much process a change needs, what counts as proof, what needs your approval, and how to brief
+subagents. Every agent already gets a short version; the full guidance goes only to the turn
+whose message names the skill, on Codex, Claude, Cursor, Grok, Antigravity, ACP registry agents,
+OpenCode and Pi. It needs no agent restart. A message that starts with a provider command does not
+load it, and neither does a skill name inside an attachment. Agents can name it in briefs for the
+tasks they delegate. Turn it off for every project, or for one project, in **Settings →
+Integrations → Agent tools**; on mobile, under **Agent behavior**.
+
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 

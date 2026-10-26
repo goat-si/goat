@@ -292,7 +292,7 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     correlationId: Schema.NullOr(Schema.String),
     workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
     runtimeMode: RuntimeMode,
-    remoteServerKind: Schema.NullOr(Schema.Literals(["external", "managed"])),
+    remoteServerKind: Schema.NullOr(Schema.Literals(["app", "external", "managed"])),
     /** Whether the calling thread will be told when the remote thread finishes. */
     watching: Schema.Boolean,
     notes: Schema.Array(Schema.String),

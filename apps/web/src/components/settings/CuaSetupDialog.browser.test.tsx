@@ -89,6 +89,7 @@ it("turns on only after both grants, then reports the step that failed and retri
     steps: [
       { id: "grants", ok: true },
       { id: "restart", ok: true },
+      { id: "agentRoute", ok: true },
       { id: "permissions", ok: true },
       { id: "identity", ok: true },
       {
@@ -113,6 +114,7 @@ it("turns on only after both grants, then reports the step that failed and retri
   expect(rows()).toEqual([
     "Permissions allowed (passed)",
     "Computer use restarted with them (passed)",
+    "Agents can start computer use (passed)",
     "Computer use sees both permissions (passed)",
     "Computer use runs as the allowed app (passed)",
     "Captured a GOAT window (failed)The screen is locked. Unlock this Mac, then try again.",
@@ -124,7 +126,15 @@ it("turns on only after both grants, then reports the step that failed and retri
   f.onVerify.mockResolvedValueOnce({
     verified: true,
     steps: (
-      ["grants", "restart", "permissions", "identity", "capture", "accessibility"] as const
+      [
+        "grants",
+        "restart",
+        "agentRoute",
+        "permissions",
+        "identity",
+        "capture",
+        "accessibility",
+      ] as const
     ).map((id) => ({ id, ok: true })),
   });
   await click("Try again");

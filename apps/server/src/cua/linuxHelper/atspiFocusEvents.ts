@@ -206,6 +206,7 @@ export function readMessage(
     const signatureLength = data[at + 1] ?? 0;
     const type = data.toString("ascii", at + 2, at + 2 + signatureLength);
     at += signatureLength + 3;
+    // A field of a code this does not use is skipped when its type is basic, as the spec asks.
     if (type === "s" || type === "o") {
       at = align(at, 4);
       const size = u32(at);
@@ -219,9 +220,16 @@ export function readMessage(
       at = align(at, 4);
       fields.set(code, u32(at));
       at += 4;
+    } else if (type === "i" || type === "b" || type === "h") {
+      // Never read as a value: a field this client uses keeps its prescribed type (UINT32).
+      at = align(at, 4) + 4;
     } else if (type === "y") {
       fields.set(code, data[at] ?? 0);
       at += 1;
+    } else if (type === "n" || type === "q") {
+      at = align(at, 2) + 2;
+    } else if (type === "x" || type === "t" || type === "d") {
+      at = align(at, 8) + 8;
     } else throw new Error("A D-Bus header field this does not read.");
   }
   if (at > fieldsEnd) throw new Error("A D-Bus header ran past its length.");
@@ -276,10 +284,14 @@ function connectOnce(
   const ready = new Promise<void>((resolve, reject) => {
     let settled = false;
     let authenticated = false;
+    // Set once the connection fails or closes: later calls refuse at once instead of writing to
+    // a destroyed socket and arming deadlines nothing will answer.
+    let ended = false;
     let pending = Buffer.alloc(0);
     let serial = 0;
     const replies = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
     const fail = (error: Error) => {
+      ended = true;
       for (const waiter of replies.values()) waiter.reject(error);
       replies.clear();
       socket.destroy();
@@ -296,6 +308,10 @@ function connectOnce(
       args?: ReadonlyArray<CallArgument>,
     ) =>
       new Promise<void>((done, refuse) => {
+        if (ended) {
+          refuse(new Error("The accessibility bus connection ended."));
+          return;
+        }
         const id = ++serial;
         const timer = setTimeout(() => {
           replies.delete(id);
@@ -332,6 +348,7 @@ function connectOnce(
       ];
       let last: Error | undefined;
       for (const args of forms) {
+        if (ended) break;
         try {
           await call(
             "org.a11y.atspi.Registry",
@@ -413,6 +430,7 @@ function connectOnce(
 export function openFocusEvents(deps: FocusEventsDependencies): FocusEvents {
   const listeners = new Set<() => void>();
   let closed = false;
+  let running = false;
   let socket: NodeNet.Socket | undefined;
   const setupLimit =
     deps.setupLimit ??
@@ -420,13 +438,17 @@ export function openFocusEvents(deps: FocusEventsDependencies): FocusEvents {
   const onFocus = () => {
     for (const listener of Array.from(listeners)) listener();
   };
+  // Connected only while someone listens: the registration makes every accessible app send focus
+  // events, so it lasts as long as a watch does (#1650).
+  const wanted = () => !closed && listeners.size > 0;
   const run = async () => {
-    while (!closed) {
+    running = true;
+    while (wanted()) {
       const closedOnce = Promise.withResolvers<void>();
       try {
         const path = busSocketPath(await deps.address());
         if (path === undefined) throw new Error("The accessibility bus address has no socket.");
-        if (closed) break;
+        if (!wanted()) break;
         const connection = connectOnce(path, deps.uid, setupLimit(), onFocus, () =>
           closedOnce.resolve(),
         );
@@ -439,14 +461,18 @@ export function openFocusEvents(deps: FocusEventsDependencies): FocusEvents {
         // The monitor keeps polling while this is down.
       }
       socket = undefined;
-      if (!closed) await deps.retry();
+      if (wanted()) await deps.retry();
     }
+    running = false;
   };
-  void run();
   return {
     subscribe: (listener) => {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      if (!running) void run();
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) socket?.destroy();
+      };
     },
     close: () => {
       closed = true;

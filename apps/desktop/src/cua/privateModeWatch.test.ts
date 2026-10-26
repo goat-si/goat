@@ -116,4 +116,25 @@ describe("private mode follower", () => {
       { active: false, windowId: 3 },
     ]);
   });
+
+  it("clears a secret field it reported when the watch stops, so the server never keeps a stale pause", async () => {
+    const calls: Array<string> = [];
+    const published: Array<DesktopCuaPrivateModeReport> = [];
+    const { follower } = follow({ publish: (report) => published.push(report) });
+    const session = fakeSession(calls, "a");
+    await follower.attach(session);
+    await follower.setWatching(true);
+    session.raise(true, 3);
+    // The agent stops controlling the host while the field still has focus: the helper stops
+    // watching and will never say it lost focus, so the follower clears it itself.
+    await follower.setWatching(false);
+    expect(published.map(({ active, target }) => ({ active, windowId: target.windowId }))).toEqual([
+      { active: true, windowId: 3 },
+      { active: false, windowId: 3 },
+    ]);
+    // A later watch that sees the field again reports it afresh.
+    await follower.setWatching(true);
+    session.raise(true, 3);
+    expect(published.at(-1)?.active).toBe(true);
+  });
 });

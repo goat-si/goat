@@ -1,4 +1,9 @@
-import type { ComputerUseReadiness } from "@goat/contracts";
+import {
+  probeAgentRoute,
+  type AgentRouteCommand,
+  type AgentRouteOutcome,
+} from "./agentRouteProbe.ts";
+import type { ComputerUseApp, ComputerUseReadiness } from "@goat/contracts";
 import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
 import { listCuaDriverApplications, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import { fromLenientJson } from "@goat/shared/schemaJson";
@@ -10,6 +15,8 @@ import {
   makeHelperHost,
   listHelperApplications,
   probeHelperGrants,
+  checkHelperCapture,
+  type CaptureCheckOutcome,
   spawnHelperProcess,
   type DaemonMetadata,
   type HelperBundle,
@@ -21,6 +28,8 @@ import { probeWindowsReadiness, windowsDriverPipe } from "./ComputerUseHelperWin
 import { resolveHelperBundle } from "./ComputerUseHelperInstall.ts";
 import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
 import { makeMcpHelperHost } from "./McpHelperHost.ts";
+import { makeAppCatalog } from "./appCatalog.ts";
+import { makeAppIconReader } from "./appIcons.ts";
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
@@ -100,11 +109,21 @@ export interface DesktopCuaDriverDependencies {
     platform: NodeJS.Platform,
   ) => Promise<Grants>;
   /**
+   * One capture of GOAT's own window by a fresh helper, the way live pictures capture (macOS);
+   * only its size comes back.
+   */
+  readonly captureCheck: (
+    bundle: HelperBundle,
+    target: { readonly pid: number; readonly windowId: number },
+  ) => Promise<CaptureCheckOutcome>;
+  /**
    * The helper bundle this build ships. absent: packaged macOS stays off; other builds may run
    * the driver in-process. unusable: it should be there and cannot be used, so computer use stays
    * off rather than run under another principal. note: something to log.
    */
   readonly helperBundlePath: typeof resolveHelperBundle;
+  /** Starts the helper as agents do, from GOAT's own Node runtime, and runs its MCP handshake. */
+  readonly agentRoute: (mcp: AgentRouteCommand) => Promise<AgentRouteOutcome>;
   readonly helperHost: (
     options: Omit<HelperHostOptions, "spawn" | "readMetadata"> & {
       readonly platform: NodeJS.Platform;
@@ -123,6 +142,12 @@ export interface DesktopCuaDriverDependencies {
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
   readonly listApps: typeof listCuaDriverApplications;
+  /** Names and icons for a listing's requestable apps; icons are read once per app. */
+  readonly appCatalog: (
+    listed: ReadonlyArray<CuaDriverListedApp>,
+    hostBundleIds: ReadonlyArray<string>,
+    platform: NodeJS.Platform,
+  ) => Promise<ReadonlyArray<ComputerUseApp>>;
   /** Read the local server's persisted opt-in, not whether an agent driver happens to run. */
   readonly computerUseEnabled: (settingsPath: string) => Promise<boolean>;
   readonly readManifest: (path: string) => Promise<string>;
@@ -179,7 +204,10 @@ export const dependencies: DesktopCuaDriverDependencies = {
     platform === "win32"
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
+  captureCheck: (bundle, target) =>
+    checkHelperCapture(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId, target),
   helperBundlePath: resolveHelperBundle,
+  agentRoute: probeAgentRoute,
   helperHost: ({ platform, verify, ...options }) =>
     platform === "darwin" && verify
       ? makeMcpHelperHost(options)
@@ -205,6 +233,17 @@ export const dependencies: DesktopCuaDriverDependencies = {
   },
   prepareManifest: prepareDesktopManifest,
   listApps: listCuaDriverApplications,
+  appCatalog: (() => {
+    const catalogs = new Map<NodeJS.Platform, ReturnType<typeof makeAppCatalog>>();
+    return (listed, hostBundleIds, platform) => {
+      let catalog = catalogs.get(platform);
+      if (catalog === undefined) {
+        catalog = makeAppCatalog(makeAppIconReader(platform));
+        catalogs.set(platform, catalog);
+      }
+      return catalog(listed, hostBundleIds);
+    };
+  })(),
   computerUseEnabled: async (settingsPath) => {
     const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
     const settings = decodeComputerUseSetting(raw);

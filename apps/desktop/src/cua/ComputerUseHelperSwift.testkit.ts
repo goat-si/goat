@@ -34,6 +34,9 @@ export function runSwiftChecks(sources: ReadonlyArray<string>, checks: string) {
       { encoding: "utf8" },
     );
     if (build.status !== 0) return { ok: false, output: build.stderr };
+    // A host that quarantines files its processes create (some agent sandboxes do) would have
+    // Gatekeeper kill the fresh binary at exec; it is ours, so drop the mark first.
+    NodeChildProcess.spawnSync("xattr", ["-d", "com.apple.quarantine", binary]);
     const result = NodeChildProcess.spawnSync(binary, { encoding: "utf8" });
     return { ok: result.status === 0, output: result.stdout + result.stderr };
   } finally {
