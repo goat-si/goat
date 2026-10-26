@@ -500,3 +500,32 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: node .github/scripts/goat-ci-result-mirror.cjs
+
+  # A re-run stays in its run's original suite, so an ignored event's republished goat-ci-result in a
+  # newer suite would keep the first verdict (#1691). On a re-run attempt this job re-runs that
+  # ignored run, cancelling it first while it still runs, so it repeats this attempt's verdict. It is
+  # the only goat-ci job that may write to Actions, and it reports nothing as goat-ci-result itself.
+  refresh-republished:
+    name: goat-ci republish refresh
+    needs: [result]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.run_attempt > 1 && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Re-run the ignored run that republished an earlier verdict
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/goat-ci-rerun-republish.cjs
