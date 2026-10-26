@@ -19,7 +19,7 @@ function configuredRelayUrl(): string {
 
 const layerHttpClient = layerRemoteHttpClient((input, init) => globalThis.fetch(input, init));
 const layerRelayTracing = RelayTracing.layer(resolveRelayTracingConfig(), {
-  serviceName: "t3code-web",
+  serviceName: "goat-web",
   serviceVersion: import.meta.env.APP_VERSION,
   runtime: "browser",
   client: typeof window !== "undefined" && window.desktopBridge ? "desktop" : "web",

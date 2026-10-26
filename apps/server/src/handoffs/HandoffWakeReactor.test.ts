@@ -2,6 +2,8 @@ import { expect, it } from "@effect/vitest";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   PROVIDER_SETTINGS_HANDOFF_PATH,
+  STORAGE_CLEAN_HANDOFF_PATH,
+  StorageMcpCleanInput,
   CommandId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -57,6 +59,24 @@ it.effect("tells the agent to continue an approved hub change through goat_call"
       expect(sent[0]!.text).toContain(
         `Call goat_call {path:"hub.device_join"} again with decisionId "${summary.handoffId}"`,
       );
+    }),
+  ),
+);
+
+it.effect("tells the agent to finish an approved storage cleanup with an argument it accepts", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, STORAGE_CLEAN_HANDOFF_PATH);
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+      const text = (yield* wakes(world))[0]!.text;
+      const argument = /the same items and (\w+) "([^"]+)"/.exec(text);
+      expect(argument?.[2]).toBe(summary.handoffId);
+      expect(Object.keys(StorageMcpCleanInput.fields)).toContain(argument?.[1]);
     }),
   ),
 );

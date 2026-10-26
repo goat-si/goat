@@ -10,6 +10,9 @@ import Foundation
 /// (apps/server/src/cua/agentInputReports.ts), so a stream of moves cannot queue the safety
 /// reports behind each other.
 enum PointerTap {
+  /// The eventSourceUserData tag ("GOATCUA1") the GOAT driver sets on pointer CGEvents it posts.
+  static let driverEventUserData: Int64 = 0x474F_4154_4355_4131
+
   /// The event types the tap receives. Keyboard events are never among them (D7: the helper does
   /// not use Input Monitoring); keyboard input is polled.
   static let types: [CGEventType] = [
@@ -17,9 +20,14 @@ enum PointerTap {
     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
   ]
 
+  static func isDriverOwned(userData: Int64) -> Bool {
+    userData == driverEventUserData
+  }
+
   /// The time to report for a tapped event of `type` that arrived at `at`, or nil.
-  static func report(_ type: CGEventType, at: Double) -> Double? {
-    types.contains(type) ? at : nil
+  static func report(_ type: CGEventType, userData: Int64 = 0, at: Double) -> Double? {
+    guard !isDriverOwned(userData: userData) else { return nil }
+    return types.contains(type) ? at : nil
   }
 }
 
@@ -83,10 +91,13 @@ final class InputActivity {
         tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
         eventsOfInterest: mask,
         callback: { _, type, event, info in
-          // Only the event's type leaves this callback: its location, buttons and every other
-          // field are never read, so nothing about where or what was clicked is kept or sent.
+          // Only the event's type and its driver tag leave this callback: its location, buttons
+          // and every other field are never read, so nothing about where or what was clicked is
+          // kept or sent.
           if let info {
-            Unmanaged<InputActivity>.fromOpaque(info).takeUnretainedValue().received(type)
+            let userData = event.getIntegerValueField(.eventSourceUserData)
+            Unmanaged<InputActivity>.fromOpaque(info).takeUnretainedValue()
+              .received(type, userData: userData)
           }
           return Unmanaged.passUnretained(event)
         },
@@ -104,8 +115,8 @@ final class InputActivity {
     return true
   }
 
-  /// On the tap's thread, as each event arrives, with its type only.
-  private func received(_ type: CGEventType) {
+  /// On the tap's thread, as each event arrives, with its type and driver tag only.
+  private func received(_ type: CGEventType, userData: Int64 = 0) {
     // The system turns off a tap it judges slow or during secure input; listening goes on.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
       if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -113,7 +124,7 @@ final class InputActivity {
     }
     let at = Self.now()
     queue.async { [self] in
-      if let at = PointerTap.report(type, at: at) { report("pointer", at) }
+      if let at = PointerTap.report(type, userData: userData, at: at) { report("pointer", at) }
     }
   }
 

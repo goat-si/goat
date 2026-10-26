@@ -260,7 +260,6 @@ import {
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
 } from "./orchestration-v2/threadHistoryPaging.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
-import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -300,6 +299,7 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { storageRpcHandlers } from "./storage/storageRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
@@ -1461,7 +1461,6 @@ export const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
-      const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
@@ -2881,9 +2880,8 @@ export const layerWsRpc = (
               ),
             ),
           ),
-        [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
-        [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
         [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
+        ...(yield* storageRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:

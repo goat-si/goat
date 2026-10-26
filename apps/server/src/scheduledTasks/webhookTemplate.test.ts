@@ -135,7 +135,7 @@ describe("renderWebhookPrompt", () => {
         authorization: "Bearer h-secret",
         "x-hub-signature-256": "sha256=abc",
         "x-shopify-hmac-sha256": "shop-hmac",
-        "x-t3-relay-delivery": "relay-jwt",
+        "x-goat-relay-delivery": "relay-jwt",
         "cf-access-jwt-assertion": "cf-jwt",
       },
     };

@@ -6,11 +6,11 @@ describe("githubMarkdownLinks", () => {
   it("links closing references, cross-repository references, commits and mentions", () => {
     expect(
       githubMarkdownLinks(
-        "Closes #123, fixes other/project#9; other#4 @julius @team/mobile abc1234 other/project@abcdef1",
+        "Closes #123, fixes other/project#9; other#4 @alex @team/mobile abc1234 other/project@abcdef1",
         url,
       ),
     ).toBe(
-      "Closes [#123](https://github.com/team/repo/issues/123), fixes [other/project#9](https://github.com/other/project/issues/9); [other#4](https://github.com/other/repo/issues/4) [@julius](https://github.com/julius) [@team/mobile](https://github.com/orgs/team/teams/mobile) [abc1234](https://github.com/team/repo/commit/abc1234) [other/project@abcdef1](https://github.com/other/project/commit/abcdef1)",
+      "Closes [#123](https://github.com/team/repo/issues/123), fixes [other/project#9](https://github.com/other/project/issues/9); [other#4](https://github.com/other/repo/issues/4) [@alex](https://github.com/alex) [@team/mobile](https://github.com/orgs/team/teams/mobile) [abc1234](https://github.com/team/repo/commit/abc1234) [other/project@abcdef1](https://github.com/other/project/commit/abcdef1)",
     );
   });
   it("leaves code, links, images, URLs, escapes, emails, and plain numbers alone", () => {

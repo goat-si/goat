@@ -140,6 +140,7 @@ const resourceHelp = (resource: string) => {
   const width = Math.max(...verbs.map((entry) => toCli(entry.verb).length));
   return [
     `Usage: goat ${toCli(resource)} <verb> [arguments] [--json]`,
+    ...(resource === "storage" ? [STORAGE_SHORTCUT_USAGE] : []),
     "",
     "Verbs:",
     ...verbs.map((entry) => `  ${toCli(entry.verb).padEnd(width)}  ${entry.summary}`),
@@ -338,6 +339,43 @@ const extraPositional = (parsed: Parsed, allowed: number) => {
     throw new UsageError(`Unexpected argument ${parsed.positionals[allowed]}.`);
 };
 
+const STORAGE_SHORTCUT_USAGE =
+  "       goat storage --dry-run | --clean [--approval <id>] [--json]   the default cleanup selection";
+
+/**
+ * goat storage --dry-run lists what the cleanup would delete by default; --clean asks a person
+ * to approve exactly that, and with --approval deletes it once they have.
+ */
+const storageShortcut = (tokens: ReadonlyArray<string>): AgentSurfaceInvocation => {
+  let clean = false;
+  let dryRun = false;
+  let json = false;
+  let approvalId: string | undefined;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === "--clean") clean = true;
+    else if (token === "--dry-run") dryRun = true;
+    else if (token === "--json") json = true;
+    else if (token === "--approval") {
+      approvalId = tokens[++index];
+      if (approvalId === undefined || approvalId.startsWith("-"))
+        throw new UsageError("--approval needs the id a person approved.");
+    } else throw new UsageError(`Unexpected argument ${token}.\n\n${resourceHelp("storage")}`);
+  }
+  if (clean === dryRun)
+    throw new UsageError(`Pass one of --dry-run or --clean.\n\n${resourceHelp("storage")}`);
+  if (approvalId !== undefined && !clean) throw new UsageError("--approval goes with --clean.");
+  return {
+    kind: "call",
+    path: "storage.clean",
+    args: { dryRun: !clean, ...(approvalId === undefined ? {} : { approvalId }) },
+    json,
+    effect: "destructive",
+    format: "value",
+    entryPath: "storage.clean",
+  };
+};
+
 const route = (
   argv: ReadonlyArray<string>,
   input: InputReader,
@@ -381,6 +419,8 @@ const route = (
   if (!byResource.has(resource)) return undefined;
   const operator = OPERATOR_VERBS[resource];
   const [verbToken, ...tokens] = rest;
+  if (resource === "storage" && (verbToken === "--dry-run" || verbToken === "--clean"))
+    return storageShortcut(rest);
   if (verbToken === undefined || verbToken.startsWith("-")) {
     // An operator command keeps its own help, which lists the generated verbs too.
     if (operator !== undefined) return undefined;
