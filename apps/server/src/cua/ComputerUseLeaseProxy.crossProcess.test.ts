@@ -182,7 +182,7 @@ describe("lease proxy cross-process primitive gate", () => {
         );
         const address = server.address();
         if (address === null || typeof address === "string")
-          throw new Error("server has no TCP port");
+          return yield* Effect.die(new Error("server has no TCP port"));
         const url = `http://127.0.0.1:${address.port}/api/computer-use/lease`;
         const descriptor = {
           command: process.execPath,
@@ -210,10 +210,28 @@ describe("lease proxy cross-process primitive gate", () => {
             stdio: ["pipe", "pipe", "pipe"],
           },
         );
+        let stderr = "";
+        proxy.stderr.on("data", (chunk: Buffer) => {
+          stderr = (stderr + chunk.toString()).slice(-4096);
+        });
+        const childExit = new Promise<string>((resolve) => {
+          proxy.once("error", (error) => resolve(`spawn error: ${error.message}`));
+          proxy.once("close", (code, signal) =>
+            resolve(`exit code ${String(code)}, signal ${String(signal)}`),
+          );
+        });
+        const withLiveChild = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.raceFirst(
+            effect,
+            Effect.promise(() => childExit).pipe(
+              Effect.flatMap((exit) => Effect.die(new Error(`proxy child ${exit}: ${stderr}`))),
+            ),
+          );
         yield* Effect.addFinalizer(() =>
           Effect.promise(async () => {
             proxy.stdin.end();
             if (proxy.exitCode === null && proxy.signalCode === null) proxy.kill("SIGTERM");
+            await childExit;
             await new Promise<void>((resolve) => server.close(() => resolve()));
             await dispose();
           }),
@@ -227,7 +245,7 @@ describe("lease proxy cross-process primitive gate", () => {
             buffered = buffered.slice(end + 1);
           }
         });
-        const firstReady = yield* Queue.take(readyReports);
+        const firstReady = yield* withLiveChild(Queue.take(readyReports));
         assert.equal(firstReady.driverGeneration, 0);
         proxy.stdin.write(
           JSON.stringify({
@@ -241,7 +259,10 @@ describe("lease proxy cross-process primitive gate", () => {
             },
           }) + "\n",
         );
-        assert.equal((JSON.parse(yield* Queue.take(providerReplies)) as { id: number }).id, 100);
+        assert.equal(
+          (JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as { id: number }).id,
+          100,
+        );
         proxy.stdin.write(
           JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
         );
@@ -264,8 +285,12 @@ describe("lease proxy cross-process primitive gate", () => {
             params: { name: "click", arguments: { pid: 42, window_id: 7, x: 1, y: 1, hold: true } },
           }) + "\n",
         );
-        const firstReceived = JSON.parse(yield* Queue.take(providerReplies)) as { method: string };
-        const secondReceived = JSON.parse(yield* Queue.take(providerReplies)) as { method: string };
+        const firstReceived = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
+          method: string;
+        };
+        const secondReceived = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
+          method: string;
+        };
         assert.equal(firstReceived.method, "fixture/received");
         assert.equal(secondReceived.method, "fixture/received");
         assert.deepEqual(calls.filter((call) => call === "reserve" || call === "validate").sort(), [
@@ -280,9 +305,9 @@ describe("lease proxy cross-process primitive gate", () => {
         );
         assert.equal(new Set(reservationConnections).size, 1);
         proxy.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/release" }) + "\n");
-        const serverCall = yield* Fiber.join(serverCallFiber);
+        const serverCall = yield* withLiveChild(Fiber.join(serverCallFiber));
         assert.equal(serverCall.status, "settled", JSON.stringify(serverCall));
-        const providerCall = JSON.parse(yield* Queue.take(providerReplies)) as {
+        const providerCall = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
           id: number;
           result: {
             structuredContent: {
@@ -325,13 +350,15 @@ describe("lease proxy cross-process primitive gate", () => {
             args: { pid: 42, window_id: 7, x: 1, y: 1, hold: true },
           })
           .pipe(Effect.forkChild);
-        const observed = JSON.parse(yield* Queue.take(providerReplies)) as { method: string };
+        const observed = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
+          method: string;
+        };
         assert.equal(observed.method, "fixture/received");
         controlState = "paused";
         yield* PubSub.publish(signals, undefined);
-        const cutoff = yield* Queue.take(cutoffReports);
+        const cutoff = yield* withLiveChild(Queue.take(cutoffReports));
         assert.equal(cutoff.connectionId, firstReady.connectionId);
-        const interrupted = yield* Fiber.join(held);
+        const interrupted = yield* withLiveChild(Fiber.join(held));
         assert.equal(interrupted.status, "unknown_outcome");
         assert.equal(
           (yield* Effect.flip(
@@ -355,7 +382,7 @@ describe("lease proxy cross-process primitive gate", () => {
             params: { name: "click", arguments: { pid: 42, window_id: 7, x: 1, y: 1 } },
           }) + "\n",
         );
-        const pausedProvider = JSON.parse(yield* Queue.take(providerReplies)) as {
+        const pausedProvider = JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as {
           id: number;
           result: { structuredContent: { detail: string } };
         };
@@ -363,7 +390,7 @@ describe("lease proxy cross-process primitive gate", () => {
         assert.equal(pausedProvider.result.structuredContent.detail, "waiting_for_human");
         controlState = "active";
         yield* PubSub.publish(signals, undefined);
-        const secondReady = yield* Queue.take(readyReports);
+        const secondReady = yield* withLiveChild(Queue.take(readyReports));
         assert.equal(secondReady.driverGeneration, 1);
         const late = yield* Effect.promise(() =>
           fetch(`${url}/primitive-replies`, {
@@ -386,20 +413,25 @@ describe("lease proxy cross-process primitive gate", () => {
           }),
         );
         assert.equal(late.status, 409);
-        const afterRestart = yield* channel.request({
-          threadId,
-          runId: "run:three",
-          turnId: "cell:three",
-          callId: 2,
-          deadlineMillis: DateTime.toEpochMillis(deadline),
-          tool: "click",
-          args: { pid: 42, window_id: 7, x: 1, y: 1 },
-        });
+        const afterRestart = yield* withLiveChild(
+          channel.request({
+            threadId,
+            runId: "run:three",
+            turnId: "cell:three",
+            callId: 2,
+            deadlineMillis: DateTime.toEpochMillis(deadline),
+            tool: "click",
+            args: { pid: 42, window_id: 7, x: 1, y: 1 },
+          }),
+        );
         assert.equal(afterRestart.status, "settled");
         proxy.stdin.write(
           JSON.stringify({ jsonrpc: "2.0", id: 101, method: "tools/list", params: {} }) + "\n",
         );
-        assert.equal((JSON.parse(yield* Queue.take(providerReplies)) as { id: number }).id, 101);
+        assert.equal(
+          (JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as { id: number }).id,
+          101,
+        );
         const heldOnA = yield* channel
           .request({
             threadId,
@@ -412,17 +444,18 @@ describe("lease proxy cross-process primitive gate", () => {
           })
           .pipe(Effect.forkChild);
         assert.equal(
-          (JSON.parse(yield* Queue.take(providerReplies)) as { method: string }).method,
+          (JSON.parse(yield* withLiveChild(Queue.take(providerReplies))) as { method: string })
+            .method,
           "fixture/received",
         );
         activeControlId = "control:replacement";
         yield* PubSub.publish(signals, undefined);
-        const oldCutoff = yield* Queue.take(cutoffReports);
+        const oldCutoff = yield* withLiveChild(Queue.take(cutoffReports));
         assert.equal(oldCutoff.controlId, controlId);
-        const replacementReady = yield* Queue.take(readyReports);
+        const replacementReady = yield* withLiveChild(Queue.take(readyReports));
         assert.equal(replacementReady.controlId, activeControlId);
         assert.equal(replacementReady.driverGeneration, 0);
-        const oldReply = yield* Fiber.join(heldOnA);
+        const oldReply = yield* withLiveChild(Fiber.join(heldOnA));
         assert.equal(oldReply.status, "unknown_outcome");
         assert.equal(yield* Queue.size(providerReplies), 0);
         const lateOldControl = yield* Effect.promise(() =>
@@ -446,15 +479,17 @@ describe("lease proxy cross-process primitive gate", () => {
           }),
         );
         assert.equal(lateOldControl.status, 409);
-        const onReplacement = yield* channel.request({
-          threadId,
-          runId: "run:five",
-          turnId: "cell:five",
-          callId: 4,
-          deadlineMillis: DateTime.toEpochMillis(deadline),
-          tool: "click",
-          args: { pid: 42, window_id: 7, x: 1, y: 1 },
-        });
+        const onReplacement = yield* withLiveChild(
+          channel.request({
+            threadId,
+            runId: "run:five",
+            turnId: "cell:five",
+            callId: 4,
+            deadlineMillis: DateTime.toEpochMillis(deadline),
+            tool: "click",
+            args: { pid: 42, window_id: 7, x: 1, y: 1 },
+          }),
+        );
         assert.equal(onReplacement.status, "settled");
         const previousResult = afterRestart.result as { structuredContent: { driverPid: number } };
         const replacementResult = onReplacement.result as {
@@ -472,7 +507,9 @@ describe("lease proxy cross-process primitive gate", () => {
             params: { name: "click", arguments: { pid: 42, window_id: 7, x: 1, y: 1 } },
           }) + "\n",
         );
-        const replacementProvider = JSON.parse(yield* Queue.take(providerReplies)) as {
+        const replacementProvider = JSON.parse(
+          yield* withLiveChild(Queue.take(providerReplies)),
+        ) as {
           id: number;
           result: { structuredContent: { driverPid: number } };
         };

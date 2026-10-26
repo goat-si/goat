@@ -400,6 +400,7 @@ export async function setupSshComposer(realComposer = false) {
       : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
         ? true
         : get(atom)) as typeof registry.get);
+  // This fixture supplies navigation directly; the router would add an unrelated route context.
   const screen = stack.use(await render(<div />, { router: false }));
   stack.defer(() => act(() => state.composer?.onMultipleModelSelectionsChange(null)));
   state.navigate.mockReset().mockImplementation(async (request) => {

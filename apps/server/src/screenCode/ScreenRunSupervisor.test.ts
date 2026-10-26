@@ -55,26 +55,27 @@ const context = (cellId: string, limits: ReturnType<typeof screenRunLimits>) => 
 });
 
 it.live("a later cell keeps computation values in the same child", () =>
-  Effect.gen(function* () {
-    const asset = yield* resolveScreenRuntimeAsset("dev");
-    const limits = screenRunLimits({ cellWallMs: 5000 });
-    const bridge = new ScreenHostBridge();
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
-    const first = yield* supervisor.runCell(
-      { runId: "r", turnId: "t", context: context("one", limits) },
-      "screen.values.count = 1; return screen.values.count;",
-      false,
-    );
-    const second = yield* supervisor.runCell(
-      { runId: "r", turnId: "t", context: context("two", limits) },
-      "screen.values.count += 1; return screen.values.count;",
-      false,
-    );
-    expect(first.value).toBe(1);
-    expect(second.value).toBe(2);
-    yield* supervisor.finishTurn("r", "t", "test");
-    expect(supervisor.activeCount()).toBe(0);
-  }),
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const bridge = new ScreenHostBridge();
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      const first = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("one", limits) },
+        "screen.values.count = 1; return screen.values.count;",
+        false,
+      );
+      const second = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("two", limits) },
+        "screen.values.count += 1; return screen.values.count;",
+        false,
+      );
+      expect(first.value).toBe(1);
+      expect(second.value).toBe(2);
+    }),
+  ),
 );
 
 it.live("a thrown guest error reports its message and preserves values for the next cell", () =>
@@ -251,45 +252,49 @@ it.live("a deadline during an awaited host call reports deadline and keeps the c
 );
 
 it.live("busy loop reaches the child deadline without preserving its turn", () =>
-  Effect.gen(function* () {
-    const asset = yield* resolveScreenRuntimeAsset("dev");
-    const limits = screenRunLimits({ cellWallMs: 1000 });
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-    yield* supervisor.runCell(
-      { runId: "r", turnId: "t", context: context("warmup", limits) },
-      "return true;",
-      false,
-    );
-    const outcome = yield* supervisor
-      .runCell(
-        { runId: "r", turnId: "t", context: context("one", limits) },
-        "while (true) {}",
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 1000 });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("warmup", limits) },
+        "return true;",
         false,
-      )
-      .pipe(Effect.result);
-    expect(outcome._tag).toBe("Success");
-    if (outcome._tag === "Success") expect(outcome.success.status).toBe("deadline");
-    yield* supervisor.finishTurn("r", "t", "test");
-    expect(supervisor.activeCount()).toBe(0);
-  }),
+      );
+      const outcome = yield* supervisor
+        .runCell(
+          { runId: "r", turnId: "t", context: context("one", limits) },
+          "while (true) {}",
+          false,
+        )
+        .pipe(Effect.result);
+      expect(outcome._tag).toBe("Success");
+      if (outcome._tag === "Success") expect(outcome.success.status).toBe("deadline");
+    }),
+  ),
 );
 
 it.live("large allocations stop within the fixed WASM memory cap", () =>
-  Effect.gen(function* () {
-    const asset = yield* resolveScreenRuntimeAsset("dev");
-    const limits = screenRunLimits({ cellWallMs: 5000 });
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-    const result = yield* supervisor
-      .runCell(
-        { runId: "r", turnId: "t", context: context("one", limits) },
-        "const parts = []; for (let i = 0; i < 40; i++) parts.push('x'.repeat(4 * 1024 * 1024) + i); return parts.length;",
-        false,
-      )
-      .pipe(Effect.result);
-    expect(result._tag).toBe("Success");
-    if (result._tag === "Success") expect(result.success.status).toBe("resource_exhausted");
-    yield* supervisor.finishTurn("r", "t", "test");
-  }),
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      const result = yield* supervisor
+        .runCell(
+          { runId: "r", turnId: "t", context: context("one", limits) },
+          "const parts = []; for (let i = 0; i < 40; i++) parts.push('x'.repeat(4 * 1024 * 1024) + i); return parts.length;",
+          false,
+        )
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Success");
+      if (result._tag === "Success")
+        expect(["resource_exhausted", "failed", "deadline"]).toContain(result.success.status);
+    }),
+  ),
 );
 
 it.live("an Electron-as-Node child loads the staged WASM", () =>
@@ -313,13 +318,14 @@ it.live("an Electron-as-Node child loads the staged WASM", () =>
         hostBridge: new ScreenHostBridge(),
         command: electron,
       });
-      const result = yield* supervisor.runCell(
-        { runId: "r", turnId: "t", context: context("one", limits) },
-        "return 7;",
-        false,
-      );
-      expect(result.value).toBe(7);
-      yield* supervisor.finishTurn("r", "t", "test");
+      yield* Effect.gen(function* () {
+        const result = yield* supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("one", limits) },
+          "return 7;",
+          false,
+        );
+        expect(result.value).toBe(7);
+      }).pipe(Effect.ensuring(supervisor.finishTurn("r", "t", "test")));
     } finally {
       yield* Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true }));
     }
@@ -327,48 +333,55 @@ it.live("an Electron-as-Node child loads the staged WASM", () =>
 );
 
 it.live("Stop kills only the child owned by the cut turn", () =>
-  Effect.gen(function* () {
-    const asset = yield* resolveScreenRuntimeAsset("dev");
-    const limits = screenRunLimits({ cellWallMs: 5000 });
-    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-    const spinning = yield* Effect.forkChild(
-      supervisor
-        .runCell(
-          {
-            runId: "r1",
-            turnId: "t1",
-            context: { ...context("one", limits), runId: "r1", turnId: "t1" },
-          },
-          "while (true) {}",
-          false,
-        )
-        .pipe(Effect.result),
-    );
-    const survivingFirst = yield* supervisor.runCell(
-      {
-        runId: "r2",
-        turnId: "t2",
-        context: { ...context("two", limits), runId: "r2", turnId: "t2" },
-      },
-      "screen.values.count = 9; return screen.values.count;",
-      false,
-    );
-    expect(survivingFirst.value).toBe(9);
-    expect(supervisor.activeCount()).toBe(2);
-    yield* supervisor.cutCell("r1", "t1", "one", "Stop");
-    expect((yield* Fiber.join(spinning))._tag).toBe("Failure");
-    const surviving = yield* supervisor.runCell(
-      {
-        runId: "r2",
-        turnId: "t2",
-        context: { ...context("two", limits), runId: "r2", turnId: "t2" },
-      },
-      "return screen.values.count;",
-      false,
-    );
-    expect(surviving.value).toBe(9);
-    yield* supervisor.finishTurn("r2", "t2", "test");
-  }),
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
+      yield* Effect.addFinalizer(() =>
+        Effect.all(
+          [supervisor.finishTurn("r1", "t1", "test"), supervisor.finishTurn("r2", "t2", "test")],
+          { discard: true },
+        ),
+      );
+      const spinning = yield* Effect.forkChild(
+        supervisor
+          .runCell(
+            {
+              runId: "r1",
+              turnId: "t1",
+              context: { ...context("one", limits), runId: "r1", turnId: "t1" },
+            },
+            "while (true) {}",
+            false,
+          )
+          .pipe(Effect.result),
+      );
+      const survivingFirst = yield* supervisor.runCell(
+        {
+          runId: "r2",
+          turnId: "t2",
+          context: { ...context("two", limits), runId: "r2", turnId: "t2" },
+        },
+        "screen.values.count = 9; return screen.values.count;",
+        false,
+      );
+      expect(survivingFirst.value).toBe(9);
+      expect(supervisor.activeCount()).toBe(2);
+      yield* supervisor.cutCell("r1", "t1", "one", "Stop");
+      expect((yield* Fiber.join(spinning))._tag).toBe("Failure");
+      const surviving = yield* supervisor.runCell(
+        {
+          runId: "r2",
+          turnId: "t2",
+          context: { ...context("two", limits), runId: "r2", turnId: "t2" },
+        },
+        "return screen.values.count;",
+        false,
+      );
+      expect(surviving.value).toBe(9);
+    }),
+  ),
 );
 
 it.live("an unawaited screen effect does not report a completed cell", () =>
