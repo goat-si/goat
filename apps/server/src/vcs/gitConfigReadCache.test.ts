@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- junction fixtures need Node's link type option.
+import * as NodeFS from "node:fs";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -81,5 +83,26 @@ it.effect("config reads follow per-worktree config changes immediately", () =>
     assert.equal(yield* driver.readConfigValue(cwd, "probe.value"), "first");
     yield* git(cwd, ["config", "--worktree", "probe.value", "second"]);
     assert.equal(yield* driver.readConfigValue(cwd, "probe.value"), "second");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("nested config reads follow the physical repository through directory aliases", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const target = yield* makeTmpDir();
+    const parent = yield* makeTmpDir();
+    yield* initRepoWithCommit(target);
+    yield* initRepoWithCommit(parent);
+    yield* git(target, ["config", "probe.repository", "target"]);
+    yield* git(parent, ["config", "probe.repository", "parent"]);
+    const nested = `${target}/nested`;
+    yield* fs.makeDirectory(nested);
+    // Directory junctions avoid Windows' symlink privilege requirement.
+    const alias = `${parent}/alias`;
+    NodeFS.symlinkSync(nested, alias, "junction");
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    assert.equal(yield* driver.readConfigValue(alias, "probe.repository"), "target");
+    yield* git(target, ["config", "probe.repository", "updated-target"]);
+    assert.equal(yield* driver.readConfigValue(alias, "probe.repository"), "updated-target");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );

@@ -23,7 +23,7 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   const directories = yield* Cache.makeWith(
     (cwd: string) =>
       Effect.gen(function* () {
-        let root = path.resolve(cwd);
+        let root = yield* fs.realPath(path.resolve(cwd));
         while (true) {
           const candidate = path.join(root, ".git");
           const info = yield* fs.stat(candidate).pipe(
