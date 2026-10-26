@@ -76,10 +76,11 @@ selection carries `appServerDeclined`. Windows hosts are not probed.
 
 Credentials for an app attachment come from the app server itself:
 `POST /.well-known/goat/runtime/session` (`apps/server/src/runtimeSessionRoute.ts`) takes the same
-loopback peer and `runtime-control.token` as a drain and answers what `goat auth ... --json`
-prints. The token reaches `curl` through its config on stdin. Running `goat auth` against
-`~/.goat/desktop` with an installed runtime instead would open the app's live database with another
-build's migrations.
+loopback peer and `runtime-control.token` as a drain and answers what
+`goat auth session issue --json` and `goat auth pairing create --json` print. The token reaches
+`curl` through its config on stdin. Running `goat auth session issue --base-dir ~/.goat/desktop`
+with an installed runtime instead would open the app's live database with another build's
+migrations.
 
 The managed server sets `appServerLive` in its descriptor while an app server's record names a
 live PID (`apps/server/src/environment/hostAppServer.ts`). A client reusing a managed forward

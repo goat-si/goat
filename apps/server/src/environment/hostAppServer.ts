@@ -3,9 +3,25 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+
+// Only the PID matters here. Importing serverRuntimeState.ts would pull its startup-access
+// dependencies into ServerEnvironment and close an import cycle through EnvironmentAuth.
+const decodeRuntimePid = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ pid: Schema.Int })),
+);
+
+const processRuns = (pid: number) => {
+  if (pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    return cause instanceof Error && "code" in cause && cause.code === "EPERM";
+  }
+};
 
 /**
  * Whether this is the server GOAT runs for SSH clients (base directory `~/.goat`) while the
@@ -24,15 +40,14 @@ export const makeAppServerLive = Effect.fn("ServerEnvironment.makeAppServerLive"
   // SSH clients never probe Windows hosts for the app's server.
   const applies = platform !== "win32" && path.resolve(config.baseDir) === path.resolve(sshHome);
   return applies
-    ? readPersistedServerRuntimeState(runtimeFile).pipe(
-        Effect.map(
-          (state) =>
-            Option.isSome(state) &&
-            state.value.pid !== process.pid &&
-            isProcessAlive(state.value.pid),
+    ? fs.readFileString(runtimeFile).pipe(
+        Effect.map((text) =>
+          Option.match(decodeRuntimePid(text.trim()), {
+            onNone: () => false,
+            onSome: (record) => processRuns(record.pid),
+          }),
         ),
         Effect.orElseSucceed(() => false),
-        Effect.provideService(FileSystem.FileSystem, fs),
       )
     : Effect.succeed(false);
 });

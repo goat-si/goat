@@ -22,7 +22,7 @@
   - Merge or replicate the two databases. Event-sourced state from two writers has no safe merge.
   - Attach to the app server through the existing runtime selection. Selection pins the
     session-issuing CLI to the live server's version, which would require installing the app's
-    exact build as a managed runtime, and `goat auth --base-dir ~/.goat/desktop` with any other
+    exact build as a managed runtime, and `goat auth session issue --base-dir ~/.goat/desktop` with any other
     build would migrate or refuse the app's live database.
   - Retire the managed server when the app starts. That interrupts work a hub dispatched there and
     hides its threads from the app.
