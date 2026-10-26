@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import { CommandId, type ScheduledTaskRun } from "@goat/contracts";
-import { scheduledTaskRunPresentation } from "./scheduledTaskRun.ts";
+import { scheduledTaskRunErrorText, scheduledTaskRunPresentation } from "./scheduledTaskRun.ts";
 const run = (
   status: ScheduledTaskRun["status"],
   dispatchStatus: ScheduledTaskRun["dispatchStatus"] = "accepted",
@@ -43,4 +43,16 @@ it("distinguishes dispatch rejection from a provider failure and makes legacy su
   expect(scheduledTaskRunPresentation({ lastRunStatus: "running" }).label).toBe(
     "Outcome unavailable",
   );
+});
+it("hides an error that only repeats the badge, but keeps real errors and legacy text", () => {
+  expect(
+    scheduledTaskRunErrorText({ lastRun: run("interrupted"), lastRunError: "interrupted" }),
+  ).toBeNull();
+  expect(
+    scheduledTaskRunErrorText({
+      lastRun: run("failed", "failed"),
+      lastRunError: "The scheduled run could not be dispatched.",
+    }),
+  ).toBe("The scheduled run could not be dispatched.");
+  expect(scheduledTaskRunErrorText({ lastRunError: "interrupted" })).toBe("interrupted");
 });

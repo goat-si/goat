@@ -1,4 +1,7 @@
-import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
+import {
+  scheduledTaskRunErrorText,
+  scheduledTaskRunPresentation,
+} from "@goat/client-runtime/scheduled-task-run";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
@@ -730,7 +733,9 @@ function ScheduledTaskRow({
             </Badge>
           ) : null}
           <MemoryRunAccessLabel {...task} />
-          {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
+          {scheduledTaskRunErrorText(task) ? (
+            <span className="text-destructive">{scheduledTaskRunErrorText(task)}</span>
+          ) : null}
         </div>
       }
       control={

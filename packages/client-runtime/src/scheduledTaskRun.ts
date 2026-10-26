@@ -24,3 +24,13 @@ export function scheduledTaskRunPresentation(
   if (status === "rolled_back") return { label: "Rolled back", tone: "warning" } as const;
   return { label: "Outcome unavailable", tone: "outline" } as const;
 }
+
+// The server keeps writing the terminal status into lastRunError so clients without
+// lastRun still learn why a run failed; clients that show the status badge drop it.
+export function scheduledTaskRunErrorText(
+  task: Pick<ScheduledTask, "lastRun" | "lastRunError">,
+): string | null {
+  if (task.lastRunError === null) return null;
+  if (task.lastRun !== undefined && task.lastRunError === task.lastRun.status) return null;
+  return task.lastRunError;
+}
