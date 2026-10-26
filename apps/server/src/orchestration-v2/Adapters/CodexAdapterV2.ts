@@ -7193,7 +7193,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const busy =
               stale &&
               (yield* threadStatuses.busy(client, conversation, !driverChanged || limitChanged));
-            // Stop/re-approval keep the key; only a driver configuration change can defer here.
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (stale && !busy) {
               const previousCuaDriver = managedCuaByThread.get(threadId);
