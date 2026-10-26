@@ -392,6 +392,13 @@ jobs:
             test -e "$p" || { echo "missing build output: $p" >&2; exit 1; }
           done
 
+      # The release verifier's private-repository URL rule, so a bundled link fails here, not the nightly.
+      - name: Check bundled links
+        if: matrix.task == 'build'
+        run: >-
+          node scripts/verify-release-artifacts.ts links --dir apps/web/dist --dir apps/server/dist
+          --dir apps/desktop/dist-electron
+
   screenshot-gate:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-screenshot-gate' || 'goat-ci (event ignored)' }}
     # It reads the pull request, so a manual run has nothing to inspect.
