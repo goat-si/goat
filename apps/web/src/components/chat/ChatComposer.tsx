@@ -12,12 +12,17 @@ import {
   useQuestionAttachmentPreparation,
 } from "../../questionAttachments";
 import type {
+  KeybindingCommand,
+  AssistantCitation,
   ChatAttachment as ContractChatAttachment,
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
   ProjectId,
+  PreviewAnnotationPayload,
+  PreviewTabContextRecord,
   ProviderApprovalDecision,
+  ThreadContextRecord,
   ProviderInteractionMode,
   ResolvedKeybindingsConfig,
   RuntimeMode,
@@ -181,7 +186,6 @@ import {
 import {
   composerCapabilityTargetDrivers,
   composerComputerSetupLocation,
-  compactSlashCommandAvailable as isCompactSlashCommandAvailable,
   selectComposerCapability,
   selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
@@ -242,12 +246,8 @@ import {
 } from "./composerScrollGesture";
 import { observeResize } from "~/lib/observeResize";
 import { ArrowUpIcon } from "~/components/solar";
-import { Button } from "../ui/button";
 import { ContextWindowMeter } from "./ContextWindowMeter";
-import { PlusIcon } from "~/components/solar";
-import { Tooltip } from "../ui/tooltip";
-import { TooltipPopup } from "../ui/tooltip";
-import { TooltipTrigger } from "../ui/tooltip";
+import { ComposerAttachAction } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
@@ -284,6 +284,7 @@ import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { readEnvironmentScope } from "../../state/session";
+import type { ReviewCommentContext } from "../../reviewCommentContext";
 import { useComposerRestingTransition } from "./useComposerRestingTransition";
 import { ComposerCommandMenuLayer } from "./ComposerCommandMenuLayer";
 import { useRestingComposerControlsLayout } from "./useRestingComposerControlsLayout";
@@ -299,12 +300,77 @@ import {
 } from "./preparingComposerImages";
 import { ComposerControlsBar } from "./ComposerControlsBar";
 import { composerCommandKeyHandler } from "./composerCommandKey";
-import type { ChatComposerHandle } from "./ChatComposerHandle";
-import { consumePasteAsTextShortcut } from "./composerPasteAsTextShortcut";
+
+function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
+  const armed = Date.now() <= deadline.current;
+  deadline.current = 0;
+  return armed;
+}
 
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
-export type { ChatComposerHandle } from "./ChatComposerHandle";
+export interface ChatComposerHandle {
+  focusAtEnd: () => void;
+  focusAt: (cursor: number) => void;
+  restoreAfterTimelineReachedEnd: () => void;
+  collapseForTimelineScrollKey: (key: string) => void;
+  addDroppedFiles: (files: File[]) => void;
+  addDroppedFolders: (folders: File[]) => void;
+  hasPendingAttachments: () => boolean;
+  insertTextAtEnd: (
+    text: string,
+    options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
+  ) => boolean;
+  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
+  citeAssistantText: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
+  openModelPicker: () => void;
+  stepReasoningEffort: (direction: 1 | -1) => void;
+  toggleModelPicker: () => void;
+  openControl: (command: KeybindingCommand) => void;
+  isModelPickerOpen: () => boolean;
+  isCaretAtStart: () => boolean;
+  compactContext: () => void;
+  readSnapshot: () => {
+    value: string;
+    cursor: number;
+    expandedCursor: number;
+    contextIds: string[];
+  };
+  resetCursorState: (options?: {
+    cursor?: number;
+    prompt?: string;
+    detectTrigger?: boolean;
+  }) => void;
+  addTerminalContext: (selection: TerminalContextSelection) => void;
+  getSendContext: () => {
+    answeringPendingUserInput: boolean;
+    prompt: string;
+    images: ComposerImageAttachment[];
+    files: ComposerFileAttachment[];
+    terminalContexts: TerminalContextDraft[];
+    previewAnnotations: PreviewAnnotationPayload[];
+    reviewComments: ReviewCommentContext[];
+    threadContexts: ThreadContextRecord[];
+    previewTabs: PreviewTabContextRecord[];
+    threadContextRoutingEnvironmentId: EnvironmentId;
+    selectedPromptEffort: string | null;
+    selectedModelOptionsForDispatch: unknown;
+    selectedModelSelection: ModelSelection;
+    multipleModelSelections: ReadonlyArray<ModelSelection> | null;
+    providerAvailable: boolean;
+    selectedProvider: ProviderDriverKind;
+    selectedModel: string;
+    selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
+    interactionMode: ProviderInteractionMode;
+    interactionModeEnabled: boolean;
+    shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
+  };
+  validateProviderInput: (providerInput: string) => boolean;
+  setMultipleModelSelections: (selections: ReadonlyArray<ModelSelection>) => void;
+}
 
 export interface ChatComposerProps {
   sshWorktreeSelected?: boolean;
@@ -1124,17 +1190,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
   });
   const composerTriggerKind = composerTrigger?.kind ?? null;
-  const compactSlashCommandAvailable = isCompactSlashCommandAvailable({
-    trigger: composerTrigger,
-    prompt,
-    compactThreadUnavailable,
-    attachmentCount:
-      composerImages.length + composerFiles.length + composerDraft.persistedAttachments.length,
-    contextCount:
-      composerTerminalContexts.length +
-      composerPreviewAnnotations.length +
-      composerReviewComments.length,
-  });
+  const compactSlashCommandAvailable =
+    composerTrigger?.kind === "slash-command" &&
+    prompt.slice(0, composerTrigger.rangeStart).trim() === "" &&
+    !compactThreadUnavailable &&
+    prompt.slice(composerTrigger.rangeEnd).trim() === "" &&
+    composerImages.length + composerFiles.length === 0 &&
+    composerDraft.persistedAttachments.length === 0 &&
+    composerTerminalContexts.length === 0 &&
+    composerPreviewAnnotations.length === 0 &&
+    composerReviewComments.length === 0;
   const {
     items: composerMenuItems,
     isLoading: isComposerMenuLoading,
@@ -1894,14 +1959,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       });
     }
     if (item.type === "preview-tab") {
-      if (trigger.kind !== "path") return;
-      return selectComposerPreviewTab({
-        record: item.record,
-        environmentId,
-        replaceTriggerWith,
-        addToDraft: (record) =>
-          addComposerDraftPreviewTabs(attachmentDraftTarget, [record], { appendReference: false }),
-        onReplaced: () => setComposerHighlightedItemId(null),
+      const record = item.record;
+      return selectComposerPreviewTab(record, trigger, environmentId, replaceTriggerWith, () => {
+        addComposerDraftPreviewTabs(attachmentDraftTarget, [record], { appendReference: false });
+        setComposerHighlightedItemId(null);
       });
     }
     if (item.type === "path") {
@@ -2638,43 +2699,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       removeComposerImageFromDraft,
       insertAttachmentReferences,
     });
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const composerAttachAction = showComposerAttachAction ? (
-    <>
-      <input
-        ref={attachmentInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = "";
-          // Inserting a chip refocuses the editor after the draft renders;
-          // focusing synchronously here would report the editor's stale text
-          // over the prompt that was just written.
-          void addComposerAttachments(files).then((inserted) => {
-            if (!inserted) focusComposer();
-          });
-        }}
-      />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={() => attachmentInputRef.current?.click()}
-              aria-label="Attach files"
-            />
-          }
-        >
-          <PlusIcon />
-        </TooltipTrigger>
-        <TooltipPopup>Attach files</TooltipPopup>
-      </Tooltip>
-    </>
+    <ComposerAttachAction
+      addComposerAttachments={addComposerAttachments}
+      focusComposer={focusComposer}
+    />
   ) : null;
   const composerContextWindowMeter = settings.contextWindowMeterHidden ? null : (
     <span data-resting-fixed-control className="flex shrink-0 items-center">

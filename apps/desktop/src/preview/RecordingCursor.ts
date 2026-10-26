@@ -7,6 +7,7 @@ import {
   type RecordingInputOptions,
   type RecordingKeyPress,
 } from "./RecordingInput.ts";
+import { onTerminalAgentCursor } from "./RecordingCursorEvent.ts";
 
 /** Draw in guest coordinates; Chromium's native cursor ignores webview CSS placement/scale. Hide it to avoid duplicates. */
 export function installRecordingCursor(
@@ -121,6 +122,7 @@ export function installRecordingCursor(
     agentActive = false;
     agentCursor.style.display = "none";
   };
+  const stopTerminalAgentHide = onTerminalAgentCursor(hideAgent);
   const moveHuman = (point: { readonly x: number; readonly y: number }) => {
     if (controller === "agent") return;
     humanPoint = point;
@@ -172,7 +174,6 @@ export function installRecordingCursor(
   window.addEventListener("blur", hide);
   return {
     move,
-    hideAgent,
     keyPress,
     setController,
     setTheme,
@@ -187,6 +188,7 @@ export function installRecordingCursor(
       window.removeEventListener("blur", hide);
       cancelPendingPointer();
       window.clearTimeout(agentTimer);
+      stopTerminalAgentHide();
       cursor.remove();
       agentCursor.remove();
       style.remove();

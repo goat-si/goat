@@ -40,6 +40,7 @@ import { readPreparedConnection } from "~/state/session";
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
 import { toastManager } from "../ui/toast";
+import { importedPreviewTabRecord } from "./previewTabImport";
 import {
   type ComposerDraftContextRecords,
   uploadedContextRecordFromDraft,
@@ -383,20 +384,8 @@ export function useComposerContextImport(input: {
           break;
         }
         case "preview-tab": {
-          if (record.environmentId !== environmentId) {
-            toastManager.add({
-              type: "error",
-              title: "Browser tab is on another machine",
-              description: "Choose a tab on this environment instead.",
-            });
-            break;
-          }
-          const imported = conflicts
-            ? {
-                ...record,
-                contextId: toKindScopedComposerContextId("preview-tab", randomUUID()),
-              }
-            : record;
+          const imported = importedPreviewTabRecord(record, environmentId, conflicts);
+          if (imported === undefined) break;
           addComposerDraftPreviewTabs(attachmentDraftTarget, [imported], {
             appendReference: false,
           });

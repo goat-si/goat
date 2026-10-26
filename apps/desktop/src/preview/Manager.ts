@@ -1,10 +1,4 @@
-import {
-  acceptsCursorState,
-  acceptsLegacyPointer,
-  acceptsPointerCursor,
-  pointerEvent,
-  type AgentPointer,
-} from "./CursorStateOrdering.ts";
+import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
   DesktopPreviewRecordingInputSchema,
@@ -3185,16 +3179,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         candidate.serverTab.tabId === pointer.key.tabId,
     );
     if (!tab) return;
-    const previous = cursorOwners.get(tab.tabId);
-    if (pointer.cursor !== undefined) {
-      if (
-        !(pointer.type === "pointer"
-          ? acceptsPointerCursor(previous, pointer.cursor)
-          : acceptsCursorState(previous, pointer.cursor))
-      )
-        return;
-      cursorOwners.set(tab.tabId, pointer.cursor);
-    } else if (!acceptsLegacyPointer(previous)) return;
+    if (!admitAgentPointer(cursorOwners, tab.tabId, pointer)) return;
     const event = pointerEvent(pointer, tab.tabId, ++pointerSequence, yield* currentIso);
     const recording = (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tab.tabId);
     const webContentsId = tab.webContentsId;

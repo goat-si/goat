@@ -45,6 +45,7 @@ import { refreshPreviewStreamAccess, usePreviewStreamAccess } from "~/state/prev
 import { observeResize } from "~/lib/observeResize";
 
 import { boxToViewport, viewportToBox } from "./letterbox";
+import { agentCursorAfterState, agentCursorOwnerFields } from "./agentCursorOwner";
 
 export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
@@ -100,6 +101,7 @@ interface TouchProbe {
 
 const buttonOf = (button: number): PreviewStreamMouseButton =>
   button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "none";
+
 const pressedButtonOf = (buttons: number): PreviewStreamMouseButton =>
   buttons & 1 ? "left" : buttons & 2 ? "right" : buttons & 4 ? "middle" : "none";
 
@@ -433,22 +435,8 @@ export function ServerBrowserSurface(props: {
           );
           if (placed) setAgentCursor(placed);
         },
-        onCursorState: (state) => {
-          if (state.phase === "hidden" || state.phase === "yielded") {
-            setAgentCursor(null);
-            return;
-          }
-          setAgentCursor((current) =>
-            current?.owner !== undefined &&
-            current.owner.environmentId === state.identity.environmentId &&
-            current.owner.runId === state.identity.runId &&
-            current.owner.turnId === state.identity.turnId &&
-            current.owner.targetId === state.identity.targetId &&
-            current.owner.generation === state.identity.generation
-              ? { ...current, sequence: state.identity.sequence, cursorPhase: state.phase }
-              : null,
-          );
-        },
+        onCursorState: (state) =>
+          setAgentCursor((current) => agentCursorAfterState(current, state)),
         onClipboard: (text) => void copyPageText(text),
         onDownload: offerDownload,
         onPopup: popupOpened,
@@ -966,6 +954,7 @@ export function ServerBrowserSurface(props: {
     </div>
   );
 }
+
 interface AgentCursorPlacement {
   readonly phase: PreviewStreamPointer["phase"];
   readonly sequence: number;
@@ -974,6 +963,7 @@ interface AgentCursorPlacement {
   readonly owner?: AgentCursorOwner;
   readonly cursorPhase?: AgentCursorState;
 }
+
 function placeAgentCursor(
   pointer: PreviewStreamPointer,
   canvas: HTMLCanvasElement | null,
@@ -987,8 +977,6 @@ function placeAgentCursor(
     sequence: pointer.sequence,
     left,
     top,
-    ...(pointer.cursor === undefined
-      ? {}
-      : { owner: pointer.cursor.identity, cursorPhase: pointer.cursor.phase }),
+    ...agentCursorOwnerFields(pointer.cursor),
   };
 }

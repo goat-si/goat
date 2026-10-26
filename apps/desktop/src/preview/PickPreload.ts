@@ -18,7 +18,6 @@ import { createAnnotationIdSource } from "./AnnotationIds.ts";
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
-import { isTerminalAgentCursor, recordingKeyInput } from "./RecordingCursorEvent.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS } from "./RecordingInput.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -87,14 +86,22 @@ ipcRenderer.on(RECORDING_CONTROLLER_CHANNEL, (_event, controller: unknown, point
     recordingCursor?.setController(controller, humanPoint);
 });
 ipcRenderer.on(RECORDING_KEY_CHANNEL, (_event, input: unknown) => {
-  const key = recordingKeyInput(input);
-  if (key !== undefined) recordingCursor?.keyPress(key);
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    !("key" in input) ||
+    typeof input.key !== "string"
+  )
+    return;
+  recordingCursor?.keyPress({
+    key: input.key,
+    metaKey: "metaKey" in input && input.metaKey === true,
+    ctrlKey: "ctrlKey" in input && input.ctrlKey === true,
+    altKey: "altKey" in input && input.altKey === true,
+    shiftKey: "shiftKey" in input && input.shiftKey === true,
+  });
 });
 ipcRenderer.on(RECORDING_POINTER_CHANNEL, (_event, point: unknown) => {
-  if (isTerminalAgentCursor(point)) {
-    recordingCursor?.hideAgent();
-    return;
-  }
   if (
     typeof point === "object" &&
     point !== null &&

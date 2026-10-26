@@ -60,6 +60,24 @@ export function acceptsPointerCursor(
 export const acceptsLegacyPointer = (previous: AgentCursorSnapshot | undefined): boolean =>
   previous === undefined || previous.phase === "hidden" || previous.phase === "yielded";
 
+/** Whether a pointer may draw on its tab; an admitted owner becomes the tab's owner. */
+export function admitAgentPointer(
+  owners: Map<string, AgentCursorSnapshot>,
+  tabId: string,
+  pointer: AgentPointer,
+): boolean {
+  const previous = owners.get(tabId);
+  if (pointer.cursor === undefined) return acceptsLegacyPointer(previous);
+  if (
+    !(pointer.type === "pointer"
+      ? acceptsPointerCursor(previous, pointer.cursor)
+      : acceptsCursorState(previous, pointer.cursor))
+  )
+    return false;
+  owners.set(tabId, pointer.cursor);
+  return true;
+}
+
 export function pointerEvent(
   pointer: AgentPointer,
   tabId: string,

@@ -6,7 +6,7 @@ import {
   clearBrowserPointer,
   detachBrowserPointer,
   reduceBrowserPointer,
-} from "./browserPointerStore";
+} from "./browserPointerOrdering";
 
 const identity = {
   environmentId: EnvironmentId.make("environment"),

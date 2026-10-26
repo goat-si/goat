@@ -82,14 +82,16 @@ import {
   terminalContextReference,
   threadContextReference,
 } from "./lib/composerContextRecords";
-import { addPreviewTabsToDraftState, setPreviewTabsInDraftState } from "./lib/previewTabDraft";
-import { composerImageDedupKey } from "./lib/composerImageDedupKey";
+import { previewTabDraftActions, type PreviewTabDraftActions } from "./lib/previewTabDraft";
 import {
-  clearStaleFileUploadMetadata,
-  composerDraftHasUserContent,
-  shouldRemoveDraft,
-} from "./lib/composerDraftHelpers";
-export { composerDraftHasUserContent } from "./lib/composerDraftHelpers";
+  draftSshDestinationsEqual,
+  draftWorkspaceEdited,
+  normalizePersistedSshDestination,
+  resolveDraftSshDestination,
+  DraftSshDestinationSchema,
+  type DraftSshDestination,
+} from "./lib/draftSshDestination";
+export { draftSshDestinationsEqual, type DraftSshDestination } from "./lib/draftSshDestination";
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
@@ -180,6 +182,29 @@ export interface ComposerFileAttachment extends Omit<ChatFileAttachment, "previe
 
 export function composerFileNeedsReattach(file: ComposerFileAttachment): boolean {
   return file.file === null && file.uploadedAttachmentId === undefined;
+}
+
+function clearStaleFileUploadMetadata(
+  draft: ComposerThreadDraftState,
+  environmentId: EnvironmentId,
+): ComposerThreadDraftState {
+  let changed = false;
+  const files = draft.files.map((file) => {
+    if (
+      (file.uploadedAttachmentId === undefined && file.uploadEnvironmentId === undefined) ||
+      file.uploadEnvironmentId === environmentId
+    ) {
+      return file;
+    }
+
+    changed = true;
+    const nextFile = { ...file };
+    delete nextFile.uploadedAttachmentId;
+    delete nextFile.uploadEnvironmentId;
+    return nextFile;
+  });
+
+  return changed ? { ...draft, files } : draft;
 }
 
 export const PersistedComposerFileAttachment = Schema.Struct({
@@ -284,13 +309,6 @@ type LegacyPersistedComposerDraftStoreState = PersistedComposerDraftStoreState &
   LegacyStickyModelFields &
   LegacyV2StoreFields;
 
-export const DraftSshDestinationSchema = Schema.Struct({
-  connectionId: Schema.String.check(Schema.isMinLength(1)),
-  environmentId: EnvironmentId,
-});
-export type DraftSshDestination = typeof DraftSshDestinationSchema.Type;
-const isDraftSshDestination = Schema.is(DraftSshDestinationSchema);
-
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.String,
@@ -366,6 +384,25 @@ export interface ComposerThreadDraftState {
   interactionMode: ProviderInteractionMode | null;
 }
 
+export function composerDraftHasUserContent(
+  draft: ComposerThreadDraftState | null | undefined,
+): boolean {
+  if (!draft) {
+    return false;
+  }
+  return (
+    draft.prompt.trim().length > 0 ||
+    draft.images.length > 0 ||
+    draft.files.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.length > 0 ||
+    draft.previewAnnotations.length > 0 ||
+    draft.reviewComments.length > 0 ||
+    draft.threadContexts.length > 0 ||
+    draft.previewTabs.length > 0
+  );
+}
+
 export interface DraftSessionState {
   threadId: ThreadId;
   environmentId: EnvironmentId;
@@ -392,7 +429,7 @@ interface ProjectDraftSession extends DraftSessionState {
 
 export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
-interface ComposerDraftStoreState {
+interface ComposerDraftStoreState extends PreviewTabDraftActions {
   draftsByThreadKey: Record<string, ComposerThreadDraftState>;
   draftThreadsByThreadKey: Record<string, DraftThreadState>;
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
@@ -581,15 +618,6 @@ interface ComposerDraftStoreState {
     records: ReadonlyArray<ThreadContextRecord>,
     options?: ComposerContextAddOptions,
   ) => void;
-  addPreviewTabs: (
-    threadRef: ComposerThreadTarget,
-    records: ReadonlyArray<PreviewTabContextRecord>,
-    options?: ComposerContextAddOptions,
-  ) => void;
-  setPreviewTabs: (
-    threadRef: ComposerThreadTarget,
-    records: ReadonlyArray<PreviewTabContextRecord>,
-  ) => void;
   setThreadContexts: (
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<ThreadContextRecord>,
@@ -759,6 +787,11 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
   };
 }
 
+function composerImageDedupKey(image: ComposerImageAttachment): string {
+  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
+  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
+}
+
 export function composerFileDedupKey(
   file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
 ): string {
@@ -840,6 +873,24 @@ function normalizeTerminalContextsForThread(
   }
 
   return normalizedContexts;
+}
+
+function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
+  return (
+    draft.prompt.length === 0 &&
+    draft.images.length === 0 &&
+    draft.files.length === 0 &&
+    draft.persistedAttachments.length === 0 &&
+    draft.terminalContexts.length === 0 &&
+    draft.previewAnnotations.length === 0 &&
+    draft.reviewComments.length === 0 &&
+    draft.threadContexts.length === 0 &&
+    draft.previewTabs.length === 0 &&
+    Object.keys(draft.modelSelectionByProvider).length === 0 &&
+    draft.activeProvider === null &&
+    draft.runtimeMode === null &&
+    draft.interactionMode === null
+  );
 }
 
 function normalizeProviderDriverKind(value: unknown): ProviderDriverKind | null {
@@ -1355,34 +1406,6 @@ function toProjectDraftSession(
   };
 }
 
-function resolveDraftSshDestination(input: {
-  previous: DraftSshDestination | null | undefined;
-  requested: DraftSshDestination | null | undefined;
-  projectChanged: boolean;
-  workspaceEdited: boolean;
-  envMode: DraftThreadEnvMode;
-  worktreePath: string | null;
-  startFromOrigin: boolean;
-}): DraftSshDestination | null {
-  const candidate =
-    input.requested !== undefined
-      ? input.requested
-      : input.projectChanged || input.workspaceEdited
-        ? null
-        : (input.previous ?? null);
-  return input.envMode === "worktree" && input.worktreePath === null && !input.startFromOrigin
-    ? candidate
-    : null;
-}
-export function draftSshDestinationsEqual(
-  left: DraftSshDestination | null | undefined,
-  right: DraftSshDestination | null | undefined,
-): boolean {
-  return left == null || right == null
-    ? left == null && right == null
-    : left.connectionId === right.connectionId && left.environmentId === right.environmentId;
-}
-
 function createDraftThreadState(
   projectRef: ScopedProjectRef,
   threadId: ThreadId,
@@ -1430,11 +1453,7 @@ function createDraftThreadState(
     previous: existingThread?.sshDestination,
     requested: options?.sshDestination,
     projectChanged,
-    workspaceEdited:
-      options?.envMode !== undefined ||
-      options?.branch !== undefined ||
-      options?.worktreePath !== undefined ||
-      options?.startFromOrigin !== undefined,
+    workspaceEdited: draftWorkspaceEdited(options),
     envMode: nextEnvMode,
     worktreePath: nextWorktreePath,
     startFromOrigin: nextStartFromOrigin,
@@ -1622,13 +1641,10 @@ function normalizePersistedDraftThreads(
         continue;
       }
       const normalizedEnvironmentId = environmentId as EnvironmentId;
-      const rawSshDestination = candidateDraftThread.sshDestination;
-      const normalizedSshDestination =
-        rawSshDestination == null
-          ? null
-          : isDraftSshDestination(rawSshDestination)
-            ? rawSshDestination
-            : { connectionId: "unavailable", environmentId: normalizedEnvironmentId };
+      const normalizedSshDestination = normalizePersistedSshDestination(
+        candidateDraftThread.sshDestination,
+        normalizedEnvironmentId,
+      );
       draftThreadsByThreadKey[threadKey] = {
         threadId,
         environmentId: normalizedEnvironmentId,
@@ -2698,11 +2714,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               previous: existing.sshDestination,
               requested: options.sshDestination,
               projectChanged,
-              workspaceEdited:
-                options.envMode !== undefined ||
-                options.branch !== undefined ||
-                options.worktreePath !== undefined ||
-                options.startFromOrigin !== undefined,
+              workspaceEdited: draftWorkspaceEdited(options),
               envMode: nextEnvMode,
               worktreePath: nextWorktreePath,
               startFromOrigin: nextStartFromOrigin,
@@ -3887,31 +3899,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
-        addPreviewTabs: (threadRef, records, options) => {
-          const threadKey = resolveComposerDraftKey(get(), threadRef);
-          if (!threadKey) return;
-          const placedAtCaret =
-            options?.appendReference !== false &&
-            options?.insertAtCaret !== false &&
-            (contextInsertionHandlers.get(threadKey)?.(records) ?? false);
-          set((state) =>
-            addPreviewTabsToDraftState(
-              state,
-              threadKey,
-              records,
-              placedAtCaret,
-              options?.appendReference === false,
-              createEmptyThreadDraft(),
-            ),
-          );
-        },
-        setPreviewTabs: (threadRef, records) => {
-          const threadKey = resolveComposerDraftKey(get(), threadRef);
-          if (threadKey)
-            set((state) =>
-              setPreviewTabsInDraftState(state, threadKey, records, createEmptyThreadDraft()),
-            );
-        },
+        ...previewTabDraftActions(set, get, {
+          resolveComposerDraftKey,
+          contextInsertionHandlers,
+          createEmptyThreadDraft,
+        }),
         setThreadContexts: (threadRef, records) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) return;

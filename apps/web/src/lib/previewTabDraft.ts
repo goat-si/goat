@@ -2,12 +2,18 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type EnvironmentId,
   type PreviewTabContextRecord,
+  type PreviewSessionSnapshot,
 } from "@goat/contracts";
 import {
   sanitizeComposerContextLabel,
   toKindScopedComposerContextId,
 } from "@goat/shared/composerContextReferences";
-import type { ComposerThreadDraftState } from "~/composerDraftStore";
+import type {
+  ComposerContextAddOptions,
+  ComposerContextInsertionHandler,
+  ComposerThreadDraftState,
+  ComposerThreadTarget,
+} from "~/composerDraftStore";
 import {
   ensureInlineContextReferences,
   removeInlineContextReference,
@@ -36,6 +42,37 @@ export function previewTabRecordForServerTab(
     title: sanitizeComposerContextLabel(tab.title, "browser tab"),
     url: tab.url,
   };
+}
+
+/** The @ menu rows for this environment's live server browser tabs that match the typed query. */
+export function previewTabMenuItems(
+  typed: string,
+  sessions: ReadonlyArray<PreviewSessionSnapshot> | undefined,
+  environmentId: EnvironmentId,
+) {
+  return (sessions ?? []).flatMap((session) => {
+    if (session.runtime !== "server" || session.navStatus._tag === "Idle") return [];
+    const { title, url } = session.navStatus;
+    const query = typed.trim().toLowerCase();
+    if (
+      query &&
+      ![title, url, "tab", "browser"].some((value) => value.toLowerCase().includes(query))
+    )
+      return [];
+    return [
+      {
+        id: `preview-tab:${session.tabId}`,
+        type: "preview-tab" as const,
+        record: previewTabRecordForServerTab(environmentId, {
+          tabId: session.tabId,
+          title,
+          url,
+        }),
+        label: title || url,
+        description: url,
+      },
+    ];
+  });
 }
 
 export function addPreviewTabsToDraftState<S extends DraftState>(
@@ -88,6 +125,57 @@ export function setPreviewTabsInDraftState<S extends DraftState>(
         prompt: ensureInlineContextReferences(prompt, records),
         previewTabs: [...records],
       },
+    },
+  };
+}
+
+export interface PreviewTabDraftActions {
+  addPreviewTabs: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<PreviewTabContextRecord>,
+    options?: ComposerContextAddOptions,
+  ) => void;
+  setPreviewTabs: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<PreviewTabContextRecord>,
+  ) => void;
+}
+
+/** The draft store's preview-tab actions, over the store's own key lookup and caret handlers. */
+export function previewTabDraftActions<S extends DraftState>(
+  set: (update: (state: S) => S) => void,
+  get: () => S,
+  store: {
+    readonly resolveComposerDraftKey: (state: S, target: ComposerThreadTarget) => string | null;
+    readonly contextInsertionHandlers: ReadonlyMap<string, ComposerContextInsertionHandler>;
+    readonly createEmptyThreadDraft: () => ComposerThreadDraftState;
+  },
+): PreviewTabDraftActions {
+  return {
+    addPreviewTabs: (threadRef, records, options) => {
+      const threadKey = store.resolveComposerDraftKey(get(), threadRef);
+      if (!threadKey) return;
+      const placedAtCaret =
+        options?.appendReference !== false &&
+        options?.insertAtCaret !== false &&
+        (store.contextInsertionHandlers.get(threadKey)?.(records) ?? false);
+      set((state) =>
+        addPreviewTabsToDraftState(
+          state,
+          threadKey,
+          records,
+          placedAtCaret,
+          options?.appendReference === false,
+          store.createEmptyThreadDraft(),
+        ),
+      );
+    },
+    setPreviewTabs: (threadRef, records) => {
+      const threadKey = store.resolveComposerDraftKey(get(), threadRef);
+      if (threadKey)
+        set((state) =>
+          setPreviewTabsInDraftState(state, threadKey, records, store.createEmptyThreadDraft()),
+        );
     },
   };
 }

@@ -25,7 +25,7 @@ import {
   filterComposerPullRequestMatches,
 } from "@goat/shared/composerPullRequestMatches";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
-import { previewTabRecordForServerTab } from "~/lib/previewTabDraft";
+import { previewTabMenuItems } from "~/lib/previewTabDraft";
 
 import type { ComposerTrigger } from "../../composer-logic";
 import { basenameOfPath } from "../../pierre-icons";
@@ -239,29 +239,11 @@ export function useComposerMenuItems({
       return [
         ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerAppItems(composerTrigger.query, capabilityContext, computerUseApps),
-        ...(previewTabsQuery.data?.sessions ?? []).flatMap((session) => {
-          if (session.runtime !== "server" || session.navStatus._tag === "Idle") return [];
-          const { title, url } = session.navStatus;
-          const query = composerTrigger.query.trim().toLowerCase();
-          if (
-            query &&
-            ![title, url, "tab", "browser"].some((value) => value.toLowerCase().includes(query))
-          )
-            return [];
-          return [
-            {
-              id: `preview-tab:${session.tabId}`,
-              type: "preview-tab" as const,
-              record: previewTabRecordForServerTab(environmentId, {
-                tabId: session.tabId,
-                title,
-                url,
-              }),
-              label: title || url,
-              description: url,
-            },
-          ];
-        }),
+        ...previewTabMenuItems(
+          composerTrigger.query,
+          previewTabsQuery.data?.sessions,
+          environmentId,
+        ),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           sshHostsByEnvironment,

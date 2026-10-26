@@ -71,7 +71,6 @@ import {
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
-import { readEnvironmentPresentation, draftHasNonPromptContent } from "./composerSendEnvironment";
 import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { ensureInlineContextReferences } from "../../lib/composerContextReferences";
 import {
@@ -82,6 +81,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
+import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
   loadBalancingSendWarning,
@@ -135,7 +135,6 @@ import type { DraftSshDestination } from "../../composerDraftStore";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
 import type { SshThreadOpenPorts } from "../../lib/sshWorktreeSubmission";
-import type { SshWorktreeSubmissionOutcome } from "../../lib/sshWorktreeSubmission";
 import type { SshWorktreeSubmissionPorts } from "../../lib/sshWorktreeSubmission";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentThreadDetails } from "../../state/threads";
@@ -151,6 +150,7 @@ import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
+import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useSideChatStore } from "../sideChat/sideChatStore";
 import { waitForThreadShell } from "../../state/entities";
@@ -164,6 +164,15 @@ const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 
 const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
+
+function readEnvironmentPresentation(environmentId: EnvironmentId) {
+  return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);
+}
+
+function draftHasNonPromptContent(target: ComposerThreadTarget) {
+  const draft = useComposerDraftStore.getState().getComposerDraft(target);
+  return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
+}
 
 type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
 type LocalDispatchState = ReturnType<typeof useLocalDispatchState>;
@@ -486,34 +495,7 @@ export function useComposerSend(input: ComposerSendInput) {
     };
   };
 
-  const showSshStartedNotOpened = (
-    outcome: Extract<SshWorktreeSubmissionOutcome, { kind: "started-not-opened" }>,
-    saved: { destination: DraftSshDestination; hostLabel: string },
-  ) => {
-    // This continuation captures remote identity only; Open cannot resend or consume a draft.
-    const { remoteRef } = outcome;
-    const { destination, hostLabel } = saved;
-    const show = (reason: string) =>
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: `Started on ${hostLabel.slice(0, 120)}, but could not open the thread`,
-          description: `${remoteRef.threadId} · ${reason.slice(0, 500)}`,
-          actionProps: {
-            children: "Open thread",
-            onClick: () => {
-              void openSshThread(
-                { remoteRef, savedEnvironmentId: destination.environmentId },
-                makeSshThreadOpenPorts(destination, null),
-              ).catch((error: unknown) =>
-                show(error instanceof Error ? error.message : "Could not open the remote thread."),
-              );
-            },
-          },
-        }),
-      );
-    show(outcome.reason);
-  };
+  const showSshStartedNotOpened = sshStartedNotOpenedToast(makeSshThreadOpenPorts);
 
   const continueThreadOnSsh = async (
     selected: SavedSshWorktreeOption,

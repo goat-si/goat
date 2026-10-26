@@ -9,24 +9,6 @@ import { formatInlineContextReference } from "../../lib/composerContextReference
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import type { ComposerTrigger } from "../../composer-logic";
 
-export function compactSlashCommandAvailable(input: {
-  trigger: ComposerTrigger | null;
-  prompt: string;
-  compactThreadUnavailable: boolean;
-  attachmentCount: number;
-  contextCount: number;
-}): boolean {
-  const { trigger, prompt } = input;
-  return (
-    trigger?.kind === "slash-command" &&
-    prompt.slice(0, trigger.rangeStart).trim() === "" &&
-    !input.compactThreadUnavailable &&
-    prompt.slice(trigger.rangeEnd).trim() === "" &&
-    input.attachmentCount === 0 &&
-    input.contextCount === 0
-  );
-}
-
 /** The drivers a send goes to: every selected model when it fans out, else the one selected. */
 export function composerCapabilityTargetDrivers(
   selections: ReadonlyArray<ModelSelection>,
@@ -71,15 +53,15 @@ export function selectComposerCapability(input: {
   input.openSetup();
 }
 
-export function selectComposerPreviewTab(input: {
-  readonly record: PreviewTabContextRecord;
-  readonly environmentId: EnvironmentId;
-  readonly replaceTriggerWith: (replacement: string) => boolean;
-  readonly addToDraft: (record: PreviewTabContextRecord) => void;
-  readonly onReplaced: () => void;
-}): void {
-  if (input.record.environmentId !== input.environmentId) return;
-  if (!input.replaceTriggerWith(`${formatInlineContextReference(input.record)} `)) return;
-  input.addToDraft(input.record);
-  input.onReplaced();
+export function selectComposerPreviewTab(
+  record: PreviewTabContextRecord,
+  trigger: ComposerTrigger,
+  environmentId: EnvironmentId,
+  replaceTriggerWith: (replacement: string) => boolean,
+  onSelected: () => void,
+): void {
+  if (trigger.kind !== "path") return;
+  if (record.environmentId !== environmentId) return;
+  if (!replaceTriggerWith(`${formatInlineContextReference(record)} `)) return;
+  onSelected();
 }

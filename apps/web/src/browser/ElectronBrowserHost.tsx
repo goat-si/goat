@@ -31,6 +31,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
+import { useBrowserPointerTabs } from "./useBrowserPointerTabs";
 import { acquireBrowserSurfaceActivity, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
@@ -188,14 +189,7 @@ export function ElectronBrowserHost() {
   const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
 
   const hostedTabIds = sessions.map((session) => session.runtimeTabId).join("\n");
-  const pointerTabs = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const active = new Set(hostedTabIds.split("\n").filter(Boolean));
-    const store = useBrowserPointerStore.getState();
-    for (const tabId of pointerTabs.current) if (!active.has(tabId)) store.detach(tabId);
-    for (const tabId of active) if (!pointerTabs.current.has(tabId)) store.attach(tabId);
-    pointerTabs.current = active;
-  }, [hostedTabIds]);
+  useBrowserPointerTabs(hostedTabIds);
   useEffect(() => {
     const active = new Set(hostedTabIds.split("\n"));
     for (const tabId of reportedStackTabs) {
