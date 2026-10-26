@@ -240,3 +240,43 @@ it.effect("accepted provider failure never releases webhook replay or relay prot
     { runStatus: "queued" },
   ),
 );
+
+it.effect(
+  "a rolled-back receipt admission releases replay and relay protection so an identical redelivery launches",
+  () =>
+    withService(({ service, sql, launches }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(
+          yield* webhookTaskInput({
+            schedule: { type: "webhook", dedupe: { replayKey: "{{body}}" } },
+          }),
+        );
+        const request = requestFor(task, { relayDeliveryId: "admission-failed" });
+        yield* sql`CREATE TRIGGER fail_admission BEFORE INSERT ON scheduled_task_runs
+          BEGIN SELECT RAISE(FAIL, 'synthetic admission failure'); END`;
+        yield* waitForSpan(
+          service.triggerWebhook(request),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        assert.equal(yield* Queue.size(launches), 0);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_runs`, 0);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_replay_keys`, 0);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_relay_deliveries`, 0);
+        assert.deepEqual(
+          yield* sql`SELECT outcome FROM scheduled_task_webhook_deliveries WHERE delivery_id = 'delivery:relay:admission-failed'`,
+          [{ outcome: "dispatch_failed" }],
+        );
+        yield* sql`DROP TRIGGER fail_admission`;
+        const retry = yield* waitForSpan(
+          service.triggerWebhook(request),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        assert.equal(retry._tag === "accepted" && retry.outcome, "accepted");
+        yield* Queue.take(launches);
+        const current = (yield* service.list()).tasks[0]!;
+        assert.equal(current.lastRun?.dispatchStatus, "accepted");
+        assert.equal(current.runCount, 1);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_replay_keys`, 1);
+      }),
+    ),
+);

@@ -700,6 +700,8 @@ export const layer = Layer.effect(
         readonly deliveryId: string;
         readonly prompt: string;
         readonly dispatched: Ref.Ref<"accepted" | "failed" | "unknown">;
+        /** Set once this attempt's receipt admission commits; launch can only follow it. */
+        readonly admitted: Ref.Ref<boolean>;
       },
     ) {
       const reserved = yield* Ref.modify(activeRuns, (active) => {
@@ -789,6 +791,7 @@ export const layer = Layer.effect(
             return claim;
           });
           const claim = yield* webhook === undefined ? admission : sql.withTransaction(admission);
+          if (webhook !== undefined) yield* Ref.set(webhook.admitted, true);
           yield* notifyChanged;
           if (!claim.dispatch) {
             const firing = yield* scheduledRuns.finishDispatch({
@@ -1608,7 +1611,8 @@ export const layer = Layer.effect(
           Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
         ]);
       const dispatched = yield* Ref.make<"accepted" | "failed" | "unknown">("unknown");
-      return yield* runTask(task, "webhook", { deliveryId, prompt, dispatched }).pipe(
+      const admitted = yield* Ref.make(false);
+      return yield* runTask(task, "webhook", { deliveryId, prompt, dispatched, admitted }).pipe(
         Effect.flatMap(({ firing }) =>
           Effect.gen(function* () {
             const status =
@@ -1639,6 +1643,27 @@ export const layer = Layer.effect(
             yield* Effect.logWarning("Webhook dispatch failed", { taskId: task.id, cause });
             const prior = yield* Ref.get(dispatched);
             const status = yield* scheduledRuns.deliveryDispatch(deliveryId);
+            // Admission never committed, so this attempt never reached launch. Without an
+            // accepted or unresolved receipt from an earlier attempt, release like a start failure.
+            if (
+              !(yield* Ref.get(admitted)) &&
+              prior !== "accepted" &&
+              status !== "accepted" &&
+              ((yield* scheduledRuns.deliveryReceipt(deliveryId))?.dispatchStatus ?? "failed") ===
+                "failed"
+            ) {
+              yield* runOutcome("failed");
+              yield* sql
+                .withTransaction(
+                  Effect.gen(function* () {
+                    yield* markDeliveryFailed(deliveryId, "The run failed to start.");
+                    yield* releaseFailedDelivery(deliveryId);
+                    yield* sql`DELETE FROM scheduled_task_webhook_pending WHERE delivery_id=${deliveryId}`;
+                  }),
+                )
+                .pipe(Effect.mapError(dedupeError));
+              return true;
+            }
             if (prior === "accepted" || status === "accepted") yield* runOutcome("started");
             else if (status === "failed") yield* runOutcome("failed");
             yield* cleanupDelivery(deliveryId);
