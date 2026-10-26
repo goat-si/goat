@@ -318,10 +318,13 @@ const make = Effect.gen(function* () {
     threadId?: ThreadId,
     withReleased = false,
   ) {
+    // SQLite uses a partial index only when the query repeats its predicate. Without the IN
+    // clause this read scans every turn item on the writer, and it runs on every lease check.
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items
-      WHERE type = 'human_handoff' AND status = 'completed'
+      WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff'
+        AND status = 'completed'
         AND json_extract(payload_json, '$.handoff.target.path') = ${COMPUTER_USE_GRANT_HANDOFF_PATH}
         ${threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`}
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
