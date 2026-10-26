@@ -35,7 +35,7 @@ import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
-import { ShellCommandLine, ToolCallCard } from "./ToolCallCard";
+import { CopyRegion, ShellCommandLine, ToolCallCard } from "./ToolCallCard";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -230,14 +230,15 @@ function ToolOutput(props: ToolOutputState) {
       </ul>
     ) : null;
   const text = props.output ? (
-    <div
-      className={cn(
-        "overflow-auto text-muted-foreground",
-        props.compact ? "scroll-edge-fade max-h-48" : "max-h-80",
-      )}
-    >
-      {props.output}
-    </div>
+    props.compact ? (
+      <CopyRegion text={props.output} label="Copy output">
+        <div className="scroll-edge-fade max-h-48 overflow-auto pe-7 text-foreground/80">
+          {props.output}
+        </div>
+      </CopyRegion>
+    ) : (
+      <div className="max-h-80 overflow-auto text-muted-foreground">{props.output}</div>
+    )
   ) : props.pending ? (
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
@@ -280,41 +281,42 @@ function ToolCallBody(
 ) {
   const call = toolCallLines({ command: props.command, args: props.args });
   const command = call.command;
-  const copyText =
-    command !== null
-      ? commandDisplayText(command)
-      : props.args === undefined
-        ? null
-        : (JSON.stringify(props.args, null, 2) ?? null);
+  // Copy what the card shows: the same key/value lines or the same formatted text.
+  const inputText =
+    call.argsText ?? call.args?.map(([key, value]) => `${key} ${value}`).join("\n") ?? "";
   const failedExit = props.exitCode !== undefined && props.exitCode !== 0;
   return (
     <ToolCallCard
       title={command !== null ? "Shell" : (props.title ?? "Tool")}
-      copyText={copyText}
-      copyLabel={command !== null ? "Copy command" : "Copy input"}
-      status={
-        failedExit ? (
-          <span className="font-mono text-destructive">exit {props.exitCode}</span>
-        ) : null
-      }
+      footer={failedExit ? `Exit code ${props.exitCode}` : null}
     >
       <div className={cn("space-y-1.5", monoClassName)}>
-        {command !== null ? <ShellCommandLine command={command} /> : null}
-        {call.args ? (
-          <div className="text-foreground/85">
-            {call.args.map(([key, value]) => (
-              <div key={key}>
-                <span className="text-muted-foreground">{key} </span>
-                {key === "code" && isJavaScriptReplTool(props.toolName) ? (
-                  <StructuredValue value={value} language="typescript" />
-                ) : (
-                  value
-                )}
-              </div>
-            ))}
-          </div>
+        {command !== null ? (
+          <CopyRegion text={commandDisplayText(command)} label="Copy command">
+            <ShellCommandLine command={command} />
+          </CopyRegion>
         ) : null}
-        {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
+        {inputText ? (
+          <CopyRegion text={inputText} label="Copy input">
+            <div className="pe-7">
+              {call.args ? (
+                <div className="text-foreground/85">
+                  {call.args.map(([key, value]) => (
+                    <div key={key}>
+                      <span className="text-muted-foreground">{key} </span>
+                      {key === "code" && isJavaScriptReplTool(props.toolName) ? (
+                        <StructuredValue value={value} language="typescript" />
+                      ) : (
+                        value
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
+            </div>
+          </CopyRegion>
+        ) : null}
         {props.outputSlot ?? <ToolOutput {...props} compact />}
       </div>
     </ToolCallCard>
