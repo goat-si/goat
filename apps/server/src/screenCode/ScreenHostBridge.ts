@@ -453,6 +453,11 @@ export class ScreenHostBridge {
     };
   }
 
+  /** Targets the cell has called, so a change to one tab can spare a cell that never used it. */
+  cellTargetIds(runId: string, turnId: string, cellId: string): ReadonlySet<string> {
+    return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
+  }
+
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
     this: ScreenHostBridge,
     runId: string,

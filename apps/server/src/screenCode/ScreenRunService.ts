@@ -181,7 +181,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     Option.getOrUndefined(yield* Effect.serviceOption(ScreenCursorPublisher));
   const routes = new Map<
     string,
-    ScreenCursorRoute & { readonly runId: string; readonly turnId: string }
+    ScreenCursorRoute & { readonly runId: string; readonly turnId: string; readonly cellId: string }
   >();
   const deliveries = new Map<string, Promise<void>>();
   const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -244,6 +244,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 ...(tabId === undefined ? {} : { tabId }),
                 runId: context.runId,
                 turnId: context.turnId,
+                cellId: context.cellId,
               });
             }),
           ),
@@ -341,6 +342,33 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     for (const controlId of controls)
       yield* options.leases.releaseForeground({ threadId: ThreadId.make(threadId), controlId });
   });
+  // A Stop for one tab (a person's Stop or the tab closing) only reaches cells that used the tab.
+  // Private mode, takeover, stopAll and desktop changes still cut the thread's active cell.
+  const tabStop = (change: { kind?: string; tabId?: string; controlId?: string }) =>
+    change.tabId !== undefined &&
+    change.controlId === undefined &&
+    (change.kind === undefined || change.kind === "stop");
+  const cellUsesTab = (runId: string, turnId: string, cellId: string, tabId: string) => {
+    const called = bridge.cellTargetIds(runId, turnId, cellId);
+    for (const [targetId, route] of routes)
+      if (
+        route.runId === runId &&
+        route.turnId === turnId &&
+        route.tabId === tabId &&
+        (route.cellId === cellId || called.has(targetId))
+      )
+        return true;
+    return false;
+  };
+  const cutsCell = (
+    change: { kind?: string; tabId?: string; controlId?: string },
+    runId: string,
+    turnId: string,
+    cellId: string | undefined,
+  ) =>
+    cellId !== undefined &&
+    (!tabStop(change) ||
+      (change.tabId !== undefined && cellUsesTab(runId, turnId, cellId, change.tabId)));
   const fenceNow = (change: {
     kind?: string;
     threadId?: string;
@@ -352,13 +380,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const [runId, turnId] = id.split("\u0000");
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
-      let touched = cellId !== undefined;
-      if (cellId) bridge.cutCellNow(runId, turnId, cellId, change.kind);
+      const cut = cutsCell(change, runId, turnId, cellId);
+      let touched = cut;
+      if (cut && cellId) bridge.cutCellNow(runId, turnId, cellId, change.kind);
       for (const [targetId, route] of routes) {
         if (route.runId !== runId || route.turnId !== turnId) continue;
-        if (!cellId && change.tabId !== undefined && route.tabId !== change.tabId) continue;
+        if (!cut && change.tabId !== undefined && route.tabId !== change.tabId) continue;
         if (
-          !cellId &&
+          !cut &&
           change.controlId !== undefined &&
           options.desktopHost?.matchesControl(targetId, change.controlId) !== true
         )
@@ -368,7 +397,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         options.desktopHost?.invalidateTarget(targetId);
         options.tabHost?.invalidateTarget(targetId);
       }
-      if (touched) resetNext.add(id);
+      // A spared cell keeps its child, so its values survive into the next cell.
+      if (touched && (cut || cellId === undefined)) resetNext.add(id);
     }
   };
   const service: ScreenRunService["Service"] = {
@@ -608,9 +638,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         const [runId, turnId] = id.split("\u0000");
         if (!runId || !turnId) continue;
         const cellId = activeCells.get(id);
+        const cut = cutsCell(input, runId, turnId, cellId);
+        // With no cell running, the child holds only values, and a cutoff still resets them.
+        const endsChild = cut || cellId === undefined;
         const affected = (
           targetId: string,
-          route: ScreenCursorRoute & { runId: string; turnId: string },
+          route: ScreenCursorRoute & { runId: string; turnId: string; cellId: string },
         ) =>
           route.runId === runId &&
           route.turnId === turnId &&
@@ -618,21 +651,22 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           (input.controlId === undefined ||
             options.desktopHost?.matchesControl(targetId, input.controlId) === true);
         if (
-          !cellId &&
+          !cut &&
           (input.tabId !== undefined || input.controlId !== undefined) &&
           ![...routes].some(([targetId, route]) => affected(targetId, route))
         )
           continue;
-        if (cellId) {
+        if (cut && cellId) {
           yield* bridge.cutCell(runId, turnId, cellId, input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }
-        yield* releaseForeground(
-          turn.threadId,
-          [...routes]
-            .filter(([, route]) => route.runId === runId && route.turnId === turnId)
-            .map(([targetId]) => targetId),
-        );
+        if (endsChild)
+          yield* releaseForeground(
+            turn.threadId,
+            [...routes]
+              .filter(([, route]) => route.runId === runId && route.turnId === turnId)
+              .map(([targetId]) => targetId),
+          );
         if (
           options.tabHost &&
           (input.kind === "stop" || input.kind === "stopAll" || input.kind === "credentialRevoked")
@@ -660,15 +694,15 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         }
         // An authority cutoff closes the child, so computation values reset even if the
         // changed target is unrelated to the active cell; the next cell must rebind.
-        if (supervisor) yield* supervisor.finishTurn(runId, turnId, input.kind);
+        if (supervisor && endsChild) yield* supervisor.finishTurn(runId, turnId, input.kind);
         for (const [targetId, route] of routes) {
-          if (!cellId && !affected(targetId, route)) continue;
+          if (!cut && !affected(targetId, route)) continue;
           if (route.runId !== runId || route.turnId !== turnId) continue;
           yield* bridge.invalidateTarget(runId, turnId, targetId, input.kind);
           options.desktopHost?.invalidateTarget(targetId);
           options.tabHost?.invalidateTarget(targetId);
         }
-        resetNext.add(id);
+        if (endsChild) resetNext.add(id);
       }
       return { cleanupFailures };
     }),
@@ -723,6 +757,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   }
   if (options.browser?.onAuthorityChange) {
     const unsubscribe = options.browser.onAuthorityChange((change) => {
+      // The agent's own close_tab reports a Stop for that tab; its dispatch releases the claim.
+      if (change.kind === "stop" && options.tabHost?.isClosingOwnTab(change.threadId, change.tabId))
+        return;
       fenceNow(change);
       void runCallback(
         service

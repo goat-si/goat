@@ -63,6 +63,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
     `${identity.runId}\u0000${identity.turnId}`;
+  // ServerBrowser reports a close as a Stop on that tab before the close replies. Marking our own
+  // close lets ScreenRunService ignore that report instead of cutting the cell that asked for it.
+  const closingTabs = new Map<string, number>();
+  const closingKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
+  const isClosingOwnTab = (threadId: string, tabId: string) =>
+    closingTabs.has(closingKey(threadId, tabId));
+  const goneErrors = new Set([
+    "PreviewAutomationTabNotFoundError",
+    "PreviewAutomationNoAvailableHostError",
+  ]);
   const close = (tab: TabClaim, afterStop: boolean) => {
     const scope = tabScopes.get(`${tab.runId}\u0000${tab.turnId}`);
     if (!scope) return Effect.die(new Error("Turn scope expired before tab cleanup"));
@@ -74,13 +84,33 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       tabId: tab.tabId as PreviewTabId,
     };
     return Effect.gen(function* () {
-      const current = yield* broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "status",
-        input: {},
-        exact: route,
-        updateCurrentTab: false,
-      });
+      // A tab a person or a crash already closed is what cleanup wanted, so it counts as closed.
+      const gone = broker
+        .listBoundTabs(scope)
+        .pipe(
+          Effect.map(
+            (live) =>
+              !live.some(
+                (entry) =>
+                  entry.browserInstanceId === tab.browserInstanceId && entry.tabId === tab.tabId,
+              ),
+          ),
+        );
+      const status = yield* broker
+        .invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+          exact: route,
+          updateCurrentTab: false,
+        })
+        .pipe(Effect.result);
+      if (status._tag === "Failure") {
+        if (goneErrors.has(status.failure._tag) && (yield* gone)) return;
+        return yield* Effect.fail(status.failure);
+      }
+      const current = status.success;
+      if (current.tabId !== tab.tabId && (yield* gone)) return;
       if (
         current.tabId !== tab.tabId ||
         current.control === undefined ||
@@ -89,16 +119,20 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         current.control.owner === "human"
       )
         return yield* Effect.die(new Error("Tab control changed before cleanup"));
-      yield* broker.invoke({
-        scope,
-        operation: "close",
-        input: {},
-        exact: {
-          ...route,
-          controlGeneration: current.control.generation,
-          origin: originOf(current.url),
-        },
-      });
+      const closed = yield* broker
+        .invoke({
+          scope,
+          operation: "close",
+          input: {},
+          exact: {
+            ...route,
+            controlGeneration: current.control.generation,
+            origin: originOf(current.url),
+          },
+        })
+        .pipe(Effect.result);
+      if (closed._tag === "Failure" && !(goneErrors.has(closed.failure._tag) && (yield* gone)))
+        return yield* Effect.fail(closed.failure);
     }).pipe(Effect.orDie);
   };
   const tabScopes = new Map<string, ScreenHostContext["invocation"]>();
@@ -576,7 +610,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           evidence: [`Wait ${waitStatus}`],
         };
       }
-      const result = yield* invoke(bound, context, operation, input);
+      const ownClose =
+        call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
+      if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
+      const result = yield* invoke(bound, context, operation, input).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (!ownClose) return;
+            const count = (closingTabs.get(ownClose) ?? 1) - 1;
+            if (count > 0) closingTabs.set(ownClose, count);
+            else closingTabs.delete(ownClose);
+          }),
+        ),
+      );
       observations.evictTarget(bound.ref.id);
       if (call.method === "close_tab") {
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
@@ -633,5 +679,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     observations.evictTarget(targetId);
     targets.delete(targetId);
   };
-  return { availability, dispatch, finishTurn, releaseControl, setBindingHints, invalidateTarget };
+  return {
+    availability,
+    dispatch,
+    finishTurn,
+    releaseControl,
+    setBindingHints,
+    invalidateTarget,
+    isClosingOwnTab,
+  };
 });

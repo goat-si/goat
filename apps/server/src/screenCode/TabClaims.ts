@@ -37,6 +37,14 @@ const keyOf = (claim: Pick<TabIdentity, "environmentId" | "browserInstanceId" | 
   `${claim.environmentId}\u0000${claim.browserInstanceId}\u0000${claim.tabId}`;
 const turnOf = (claim: Pick<TabIdentity, "runId" | "turnId">) =>
   `${claim.runId}\u0000${claim.turnId}`;
+// Turn IDs never repeat, and a late claim is bounded by the 660 s open timeout, so the oldest
+// turns can be forgotten once this many newer turns have ended.
+const TURN_MEMORY = 4096;
+const forgetOldest = (turns: Set<string> | Map<string, unknown>) => {
+  if (turns.size <= TURN_MEMORY) return;
+  const oldest = turns.keys().next().value;
+  if (oldest !== undefined) turns.delete(oldest);
+};
 
 export class TabClaims extends Context.Service<
   TabClaims,
@@ -74,8 +82,20 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
 ) {
   const claims = yield* SynchronizedRef.make(new Map<string, TabClaim>());
   const deferred = new Map<string, TabClaim[]>();
-  const consumed = yield* SynchronizedRef.make(new Set<string>());
+  // Epochs of each turn's cleanup authorities already released, so none runs twice.
+  const consumed = new Map<string, Set<number>>();
   const fencedTurns = new Set<string>();
+  const consume = (turn: string, authorityEpoch: number) => {
+    let epochs = consumed.get(turn);
+    if (!epochs) {
+      epochs = new Set();
+      consumed.set(turn, epochs);
+      forgetOldest(consumed);
+    }
+    if (epochs.has(authorityEpoch)) return false;
+    epochs.add(authorityEpoch);
+    return true;
+  };
   let epoch = 0;
   const claim = (input: TabIdentity, provenance: TabClaim["provenance"]) =>
     SynchronizedRef.modify(claims, (current) => {
@@ -162,7 +182,10 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
       }),
     captureCleanup: (identity, options) =>
       SynchronizedRef.modify(claims, (all) => {
-        if (options?.fence !== false) fencedTurns.add(turnOf(identity));
+        if (options?.fence !== false && !fencedTurns.has(turnOf(identity))) {
+          fencedTurns.add(turnOf(identity));
+          forgetOldest(fencedTurns);
+        }
         return [
           {
             ...identity,
@@ -179,13 +202,7 @@ export const makeTabClaims = Effect.fn("TabClaims.make")(function* (
       }),
     releaseTurn: Effect.fn("TabClaims.releaseTurn")(function* (identity, authority) {
       if (authority.runId !== identity.runId || authority.turnId !== identity.turnId) return [];
-      const token = `${turnOf(identity)}\u0000${authority.epoch}`;
-      const fresh = yield* SynchronizedRef.modify(consumed, (all) => {
-        if (all.has(token)) return [false, all] as const;
-        const next = new Set(all);
-        next.add(token);
-        return [true, next] as const;
-      });
+      const fresh = yield* Effect.sync(() => consume(turnOf(identity), authority.epoch));
       if (!fresh) return [];
       const outcomes: CleanupOutcome[] = [];
       for (const tab of authority.tabs) {

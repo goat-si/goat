@@ -122,3 +122,24 @@ it.effect("Stop relaxation stays on its own cleanup authority", () =>
     expect(modes).toEqual([true, false]);
   }),
 );
+
+it.effect("turn memory stays bounded over many turns while recent turns stay fenced", () =>
+  Effect.gen(function* () {
+    const claims = yield* makeTabClaims(() => Effect.void);
+    const turn = (index: number) => ({
+      ...identity,
+      runId: `run-${index}`,
+      turnId: `turn-${index}`,
+      tabId: `tab-${index}`,
+    });
+    for (let index = 0; index < 5000; index++) {
+      const authority = yield* claims.captureCleanup(turn(index));
+      yield* claims.releaseTurn(turn(index), authority);
+    }
+    const recent = yield* claims.recordOpened(turn(4999)).pipe(Effect.result);
+    expect(recent._tag).toBe("Failure");
+    // The first turn ended thousands of turns ago; forgetting it is what bounds the memory.
+    const oldest = yield* claims.recordOpened(turn(0)).pipe(Effect.result);
+    expect(oldest._tag).toBe("Success");
+  }),
+);
