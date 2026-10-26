@@ -136,6 +136,7 @@ import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ServerHttp from "./http.ts";
+import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
 import {
   guardHttpResponseWriteErrors,
@@ -979,6 +980,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerRuntimeDrainRoute,
+    RuntimeSessionRoute.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,

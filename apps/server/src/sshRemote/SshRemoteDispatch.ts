@@ -214,7 +214,7 @@ export interface SshLaunchResult {
   readonly runId: string | null;
   readonly workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy;
   readonly runtimeMode: RuntimeMode;
-  readonly remoteServerKind: "external" | "managed" | null;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
   readonly notes: ReadonlyArray<string>;
 }
 

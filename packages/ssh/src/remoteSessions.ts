@@ -3,11 +3,13 @@ import { AuthEnvironmentScopes } from "@goat/contracts";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 import * as SshAuth from "./auth.ts";
+import { appServerSessionRequest, issueAppServerCredential } from "./appServer.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -270,6 +272,48 @@ export function makeRemoteSessions({
       ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
     > {
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
+      if (prepared?.appServerPort !== undefined) {
+        const request = appServerSessionRequest({
+          subject: "mcp-client",
+          scopes: [
+            "orchestration:read",
+            "orchestration:operate",
+            ...(sessionOptions.approvals === true ? ["orchestration:approve"] : []),
+            ...(sessionOptions.providersManage === true ? ["providers:manage"] : []),
+            ...(sessionOptions.settingsWrite === true ? ["settings:write"] : []),
+            ...(sessionOptions.memoryScopes ?? []),
+          ],
+          ttl: sessionOptions.ttl,
+          label: sessionOptions.label,
+          runtimeModeCeiling: sessionOptions.runtimeModeCeiling,
+        });
+        if (Option.isNone(request))
+          return yield* new SshPairingError({
+            message: `The MCP session requested for ${target.alias} has a scope or runtime mode GOAT cannot grant.`,
+            stdout: "",
+          });
+        const body = yield* issueAppServerCredential(
+          target,
+          prepared.appServerPort,
+          request.value,
+          input,
+        );
+        const session = yield* decodeRemoteMcpSessionOutput(body).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SshPairingError({
+                message: "The GOAT app server did not return an MCP session.",
+                stdout: body,
+                cause,
+              }),
+          ),
+        );
+        // The app server applies a requested ceiling; without one it keeps its default.
+        return {
+          ...session,
+          runtimeModeCeilingApplied: sessionOptions.runtimeModeCeiling !== null,
+        };
+      }
       const selected =
         prepared ??
         (yield* prepareRemoteRuntime(
@@ -348,6 +392,28 @@ export function makeRemoteSessions({
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
     const stateKey = REMOTE_RUNTIME_STATE_KEY;
+    if (prepared?.appServerPort !== undefined) {
+      const request = appServerSessionRequest({
+        subject: sessionOptions.subject,
+        scopes: sessionOptions.scopes,
+        ttl: sessionOptions.ttl,
+        label: sessionOptions.label,
+      });
+      if (Option.isNone(request))
+        return yield* new SshPairingError({
+          message: `The client session requested for ${target.alias} has a scope GOAT cannot grant.`,
+          stdout: "",
+        });
+      if (sessionOptions.subject === "mcp-client")
+        throw new Error("The mcp-client subject cannot access client HTTP or WebSocket endpoints.");
+      const body = yield* issueAppServerCredential(
+        target,
+        prepared.appServerPort,
+        request.value,
+        input,
+      );
+      return yield* decodeRemoteClientSessionOutput(body, sessionOptions.scopes);
+    }
     const selected =
       prepared ??
       (yield* prepareRemoteRuntime(

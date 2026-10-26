@@ -11,6 +11,7 @@
     "scripts/dev-electron-pack.ts",
     "scripts/dev-electron-restart.ts",
     "../../scripts/lib",
+    "../../packages/ssh/src/appServer.ts",
     "../../packages/ssh/src/auth.ts",
     "../../packages/ssh/src/command.ts",
     "../../packages/ssh/src/ensureFlight.ts",
