@@ -237,7 +237,7 @@
   "apps/server/src/memory/MemorySyncService.ts": { "lines": 2443, "nonNull": 44 },
   "apps/server/src/memory/MemoryUsageScan.testkit.ts": { "nonNull": 33 },
   "apps/server/src/memory/MemoryWorker.test.ts": { "lines": 1796 },
-  "apps/server/src/memory/MemoryWorker.ts": { "lines": 1031, "nonNull": 7 },
+  "apps/server/src/memory/MemoryWorker.ts": { "lines": 1017, "nonNull": 7 },
   "apps/server/src/memory/imports/ClaudeMemoryImporter.ts": { "nonNull": 5 },
   "apps/server/src/memory/imports/CodexMemoryImporter.ts": { "nonNull": 9 },
   "apps/server/src/memory/imports/MemoryImportFixtures.fixture.ts": { "nonNull": 3 },
