@@ -188,6 +188,16 @@ screen-code children can run on one host; a fifth request receives `live_childre
 slot is released. For user-facing controls, see
 [Computer use](../user/computer-use.md).
 
+The guest engine is the Bellard QuickJS build vendored by `quickjs-emscripten` 0.32.0
+(engine `2025-09-13+f1139494`), staged as a sync WASM file. As of October 2026 no published
+CVE with an upstream fix applies to that engine, and the one open bytecode-reader CVE is not
+reachable because the bindings never load bytecode. Upstream has since fixed TypedArray,
+Atomics and FinalizationRegistry memory bugs without CVEs, and no quickjs-emscripten release
+carries them yet. Those bugs corrupt only the guest's WASM linear memory; a guest that exploits
+one still reaches the host only through `ScreenHostBridge`, which checks every call. Bump both
+pinned packages together when a release with a newer engine ships, and keep the pin check in
+`scripts/lib/screen-wasm-asset.ts` in step.
+
 ## Transcript fidelity
 
 The rule: the screenshot the model saw is the screenshot the person sees.
