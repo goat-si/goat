@@ -9,21 +9,18 @@ import * as EffectScheduler from "effect/Scheduler";
 import { withWebhookService as withService } from "./ScheduledRunFixture.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Effect's Crypto has no createHmac
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput, ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
+import { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "node:crypto";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import { renderWebhookPrompt } from "./webhookTemplate.ts";
-
-const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
 it.effect(
   "preserves omitted dedupe settings, releases duplicate claims, and retains coalesced claims",

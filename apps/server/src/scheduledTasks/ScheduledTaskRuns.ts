@@ -226,6 +226,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     }>`SELECT last_sequence FROM orchestration_v2_projection_metadata WHERE projection_name='thread-projections'`;
     return {
       messageId: MessageId.make(row.message_id),
+      hasMessage: message !== null,
       run,
       sequence: Math.max(row.last_sequence, metadata[0]?.last_sequence ?? 0),
     };
@@ -304,10 +305,12 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           }
           if (existing) {
             const previous = yield* readSnapshot(existing);
+            const durable = yield* resolve(existing);
             if (
               input.triggerKind !== "webhook" ||
               previous.dispatchStatus !== "failed" ||
-              (yield* resolve(existing)).run !== null
+              durable.run !== null ||
+              durable.hasMessage
             )
               return { created: false, dispatch: false };
           }
@@ -355,6 +358,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
       readonly run: OrchestrationV2Run | null;
       readonly sequence: number;
       readonly at: string;
+      readonly hasMessage?: boolean;
       readonly evidence: "rejected" | "unresolved";
     }>,
   ) {
@@ -371,7 +375,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           : never;
       }
     >();
-    for (const { row, run, sequence, at, evidence } of inputs) {
+    for (const { row, run, sequence, at, evidence, hasMessage } of inputs) {
       const before = yield* readSnapshot(row);
       let next = before;
       if (run !== null) {
@@ -406,7 +410,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
                 : before.completedAt,
           };
         }
-      } else if (before.dispatchStatus !== "accepted" && before.dispatchStatus !== "failed") {
+      } else if (
+        before.dispatchStatus !== "accepted" &&
+        (before.dispatchStatus !== "failed" || hasMessage === true)
+      ) {
         next = {
           ...before,
           dispatchStatus: evidence === "rejected" ? "failed" : "unknown",
@@ -469,7 +476,12 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           const row = yield* readRow(input.firingId);
           const resolved = yield* resolve(row, input.acceptedRun);
           yield* writeResolvedSnapshots([
-            { row, ...resolved, at: input.at, evidence: input.dispatchEvidence },
+            {
+              row,
+              ...resolved,
+              at: input.at,
+              evidence: resolved.hasMessage ? "unresolved" : input.dispatchEvidence,
+            },
           ]);
           if (row.dispatch_bookkept_at === null) {
             const tasks = yield* sql<{
@@ -527,7 +539,9 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
       const resolved = yield* resolve(rows[0]);
       if (resolved.run !== null || snapshot.dispatchStatus === "accepted")
         return "accepted" as const;
-      return snapshot.dispatchStatus === "failed" ? ("failed" as const) : ("unknown" as const);
+      return snapshot.dispatchStatus === "failed" && !resolved.hasMessage
+        ? ("failed" as const)
+        : ("unknown" as const);
     },
     Effect.mapError(failure("Could not resolve scheduled delivery dispatch.")),
   );

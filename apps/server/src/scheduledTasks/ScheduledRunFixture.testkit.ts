@@ -119,7 +119,7 @@ export const syntheticLaunch = (sink: EventSink.EventSinkV2["Service"]) =>
   });
 
 type LaunchInput = Parameters<Launch.ThreadLaunchService["Service"]["launch"]>[0];
-export const syntheticLaunchLayer = (
+const syntheticLaunchLayer = (
   launches: Queue.Queue<LaunchInput>,
   options: {
     readonly completedLaunches?: Set<string>;
@@ -196,6 +196,8 @@ export const syntheticLaunchLayer = (
 export const withWebhookService = <A, E>(
   body: (input: {
     readonly runs: Runs.ScheduledTaskRuns["Service"];
+    readonly sink: EventSink.EventSinkV2["Service"];
+    readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<LaunchInput>;
     readonly sql: SqlClient.SqlClient;
@@ -284,7 +286,11 @@ export const withWebhookService = <A, E>(
       const runs = yield* Effect.gen(function* () {
         return yield* Runs.ScheduledTaskRuns;
       }).pipe(Effect.provide(Runs.layer));
-      return yield* body({ service, launches, sql, secretsByRef, runs });
+      return yield* Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        return yield* body({ service, launches, sql, secretsByRef, runs, sink, projections });
+      }).pipe(Effect.provide(layerSink));
     }).pipe(
       Effect.provide(
         Layer.fresh(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))),

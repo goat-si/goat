@@ -1,3 +1,4 @@
+import { scheduledTaskFixture } from "../scheduledTasks/ScheduledTaskFixture.testkit.ts";
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -3022,45 +3023,7 @@ describe("OrchestratorMcpService provider resolution", () => {
   describe("scheduled tasks at modes above the caller's", () => {
     const projectId = ProjectId.make("project:scheduled");
     const boundThreadId = ThreadId.make("thread:scheduled-bound");
-    const task = (overrides: Partial<ScheduledTask>): ScheduledTask => ({
-      id: ScheduledTaskId.make("scheduled-task:webhook"),
-      title: "On push",
-      prompt: "Do {{body.instruction}}",
-      enabled: true,
-      schedule: { type: "webhook", signature: null },
-      projectId,
-      threadId: null,
-      workspaceStrategy: { type: "root" },
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      createdBy: "agent",
-      creationSource: "mcp",
-      createdAt: "2026-10-05T00:00:00.000Z",
-      updatedAt: "2026-10-05T00:00:00.000Z",
-      nextRunAt: null,
-      lastRunAt: null,
-      lastRunStatus: "running",
-      lastRun: {
-        firingId: CommandId.make("firing"),
-        dispatchStatus: "accepted",
-        status: "queued",
-        threadId: ThreadId.make("thread:scheduled-run"),
-        runId: RunId.make("run:scheduled-run"),
-        requestedAt: "2026-10-15T00:00:00.000Z",
-        dispatchedAt: null,
-        startedAt: null,
-        completedAt: null,
-      },
-      lastRunError: null,
-      runCount: 0,
-      webhook: {
-        path: "/hooks/scheduled-task/secret",
-        url: "https://t3.example/hooks/secret",
-        hasSecret: false,
-      },
-      ...overrides,
-    });
+    const task = (overrides: Partial<ScheduledTask>) => scheduledTaskFixture(projectId, overrides);
     const supervisedClient: McpInvocationScope = {
       environmentId: EnvironmentId.make("environment:scheduled"),
       requestNamespace: "client:scheduled",

@@ -1,3 +1,5 @@
+import { EventId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -184,4 +186,57 @@ it.effect(
         }),
       { returnOnly: true },
     ),
+);
+
+it.effect("accepted provider failure never releases webhook replay or relay protection", () =>
+  withService(
+    ({ service, sql, launches, sink, projections }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(
+          yield* webhookTaskInput({
+            schedule: { type: "webhook", dedupe: { replayKey: "{{body}}" } },
+          }),
+        );
+        const request = requestFor(task, { relayDeliveryId: "provider-failed" });
+        yield* waitForSpan(
+          service.triggerWebhook(request),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        yield* Queue.take(launches);
+        const accepted = (yield* service.list()).tasks[0]!.lastRun!;
+        const projection = yield* projections.getThreadProjection(accepted.threadId!);
+        const run = projection.runs[0]!;
+        const now = yield* DateTime.now;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("provider-failed"),
+              threadId: run.threadId,
+              occurredAt: now,
+              type: "run.updated",
+              payload: {
+                ...run,
+                status: "failed",
+                completedAt: now,
+                terminationCause: { kind: "provider_error" },
+              },
+            },
+          ],
+        });
+        assert.equal((yield* service.list()).tasks[0]?.lastRun?.status, "failed");
+        assert.equal(
+          (yield* sql<{
+            outcome: string;
+          }>`SELECT outcome FROM scheduled_task_webhook_deliveries WHERE delivery_id='delivery:relay:provider-failed'`)[0]
+            ?.outcome,
+          "accepted",
+        );
+        assert.equal((yield* sql`SELECT 1 FROM scheduled_task_webhook_replay_keys`).length, 1);
+        assert.equal((yield* sql`SELECT 1 FROM scheduled_task_webhook_relay_deliveries`).length, 1);
+        const retry = yield* service.triggerWebhook(request);
+        assert.equal(retry._tag === "accepted" && retry.outcome, "duplicate");
+        assert.equal(yield* Queue.size(launches), 0);
+      }),
+    { runStatus: "queued" },
+  ),
 );

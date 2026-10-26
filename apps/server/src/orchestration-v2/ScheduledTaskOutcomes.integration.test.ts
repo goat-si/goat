@@ -1,3 +1,4 @@
+import * as Console from "effect/Console";
 import * as TestClock from "effect/testing/TestClock";
 import { RunId } from "@goat/contracts";
 import * as Tracer from "effect/Tracer";
@@ -374,7 +375,7 @@ it.effect(
       const codec = Schema.fromJsonString(ScheduledTaskRun);
       const bytes = Buffer.byteLength(yield* Schema.encodeEffect(codec)(ran.task.lastRun!));
       assert.isBelow(bytes, 1024);
-      yield* Effect.logInfo("Scheduled outcome query budget", {
+      yield* Console.log("Scheduled outcome query budget", {
         unrelatedQueries: 0,
         listQueries: 1,
         metadataReceiptWrites: receiptWrites.length,
@@ -454,5 +455,50 @@ it.effect(
       assert.equal(receipt.runId, accepted.projection.runs[0]?.id);
       assert.equal(receipt.status, "queued");
       assert.equal(receipt.completedAt, null);
+    }).pipe(Effect.provide(harness())),
+);
+
+it.effect(
+  "a persisted message without a run binding is unresolved rather than proof of dispatch rejection",
+  () =>
+    Effect.gen(function* () {
+      const tasks = yield* Tasks.ScheduledTaskService;
+      const runs = yield* Runs.ScheduledTaskRuns;
+      const sink = yield* EventSink.EventSinkV2;
+      const projections = yield* Projections.ProjectionStoreV2;
+      const task = yield* create();
+      const first = yield* tasks.runNow({ id: task.id });
+      const projection = yield* projections.getThreadProjection(first.threadId!);
+      const now = yield* DateTime.now;
+      const firingId = CommandId.make("message-only");
+      const messageId = MessageId.make("message-only");
+      const at = DateTime.formatIso(now);
+      yield* runs.begin({
+        task,
+        firingId,
+        messageId,
+        requestedAt: at,
+        triggerKind: "manual",
+        webhookDeliveryId: null,
+      });
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("message-only"),
+            type: "message.updated",
+            threadId: projection.thread.id,
+            occurredAt: now,
+            payload: { ...projection.messages[0]!, id: messageId, runId: null },
+          },
+        ],
+      });
+      const result = yield* runs.finishDispatch({
+        firingId,
+        acceptedRun: null,
+        at,
+        dispatchEvidence: "rejected",
+      });
+      assert.equal(result.dispatchStatus, "unknown");
+      assert.equal(result.status, "unknown");
     }).pipe(Effect.provide(harness())),
 );
