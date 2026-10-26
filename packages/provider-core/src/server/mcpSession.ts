@@ -52,6 +52,8 @@ export interface McpProviderSessionConfig {
    * with browser access even when no Cua Driver is present.
    */
   readonly builtInSkills?: ReadonlyArray<BuiltInSkillName>;
+  /** Present only after the attached screen guide was written on this host. */
+  readonly screenCodeSkillPath?: string;
   /**
    * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
    * while goatclaw is off, which leaves the provider's own limits in place.

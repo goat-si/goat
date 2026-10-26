@@ -7,6 +7,7 @@ import {
   SCREEN_CODE_SKILL_FILE,
   screenCodeSkillFiles,
 } from "@goat/provider-core/server/builtinSkills/screenCodeSkillFiles";
+import type { BuiltInSkillName } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -37,7 +38,14 @@ export function installScreenCodeSkillAt(stateDir: string): string | undefined {
 
 export const installScreenCodeSkill = Effect.gen(function* () {
   const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
-  if (Option.isNone(config)) return;
+  if (Option.isNone(config)) return undefined;
   const path = yield* Effect.sync(() => installScreenCodeSkillAt(config.value.stateDir));
   if (path === undefined) yield* Effect.logWarning("Built-in screen guide could not be installed.");
+  return path;
 });
+
+export const installScreenCodeSkillWhenActive = (skills: ReadonlyArray<BuiltInSkillName>) =>
+  skills.includes("screen-code") ? installScreenCodeSkill : Effect.succeed(undefined);
+
+export const screenSkillPath = (path: string | undefined) =>
+  path === undefined ? {} : { screenCodeSkillPath: path };

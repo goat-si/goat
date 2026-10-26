@@ -80,7 +80,7 @@ import {
   sameScreenBindingHints,
   screenSurfaceAttached,
 } from "./ScreenSkills.ts";
-import { installScreenCodeSkill } from "./ScreenCodeSkillInstall.ts";
+import { installScreenCodeSkillWhenActive, screenSkillPath } from "./ScreenCodeSkillInstall.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -750,10 +750,10 @@ export const layerWithOptions = (
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
                 });
-                if (activeSkills.includes("screen-code")) yield* installScreenCodeSkill;
+                const skillPath = yield* installScreenCodeSkillWhenActive(activeSkills);
                 const withTurnSkills = (config: McpProviderSessionConfig) =>
                   ComputerUse.withComputerUse(
-                    { ...config, builtInSkills: activeSkills },
+                    { ...config, builtInSkills: activeSkills, ...screenSkillPath(skillPath) },
                     computerUse,
                     COMPUTER_USE_LEASE_ROUTE,
                   );

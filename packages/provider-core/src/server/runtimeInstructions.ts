@@ -26,6 +26,7 @@ export function buildRuntimeInstructions(runtime: {
   /** True when this turn carries the computer use skill (see `resolveBuiltInSkills`). */
   readonly computerUse?: boolean | undefined;
   readonly screenCode?: boolean | undefined;
+  readonly screenCodeSkillPath?: string | undefined;
   /** Cursor and ACP resend this block on later turns under the 300-byte budget. */
   readonly screenCodeCompact?: boolean | undefined;
 }): string {
@@ -38,11 +39,14 @@ export function buildRuntimeInstructions(runtime: {
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
   const computerUse = runtime.computerUse ? `\n\n${COMPUTER_USE_INSTRUCTIONS}` : "";
+  const screenCodePointer = runtime.screenCodeSkillPath
+    ? ` Read the screen-code skill at ${toSingleLine(runtime.screenCodeSkillPath)} before the first cell.`
+    : "";
   const screenCode = !runtime.screenCode
     ? ""
-    : runtime.screenCodeCompact
-      ? `\n${SCREEN_CODE_INSTRUCTIONS}`
-      : `\n\n${SCREEN_CODE_INSTRUCTION_SECTIONS.join("\n\n")}`;
+    : runtime.screenCodeCompact && runtime.screenCodeSkillPath !== undefined
+      ? `\n${SCREEN_CODE_INSTRUCTIONS}${screenCodePointer}`
+      : `\n\n${SCREEN_CODE_INSTRUCTION_SECTIONS.join("\n\n")}${screenCodePointer}`;
   return `<runtime_info>You run in GOAT through the ${harness} harness${modelInfo}${effortInfo}; say so only if asked. Markdown can embed images and videos by absolute file path.</runtime_info>${computerUse}${screenCode}`;
 }
 

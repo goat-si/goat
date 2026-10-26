@@ -2309,6 +2309,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               harness: "Cursor",
               model: turnInput.modelSelection.model,
               screenCode: McpProviderSession.carriesScreenCodeSkill(config),
+              screenCodeSkillPath: config?.screenCodeSkillPath,
               screenCodeCompact: true,
               computerUse:
                 agent !== null &&

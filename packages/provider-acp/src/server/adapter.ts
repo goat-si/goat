@@ -7231,6 +7231,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 harness: flavor.runtimeHarness ?? driver,
                 model: turnInput.modelSelection.model,
                 screenCode: mcpContext.screenCodeSkill === true,
+                screenCodeSkillPath: mcpContext.screenCodeSkillPath,
                 screenCodeCompact: true,
                 // The server list is fixed when a session is activated, so a
                 // driver enabled later reaches the agent on its next activation.
