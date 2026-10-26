@@ -35,20 +35,20 @@ export type ScrollCollectStop = "minItems" | "maxItems" | "maxScrolls" | "noGrow
 
 export interface ScrollCollectOptions {
   /** A substring of, or pattern for, the response URL. Every URL matches when absent. */
-  readonly url?: string | RegExp;
+  readonly url?: string | RegExp | undefined;
   /** Matched against the content-type header; JSON types by default. */
-  readonly mimeType?: RegExp;
+  readonly mimeType?: RegExp | undefined;
   /** Turns one response's JSON into items; arrays pass through, anything else yields none. */
-  readonly extract?: (json: unknown) => ReadonlyArray<unknown>;
-  readonly minItems?: number;
-  readonly maxItems?: number;
-  readonly maxScrolls?: number;
-  readonly maxResponses?: number;
-  readonly maxResponseBytes?: number;
+  readonly extract?: ((json: unknown) => ReadonlyArray<unknown>) | undefined;
+  readonly minItems?: number | undefined;
+  readonly maxItems?: number | undefined;
+  readonly maxScrolls?: number | undefined;
+  readonly maxResponses?: number | undefined;
+  readonly maxResponseBytes?: number | undefined;
   /** How long a round waits for a matching response after scrolling. */
-  readonly settleMs?: number;
+  readonly settleMs?: number | undefined;
   /** How long a round waits for response bodies before it abandons them. */
-  readonly bodyTimeoutMs?: number;
+  readonly bodyTimeoutMs?: number | undefined;
 }
 
 export interface ScrollCollectResult {

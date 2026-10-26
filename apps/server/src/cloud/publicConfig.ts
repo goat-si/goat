@@ -1,9 +1,5 @@
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import {
-  connectLoopbackRedirectUri,
-  CONNECT_OAUTH_SCOPES,
-  DEFAULT_HOSTED_APP_URL,
-} from "@goat/shared/connectAuth";
+import { connectLoopbackRedirectUri, CONNECT_OAUTH_SCOPES } from "@goat/shared/connectAuth";
 import { clerkFrontendApiUrlFromPublishableKey } from "@goat/shared/relayAuth";
 import { isRelayTracingEnabled } from "@goat/shared/otelEnvironment";
 import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
@@ -109,10 +105,10 @@ export function makeRelayUrlConfig(fallback = buildTimeRelayUrl) {
 
 export const relayUrlConfig = makeRelayUrlConfig();
 
-export const hostedAppUrlConfig = makePublicValueConfig(
-  "GOAT_HOSTED_APP_URL",
-  DEFAULT_HOSTED_APP_URL,
-).pipe(Config.mapEffect(validateHostedAppUrl));
+// GOAT has no hosted web app; GOAT Connect sign-in needs one configured.
+export const hostedAppUrlConfig = makePublicValueConfig("GOAT_HOSTED_APP_URL", "").pipe(
+  Config.mapEffect(validateHostedAppUrl),
+);
 
 function validateHostedAppUrl(value: string) {
   try {

@@ -380,7 +380,7 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
       }).toString();
       const request = {
         authorizationUrl: authorize.toString(),
-        returnUrl: "https://app.t3.codes/welcome#agents:remote-one",
+        returnUrl: "goat://app/welcome#agents:remote-one",
         environmentId: EnvironmentId.make("remote-one"),
         instanceId: ProviderInstanceId.make("work"),
         flowId: "flow-one",

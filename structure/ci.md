@@ -81,9 +81,12 @@ outlives the six-hour hosted job limit fails. Ignored runs take a concurrency gr
 per pull request, because a group holds one pending run and an ignored newcomer would cancel a real
 run waiting there. Skipped jobs
 keep their raw name expressions, so no skipped check carries a real name. A re-run keeps its run's
-original suite, and a republished result is never refreshed: after re-running a real run that an
-edit or label followed, re-run that later run too. Until then a red re-run stays hidden behind a
-republished green, and a green one stays blocked behind a republished red (#1691). `goat-ci-result`
+original suite, so a re-run attempt ends with `refresh-republished` (#1691). When the newest later
+run on the head is an ignored-event run of the same pull request, the job re-runs it, cancelling it
+first while it still runs, so its republish repeats the re-run's verdict. It is the only goat-ci job
+with `actions: write` (pinned by `.vite-hooks/goat-workflow-guard.mjs`) and reports no verdict
+itself. If the Actions API refuses the cancel or re-run, its `goat-ci republish refresh` check
+fails, which is not a required check: re-run that ignored run by hand. `goat-ci-result`
 is the one check to read: it fails when goat-scope or any selected task failed or was cancelled, and
 its notice says whether the run was quick and names the label and the command that start the full
 run.

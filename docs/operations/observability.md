@@ -36,10 +36,10 @@ SSH-managed launch persistence stay unchanged either way.
 
 Completed spans are written as NDJSON records to `serverTracePath`. The default depends on how the
 server starts: production and explicitly configured homes use
-`<home>/userdata/logs/server.trace.ndjson` (so `~/.t3/userdata/...` by default, or
+`<home>/userdata/logs/server.trace.ndjson` (so `~/.goat/userdata/...` by default, `~/.t3/userdata/...` while only that legacy home holds state, or
 `/custom/path/userdata/...` with `--home-dir /custom/path`), a linked worktree dev run uses
-`<worktree>/.t3/userdata/logs/server.trace.ndjson`, and an implicit dev run outside a linked
-worktree uses `~/.t3/dev/logs/server.trace.ndjson`.
+`<worktree>/.goat/userdata/logs/server.trace.ndjson`, and an implicit dev run outside a linked
+worktree uses `~/.goat/dev/logs/server.trace.ndjson`.
 
 Important fields common to both record types:
 
@@ -261,22 +261,22 @@ The backend reads observability config at process start. If you change OTLP env 
 The trace file is the fastest way to inspect raw span data.
 
 Resolve the path for the launch mode once. Production and explicitly configured homes store runtime
-state under the base directory's `userdata` folder:
+state under the base directory's `userdata` folder. An install whose state is still only in `~/.t3` keeps using it, so set `GOAT_HOME=~/.t3` there first:
 
 ```bash
-TRACE_FILE="${GOAT_HOME:-$HOME/.t3}/userdata/logs/server.trace.ndjson"
+TRACE_FILE="${GOAT_HOME:-$HOME/.goat}/userdata/logs/server.trace.ndjson"
 ```
 
-A dev server started from a linked worktree defaults to that worktree's local home:
+A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` while only that one holds the state):
 
 ```bash
-TRACE_FILE="$WORKTREE/.t3/userdata/logs/server.trace.ndjson"
+STATE_HOME="$WORKTREE/.goat"; [ -d "$STATE_HOME/userdata" ] || [ ! -d "$WORKTREE/.t3"/userdata ] || STATE_HOME="$WORKTREE/.t3"; TRACE_FILE="$STATE_HOME/userdata/logs/server.trace.ndjson"
 ```
 
-Only an implicit dev run outside a linked worktree uses the shared dev directory:
+Only an implicit dev run outside a linked worktree uses the shared dev directory (`~/.t3/dev` while only that one exists):
 
 ```bash
-TRACE_FILE="$HOME/.t3/dev/logs/server.trace.ndjson"
+STATE_HOME="$HOME/.goat"; [ -d "$STATE_HOME/dev" ] || [ ! -d "$HOME/.t3"/dev ] || STATE_HOME="$HOME/.t3"; TRACE_FILE="$STATE_HOME/dev/logs/server.trace.ndjson"
 ```
 
 Tail the selected file:
@@ -697,10 +697,10 @@ Send the signal to the server pid in `server-runtime.json`, which sits in the se
 next to the `logs` dir. For a dev server or a `--home-dir` launch, use that server's state dir from
 [Traces](#traces). Do not send it to the desktop app or the service launcher: a process without the
 handler exits on `SIGUSR2`. After a crash the file can keep a stale pid that now belongs to a
-different process, so check the pid first.
+different process, so check the pid first. On an install still using `~/.t3`, set `GOAT_HOME=~/.t3` first.
 
 ```bash
-pid="$(jq .pid "${GOAT_HOME:-$HOME/.t3}/userdata/server-runtime.json")"
+pid="$(jq .pid "${GOAT_HOME:-$HOME/.goat}/userdata/server-runtime.json")"
 ps -p "$pid" -o command=
 ```
 

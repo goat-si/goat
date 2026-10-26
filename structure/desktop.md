@@ -128,6 +128,7 @@ The shared supervisor owns cancellation and retry policy; see
 
 Where the desktop process stores server state is the [state roots](settings-and-storage.md#state-roots)
 contract: `~/.goat/desktop` for a packaged stable build, `~/.goat/desktop-nightly` for a packaged
-nightly or preview build, `~/.t3` for a development build unless `GOAT_HOME` is set.
+nightly or preview build, and `~/.goat` for a development build (`~/.t3` while only that legacy
+home holds its dev state) unless `GOAT_HOME` is set.
 
 > Decision record: [ADR-0004](decisions/ADR-0004-electron-shell.md)

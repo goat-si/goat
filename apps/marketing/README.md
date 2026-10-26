@@ -39,8 +39,8 @@ The GitHub Pages preview builds with `MARKETING_SITE_URL=https://goat-si.github.
 - `src/scripts/releases.ts` is the only client script. It fills the download links from
   `goat-si/goat-releases` and leaves links to the releases page when GitHub cannot be reached.
 - `src/pages/robots.txt.ts`, `sitemap.xml.ts` and `site.webmanifest.ts` generate those files with
-  the base path applied. `src/pages/schema/t3.json.ts` serves the `goat.json` schema at the path
-  existing files reference.
+  the base path applied. `src/pages/schema/goat.json.ts` serves the `goat.json` schema at the URL
+  `GOAT_PROJECT_FILE_SCHEMA_URL` names.
 - `public/` holds the icons (from `assets/prod`) and the Open Graph images in `public/og/`.
 
 ## Product captures

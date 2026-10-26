@@ -8,6 +8,22 @@ import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import type { ListedApp } from "./ComputerUseScope.ts";
 
+/** Gives back a call's window reservation, when it holds one. */
+export const releaseProxyCall = (
+  options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">,
+  request: { readonly reservationId?: string; readonly connectionId?: string },
+) =>
+  request.reservationId === undefined || request.connectionId === undefined
+    ? Effect.void
+    : options
+        .reservation({
+          action: "release",
+          controlId: options.controlId,
+          connectionId: request.connectionId,
+          reservationId: request.reservationId,
+        })
+        .pipe(Effect.asVoid);
+
 export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId" | "bundleIds">,
   input: {

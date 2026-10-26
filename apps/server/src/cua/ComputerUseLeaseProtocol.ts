@@ -16,6 +16,9 @@ const MAX_NAMED_NODES = 4_096;
  * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
  * other tool waits for that proof (#1358).
  */
+/** Ids of the lease proxy's own requests to the driver; their answers never reach the provider. */
+export const OWN_ID = "goat-proxy:";
+
 export const DISPLAY_PROOF_FREE: ReadonlySet<string> = new Set([
   "check_permissions",
   "get_guide",

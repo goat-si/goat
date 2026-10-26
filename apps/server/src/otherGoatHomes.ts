@@ -12,8 +12,9 @@ import * as Path from "effect/Path";
 /**
  * The GOAT homes other servers on this machine use by default: a headless server, the desktop app
  * and the nightly desktop app (whose state starts as a copy of the desktop app's, so both bind the
- * same worktrees), the legacy home, and an explicit GOAT_HOME. PR #1632 replaces this list with
- * discovery of running servers; until then storage cleanup reads these.
+ * same worktrees), the legacy home, and an explicit GOAT_HOME. The storage scanner also discovers
+ * running servers; cleanup keeps this list because the copied desktop state can bind a worktree
+ * even when its server is not running.
  */
 const localGoatHomes = Effect.fnUntraced(function* () {
   const path = yield* Path.Path;

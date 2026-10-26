@@ -31,7 +31,7 @@ GOAT devcontainer
 
   vp run dev            start server + web, then open the pairing URL it
                         prints (the bare forwarded port will not authenticate)
-  cp .env.example .env  optional: enable T3 Connect cloud features
+  cp .env.example .env  optional: upstream Connect identifiers (unused by GOAT)
                         (public identifiers, not secrets)
 
 Details: docs/internals/devcontainer.md

@@ -121,7 +121,7 @@ describe("webhook route", () => {
       const response = await handler(post("/api/hooks/id/tok", "{}"));
       expect(response.status).toBe(503);
       expect(response.headers.get("retry-after")).toBe("30");
-      expect(response.headers.get("x-t3-hook-outcome")).toBe("automation_held");
+      expect(response.headers.get("x-goat-hook-outcome")).toBe("automation_held");
       expect(await response.json()).toEqual({ error: "automation_held" });
     } finally {
       await dispose();

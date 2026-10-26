@@ -74,6 +74,28 @@ export function screenshotWorkflow(patch: Record<string, unknown> = {}) {
   });
 }
 
+export const refreshPermissions = { contents: "read", actions: "write" };
+
+/** goat-ci with the refresh-republished job (#1691), the one job allowed to write to Actions. */
+export function refreshWorkflow(
+  patch: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+) {
+  return JSON.stringify({
+    on: { pull_request: null },
+    ...extra,
+    jobs: {
+      ci: baseJob,
+      "refresh-republished": {
+        "runs-on": "ubuntu-24.04",
+        permissions: refreshPermissions,
+        steps: [{ run: "echo ok" }],
+        ...patch,
+      },
+    },
+  });
+}
+
 export function fixture(
   options: {
     node?: boolean;

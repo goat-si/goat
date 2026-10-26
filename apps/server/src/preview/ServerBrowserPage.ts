@@ -21,6 +21,7 @@ import {
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
+import { readLayersHeader } from "./blockingLayers.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -721,6 +722,7 @@ const capture = async (
         "url" | "title" | "loading" | "visibleText" | "interactiveElements"
       >
     >,
+    readLayersHeader(input.page),
     capture,
   ]);
   void pageAndScreenshot.catch(constVoid);
@@ -753,13 +755,13 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [page, screenshot] = await pageAndScreenshot;
+  const [page, layersLine, screenshot] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
   const mask = (text: string) => (dotted ? text.replace(dotted, MASKED_VALUE) : text);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
-  const accessibilityTree = (dotted ? maskTree(redacted, dotted) : redacted)
+  const accessibilityTree = `${mask(layersLine)}\n${dotted ? maskTree(redacted, dotted) : redacted}`
     .slice(0, MAX_VISIBLE_TEXT_LENGTH)
     .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
       const ref = `t3-${generation}-${nativeRef}`;

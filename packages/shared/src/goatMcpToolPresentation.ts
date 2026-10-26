@@ -434,6 +434,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  goat_preview_fetch: tool(
+    ["Fetch", "Fetching", "Fetched", "from the preview page"],
+    "browser",
+    "browser",
+  ),
+  goat_preview_scroll_collect: tool(
+    ["Collect", "Collecting", "Collected", "from the scrolling preview page"],
+    "browser",
+    "browser",
+  ),
   goat_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",

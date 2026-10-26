@@ -15,6 +15,7 @@ import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+import { META_KEEP_RULES, META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
 import {
   CONNECT_CONTRAST_RULES,
@@ -33,12 +34,14 @@ export const isExempt = (path: string): boolean =>
   // Recorded protocols and generated/binary assets are upstream input, not rename output.
   /\.ndjson$|\.(?:png|jpg|jpeg|ico|icns|woff2?|ttf|wasm|pdf|svg)$/.test(path) ||
   path === "pnpm-lock.yaml" ||
-  path.startsWith("apps/marketing/") ||
+  // Marketing copy and its i18n stay upstream-shaped; the schema route and its docs are GOAT's.
+  (path.startsWith("apps/marketing/") &&
+    !path.startsWith("apps/marketing/src/pages/schema/") &&
+    path !== "apps/marketing/README.md" &&
+    path !== "apps/marketing/DESIGN.md") ||
   // The relay is GOAT Connect's; its migrations are snapshots upstream also edits.
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
-  path.startsWith(".devcontainer/") ||
-  path.startsWith(".github/ISSUE_TEMPLATE/") ||
   path === ".github/TRIAGE_EXEMPTIONS.td" ||
   path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
@@ -119,15 +122,12 @@ const outsideMarketingSchema = (path: string) =>
 const SSH_RUNNER_SHELL_NAMES =
   "ARCHIVE_VERSION|STAGING|LOCK|NODE_SCRIPT_PATH|LOCK_CANDIDATE|ARCHIVE|STATE_KEY|RUNTIME_DIR|ARCHIVE_MODE|LOCK_TOKEN|RUNNER_SETUP|RELEASE_BASE_URL|READY_PROBE_TIMEOUT_MS|NODE_ENGINE_RANGE|LOCK_UNOWNED|CEILING|SSH_PROTOCOL|REUSE_READY_TIMEOUT_MS|REPLACEMENT_LOCK|PROTOCOL_TOKENS|OWNED_IDENTITY|ORCHESTRATION_PROTOCOL|NODE_ENV_SCRIPT|LOCK_WAITED|EXPECTED|STAGED_VERSION_OUTPUT|REMOTE_PORT_SCAN_WINDOW|PLATFORM|NODE_BIN|LOCK_OWNER|DEFAULT_REMOTE_PORT|ARCH|ACTUAL|WAIT_READY_SCRIPT|VERIFY_OWNED_BEFORE_PUBLICATION|TTL|SSH_UPLOADED_ARCHIVE|SELECTED_VERSION|RUNNER_SCRIPT|RUNNER_INSTALL|RETAINED_RUNNER_SHA256|REQUIRE_INSTALLED|REQUESTED_VERSION|REQUESTED_RUNNER|REFRESH_LIVE_VERSION|REFRESH_IF_IDLE|READY_TIMEOUT_MS|PROTOCOL_GUARD|PRESERVE_SELECTED_RUNNER|PICK_PORT_SCRIPT|OWNING_LAUNCH|NODE_ENGINE_CHECK_SCRIPT|LOCK_STATUS|LIVE_RUNNER_SHA256|LEGACY_IDENTITY|LABEL|EXTRA_SCOPES|EXPECTED_ARCHIVE_VERSION|CAPTURE_RUNNING_RUNNER|ARCHIVE_LOCK_WAIT_SECONDS|ARCHIVE_DOWNLOAD_SECONDS|ARCHIVE_CHECKSUMS_SECONDS|ALLOW_OWNED_UPGRADE|ALLOW_LEGACY_ADOPTION";
 
-/** Hosted web routing keys read only by upstream's Vercel config (plan D7). */
-const RELAY_ENV_NAMES = "WEB_ROUTER_URL|WEB_LATEST_DOMAIN|WEB_NIGHTLY_DOMAIN";
-
 /**
  * `T3CODE_X`, `T3_CODE_X` and `T3_X` become `GOAT_X` (plan D5). A name may follow a
  * `\\n` escape inside a string. Runner shell names and relay keys stay.
  */
 export const ENV_NAME = new RegExp(
-  String.raw`(?:(?<=\\n)|(?<![A-Za-z0-9_]))(?!T3_(?:${SSH_RUNNER_SHELL_NAMES})\b|(?:VITE_)?T3CODE_(?:${RELAY_ENV_NAMES})\b)(VITE_|EXPO_PUBLIC_)?T3(?:CODE|_CODE)?_([A-Z0-9_]*[A-Z0-9])\b`,
+  String.raw`(?:(?<=\\n)|(?<![A-Za-z0-9_]))(?!T3_(?:${SSH_RUNNER_SHELL_NAMES})\b)(VITE_|EXPO_PUBLIC_)?T3(?:CODE|_CODE)?_([A-Z0-9_]*[A-Z0-9])\b`,
   "g",
 );
 
@@ -502,6 +502,8 @@ export const TEXT_RULES: readonly TextRule[] = [
   // Last, so they see text the env, package and identifier rules already renamed.
   ...LEFTOVER_TEXT_RULES,
   ...OWNER_TEXT_RULES,
+  ...META_TEXT_RULES,
+  ...TITLE_TEXT_RULES,
   ...SAMPLE_TEXT_RULES,
 ];
 
@@ -540,6 +542,12 @@ export const PATH_RULES: readonly PathRule[] = [
 /** Upstream paths GOAT drops. Reasons: devlog/_plan/261021_repo_hygiene.md. */
 export const DROP_RULES: readonly DropRule[] = [
   {
+    id: "vercel-configs",
+    category: "hygiene",
+    find: /^apps\/(?:web|marketing)\/vercel\.ts$/,
+    reason: "GOAT deploys no hosted web app and publishes marketing to GitHub Pages.",
+  },
+  {
     id: "cursor-rules",
     category: "hygiene",
     find: /^\.cursor\//,
@@ -550,6 +558,7 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  ...META_KEEP_RULES,
   ...RELAY_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
   ...OWNER_KEEP_RULES,
@@ -865,11 +874,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     reason: "V1 profile merge must read the exact persisted upstream keys (D10/D13).",
   },
 
-  {
-    id: "relay-env",
-    pattern: /\b(?:VITE_)?T3CODE_WEB_(?:ROUTER_URL|LATEST_DOMAIN|NIGHTLY_DOMAIN)\b/g,
-    reason: "Hosted web routing keys read only by upstream's Vercel config (D7).",
-  },
   {
     id: "terminal-magic",
     pattern: /T3VT/g,

@@ -14,8 +14,6 @@ type Env = Record<string, string | undefined>;
 /** Home directory (`~/.t3`, a worktree's `.t3`) that builds before the GOAT rename created. */
 export const LEGACY_HOME_DIR_NAME = ".t3";
 
-/** Hosted web routing keys read only by upstream's Vercel config. They keep their T3 spelling. */
-const RELAY_ENV = /^(?:VITE_)?T3CODE_(?:WEB_ROUTER_URL|WEB_LATEST_DOMAIN|WEB_NIGHTLY_DOMAIN)$/;
 const LEGACY_ENV = /^(VITE_|EXPO_PUBLIC_)?(T3CODE_|T3_CODE_|T3_)([A-Z0-9_]*[A-Z0-9])$/;
 const GOAT_ENV = /^(VITE_|EXPO_PUBLIC_)?GOAT_([A-Z0-9_]*[A-Z0-9])$/;
 
@@ -44,7 +42,6 @@ const GOAT_BY_LEGACY: Readonly<Record<string, string>> = Object.fromEntries(
 export const goatEnvName = (name: string): string | undefined => {
   const exception = GOAT_BY_LEGACY[name];
   if (exception !== undefined) return exception;
-  if (RELAY_ENV.test(name)) return undefined;
   const match = LEGACY_ENV.exec(name);
   return match === null ? undefined : `${match[1] ?? ""}GOAT_${match[3]}`;
 };
@@ -324,6 +321,12 @@ export const LEGACY_ATTACHMENT_CACHE_PREFIX = "t3-attachment:";
  * sibling channels drop every saved environment. A future GOAT Connect adds its own kind beside it.
  */
 export const LEGACY_CONNECT_ROUTE_KIND = "t3-connect" as const;
+
+/**
+ * Upstream's hosted web app. Share links copied before GOAT dropped the hosted app default point here;
+ * they are still read as in-app links, and nothing new is written to this origin.
+ */
+export const LEGACY_HOSTED_APP_ORIGIN = "https://app.t3.codes";
 
 /** Relay client ids that cached mobile relay tokens recorded before the GOAT names. */
 export const LEGACY_RELAY_CLIENT_IDS = { mobile: "t3-mobile", web: "t3-web" } as const;

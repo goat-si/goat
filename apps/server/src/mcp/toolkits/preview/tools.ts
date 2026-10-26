@@ -8,6 +8,8 @@ import {
   PreviewAutomationDragInput,
   PreviewAutomationError,
   PreviewAutomationEvaluateInput,
+  PreviewAutomationFetchInput,
+  PreviewAutomationFetchResult,
   PreviewAutomationHoverInput,
   PreviewAutomationHistoryInput,
   PreviewAutomationLogs,
@@ -20,6 +22,8 @@ import {
   PreviewAutomationReloadInput,
   PreviewAutomationResizeInput,
   PreviewAutomationResizeResult,
+  PreviewAutomationScrollCollectInput,
+  PreviewAutomationScrollCollectResult,
   PreviewAutomationScrollInput,
   PreviewAutomationSelectInput,
   PreviewAutomationSelectResult,
@@ -163,6 +167,22 @@ const PreviewLogsTool = Tool.make(agentSurfaceRegistry["preview.logs"].name, {
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.logs"]));
 
+const PreviewFetchTool = Tool.make(agentSurfaceRegistry["preview.fetch"].name, {
+  description: agentSurfaceRegistry["preview.fetch"].description,
+  parameters: PreviewAutomationFetchInput,
+  success: Schema.Struct({ ...PreviewAutomationFetchResult.fields, ...presentationFields }),
+  failure: PreviewToolFailure,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fetch"]));
+
+const PreviewScrollCollectTool = Tool.make(agentSurfaceRegistry["preview.scroll_collect"].name, {
+  description: agentSurfaceRegistry["preview.scroll_collect"].description,
+  parameters: PreviewAutomationScrollCollectInput,
+  success: Schema.Struct({ ...PreviewAutomationScrollCollectResult.fields, ...presentationFields }),
+  failure: PreviewToolFailure,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.scroll_collect"]));
+
 const PreviewClickTool = Tool.make(agentSurfaceRegistry["preview.click"].name, {
   description: agentSurfaceRegistry["preview.click"].description,
   parameters: PreviewAutomationClickInput,
@@ -286,6 +306,8 @@ export const PreviewToolkit = Toolkit.make(
   PreviewSetAppearanceTool,
   PreviewSnapshotTool,
   PreviewLogsTool,
+  PreviewFetchTool,
+  PreviewScrollCollectTool,
   PreviewClickTool,
   PreviewTypeTool,
   PreviewHoverTool,
@@ -302,6 +324,8 @@ export const PreviewToolkit = Toolkit.make(
 
 export const PreviewStandardToolkit = Toolkit.make(
   PreviewLogsTool,
+  PreviewFetchTool,
+  PreviewScrollCollectTool,
   PreviewDialogTool,
   PreviewStatusTool,
   PreviewOpenTool,
