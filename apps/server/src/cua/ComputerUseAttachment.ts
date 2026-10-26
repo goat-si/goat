@@ -66,7 +66,8 @@ export type ComputerUseAttachment =
       readonly _tag: "proxied";
       readonly mcp: CuaDriverMcpConfiguration;
       readonly control: ComputerUseLeases.ComputerUseControl;
-      readonly proxyChannelToken: string;
+      /** Absent when this server has no primitive channel, so the proxy opens no reverse channel. */
+      readonly proxyChannelToken?: string;
       readonly attachmentGeneration: string;
       readonly proxy: SelfInvocation;
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
@@ -221,15 +222,17 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       ? installComputerUseSkill(config.value.stateDir, HostProcess.Platform.defaultValue())
       : undefined;
   const attachmentGeneration = NodeCrypto.randomUUID();
-  const proxyChannelToken = NodeCrypto.randomBytes(32).toString("base64url");
   const channel = yield* Effect.serviceOption(
     ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel,
   );
+  const proxyChannelToken = Option.isSome(channel)
+    ? yield* channel.value.tokenFor(input.threadId)
+    : undefined;
   if (Option.isSome(channel))
     yield* channel.value.issue({
       threadId: input.threadId,
       attachmentGeneration,
-      proxyChannelToken,
+      proxyChannelToken: yield* channel.value.tokenFor(input.threadId),
       expiresAt: DateTime.toEpochMillis(control.value.expiresAt),
       controlId: control.value.controlId,
     });
@@ -239,7 +242,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     ...(skillPath === undefined ? {} : { skillPath }),
     ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
     control: control.value,
-    proxyChannelToken,
+    ...(proxyChannelToken === undefined ? {} : { proxyChannelToken }),
     attachmentGeneration,
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
@@ -333,8 +336,10 @@ function leaseProxyDescriptor(
       { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
-      { name: LEASE_PROXY_ENV.proxyChannelToken, value: attachment.proxyChannelToken },
       { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
+      ...(attachment.proxyChannelToken === undefined
+        ? []
+        : [{ name: LEASE_PROXY_ENV.proxyChannelToken, value: attachment.proxyChannelToken }]),
       ...(attachment.skillPath === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.skill, value: attachment.skillPath }]),

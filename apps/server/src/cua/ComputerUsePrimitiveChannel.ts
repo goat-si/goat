@@ -89,6 +89,11 @@ export interface PrimitiveChannelRequest {
 export class ComputerUsePrimitiveChannel extends Context.Service<
   ComputerUsePrimitiveChannel,
   {
+    /**
+     * One secret per thread for this server's life. The proxy descriptor carries it, so Stop and a
+     * new approval leave the harness's MCP config unchanged; the attachment generation still fences.
+     */
+    readonly tokenFor: (threadId: ThreadId) => Effect.Effect<string>;
     readonly issue: (
       input: Authority & { readonly expiresAt: number; readonly controlId?: string },
     ) => Effect.Effect<void>;
@@ -143,6 +148,7 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
 export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
+  const threadTokens = new Map<ThreadId, string>();
   const settle = (pending: Pending) =>
     Deferred.doneUnsafe(
       pending.answer,
@@ -250,6 +256,17 @@ export const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
   return ComputerUsePrimitiveChannel.of({
+    tokenFor: Effect.fn("ComputerUsePrimitiveChannel.tokenFor")(function* (threadId) {
+      const existing = threadTokens.get(threadId);
+      if (existing !== undefined) return existing;
+      const token = NodeCrypto.randomBytes(32).toString("base64url");
+      if (threadTokens.size >= 4096) {
+        const oldest = threadTokens.keys().next().value;
+        if (oldest !== undefined) threadTokens.delete(oldest);
+      }
+      threadTokens.set(threadId, token);
+      return token;
+    }),
     issue: Effect.fn("ComputerUsePrimitiveChannel.issue")(function* (input) {
       const previous = attachments.get(input.threadId);
       if (previous !== undefined) yield* close(previous) ?? Effect.void;

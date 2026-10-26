@@ -261,11 +261,11 @@ describe("computerUseAttachment", () => {
       const leases = fakeLeases({});
       const attached = yield* decide(driver, { leases: leases.leases });
       if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
-      assert.match(attached.proxyChannelToken, /^[A-Za-z0-9_-]{43}$/);
+      // Without a primitive channel on this server the proxy gets no reverse-channel secret.
+      assert.equal(attached.proxyChannelToken, undefined);
       assert.deepEqual(attached, {
         _tag: "proxied",
         mcp,
-        proxyChannelToken: attached.proxyChannelToken,
         attachmentGeneration: attached.attachmentGeneration,
         control: interactiveControl,
         proxy,
@@ -323,8 +323,8 @@ describe("computerUseAttachment", () => {
       assert.deepEqual(attached.skills, ["screen-code"]);
       const config = ComputerUse.withComputerUse(session, attached, ROUTE);
       assert.deepInclude(config.cuaDriver?.environment ?? [], {
-        name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken,
-        value: attached.proxyChannelToken,
+        name: ComputerUse.LEASE_PROXY_ENV.driver,
+        value: JSON.stringify(mcp),
       });
     }),
   );
@@ -670,7 +670,6 @@ describe("computerUseAttachment", () => {
       assert.deepEqual(attached, {
         _tag: "proxied",
         mcp,
-        proxyChannelToken: attached.proxyChannelToken,
         attachmentGeneration: attached.attachmentGeneration,
         control: {
           controlId: "control:unattended",
