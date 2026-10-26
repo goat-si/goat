@@ -23,10 +23,24 @@ const goatCiTrustedRunner =
 // The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
 // the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
 const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
-const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result", "republish"]);
-// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, and republish repeats the
-// real goat-ci-result for an ignored event.
-const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result", "republish"]);
+const goatCiGateJobs = new Set([
+  "scope",
+  "screenshot-gate",
+  "result",
+  "republish",
+  "refresh-republished",
+]);
+// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, republish repeats the real
+// goat-ci-result for an ignored event, and refresh-republished re-runs that ignored run after a
+// re-run of the real one (#1691). It alone may write to Actions.
+const goatCiJobs = new Set([
+  "scope",
+  "ci",
+  "screenshot-gate",
+  "result",
+  "republish",
+  "refresh-republished",
+]);
 // No Actions artifacts anywhere: goat-si is on the free plan and a full artifact
 // quota fails every upload. goat-nightly hands off through a staging draft release.
 const actions = new Set(["actions/checkout@v6", "voidzero-dev/setup-vp@v1"]);
@@ -134,10 +148,31 @@ function validateWorkflow(source, yaml) {
     !Object.hasOwn(workflow.jobs, "ci") ||
     Object.keys(workflow.jobs).some((name) => !goatCiJobs.has(name))
   ) {
-    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result, republish");
+    return refuse(
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
+    );
+  }
+  if (isMapping(workflow.permissions) && Object.hasOwn(workflow.permissions, "actions")) {
+    return refuse("permissions.actions is forbidden at the workflow level");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (!isMapping(job)) return refuse(`jobs.${name} must be a mapping`);
+    if (name === "refresh-republished") {
+      const permissions = job.permissions;
+      if (
+        !isMapping(permissions) ||
+        Object.keys(permissions).length !== 2 ||
+        permissions.contents !== "read" ||
+        permissions.actions !== "write" ||
+        job["runs-on"] !== goatCiHostedRunner
+      ) {
+        return refuse(
+          `jobs.refresh-republished must run on ${goatCiHostedRunner} and grant only contents: read and actions: write`,
+        );
+      }
+    } else if (isMapping(job.permissions) && Object.hasOwn(job.permissions, "actions")) {
+      return refuse(`jobs.${name}.permissions.actions is forbidden`);
+    }
     if (name === "screenshot-gate") {
       const permissions = job.permissions;
       if (
