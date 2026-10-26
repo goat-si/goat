@@ -1,35 +1,26 @@
-// @effect-diagnostics nodeBuiltinImport:off - Effect's Crypto has no createHmac
-import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
-import { assert, it } from "@effect/vitest";
 import {
-  ScheduledTaskUpsertInput,
-  ScheduledTaskWebhookDeliveryId,
-  type ScheduledTaskWebhookUrlUnavailableReason,
-  SecretRequestError,
-} from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+  waitForSpan,
+  drainPendingDispatch,
+  webhookTaskInput,
+  requestFor,
+  pullRequestBody,
+} from "./ScheduledRunFixture.testkit.ts";
+import * as EffectScheduler from "effect/Scheduler";
+import { withWebhookService as withService } from "./ScheduledRunFixture.testkit.ts";
+// @effect-diagnostics nodeBuiltinImport:off - Effect's Crypto has no createHmac
+import { assert, it } from "@effect/vitest";
+import { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
-import * as EffectScheduler from "effect/Scheduler";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-import * as Tracer from "effect/Tracer";
 import * as NodeCrypto from "node:crypto";
-import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import * as Scheduler from "../scheduling/Scheduler.ts";
-import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import { renderWebhookPrompt } from "./webhookTemplate.ts";
-
-const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
 it.effect(
   "preserves omitted dedupe settings, releases duplicate claims, and retains coalesced claims",
@@ -92,182 +83,6 @@ it.effect(
       }),
     ),
 );
-
-const waitForSpan = <A, E, R>(work: Effect.Effect<A, E, R>, name: string) =>
-  Effect.gen(function* () {
-    const done = yield* Deferred.make<void>();
-    const tracer = Tracer.make({
-      span: (options) => {
-        const span = new Tracer.NativeSpan(options);
-        const end = span.end.bind(span);
-        span.end = (...args) => {
-          end(...args);
-          if (span.name === name) Deferred.doneUnsafe(done, Effect.void);
-        };
-        return span;
-      },
-    });
-    const result = yield* work.pipe(Effect.withTracer(tracer));
-    yield* Deferred.await(done);
-    return result;
-  });
-
-const drainPendingDispatch = (workers: Map<string, Effect.Effect<void>>) =>
-  waitForSpan(workers.get("webhook-coalescing")!, "ScheduledTaskService.dispatchPendingWebhook");
-
-type LaunchInput = ThreadLaunchService.ThreadLaunchInput;
-
-const webhookTaskInput = (overrides: Record<string, unknown> = {}) =>
-  decodeUpsertInput({
-    id: "scheduled-task:hook",
-    title: "Review PRs",
-    prompt: "Review this PR: {{body.pull_request.url}}",
-    enabled: true,
-    schedule: { type: "webhook" },
-    projectId: "project-webhook",
-    workspaceStrategy: { type: "root" },
-    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    ...overrides,
-  });
-
-const pullRequestBody = new TextEncoder().encode(
-  JSON.stringify({ pull_request: { url: "https://github.com/org/repo/pull/45" } }),
-);
-
-const requestFor = (
-  task: { readonly id: string; readonly webhook?: { readonly path: string } | undefined },
-  overrides: Partial<ScheduledTaskService.WebhookTriggerRequest> = {},
-): ScheduledTaskService.WebhookTriggerRequest => ({
-  hookId: task.id,
-  token: task.webhook?.path.split("/").at(-1) ?? "",
-  method: "POST",
-  path: `/api/hooks/${task.id}`,
-  query: "",
-  headers: { "content-type": "application/json" },
-  body: pullRequestBody,
-  bodyText: new TextDecoder().decode(pullRequestBody),
-  ...overrides,
-});
-
-const withService = <A, E>(
-  body: (input: {
-    readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
-    readonly launches: Queue.Queue<LaunchInput>;
-    readonly sql: SqlClient.SqlClient;
-    readonly secretsByRef: Map<string, string>;
-  }) => Effect.Effect<A, E, never>,
-  options: {
-    readonly unavailableReason?: ScheduledTaskWebhookUrlUnavailableReason;
-    readonly onFrame?: () => void;
-    readonly frameGate?: {
-      readonly started: Deferred.Deferred<void>;
-      readonly release: Deferred.Deferred<void>;
-    };
-    readonly completedLaunches?: Set<string>;
-    readonly failLaunches?: { remaining: number };
-    readonly gate?: Deferred.Deferred<void>;
-    readonly gateForTask?: (input: LaunchInput) => Deferred.Deferred<void> | undefined;
-    readonly relayHookBaseUrl?: string;
-    readonly sql?: SqlClient.SqlClient;
-    readonly workers?: Map<string, Effect.Effect<void>>;
-  } = {},
-) =>
-  Effect.gen(function* () {
-    const launches = yield* Queue.unbounded<LaunchInput>();
-    const secretsByRef = new Map<string, string>();
-    const layerDependencies = Layer.mergeAll(
-      options.frameGate === undefined && options.onFrame === undefined
-        ? NodePlatformCrypto.layer
-        : Layer.effect(
-            Crypto.Crypto,
-            Effect.gen(function* () {
-              const crypto = yield* Crypto.Crypto;
-              return {
-                ...crypto,
-                randomBytes: (size: number) =>
-                  Effect.suspend(() => {
-                    if (size === 6) options.onFrame?.();
-                    return size === 6 && options.frameGate !== undefined
-                      ? Deferred.succeed(options.frameGate.started, undefined).pipe(
-                          Effect.andThen(Deferred.await(options.frameGate.release)),
-                          Effect.andThen(crypto.randomBytes(size)),
-                        )
-                      : crypto.randomBytes(size);
-                  }),
-              };
-            }),
-          ).pipe(Layer.provide(NodePlatformCrypto.layer)),
-      options.workers === undefined
-        ? Scheduler.layer
-        : Layer.succeed(Scheduler.Scheduler, {
-            register: <E, R>(name: string, work: Effect.Effect<void, E, R>) =>
-              Effect.gen(function* () {
-                const context = yield* Effect.context<R>();
-                options.workers!.set(name, work.pipe(Effect.provideContext(context), Effect.orDie));
-              }),
-          }),
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-        launch: (input) =>
-          Effect.suspend(() => {
-            if (options.completedLaunches?.has(input.commandId))
-              return Effect.succeed({ threadId: "thread-1", resumed: false } as never);
-            options.completedLaunches?.add(input.commandId);
-            return Queue.offer(launches, input).pipe(
-              Effect.andThen(
-                (options.gateForTask?.(input) ?? options.gate)
-                  ? Deferred.await((options.gateForTask?.(input) ?? options.gate)!)
-                  : Effect.void,
-              ),
-              Effect.andThen(
-                Effect.sync(() => {
-                  if (options.failLaunches && options.failLaunches.remaining-- > 0)
-                    throw new Error("injected start failure");
-                }),
-              ),
-              Effect.as({ threadId: "thread-1", resumed: false } as never),
-            );
-          }),
-      }),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-        namedProjectsRoot: "/projects",
-        isScratchProject: () => Effect.succeed(false),
-      }),
-      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-      Layer.mock(SecretRequests.SecretRequests)({
-        consume: ({ ref }) => {
-          const value = secretsByRef.get(ref);
-          secretsByRef.delete(ref);
-          return value === undefined
-            ? Effect.fail(new SecretRequestError({ reason: "ref_unavailable" }))
-            : Effect.succeed(value);
-        },
-      }),
-      Layer.succeed(
-        ScheduledTaskService.ScheduledTaskWebhookOrigin,
-        Effect.succeed({
-          relayHookBaseUrl: options.relayHookBaseUrl ?? null,
-          unavailableReason: options.unavailableReason,
-        }),
-      ),
-    );
-    return yield* Effect.gen(function* () {
-      const service = yield* ScheduledTaskService.ScheduledTaskService;
-      const sql = yield* SqlClient.SqlClient;
-      return yield* body({ service, launches, sql, secretsByRef });
-    }).pipe(
-      Effect.provide(
-        Layer.fresh(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))),
-      ),
-    );
-  }).pipe(
-    Effect.provide(
-      options.sql === undefined
-        ? SqlitePersistence.layerMemory
-        : Layer.succeed(SqlClient.SqlClient, options.sql),
-    ),
-  );
 
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   withService(({ service, launches }) =>
@@ -1267,8 +1082,8 @@ it.effect("keeps replay keys when dispatch succeeds but completion bookkeeping f
           },
         }),
       );
-      yield* sql`CREATE TRIGGER fail_completion BEFORE UPDATE ON scheduled_tasks
-      WHEN NEW.last_run_status = 'succeeded' BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
+      yield* sql`CREATE TRIGGER fail_completion BEFORE UPDATE OF dispatch_bookkept_at ON scheduled_task_runs
+      WHEN NEW.dispatch_bookkept_at IS NOT NULL BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
       yield* waitForSpan(
         service.triggerWebhook(requestFor(task)),
         "ScheduledTaskService.runWebhookDelivery",
@@ -1625,14 +1440,13 @@ it.effect.each([false, true])(
             const window = yield* service.triggerWebhook(
               requestFor(task, { headers: { group: "old" }, bodyText: '{"value":"old"}' }),
             );
-            yield* sql`CREATE TRIGGER fail_old_completion BEFORE UPDATE ON scheduled_tasks
-        WHEN NEW.last_run_status = 'succeeded' BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
+            yield* sql`CREATE TRIGGER fail_old_completion BEFORE DELETE ON scheduled_task_webhook_pending BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
             yield* TestClock.adjust("10 seconds");
             yield* drainPendingDispatch(workers);
             yield* Queue.take(launches);
             yield* sql`DROP TRIGGER fail_old_completion`;
             assert.equal(
-              (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE state = 'running'`)
+              (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE state = 'completed'`)
                 .length,
               1,
             );
@@ -1653,7 +1467,7 @@ it.effect.each([false, true])(
               before!.last_run_webhook_delivery_id,
               window._tag === "accepted" ? window.deliveryId : "",
             );
-            assert.equal(before!.run_count, 0);
+            assert.equal(before!.run_count, 2);
             if (corrupt)
               yield* sql`UPDATE scheduled_tasks SET model_selection_json = 'broken' WHERE task_id = ${task.id}`;
             const restartedWorkers = new Map<string, Effect.Effect<void>>();
@@ -1664,8 +1478,8 @@ it.effect.each([false, true])(
                     run_count: number;
                     last_run_status: string;
                   }>`SELECT run_count, last_run_status FROM scheduled_tasks WHERE task_id = ${task.id}`;
-                  assert.equal(recovered!.run_count, 1);
-                  assert.equal(recovered!.last_run_status, "failed");
+                  assert.equal(recovered!.run_count, 2);
+                  assert.equal(recovered!.last_run_status, "running");
                   if (corrupt)
                     yield* sql`UPDATE scheduled_tasks SET model_selection_json = ${before!.model_selection_json} WHERE task_id = ${task.id}`;
                   yield* drainPendingDispatch(restartedWorkers);

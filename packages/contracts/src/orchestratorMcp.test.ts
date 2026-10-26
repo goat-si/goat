@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  OrchestratorMcpScheduledTask,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpPendingRequestRespondInput,
   OrchestratorMcpPendingRequestRespondResult,
@@ -435,4 +436,51 @@ it("decodes terminal cause in status and recent runs with older-host omission", 
     decodeStatus({ ...legacyStatus, run: { ...legacyStatus.run, terminationCause: cause } }).run
       ?.terminationCause,
   ).toEqual(cause);
+});
+
+it("preserves lastRun in MCP JSON and keeps legacy and future nested outcomes readable", () => {
+  const task = {
+    scheduledTaskId: "task",
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: true,
+    projectId: "project",
+    boundThreadId: null,
+    schedule: { type: "interval", everyMs: 60000 },
+    nextRunAt: null,
+    lastRunStatus: "running",
+  };
+  const codec = Schema.fromJsonString(OrchestratorMcpScheduledTask);
+  const old = OrchestratorMcpScheduledTask.mapFields(({ lastRun: _lastRun, ...fields }) => fields);
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpScheduledTask);
+  expect(decode(task).lastRun).toBeUndefined();
+  for (const status of [
+    "dispatching",
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "rolled_back",
+    "unknown",
+  ]) {
+    const lastRun = {
+      firingId: "firing",
+      dispatchStatus: "accepted",
+      status,
+      threadId: "thread",
+      runId: "run",
+      requestedAt: "2026-10-15T00:00:00.000Z",
+      dispatchedAt: null,
+      startedAt: null,
+      completedAt: null,
+    };
+    const output = Schema.encodeSync(codec)(decode({ ...task, lastRun }));
+    expect(Schema.decodeUnknownSync(codec)(output).lastRun).toEqual(lastRun);
+    expect(Schema.decodeUnknownSync(Schema.fromJsonString(old))(output).lastRunStatus).toBe(
+      "running",
+    );
+  }
+  expect(decode({ ...task, lastRun: { status: "future" } }).lastRun).toBeUndefined();
 });

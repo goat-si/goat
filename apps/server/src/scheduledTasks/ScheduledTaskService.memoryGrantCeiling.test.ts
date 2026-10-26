@@ -157,7 +157,7 @@ it.effect(
               bound: boolean,
             ) =>
               Effect.gen(function* () {
-                yield* orchestrator.dispatch({
+                const dispatchedCommand = yield* orchestrator.dispatch({
                   type: "message.dispatch",
                   commandId: input.commandId!,
                   threadId,
@@ -184,7 +184,16 @@ it.effect(
                   ceiling: run.memoryGrantCeiling ?? "none",
                   bound,
                 });
-                return yield* Effect.die("fixture stops before provider");
+                return {
+                  threadId,
+                  resumed: false,
+                  projection,
+                  run,
+                  dispatch: dispatchedCommand,
+                  message,
+                  turnItem: null,
+                  delivery: "queued" as const,
+                };
               });
             return Layer.mergeAll(
               Layer.mock(Threads.ThreadManagementService)({
