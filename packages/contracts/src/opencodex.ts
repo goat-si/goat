@@ -98,6 +98,7 @@ export const OpenCodexChildBootstrapStatus = Schema.Struct({
       "runtime_unhealthy",
       "unreachable",
       "link_failed",
+      "consent_revoked",
     ]),
   ),
   message: Schema.optional(Schema.String),

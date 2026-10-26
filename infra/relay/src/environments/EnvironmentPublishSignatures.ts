@@ -83,7 +83,7 @@ export class EnvironmentPublishSignatures extends Context.Service<
       readonly request: RelayAgentActivityPublishRequest;
     }) => Effect.Effect<void, EnvironmentPublishSignatureError>;
   }
->()("t3code-relay/environments/EnvironmentPublishSignatures") {}
+>()("goat-relay/environments/EnvironmentPublishSignatures") {}
 
 const decodeProof = Schema.decodeUnknownEffect(RelayAgentActivityPublishProofPayload);
 
@@ -139,7 +139,7 @@ const make = Effect.gen(function* () {
         publicKey: input.environmentPublicKey,
         token: input.request.proof,
         typ: RELAY_ACTIVITY_PUBLISH_TYP,
-        issuer: `t3-env:${input.environmentId}`,
+        issuer: `goat-env:${input.environmentId}`,
         audience: normalizeRelayIssuer(config.relayIssuer),
         nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
       }).pipe(

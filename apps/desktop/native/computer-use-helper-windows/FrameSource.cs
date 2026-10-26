@@ -210,7 +210,10 @@ namespace Goat.ComputerUse
             if (started == 0) return Unavailable("unsupported");
             if (IsGoat(pid)) return Unavailable("appNotApproved");
             if (target.Apps != null && !Approved(pid, target.Apps)) return Unavailable("appNotApproved");
-            if (!(bool)facts["sameSession"] || (bool)facts["elevatedTarget"]) return Unavailable("unsupported");
+            if (!(bool)facts["sameSession"] || (bool)facts["elevatedTarget"] ||
+                (facts.ContainsKey("protectedSurface") && (bool)facts["protectedSurface"]) ||
+                WindowsFacts.IsProtectedWindow(window, pid))
+                return Unavailable("unsupported");
             // The lock screen or a UAC prompt holds the input desktop: nothing of it is shown.
             if ((string)facts["inputDesktop"] != "Default") return Unavailable("paused");
             // Unknown counts as private: no answer from UI Automation is no proof of a clear field.
@@ -257,9 +260,11 @@ namespace Goat.ComputerUse
         static string Admission(IntPtr window, int pid, long started)
         {
             if (!Owned(window, pid, started)) return "windowGone";
+            if (WindowsFacts.IsProtectedWindow(window, pid)) return "unsupported";
             if (WindowsFacts.InputDesktop() != "Default") return "paused";
             if (WindowsFacts.FocusedSecure(pid) != "clear") return "private";
             if (WindowsFacts.InputDesktop() != "Default") return "paused";
+            if (WindowsFacts.IsProtectedWindow(window, pid)) return "unsupported";
             return Owned(window, pid, started) ? null : "windowGone";
         }
 

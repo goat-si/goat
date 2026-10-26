@@ -277,6 +277,8 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_ssh_runtime_update",
     "goat_ssh_thread_handoff",
     "goat_ssh_thread_launch",
+    "goat_storage_clean",
+    "goat_storage_usage",
     "goat_thread_checkpoint_capture",
     "goat_thread_checkpoint_reconcile",
     "goat_thread_checkpoint_restore",
@@ -323,7 +325,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(180);
+  expect(names.size).toBe(182);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("t3_thread_start")).toBe(false);
   for (const [tool, questionDelivery] of [

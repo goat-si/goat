@@ -8,6 +8,7 @@ import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import { AGENT_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAgentItems";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
 import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
 import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
@@ -792,22 +793,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["refresh availability versions auth state models background probes seconds off"],
     providerSettingsOnly: true,
   },
-  {
-    id: "agent-browser-access",
-    title: "Agent browser access",
-    to: "/settings/integrations",
-    scope: "project-defaults",
-    searchTerms: ["allow disable enable open drive preview tools sessions project override"],
-  },
-  {
-    id: "agent-tool-listing",
-    title: "GOAT tools agents see",
-    to: "/settings/integrations",
-    scope: "environment-defaults",
-    searchTerms: [
-      "agent tool listing core all full mcp tools list describe call prompt context size",
-    ],
-  },
+  ...AGENT_SETTINGS_SEARCH_ITEMS,
   {
     id: "device-hosts",
     title: "Device hosts",

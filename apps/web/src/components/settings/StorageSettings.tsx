@@ -38,6 +38,7 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { DatabaseStorageNotice } from "./DatabaseStorageNotice";
+import { DiskUsageSection } from "./DiskUsageSettings";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { SettingsGroup } from "./SettingsGroup";
@@ -543,6 +544,7 @@ export function StorageSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      {!isProjectScope && <DiskUsageSection />}
       {!isProjectScope && (
         <DatabaseStorageNotice
           environments={connectedEnvironments.filter(

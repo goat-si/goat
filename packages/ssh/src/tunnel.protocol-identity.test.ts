@@ -1,5 +1,7 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+// @effect-diagnostics nodeBuiltinImport:off - Loopback servers stand in for the two remote runtimes.
+import * as NodeHttp from "node:http";
+import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
@@ -15,6 +17,8 @@ import * as SshAuth from "./auth.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   remoteShell,
+  makeSuccessfulProcess,
+  makeRunningProcess,
   TEST_NODE_ENGINE_RANGE,
   testHttpClient,
   testNetService,
@@ -24,9 +28,251 @@ import {
 } from "./tunnel.fixture.ts";
 import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
+const startOwner = (environmentId: string, token: string) =>
+  Effect.acquireRelease(
+    Effect.callback<{
+      readonly server: NodeHttp.Server;
+      readonly port: number;
+      readonly sessions: string[];
+    }>((resume) => {
+      const sessions: string[] = [];
+      const server = NodeHttp.createServer((request, response) => {
+        if (request.url === "/.well-known/goat/environment") {
+          response.end(
+            JSON.stringify({
+              environmentId,
+              serverVersion: ARCHIVE.archiveVersion,
+              sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+              orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+              capabilities: { runtimeSessions: true },
+            }),
+          );
+          return;
+        }
+        if (request.url === "/.well-known/goat/runtime/session") {
+          sessions.push(String(request.headers["x-goat-runtime-control"]));
+          response.statusCode = request.headers["x-goat-runtime-control"] === token ? 200 : 403;
+          response.end(JSON.stringify({ token: `${environmentId}-session`, expiresAt: null }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end();
+      });
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        resume(
+          Effect.succeed({
+            server,
+            port: typeof address === "object" && address !== null ? address.port : 0,
+            sessions,
+          }),
+        );
+      });
+    }),
+    ({ server }) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
+  );
+
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
+    it.live("uses an app sidecar while a managed server remains primary", () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: ARCHIVE.archiveVersion,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        let localPort = 41773;
+        const net = NetService.NetService.of({
+          ...testNetService,
+          reserveLoopbackPort: () => Effect.sync(() => localPort++),
+        });
+        const layer = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fixture.transport),
+          Layer.succeed(FileSystem.FileSystem, fixture.observedFs),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, net),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+        ).pipe((base) =>
+          SshTunnel.SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.succeed({ ...fixture.runner, attachAppServer: true }),
+            leaveRemoteServerRunning: true,
+          }).pipe(Layer.provideMerge(base)),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const primary = yield* manager.ensureEnvironment(uploadTarget);
+          assert.isFalse("type" in primary);
+          if ("type" in primary) return;
+          assert.equal(primary.remoteServerKind, "managed");
+          const appId = EnvironmentId.make("app-owner");
+          const app = yield* startOwner(appId, "app-control");
+          const appDir = `${fixture.home}/.goat/desktop/userdata`;
+          yield* fixture.fs.makeDirectory(appDir, { recursive: true });
+          yield* fixture.fs.writeFileString(`${appDir}/environment-id`, `${appId}\n`);
+          yield* fixture.fs.writeFileString(`${appDir}/runtime-control.token`, "app-control\n");
+          yield* fixture.fs.writeFileString(
+            `${appDir}/server-runtime.json`,
+            JSON.stringify({
+              version: 1,
+              pid: process.pid,
+              port: app.port,
+              origin: `http://127.0.0.1:${app.port}`,
+            }),
+          );
+          const sidecar = yield* manager.existingEnvironment!(uploadTarget, appId);
+          assert.notEqual(sidecar.httpBaseUrl, primary.httpBaseUrl);
+          const session = yield* manager.issueExistingMcpSession!(uploadTarget, appId, {
+            label: "reverse",
+            ttl: "1h",
+            runtimeModeCeiling: "full-access",
+          });
+          assert.equal(session.token, `${appId}-session`);
+          assert.deepEqual(app.sessions, ["app-control"]);
+          const stillPrimary = yield* manager.ensureEnvironment(uploadTarget);
+          assert.isFalse("type" in stillPrimary);
+          if ("type" in stillPrimary) return;
+          assert.equal(stillPrimary.remoteServerKind, "managed");
+          assert.equal(stillPrimary.httpBaseUrl, primary.httpBaseUrl);
+          yield* fixture.fs.writeFileString(`${appDir}/environment-id`, "replaced-owner\n");
+          yield* manager.existingEnvironment!(uploadTarget, appId).pipe(Effect.flip);
+          assert.notInclude(
+            yield* fixture.fs.readFileString(`${fixture.test}/events`),
+            '"type":"stop"',
+          );
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live(
+      "opens a passive forward for the nonprimary environment without replacing the primary",
+      () =>
+        Effect.gen(function* () {
+          const appId = "app-owner";
+          const managedId = "managed-owner";
+          const app = yield* startOwner(appId, "app-control");
+          const managed = yield* startOwner(managedId, "managed-control");
+          const fs = yield* FileSystem.FileSystem;
+          const real = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-two-owners-" });
+          const forwards: Array<{ remotePort: number; killed: boolean }> = [];
+          const scripts: string[] = [];
+          for (const [kind, owner, id, token] of [
+            ["app", app, appId, "app-control"],
+            ["managed", managed, managedId, "managed-control"],
+          ] as const) {
+            const dir = `${home}/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}`;
+            yield* fs.makeDirectory(dir, { recursive: true });
+            yield* fs.writeFileString(`${dir}/environment-id`, `${id}\n`);
+            yield* fs.writeFileString(`${dir}/runtime-control.token`, `${token}\n`);
+            yield* fs.writeFileString(
+              `${dir}/server-runtime.json`,
+              JSON.stringify({
+                version: 1,
+                pid: process.pid,
+                port: owner.port,
+                origin: `http://127.0.0.1:${owner.port}`,
+              }),
+            );
+          }
+          const transport = ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              if (command._tag !== "StandardCommand") return yield* real.spawn(command);
+              if (command.args.includes("-N")) {
+                const forward = command.args[command.args.indexOf("-L") + 1] ?? "";
+                const remotePort = Number(forward.split(":").at(-1));
+                const observed = { remotePort, killed: false };
+                forwards.push(observed);
+                return makeRunningProcess(() => {
+                  observed.killed = true;
+                });
+              }
+              if (!command.command.endsWith("ssh")) return yield* real.spawn(command);
+              if (command.args.includes("-G"))
+                return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
+              const stdin = command.options.stdin;
+              if (
+                stdin === undefined ||
+                typeof stdin !== "object" ||
+                !("stream" in stdin) ||
+                !Stream.isStream(stdin.stream)
+              )
+                return makeSuccessfulProcess("");
+              const bytes = yield* stdin.stream.pipe(Stream.runCollect);
+              scripts.push(
+                new TextDecoder().decode(
+                  new Uint8Array(bytes.flatMap((chunk) => Array.from(chunk))),
+                ),
+              );
+              return yield* real.spawn(
+                ChildProcess.make(remoteShell, ["-s"], {
+                  env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+                  extendEnv: false,
+                  stdin: { stream: Stream.fromIterable(bytes), endOnDone: true },
+                }),
+              );
+            }),
+          );
+          let localPort = 41773;
+          const net = NetService.NetService.of({
+            ...testNetService,
+            reserveLoopbackPort: () => Effect.sync(() => localPort++),
+          });
+          const layer = Layer.mergeAll(
+            NodeServices.layer,
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
+            Layer.succeed(HttpClient.HttpClient, testHttpClient),
+            Layer.succeed(NetService.NetService, net),
+            SshAuth.SshPasswordPrompt.disabledLayer,
+          ).pipe((base) =>
+            SshTunnel.SshEnvironmentManager.layer({
+              resolveCliRunner: Effect.succeed({ ...ARCHIVE, attachAppServer: true }),
+              leaveRemoteServerRunning: false,
+            }).pipe(Layer.provideMerge(base)),
+          );
+          yield* Effect.gen(function* () {
+            const manager = yield* SshTunnel.SshEnvironmentManager;
+            const primary = yield* manager.ensureEnvironment(uploadTarget);
+            assert.isFalse("type" in primary);
+            if ("type" in primary) return;
+            assert.equal(primary.remoteServerKind, "app");
+            const alternate = yield* manager.existingEnvironment!(
+              uploadTarget,
+              EnvironmentId.make(managedId),
+            );
+            assert.notEqual(alternate.httpBaseUrl, primary.httpBaseUrl);
+            assert.deepEqual(
+              forwards.map(({ remotePort }) => remotePort),
+              [app.port, managed.port],
+            );
+            const session = yield* manager.issueExistingMcpSession!(
+              uploadTarget,
+              EnvironmentId.make(managedId),
+              {
+                label: "hub",
+                ttl: "1h",
+                runtimeModeCeiling: "full-access",
+              },
+            );
+            assert.equal(session.token, `${managedId}-session`);
+            assert.deepEqual(managed.sessions, ["managed-control"]);
+            assert.deepEqual(app.sessions, []);
+            const stillPrimary = yield* manager.ensureEnvironment(uploadTarget);
+            assert.isFalse("type" in stillPrimary);
+            if ("type" in stillPrimary) return;
+            assert.equal(stillPrimary.httpBaseUrl, primary.httpBaseUrl);
+            yield* fs.writeFileString(`${home}/.goat/userdata/environment-id`, "replaced-owner\n");
+            yield* manager.existingEnvironment!(uploadTarget, EnvironmentId.make(managedId)).pipe(
+              Effect.flip,
+            );
+            assert.isTrue(forwards[1]?.killed);
+            assert.isFalse(forwards[0]?.killed);
+            assert.isFalse(scripts.some((script) => script.includes("STOP_WAIT_ATTEMPTS")));
+          }).pipe(Effect.provide(layer), Effect.scoped);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([false, true])(
       "checks an old Node entry before publishing an upgrade; missing identity=%s",
       (missingIdentity) =>

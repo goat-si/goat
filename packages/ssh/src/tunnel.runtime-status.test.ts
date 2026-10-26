@@ -240,9 +240,7 @@ describe("SSH runtime status", () => {
           );
           assert.equal(
             result.status?.keyAuth?.command,
-            managed
-              ? `ssh-copy-id -i '${dir}/id_ed25519.pub' -p '2222' 'julius@devbox'`
-              : undefined,
+            managed ? `ssh-copy-id -i '${dir}/id_ed25519.pub' -p '2222' 'alex@devbox'` : undefined,
           );
         }).pipe(
           Effect.provide(

@@ -4,15 +4,15 @@
 
 The relay Alchemy stack owns a shared Axiom trace setup:
 
-- `t3-code-relay-traces-prod`, the OpenTelemetry trace dataset shared by the Worker, mobile app, and
+- `goat-relay-traces-prod`, the OpenTelemetry trace dataset shared by the Worker, mobile app, and
   first-party relay clients
-- `t3-code-relay-otel-ingest-prod`, the dataset-scoped Worker ingest token
-- `t3-code-mobile-otel-ingest-prod`, the dataset-scoped mobile ingest token
-- `t3-code-relay-client-otel-ingest-prod`, the dataset-scoped first-party relay-client ingest token
-- `t3-code-relay-recent-spans-prod`, a view of recent request and endpoint spans
+- `goat-relay-otel-ingest-prod`, the dataset-scoped Worker ingest token
+- `goat-mobile-otel-ingest-prod`, the dataset-scoped mobile ingest token
+- `goat-relay-client-otel-ingest-prod`, the dataset-scoped first-party relay-client ingest token
+- `goat-relay-recent-spans-prod`, a view of recent request and endpoint spans
 
 Alchemy stages append their sanitized stage name to isolate resources, for example
-`t3-code-relay-traces-dev-julius` for a personal stage.
+`goat-relay-traces-dev-alex` for a personal stage.
 
 Deploy from `infra/relay` with the normal Alchemy workflow:
 
@@ -29,7 +29,7 @@ Effect's OpenTelemetry exporter stores semantic HTTP attributes below the `attri
 For example:
 
 ```apl
-['t3-code-relay-traces-prod']
+['goat-relay-traces-prod']
 | where kind == 'server'
 | extend endpoint = column_ifexists('attributes.http.route', ''),
     customAttributes = column_ifexists('attributes.custom', dynamic({}))
@@ -67,10 +67,10 @@ managed endpoint, and with it the environment. On a forward, `relay.hook.upstrea
 `relay.hook.upstream_error` records the environment's answer, and
 `relay.hook.upstream_outcome` what it did with the request (`accepted`, `duplicate`,
 `prompt_too_long`, `queue_full`, `rejected_signature`, `expired`, `disabled`, ...), from its
-`x-t3-hook-outcome` response header. A held request's delivery records the same on its
+`x-goat-hook-outcome` response header. A held request's delivery records the same on its
 `relay.inbox.deliver` span. The relay sends its own `traceparent` with each forward and drops any a
-sender supplied, and signs each forward (`x-t3-relay-delivery`) so the environment trusts the
-relay's delivery id, receive time and trace context only from the relay, so on environments that export to T3 Connect, the environment's
+sender supplied, and signs each forward (`x-goat-relay-delivery`) so the environment trusts the
+relay's delivery id, receive time and trace context only from the relay, so on environments that export to GOAT Connect, the environment's
 `ScheduledTaskService.triggerWebhook` span lands in the same trace. `relay.hook.rate_limit` says which
 budget ran out: `endpoint` or `hook`. `relay.hook.rate_limiter_failed_open` is set when the
 Cloudflare rate limiter was unavailable and the request went through unlimited.
@@ -90,19 +90,19 @@ Questions these answer:
 
 ```apl
 // Webhook outcomes per hour
-['t3-code-relay-traces-prod']
+['goat-relay-traces-prod']
 | where name == 'relay.hooks.forward'
 | summarize count() by bin(_time, 1h), outcome = tostring(['attributes.custom']['relay.hook.outcome'])
 
 // Inboxes stuck behind an unreachable environment, by endpoint
-['t3-code-relay-traces-prod']
+['goat-relay-traces-prod']
 | where name == 'HookInboxStore.deliverDue'
 | extend c = ['attributes.custom']
 | where tostring(c['relay.inbox.run_result']) == 'unreachable'
 | project trace_id, failures = toint(c['relay.inbox.consecutive_failures']),
     backlog = toint(c['relay.inbox.held_count'])
 | join kind=inner (
-    ['t3-code-relay-traces-prod']
+    ['goat-relay-traces-prod']
     | where name == 'relay.inbox.deliver'
     | project trace_id, endpoint = tostring(['attributes.custom']['relay.hook.endpoint_key'])
   ) on trace_id
@@ -111,7 +111,7 @@ Questions these answer:
 
 ## Alerts
 
-The stack provisions threshold monitors and a `t3-code-relay-health` dashboard from
+The stack provisions threshold monitors and a `goat-relay-health` dashboard from
 [`infra/relay/src/monitoring.ts`](../../infra/relay/src/monitoring.ts) when the deployment sets
 `RELAY_ALERT_NOTIFIER_ID`. Paging monitors go to that notifier and need two failing runs in a row.
 Warnings go to `RELAY_WARNING_NOTIFIER_ID` when it is set and are otherwise only visible in Axiom.

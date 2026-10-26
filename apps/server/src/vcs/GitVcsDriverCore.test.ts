@@ -3181,12 +3181,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.createRef({ cwd, refName: "Julius/ABC-123" });
+        yield* driver.createRef({ cwd, refName: "Alex/ABC-123" });
         const failed = yield* driver
           .renameBranch({
             cwd,
             oldBranch: initialBranch,
-            newBranch: "Julius/ABC-123",
+            newBranch: "Alex/ABC-123",
             exactName: true,
           })
           .pipe(Effect.exit);
@@ -3195,10 +3195,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const renamed = yield* driver.renameBranch({
           cwd,
           oldBranch: initialBranch,
-          newBranch: "Julius/ABC-124.v2",
+          newBranch: "Alex/ABC-124.v2",
           exactName: true,
         });
-        assert.equal(renamed.branch, "Julius/ABC-124.v2");
+        assert.equal(renamed.branch, "Alex/ABC-124.v2");
       }),
     );
 

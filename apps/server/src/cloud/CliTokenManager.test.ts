@@ -18,9 +18,9 @@ import * as ExternalLauncher from "../process/externalLauncher.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 
 const TEST_ENV = {
-  T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_Y2xlcmsuZXhhbXBsZS50ZXN0JA==",
-  T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_client_test",
-  T3CODE_HOSTED_APP_URL: "https://hosted.example.test",
+  GOAT_CLERK_PUBLISHABLE_KEY: "pk_test_Y2xlcmsuZXhhbXBsZS50ZXN0JA==",
+  GOAT_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_client_test",
+  GOAT_HOSTED_APP_URL: "https://hosted.example.test",
 };
 
 interface RecordedTokenRequest {
@@ -34,7 +34,7 @@ const encodeTestIdTokenHeader = Schema.encodeSync(TestIdTokenHeaderJson);
 const encodeTestIdTokenPayload = Schema.encodeSync(TestIdTokenPayloadJson);
 const idTokenWithEmail = (() => {
   const header = Base64Url.encode(encodeTestIdTokenHeader({ alg: "none" }));
-  const payload = Base64Url.encode(encodeTestIdTokenPayload({ email: "theo@example.test" }));
+  const payload = Base64Url.encode(encodeTestIdTokenPayload({ email: "sam@example.test" }));
   return `${header}.${payload}.`;
 })();
 
@@ -276,8 +276,8 @@ it.layer(NodeServices.layer)("CliTokenManager.deviceAuthorizationLogin", (it) =>
       ]);
       assert.equal(token.accessToken, "access-token-1");
       assert.equal(token.refreshToken, "refresh-token-1");
-      assert.equal(token.identity, "theo@example.test");
-      assert.equal(identity, "theo@example.test");
+      assert.equal(token.identity, "sam@example.test");
+      assert.equal(identity, "sam@example.test");
 
       const authorization = server.requests[0]!;
       assert.equal(authorization.url, "https://clerk.example.test/oauth/device_authorization");

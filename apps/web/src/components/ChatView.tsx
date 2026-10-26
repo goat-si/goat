@@ -223,7 +223,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { threadEnvironment } from "../state/threads";
-import { providerSkillsWithBuiltIns } from "./chat/providerSkillsWithBuiltIns";
+import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
 import { vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
@@ -2949,7 +2949,8 @@ export default function ChatView(props: ChatViewProps) {
     isDesktop: isElectron,
   });
   const getShortcutContextStable = useStableCallback(getShortcutContext);
-  const timelineSkills = providerSkillsWithBuiltIns(activeProviderStatus, gitCwd, settings);
+  const skillScope = { environmentId, projectId: activeThreadProjectId };
+  const timelineSkills = useOfferedSkills(activeProviderStatus, gitCwd, settings, skillScope);
   const threadFindControlsRef = useRef<ThreadFindControls | null>(null);
   const [isThreadFindActive, setIsThreadFindActive] = useState(false);
   const openThreadFind = () => threadFindControlsRef.current?.open();

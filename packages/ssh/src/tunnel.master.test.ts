@@ -94,7 +94,7 @@ const fixture = (
         const args = commandArgs(command);
         if (args.includes("-G"))
           return makeSuccessfulProcess(
-            `hostname devbox.example.com\nuser julius\nport 2222\ncontrolmaster ${mode === "user-master" ? "auto" : "false"}\n${mode === "user-path" ? "controlpath /private/user/socket\n" : ""}proxycommand cloudflared access ssh --hostname %h\nidentityfile ${identity}\n`,
+            `hostname devbox.example.com\nuser alex\nport 2222\ncontrolmaster ${mode === "user-master" ? "auto" : "false"}\n${mode === "user-path" ? "controlpath /private/user/socket\n" : ""}proxycommand cloudflared access ssh --hostname %h\nidentityfile ${identity}\n`,
           );
         if (args.includes("-M")) {
           events.push("master");
@@ -301,7 +301,7 @@ describe("scoped SSH master", () => {
               Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
             );
           const resolve = f.commands.find((c) => commandArgs(c).includes("-G"))!;
-          assert.includeMembers([...commandArgs(resolve)], ["-p", "2222", "julius@devbox"]);
+          assert.includeMembers([...commandArgs(resolve)], ["-p", "2222", "alex@devbox"]);
           const master = f.commands.find((c) => commandArgs(c).includes("-M"))!;
           const args = commandArgs(master);
           const socket = args[args.indexOf("-S") + 1]!;

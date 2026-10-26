@@ -1,7 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import {
+  DEFAULT_SERVER_SETTINGS,
+  MessageId,
   type ModelSelection,
   NodeId,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
   ProjectId,
@@ -27,6 +31,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -347,5 +352,118 @@ it.effect(
       assert.equal(interrupted?.providerSessionId, oldSessionId);
       assert.equal(interrupted?.id, providerThreadId);
       assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
+    }),
+);
+
+it.effect(
+  "steers a goat-discipline mention with the guidance only for a project that keeps it on",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:steer-skill");
+      const providerSessionId = ProviderSessionId.make("provider-session:steer-skill");
+      const providerThreadId = ProviderThreadId.make("provider-thread:steer-skill");
+      const providerTurnId = ProviderTurnId.make("provider-turn:steer-skill");
+      const attemptId = RunAttemptId.make("run-attempt:steer-skill");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: { driver, nativeId: "native-thread:steer-skill", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const projection = makeProjection({
+        now,
+        threadId,
+        providerThread,
+        providerTurnId,
+        attemptId,
+      });
+      const message: OrchestrationV2ConversationMessage = {
+        createdBy: "user",
+        creationSource: "web",
+        id: MessageId.make("message:steer-skill"),
+        threadId,
+        runId: RunId.make("run:restart-session"),
+        nodeId: null,
+        role: "user",
+        text: "Also check the tests $goat-discipline",
+        attachments: [],
+        streaming: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const steered: Array<string> = [];
+      const runtime = {
+        instanceId: providerInstanceId,
+        driver,
+        providerSessionId,
+        steerTurn: (input: ProviderAdapter.ProviderAdapterV2SteerInput) =>
+          Effect.sync(() => void steered.push(input.message.text)),
+      } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      const layerControl = (projectSwitch: boolean | undefined) =>
+        ProviderTurnControlService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(ProjectionStore.ProjectionStoreV2)({
+                getThread: () => Effect.succeed(projection.thread),
+                getProviderControlContext: () =>
+                  Effect.succeed({
+                    providerThread,
+                    providerTurn: projection.providerTurns[0],
+                    attempt: projection.attempts[0],
+                    message,
+                    run: { id: message.runId } as OrchestrationV2Run,
+                  }),
+              }),
+              Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+                get: () => Effect.succeed(Option.some(runtime)),
+              }),
+              Layer.mock(ServerSettings.ServerSettingsService)({
+                getSettings: Effect.succeed({
+                  ...DEFAULT_SERVER_SETTINGS,
+                  projectSettingsOverrides:
+                    projectSwitch === undefined
+                      ? {}
+                      : {
+                          [projection.thread.projectId]: {
+                            builtInSkills: { "goat-discipline": { enabled: projectSwitch } },
+                          },
+                        },
+                }),
+              }),
+            ),
+          ),
+        );
+      const steer = Effect.gen(function* () {
+        const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+        yield* control.steer({
+          threadId,
+          providerSessionId,
+          providerThreadId,
+          providerTurnId,
+          messageId: message.id,
+        });
+      });
+
+      yield* steer.pipe(Effect.provide(layerControl(undefined)));
+      yield* steer.pipe(Effect.provide(layerControl(false)));
+      yield* steer.pipe(Effect.provide(layerControl(true)));
+
+      assert.deepStrictEqual(
+        steered.map((text) => text.startsWith('<goat_skill name="goat-discipline">')),
+        [true, false, true],
+      );
+      assert.isTrue(steered.every((text) => text.endsWith(message.text)));
     }),
 );

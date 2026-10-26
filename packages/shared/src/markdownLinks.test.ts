@@ -61,8 +61,8 @@ describe("parseMarkdownFileLink", () => {
   });
 
   it("reads positions from suffixes and line anchors", () => {
-    expect(parseMarkdownFileLink("/Users/julius/project/src/main.ts#L42C7")).toEqual({
-      path: "/Users/julius/project/src/main.ts",
+    expect(parseMarkdownFileLink("/Users/alex/project/src/main.ts#L42C7")).toEqual({
+      path: "/Users/alex/project/src/main.ts",
       line: 42,
       column: 7,
     });
@@ -104,14 +104,14 @@ describe("resolveMarkdownFileLinkTarget", () => {
   });
 
   it("does not treat filename line references as external schemes", () => {
-    expect(resolveMarkdownFileLinkTarget("script.ts:10", "/Users/julius/project")).toBe(
-      "/Users/julius/project/script.ts:10",
+    expect(resolveMarkdownFileLinkTarget("script.ts:10", "/Users/alex/project")).toBe(
+      "/Users/alex/project/script.ts:10",
     );
   });
 
   it("maps #L line anchors to editor line suffixes", () => {
-    expect(resolveMarkdownFileLinkTarget("/Users/julius/project/src/main.ts#L42C7")).toBe(
-      "/Users/julius/project/src/main.ts:42:7",
+    expect(resolveMarkdownFileLinkTarget("/Users/alex/project/src/main.ts#L42C7")).toBe(
+      "/Users/alex/project/src/main.ts:42:7",
     );
   });
 
@@ -121,8 +121,8 @@ describe("resolveMarkdownFileLinkTarget", () => {
   });
 
   it("does not double-decode file URLs", () => {
-    expect(resolveMarkdownFileLinkTarget("file:///Users/julius/project/file%2520name.md")).toBe(
-      "/Users/julius/project/file%20name.md",
+    expect(resolveMarkdownFileLinkTarget("file:///Users/alex/project/file%2520name.md")).toBe(
+      "/Users/alex/project/file%20name.md",
     );
   });
 

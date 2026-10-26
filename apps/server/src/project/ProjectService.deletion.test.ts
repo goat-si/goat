@@ -514,7 +514,10 @@ it.effect(
         const serverSettings = yield* ServerSettings.ServerSettingsService;
         yield* serverSettings.updateSettings({
           projectSettingsOverrides: {
-            [projectId]: { providerInstances: { [instanceId]: { enabled: true } } },
+            [projectId]: {
+              providerInstances: { [instanceId]: { enabled: true } },
+              builtInSkills: { "goat-discipline": { enabled: false } },
+            },
           },
         });
 

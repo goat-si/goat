@@ -1,6 +1,6 @@
 # GOAT Connect
 
-> **Status:** T3 Connect is disabled in every build by `GOAT_CONNECT_ENABLED=false`
+> **Status:** GOAT Connect is disabled in every build by `GOAT_CONNECT_ENABLED=false`
 > in [`@goat/shared/goatConnect`](../../packages/shared/src/goatConnect.ts).
 > GOAT Connect is coming soon. The remainder describes the dormant implementation
 > retained for that work. Previously linked servers keep their stored link without
@@ -35,7 +35,7 @@ environment stays away. When the tunnel reconnects, the environment asks the
 relay to deliver right away. Requests are deleted once the environment
 answers, after 24 hours, or when no user has the environment linked. The relay
 still never checks the token; delivery goes through the same environment route.
-Every forward carries `x-t3-relay-delivery-id`, so a request that reached the
+Every forward carries `x-goat-relay-delivery-id`, so a request that reached the
 environment before a timeout and is delivered again later runs once
 ([inbox object](../../infra/relay/src/hooks/HookInboxObject.ts)).
 
