@@ -105,6 +105,8 @@ import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import * as StorageReclaim from "../storage/StorageReclaim.ts";
+import * as StorageConsent from "../storage/StorageConsent.ts";
 import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
@@ -154,6 +156,8 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
+  Layer.mock(StorageReclaim.StorageReclaim)({}),
+  Layer.mock(StorageConsent.StorageConsent)({}),
   Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   // A live thread, so thread callers reach the handler instead of the inert services above.

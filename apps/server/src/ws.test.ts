@@ -94,6 +94,8 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
+import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -570,6 +572,8 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
+  Layer.mock(StorageReclaim.StorageReclaim)({}),
+  Layer.mock(HostPressureMonitor.HostPressureMonitor)({}),
   Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
     current: Effect.succeed(null),
     subscribeChanges: Effect.succeed(Stream.empty),

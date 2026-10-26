@@ -32,6 +32,7 @@ const calm: PressureSample = {
   cpuUtilization: 0.1,
   memoryFreeRatio: 0.5,
   diskAvailableBytes: 200 * 1024 ** 3,
+  diskTotalBytes: null,
   eventLoopDelayMs: null,
 };
 const load = (loadPerCore: number): PressureSample => ({ ...calm, loadPerCore });
@@ -48,12 +49,33 @@ function levels(samples: ReadonlyArray<PressureSample>, start?: PressureState) {
 }
 
 describe("classify", () => {
+  it("flags disk only when free space is under both the percent and the GiB limit", () => {
+    const GIB = 1024 ** 3;
+    const disk = (freeGiB: number, totalGiB: number | null): PressureSample => ({
+      ...calm,
+      diskAvailableBytes: freeGiB * GIB,
+      diskTotalBytes: totalGiB === null ? null : totalGiB * GIB,
+    });
+    // A 2 TiB laptop disk: 40 GiB free is 2 %, under 15 % and under 50 GiB.
+    expect(classify(disk(40, 2048), settings).level).toBe("elevated");
+    expect(classify(disk(14, 2048), settings).level).toBe("critical");
+    // A 4 TiB disk with 600 GiB free is under 15 % but far from 50 GiB.
+    expect(classify(disk(600, 4096), settings).level).toBe("ok");
+    // A 64 GiB cloud VM with 30 GiB free is under 50 GiB but half empty.
+    expect(classify(disk(30, 64), settings).level).toBe("ok");
+    expect(classify(disk(9, 64), settings).level).toBe("elevated");
+    expect(classify(disk(3, 64), settings).level).toBe("critical");
+    // A host that does not report its size is judged on the GiB limits alone.
+    expect(classify(disk(40, null), settings).level).toBe("elevated");
+    expect(classify(disk(60, null), settings).level).toBe("ok");
+  });
+
   it("reads each signal against its threshold", () => {
     expect(classify(load(2), settings).level).toBe("elevated");
     expect(classify(load(6.2), settings).level).toBe("critical");
     expect(classify({ ...calm, cpuUtilization: 0.95 }, settings).level).toBe("elevated");
     expect(classify({ ...calm, memoryFreeRatio: 0.04 }, settings).level).toBe("critical");
-    expect(classify({ ...calm, diskAvailableBytes: 5 * 1024 ** 3 }, settings).level).toBe(
+    expect(classify({ ...calm, diskAvailableBytes: 20 * 1024 ** 3 }, settings).level).toBe(
       "elevated",
     );
     expect(classify(calm, settings).level).toBe("ok");
