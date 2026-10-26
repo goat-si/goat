@@ -60,7 +60,7 @@ export function probeMacosGlass(runtime: ObjcRuntime): MaterialAdapter {
       let released = false;
       const constraints: bigint[] = [];
       const tint = ({ dark, glassOpacity }: MaterialAppearance) => {
-        // Candidate tint deliberately covers built-in light/dark themes, not custom palettes.
+        // The tint follows light/dark only; custom theme palettes are not sampled.
         const rgba = dark ? [0.11, 0.11, 0.12] : [0.96, 0.96, 0.97];
         const color = nonzero(
           runtime.color(cls("NSColor"), sel("colorWithSRGBRed:green:blue:alpha:"), [

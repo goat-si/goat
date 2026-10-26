@@ -32,7 +32,12 @@ export class WindowMaterialSenderError extends Schema.TaggedError<WindowMaterial
 export class DesktopWindowMaterial extends Context.Service<
   DesktopWindowMaterial,
   {
-    readonly attach: (window: Electron.BrowserWindow) => Effect.Effect<void, never, Scope.Scope>;
+    /** Creation options; a window cannot become transparent after it exists. */
+    readonly windowOptions: Effect.Effect<{ readonly transparent?: true }>;
+    readonly attach: (
+      window: Electron.BrowserWindow,
+      options?: { readonly transparent?: boolean },
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly afterReveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly syncAppearance: (window: Electron.BrowserWindow, dark: boolean) => Effect.Effect<void>;
     readonly getState: (
@@ -45,6 +50,7 @@ type WindowRecord = {
   readonly window: Electron.BrowserWindow;
   readonly semaphore: Semaphore.Semaphore;
   readonly removeListeners: () => void;
+  readonly transparent: boolean;
   state: DesktopWindowMaterialState;
   generation: number;
   revealed: boolean;
@@ -58,6 +64,11 @@ export const make = Effect.gen(function* () {
   const theme = yield* ElectronTheme.ElectronTheme;
   const settingsStore = yield* DesktopClientSettings.DesktopClientSettings;
   const { capability, adapter } = yield* MaterialPlatform.DesktopMaterialPlatform;
+  // macOS glass sits below Chromium's view. In a window created opaque, Chromium never clears
+  // transparent regions between frames, so old titles and row highlights pile up on the glass.
+  const needsTransparentWindow = adapter?.kind === "macos-glass";
+  // A failed probe never succeeds later in this process, so a restart would not help.
+  let probeFailed = false;
   const scope = yield* Scope.Scope;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
@@ -73,6 +84,7 @@ export const make = Effect.gen(function* () {
       enabled: settings.desktopSystemMaterialEnabled,
       glassOpacity: settings.glassOpacity,
       ...accessibility,
+      restartRequired: needsTransparentWindow && !entry.transparent && !probeFailed,
       revealed: entry.revealed && !entry.closing,
       fullscreen: entry.window.isFullScreen(),
     });
@@ -120,6 +132,7 @@ export const make = Effect.gen(function* () {
       const attachment = entry.attachment;
       entry.attachment = undefined;
       attachment?.releaseSync();
+      if (attachment !== undefined && entry.transparent) entry.window.invalidateShadow();
     }
   };
 
@@ -151,6 +164,8 @@ export const make = Effect.gen(function* () {
       try {
         entry.attachment = adapter.attachSync(entry.window, appearance());
         entry.window.setBackgroundColor("#00000000");
+        // macOS computes a transparent window's shadow from its painted shape.
+        if (entry.transparent) entry.window.invalidateShadow();
         updateOverlay(entry, true);
         publish(entry, "active");
       } catch (cause) {
@@ -228,7 +243,16 @@ export const make = Effect.gen(function* () {
   if (startupRevision === settingsRevision && Option.isSome(initial)) settings = initial.value;
 
   return DesktopWindowMaterial.of({
-    attach: Effect.fn("desktop.windowMaterial.attach")(function* (window) {
+    // Probe before creating the window so a Mac that cannot attach glass keeps an opaque window.
+    windowOptions: Effect.gen(function* () {
+      if (adapter === null || !needsTransparentWindow || !settings.desktopSystemMaterialEnabled)
+        return {};
+      const prepared = yield* adapter.prepare().pipe(Effect.result);
+      if (prepared._tag === "Success") return { transparent: true as const };
+      probeFailed = true;
+      return {};
+    }),
+    attach: Effect.fn("desktop.windowMaterial.attach")(function* (window, options) {
       if (window.isDestroyed()) return;
       if (windows.has(window.webContents.id)) return;
       const semaphore = yield* Semaphore.make(1);
@@ -256,6 +280,7 @@ export const make = Effect.gen(function* () {
       const entry: WindowRecord = {
         window,
         semaphore,
+        transparent: options?.transparent === true,
         generation: 0,
         revealed: false,
         closing: false,
