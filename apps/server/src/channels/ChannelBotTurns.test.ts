@@ -32,6 +32,7 @@ import {
   modelSelection,
   onlyTask,
   ownerId,
+  projectId,
   rpcContext,
   scratchProjectId,
   setupBot,
@@ -794,6 +795,85 @@ describe("GOAT Bot follow-ups under failure", () => {
         yield* runtime.drain;
         const afterTexts = (yield* botMessages).messages.map((message) => message.text);
         assert.notInclude(afterTexts, "Routine worker step that stays silent.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "fans out additionalTasks on a fresh or joined run_turn and refuses unauthorized joined extras",
+    () => {
+      const harness = harnessWith(botModel);
+      harness.script.current = (input) => {
+        if (input.mode === "input" && input.inputText?.startsWith("hybrid:")) {
+          return Effect.succeed({
+            replyText: "Checking disk and starting the coding task.",
+            action: {
+              type: "run_turn" as const,
+              title: "Inspect disk",
+              instruction: "Check disk usage.",
+              additionalTasks: [
+                { title: "Rotate logs", instruction: "Add log rotation.", projectId },
+              ],
+            },
+          });
+        }
+        if (input.mode === "input" && input.inputText?.startsWith("hybrid-join:")) {
+          return Effect.succeed({
+            replyText: "Steering turn and starting the extra fix.",
+            action: {
+              type: "run_turn" as const,
+              title: "Also check /tmp",
+              instruction: "Check /tmp too.",
+              additionalTasks: [
+                { title: "Prune cache", instruction: "Prune build cache.", projectId },
+              ],
+            },
+          });
+        }
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+
+        // 1. Fresh hybrid run_turn + additionalTasks creates index 0 (turn) and index 1 (coding task).
+        const first = yield* gateway.ingest(
+          goatInput("hybrid: check disk and rotate logs", "h1"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        yield* reports.reconcile(runtime.ownerToken);
+
+        const afterFirst = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        assert.lengthOf(afterFirst, 2);
+        const turnTask = (yield* ledger.getTask(taskIdFor(first.inputId, 0)))!.task;
+        const extraTask = (yield* ledger.getTask(taskIdFor(first.inputId, 1)))!.task;
+        assert.strictEqual(turnTask.kind, "turn");
+        assert.isUndefined(extraTask.kind);
+        assert.strictEqual(extraTask.title, "Rotate logs");
+
+        // 2. Joined hybrid run_turn while the turn is running steers the turn and creates index 1.
+        const second = yield* gateway.ingest(
+          goatInput("hybrid-join: also /tmp and prune cache", "h2"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        assert.isUndefined(yield* ledger.getTask(taskIdFor(second.inputId, 0)));
+        const joinedExtra = (yield* ledger.getTask(taskIdFor(second.inputId, 1)))?.task;
+        assert.strictEqual(joinedExtra?.title, "Prune cache");
+        assert.isTrue(harness.world.sends.some((send) => send.text.includes("hybrid-join:")));
+
+        // 3. A lower-ceiling caller in the same conversation cannot steer the full-access turn or stage its extras.
+        const unauth = yield* gateway.ingest(goatInput("hybrid-join: unauthorized", "h3"), {
+          ...rpcContext,
+          runtimeModeCeiling: "approval-required",
+        });
+        yield* runtime.drain;
+        assert.isUndefined(yield* ledger.getTask(taskIdFor(unauth.inputId, 1)));
       }).pipe(Effect.provide(harness.layer));
     },
   );

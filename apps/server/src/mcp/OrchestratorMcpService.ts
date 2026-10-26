@@ -1946,7 +1946,10 @@ const make = Effect.gen(function* () {
       // can answer the follow-up while finishTaskWait promotes completionWake to "always".
       return yield* Stream.mergeAll(
         TASK_WAKE_EVENTS.flatMap(({ thread, eventType }) => {
-          if (thread === "child" && (initial.host !== undefined || initial.childThreadId === null))
+          if (
+            (thread === "child" || eventType === "turn-item.updated") &&
+            (initial.host !== undefined || initial.childThreadId === null)
+          )
             return [];
           const threadId = thread === "parent" ? scope.thread.threadId : initial.childThreadId;
           return threadId === null

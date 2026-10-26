@@ -692,7 +692,9 @@ describe("OrchestratorMcpService delegate child work", () => {
                       }
                       return { sequence: 12, storedEvents: [] } as never;
                     }),
-                  streamStoredEventsFrom: ({ threadId, eventType }) => {
+                  streamStoredEventsFrom: (options) => {
+                    const threadId = options?.threadId;
+                    const eventType = options?.eventType;
                     if (threadId === callerThreadId && eventType === "subagent.updated") {
                       return Stream.fromIterable([
                         {

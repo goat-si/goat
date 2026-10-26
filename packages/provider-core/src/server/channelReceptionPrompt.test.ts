@@ -303,12 +303,23 @@ describe("channel reception turns", () => {
       title: "Check the disk",
       instruction: "Find what fills the disk.",
       notesChangeRequested: " forget the Friday rule ",
+      additionalTasks: [
+        {
+          title: " Clean logs ",
+          instruction: " Rotate logs. ",
+          projectId: " project-1 ",
+          host: "",
+        },
+      ],
     });
     expect(result.action).toEqual({
       type: "run_turn",
       title: "Check the disk",
       instruction: "Find what fills the disk.",
       notesChangeRequested: "forget the Friday rule",
+      additionalTasks: [
+        { title: "Clean logs", instruction: "Rotate logs.", projectId: "project-1" },
+      ],
     });
     expect(Option.isNone(toChannelReceptionResult({ ...emptyOutput, action: "run_turn" }))).toBe(
       true,
