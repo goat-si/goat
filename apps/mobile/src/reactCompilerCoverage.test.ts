@@ -33,7 +33,6 @@ const KNOWN_BAILOUTS: Record<string, string> = {
   "src/features/threads/ThreadRouteScreen.tsx": "try without catch",
   "src/features/voice-input/VoiceInputProvider.tsx": "ref read during render",
   "src/features/voice-input/useVoiceInputController.ts": "ref read during render",
-  "src/native/StackHeader.tsx": "ref read during render",
   "src/native/GoatComposerEditor.ios.tsx": "ref read during render",
   "src/native/GoatComposerEditor.native.tsx": "ref read during render",
 };
