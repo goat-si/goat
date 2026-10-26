@@ -1,3 +1,5 @@
+import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -18,12 +20,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import {
-  ScheduledTaskRunStatus,
-  ScheduledTask,
-  ScheduledTaskSchedule,
-  ScheduledTaskUpsertSchedule,
-} from "./scheduledTask.ts";
+import { ScheduledTaskUpsertSchedule } from "./scheduledTask.ts";
 import {
   ProviderInteractionMode,
   ProviderRequestKind,
@@ -1133,35 +1130,6 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
-
-export const OrchestratorMcpScheduledTask = Schema.Struct({
-  scheduledTaskId: ScheduledTaskId,
-  title: Schema.String,
-  prompt: Schema.String,
-  enabled: Schema.Boolean,
-  projectId: ProjectId,
-  boundThreadId: Schema.NullOr(ThreadId),
-  schedule: ScheduledTaskSchedule,
-  nextRunAt: Schema.NullOr(IsoDateTime),
-  lastRunStatus: ScheduledTaskRunStatus,
-  lastRun: ScheduledTask.fields.lastRun,
-  runCount: Schema.optional(NonNegativeInt),
-  lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
-  /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */
-  webhookUrl: Schema.optional(Schema.String).annotate({
-    description:
-      "Public URL to give the sender. Absent when this environment has no GOAT Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
-  }),
-  webhookUrlUnavailableReason: Schema.optional(Schema.String).annotate({
-    description:
-      "For a webhook task without webhookUrl: why it is absent and what the user can do.",
-  }),
-  webhookSignature: Schema.optional(Schema.Literals(["none", "set"])).annotate({
-    description: "Whether requests must carry a valid signature.",
-  }),
-  ...OrchestratorMcpReconcileFields.scheduledTask,
-});
-export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
 
 export const OrchestratorMcpScheduleTaskResult = OrchestratorMcpScheduledTask;
 export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTaskResult.Type;

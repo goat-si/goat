@@ -216,6 +216,11 @@ describe("scheduled run outcomes", () => {
       completedAt: null,
     };
     const decoded = Schema.decodeUnknownSync(ScheduledTask)({ ...task, lastRun });
+    const old = ScheduledTask.mapFields(({ lastRun: _lastRun, ...fields }) => fields);
+    expect(
+      Schema.decodeUnknownSync(Schema.fromJsonString(old))(Schema.encodeSync(codec)(decoded))
+        .lastRunStatus,
+    ).toBe("running");
     expect(Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decoded)).lastRun).toEqual(
       lastRun,
     );
@@ -224,6 +229,15 @@ describe("scheduled run outcomes", () => {
     expect(
       Schema.decodeUnknownSync(ScheduledTask)({ ...task, lastRun: { status: "future" } }).lastRun,
     ).toBeUndefined();
+  });
+  it("ignores client-supplied lastRun on task mutation", () => {
+    const input = Schema.decodeUnknownSync(ScheduledTaskUpsertInput)({
+      ...task,
+      lastRun: { status: "completed" },
+      firingId: "forged",
+    });
+    expect(input).not.toHaveProperty("lastRun");
+    expect(input).not.toHaveProperty("firingId");
   });
   it("old schema decodes new-server output", () => {
     const old = ScheduledTask.mapFields(({ lastRun: _lastRun, ...fields }) => fields);
