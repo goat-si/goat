@@ -115,7 +115,17 @@ it.effect(
       yield* runs.finishDispatch(finish("B"));
       const b = yield* sql`SELECT * FROM scheduled_task_runs WHERE firing_id='B'`;
       const retryAt = "2026-10-15T00:01:00.000Z";
-      assert.deepEqual(yield* admit(task, "A", "webhook", retryAt), {
+      // The task is edited between attempts; the retry must admit the current configuration.
+      const edited = makeTask({ type: "interval", everyMs: 120000 });
+      yield* sql`UPDATE scheduled_tasks SET schedule_json=${yield* encodeSchedule(edited.schedule)},
+        next_run_at='2026-10-15T00:05:00.000Z'`;
+      assert.deepEqual(yield* sql`SELECT last_run_status,last_run_error FROM scheduled_tasks`, [
+        {
+          last_run_status: "running",
+          last_run_error: "The scheduled run outcome could not be recovered.",
+        },
+      ]);
+      assert.deepEqual(yield* admit(edited, "A", "webhook", retryAt), {
         created: false,
         dispatch: true,
       });
@@ -127,6 +137,19 @@ it.effect(
         yield* sql`SELECT attempt,dispatch_bookkept_at FROM scheduled_task_runs WHERE firing_id='A'`,
         [{ attempt: 2, dispatch_bookkept_at: null }],
       );
+      assert.deepEqual(
+        yield* sql`SELECT admitted_next_run_at,admitted_schedule_digest,admitted_enabled FROM scheduled_task_runs WHERE firing_id='A'`,
+        [
+          {
+            admitted_next_run_at: "2026-10-15T00:05:00.000Z",
+            admitted_schedule_digest: '{"type":"interval","everyMs":120000}',
+            admitted_enabled: 1,
+          },
+        ],
+      );
+      assert.deepEqual(yield* sql`SELECT last_run_status,last_run_error FROM scheduled_tasks`, [
+        { last_run_status: "running", last_run_error: null },
+      ]);
       yield* runs.reconcile;
       yield* runs.reconcile;
       assert.deepEqual(yield* sql`SELECT run_count FROM scheduled_tasks`, [{ run_count: 3 }]);
