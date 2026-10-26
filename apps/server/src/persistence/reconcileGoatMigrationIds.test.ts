@@ -90,6 +90,7 @@ const laterGoatMigrations = [
   [105, "ScheduledTaskWebhookSecretRef"],
   [106, "RemoteReportFences"],
   [107, "HubProvisionedLinks"],
+  [108, "ScheduledTaskRuns"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -383,6 +384,7 @@ const GOAT_SINCE_256 = [
   "ScheduledTaskWebhookSecretRef",
   "RemoteReportFences",
   "HubProvisionedLinks",
+  "ScheduledTaskRuns",
 ].map(currentGoatRow);
 
 describe("upgrading a nightly 256 ledger past upstream 068", () => {
@@ -456,3 +458,22 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
+
+it.effect("relocates ScheduledTaskRuns without changing populated receipts or associations", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* seedGoatLedger(goatNames, 68);
+    yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count,last_firing_id)
+      VALUES ('task','Synthetic','Synthetic',1,'{}','project','{}','{}','full-access','default','user','web','2026-10-15','2026-10-15','running',1,'firing')`;
+    yield* sql`INSERT INTO scheduled_task_runs (firing_id,task_id,task_created_at,message_id,trigger_kind,admitted_next_run_at,admitted_schedule_digest,admitted_enabled,dispatch_status,status,requested_at,snapshot_json)
+      VALUES ('firing','task','2026-10-15','message','manual',NULL,'{}',1,'dispatching','dispatching','2026-10-15','{}')`;
+    const receipts = yield* sql`SELECT * FROM scheduled_task_runs`;
+    const tasks = yield* sql`SELECT last_firing_id FROM scheduled_tasks`;
+    yield* reconcileGoatMigrationIds(migrationEntries);
+    yield* runMigrations();
+    assert.deepStrictEqual(yield* sql`SELECT * FROM scheduled_task_runs`, receipts);
+    assert.deepStrictEqual(yield* sql`SELECT last_firing_id FROM scheduled_tasks`, tasks);
+    assert.includeDeepMembers(yield* history, [[108, "ScheduledTaskRuns"]]);
+    assert.deepStrictEqual(yield* runMigrations(), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

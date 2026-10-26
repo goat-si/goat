@@ -20,6 +20,7 @@ import {
 } from "./baseSchemas.ts";
 import {
   ScheduledTaskRunStatus,
+  ScheduledTask,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
@@ -1143,6 +1144,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  lastRun: ScheduledTask.fields.lastRun,
   runCount: Schema.optional(NonNegativeInt),
   lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */

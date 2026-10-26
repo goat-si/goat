@@ -165,3 +165,72 @@ describe("persisted task memory ceiling", () => {
     expect(() => Schema.decodeUnknownSync(codec)({ memoryGrantCeiling: "full-access" })).toThrow();
   });
 });
+
+describe("scheduled run outcomes", () => {
+  const task = {
+    id: "task",
+    title: "Synthetic schedule",
+    prompt: "Synthetic prompt",
+    enabled: true,
+    schedule: { type: "interval", everyMs: 60000 },
+    projectId: "project",
+    threadId: null,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: "codex", model: "model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: "2026-10-15T00:00:00.000Z",
+    updatedAt: "2026-10-15T00:00:00.000Z",
+    nextRunAt: null,
+    lastRunAt: null,
+    lastRunStatus: "running",
+    lastRunError: null,
+    runCount: 1,
+  };
+  const codec = Schema.fromJsonString(ScheduledTask);
+  it("accepts a legacy task without lastRun", () => {
+    expect(Schema.decodeUnknownSync(ScheduledTask)(task)).not.toHaveProperty("lastRun");
+  });
+  it.each([
+    "dispatching",
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "rolled_back",
+    "unknown",
+  ])("round-trips scheduled outcome %s through task JSON", (status) => {
+    const lastRun = {
+      firingId: "firing",
+      dispatchStatus: "accepted",
+      status,
+      threadId: "thread",
+      runId: "run",
+      requestedAt: task.createdAt,
+      dispatchedAt: task.createdAt,
+      startedAt: null,
+      completedAt: null,
+    };
+    const decoded = Schema.decodeUnknownSync(ScheduledTask)({ ...task, lastRun });
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decoded)).lastRun).toEqual(
+      lastRun,
+    );
+  });
+  it("keeps a task when a future nested outcome is unknown", () => {
+    expect(
+      Schema.decodeUnknownSync(ScheduledTask)({ ...task, lastRun: { status: "future" } }).lastRun,
+    ).toBeUndefined();
+  });
+  it("old schema decodes new-server output", () => {
+    const old = ScheduledTask.mapFields(({ lastRun: _lastRun, ...fields }) => fields);
+    const output = Schema.decodeUnknownSync(ScheduledTask)(task);
+    expect(
+      Schema.decodeUnknownSync(Schema.fromJsonString(old))(Schema.encodeSync(codec)(output))
+        .lastRunStatus,
+    ).toBe("running");
+  });
+});

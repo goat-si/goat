@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import {
   CommandId,
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
+  RunId,
   IsoDateTime,
   ProjectId,
   ScheduledTaskId,
@@ -222,6 +224,29 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 
+export const ScheduledTaskRun = Schema.Struct({
+  firingId: CommandId,
+  dispatchStatus: Schema.Literals(["dispatching", "accepted", "failed", "unknown"]),
+  status: Schema.Literals([
+    "dispatching",
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "rolled_back",
+    "unknown",
+  ]),
+  threadId: Schema.NullOr(ThreadId),
+  runId: Schema.NullOr(RunId),
+  requestedAt: IsoDateTime,
+  dispatchedAt: Schema.NullOr(IsoDateTime),
+  startedAt: Schema.NullOr(IsoDateTime),
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type ScheduledTaskRun = typeof ScheduledTaskRun.Type;
+
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
@@ -271,6 +296,7 @@ export const ScheduledTask = Schema.Struct({
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  lastRun: ForwardCompatibleOptional(ScheduledTaskRun),
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),

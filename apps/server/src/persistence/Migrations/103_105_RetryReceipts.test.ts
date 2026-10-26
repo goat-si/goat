@@ -43,7 +43,7 @@ it.effect(
       assert.notInclude(before, "webhook_secret_ref");
       assert.deepStrictEqual(
         (yield* runMigrations()).map(([id]) => id),
-        [103, 104, 105, 106, 107],
+        [103, 104, 105, 106, 107, 108],
       );
       const inbox = yield* sql<{ readonly text: string }>`SELECT text FROM remote_report_inbox`;
       assert.deepStrictEqual(

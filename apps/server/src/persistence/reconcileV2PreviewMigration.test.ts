@@ -120,6 +120,7 @@ describe("V2 preview upgrade", () => {
         [105, "ScheduledTaskWebhookSecretRef"],
         [106, "RemoteReportFences"],
         [107, "HubProvisionedLinks"],
+        [108, "ScheduledTaskRuns"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -250,6 +251,7 @@ describe("V2 preview upgrade", () => {
         [105, "ScheduledTaskWebhookSecretRef"],
         [106, "RemoteReportFences"],
         [107, "HubProvisionedLinks"],
+        [108, "ScheduledTaskRuns"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
