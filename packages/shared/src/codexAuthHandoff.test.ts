@@ -44,6 +44,13 @@ describe("Codex desktop handoff", () => {
       returnUrl: input.returnUrl,
     });
   });
+  it("reads handoff links on the goat scheme as well as the t3code scheme older servers write", () => {
+    const link = codexAuthHandoffUrl(input);
+    expect(readCodexAuthHandoff(link.replace(/^t3code:/, "goat:"), false)).toEqual(input);
+    const dev = codexAuthHandoffUrl(input, true);
+    expect(readCodexAuthHandoff(dev.replace(/^t3code-dev:/, "goat-dev:"), true)).toEqual(input);
+    expect(readCodexAuthHandoff(dev.replace(/^t3code-dev:/, "goat-dev:"), false)).toBeUndefined();
+  });
   it("rejects other handlers, schemes, arbitrary return sites, and non-OpenAI authorization", () => {
     const link = codexAuthHandoffUrl(input);
     expect(readCodexAuthHandoff(link, true)).toBeUndefined();
