@@ -1,9 +1,11 @@
 # 10 — T3 chase MOC
 
 > 축: upstream `pingdotgg/t3code` `main`
-> reviewed-through: `2c592a108` · 열린 카드 없음 · 갱신 2026-10-26
+> reviewed-through: `2c592a108` · 열린 카드 016 · 갱신 2026-10-26
 
-열린 카드 없음.
+| NNN | 카드                                                    | 상태       |
+| --- | ------------------------------------------------------- | ---------- |
+| 016 | [사이클 261026 머지](./10.016_t3_chase_cycle_261026.md) | 🟡 진행 중 |
 
 머지 순서: 사이클 PR goat-ci green → dev에 merge commit으로 랜딩 → 000 기준선 갱신, 카드 `_fin` 이동.
 
