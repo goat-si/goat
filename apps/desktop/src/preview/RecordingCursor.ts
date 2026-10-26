@@ -116,6 +116,11 @@ export function installRecordingCursor(
     }, 700);
     pointer(point, phase);
   };
+  const hideAgent = () => {
+    window.clearTimeout(agentTimer);
+    agentActive = false;
+    agentCursor.style.display = "none";
+  };
   const moveHuman = (point: { readonly x: number; readonly y: number }) => {
     if (controller === "agent") return;
     humanPoint = point;
@@ -167,6 +172,7 @@ export function installRecordingCursor(
   window.addEventListener("blur", hide);
   return {
     move,
+    hideAgent,
     keyPress,
     setController,
     setTheme,

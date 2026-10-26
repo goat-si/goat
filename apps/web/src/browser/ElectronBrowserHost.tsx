@@ -169,8 +169,10 @@ export function startElectronBrowserHost(): () => void {
   const disposers = [
     startAnnotationThemeSync(preview),
     preview.onPointerEvent((event) => {
-      useBrowserPointerStore.getState().apply(event);
-      avoidStackPointer(event);
+      const store = useBrowserPointerStore.getState();
+      store.apply(event);
+      if (!("type" in event) && useBrowserPointerStore.getState().byTabId[event.tabId] === event)
+        avoidStackPointer(event);
     }),
     preview.onOpenLink(openLinkInPreview),
   ];
@@ -186,6 +188,14 @@ export function ElectronBrowserHost() {
   const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
 
   const hostedTabIds = sessions.map((session) => session.runtimeTabId).join("\n");
+  const pointerTabs = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const active = new Set(hostedTabIds.split("\n").filter(Boolean));
+    const store = useBrowserPointerStore.getState();
+    for (const tabId of pointerTabs.current) if (!active.has(tabId)) store.clear(tabId);
+    for (const tabId of active) if (!pointerTabs.current.has(tabId)) store.attach(tabId);
+    pointerTabs.current = active;
+  }, [hostedTabIds]);
   useEffect(() => {
     const active = new Set(hostedTabIds.split("\n"));
     for (const tabId of reportedStackTabs) {

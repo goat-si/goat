@@ -166,6 +166,11 @@ function DesktopThumbnail(props: {
           src={shown}
         />
         {props.stopped || size === null ? null : <AgentCursor session={session} frame={size} />}
+        {session.target.kind === "desktop" && session.target.motionSupport === "unsupported" ? (
+          <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
+            Native cursor motion unavailable
+          </span>
+        ) : null}
       </div>
     );
   if (reason === "private") return <Placeholder icon="lock" text="Private" />;
@@ -197,12 +202,19 @@ function AgentCursor(props: {
     );
   }, []);
   const target = props.session.target;
+  const cursorState = target.kind === "desktop" ? target.cursorState : undefined;
   const cursor =
-    target.kind === "desktop" && target.cursor?.windowId === target.windowId
+    target.kind === "desktop" &&
+    target.cursor?.windowId === target.windowId &&
+    cursorState?.phase !== "hidden" &&
+    cursorState?.phase !== "yielded"
       ? target.cursor
       : undefined;
   const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
-  const key = cursor ? `${cursor.point.fx}:${cursor.point.fy}:${cursor.phase}` : null;
+  const ownerKey = cursorState
+    ? `${cursorState.identity.runId}:${cursorState.identity.turnId}:${cursorState.identity.targetId}:${cursorState.identity.generation}:${cursorState.identity.sequence}:${cursorState.phase}`
+    : cursor?.phase;
+  const key = cursor ? `${cursor.point.fx}:${cursor.point.fy}:${ownerKey}` : null;
   const [mark, setMark] = useState({ key, sequence: 0 });
   if (mark.key !== key) setMark({ key, sequence: mark.sequence + 1 });
   return (
@@ -210,6 +222,7 @@ function AgentCursor(props: {
       {place === undefined || cursor === undefined ? null : (
         <AgentCursorMark
           phase={cursor.phase === "acting" ? "click" : "move"}
+          {...(cursorState ? { cursorPhase: cursorState.phase } : {})}
           sequence={mark.sequence}
           left={place.left}
           top={place.top}

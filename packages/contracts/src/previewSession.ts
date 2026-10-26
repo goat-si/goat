@@ -7,7 +7,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
+import { ComputerUseAgentCursor, ComputerUseCursorState } from "./computerUseOverlay.ts";
 import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 
 export const PreviewSessionKind = Schema.Literals(["browser", "desktop"]);
@@ -32,6 +32,8 @@ export const PreviewSessionTarget = Schema.Union([
     title: Schema.String,
     /** Where the agent's cursor is on that window, while the helper draws it there. */
     cursor: Schema.optionalKey(ComputerUseAgentCursor),
+    cursorState: Schema.optionalKey(ComputerUseCursorState),
+    motionSupport: Schema.Literals(["supported", "unsupported"]),
   }),
 ]);
 export type PreviewSessionTarget = typeof PreviewSessionTarget.Type;

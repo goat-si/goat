@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { EnvironmentId } from "@goat/contracts";
 
 import {
   initialOverlayState,
@@ -36,6 +37,42 @@ const reply = (id: string, image?: { width: number; height: number }): OverlayEv
 const snapshot = [call("s", "get_window_state"), reply("s", { width: 1000, height: 500 })];
 
 describe("ComputerUseOverlay", () => {
+  it("keeps a hidden capture above concurrent thinking and refuses a stale show", () => {
+    const owner = { environmentId: EnvironmentId.make("environment"), runId: "run", turnId: "turn", targetId: "target", generation: 1 };
+    const scoped = (sequence: number, phase: "thinking" | "idle") => ({
+      type: "cursor" as const,
+      event: { op: "show" as const, identity: { ...owner, sequence }, phase },
+    });
+    const { state, sent } = run([
+      ...snapshot,
+      call("click", "click", { ...WINDOW, x: 20, y: 20 }),
+      reply("click"),
+      scoped(1, "thinking"),
+      call("capture", "get_window_state", WINDOW),
+      scoped(2, "idle"),
+      scoped(1, "thinking"),
+      reply("capture"),
+      { type: "cursor", event: { op: "hide", identity: { ...owner, sequence: 3 }, phase: "hidden", reason: "ended" } },
+      scoped(2, "idle"),
+    ]);
+    assert.deepEqual(sent[5], [{ op: "hide", identity: { ...owner, sequence: 1 }, phase: "hidden", reason: "capture" }]);
+    assert.deepEqual(sent[6], [{ op: "hide", identity: { ...owner, sequence: 2 }, phase: "hidden", reason: "capture" }]);
+    assert.deepEqual(sent[7], []);
+    assert.deepEqual(state.shown, { op: "hide", identity: { ...owner, sequence: 3 }, phase: "hidden", reason: "ended" });
+  });
+
+  it("keeps direct-call markers separate from a code-mode cursor owner", () => {
+    const owner = { environmentId: EnvironmentId.make("environment"), runId: "run", turnId: "turn", targetId: "target", generation: 1, sequence: 1 };
+    const { sent } = run([
+      ...snapshot,
+      { type: "cursor", event: { op: "show", identity: owner, phase: "thinking" } },
+      call("direct", "click", { ...WINDOW, x: 50, y: 50 }),
+      reply("direct"),
+    ]);
+    assert.deepEqual(sent[3], [{ op: "show", pid: 42, windowId: 7, point: { fx: 0.05, fy: 0.1 }, phase: "acting" }]);
+    assert.deepEqual(sent[4], [{ op: "show", pid: 42, windowId: 7, point: { fx: 0.05, fy: 0.1 }, phase: "resting" }]);
+  });
+
   it("hides the overlay through settle sampling and uses that window's fresh pixel frame", () => {
     const { sent, state } = run([
       ...snapshot,

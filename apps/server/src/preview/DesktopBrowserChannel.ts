@@ -6,6 +6,7 @@ import {
   DesktopBrowserCommand,
   DesktopBrowserEvent,
   type DesktopBrowserCommand as DesktopBrowserCommandType,
+  type ComputerUseCursorState,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -47,10 +48,11 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
-      pointer: { readonly phase: "move" | "click"; readonly x: number; readonly y: number },
+      pointer: { readonly phase: "move" | "click"; readonly x: number; readonly y: number; readonly cursor?: ComputerUseCursorState },
     ) => Effect.Effect<void>;
     /** Never fails. A failed write means a broken channel; the next backend starts with no turns. */
     readonly turn: (threadId: string, active: boolean) => Effect.Effect<void>;
+    readonly cursorState?: (key: DesktopTabKey, cursor: ComputerUseCursorState) => Effect.Effect<void>;
   }
 >()("goat/preview/DesktopBrowserChannel") {}
 
@@ -81,6 +83,9 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }),
       pointer: Effect.fn("DesktopBrowserChannel.pointer")(function () {
+        return Effect.void;
+      }),
+      cursorState: Effect.fn("DesktopBrowserChannel.cursorState")(function () {
         return Effect.void;
       }),
     });
@@ -227,6 +232,9 @@ const make = Effect.gen(function* () {
     }),
     pointer: Effect.fn("DesktopBrowserChannel.pointer")(function (key, pointer) {
       return command({ type: "pointer", ...key, ...pointer });
+    }),
+    cursorState: Effect.fn("DesktopBrowserChannel.cursorState")(function (key, cursor) {
+      return command({ type: "cursor-state", ...key, cursor });
     }),
   });
 });

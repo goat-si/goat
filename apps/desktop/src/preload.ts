@@ -2,7 +2,7 @@ import type {
   DesktopBridge,
   DesktopPreviewCaptureEvent,
   DesktopPreviewOpenLinkEvent,
-  DesktopPreviewPointerEvent,
+  DesktopPreviewCursorEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -546,7 +546,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     onPointerEvent: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, pointerEvent: unknown) => {
         if (typeof pointerEvent !== "object" || pointerEvent === null) return;
-        listener(pointerEvent as DesktopPreviewPointerEvent);
+        listener(pointerEvent as DesktopPreviewCursorEvent);
       };
       ipcRenderer.on(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, wrappedListener);
       return () =>

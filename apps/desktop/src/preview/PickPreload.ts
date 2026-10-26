@@ -103,6 +103,16 @@ ipcRenderer.on(RECORDING_KEY_CHANNEL, (_event, input: unknown) => {
 });
 ipcRenderer.on(RECORDING_POINTER_CHANNEL, (_event, point: unknown) => {
   if (
+    typeof point === "object" && point !== null &&
+    "type" in point && point.type === "cursor-state" &&
+    "cursor" in point && typeof point.cursor === "object" && point.cursor !== null &&
+    "phase" in point.cursor &&
+    (point.cursor.phase === "hidden" || point.cursor.phase === "yielded")
+  ) {
+    recordingCursor?.hideAgent();
+    return;
+  }
+  if (
     typeof point === "object" &&
     point !== null &&
     "x" in point &&

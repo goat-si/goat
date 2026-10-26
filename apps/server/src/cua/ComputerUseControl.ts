@@ -1,5 +1,6 @@
 import type {
   ComputerUseAgentCursor,
+  ComputerUseCursorReport,
   ComputerUseControlEnd,
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
@@ -28,6 +29,8 @@ export interface ComputerUseControl {
   readonly target?: { readonly pid: number; readonly windowId: number };
   /** Where the helper draws the agent's cursor on that window, for the preview to draw too. */
   readonly cursor?: ComputerUseAgentCursor;
+  /** Latest scoped report, including a terminal identity-bearing tombstone. */
+  readonly cursorReport?: ComputerUseCursorReport;
 }
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
@@ -72,7 +75,7 @@ export const markActed = <C extends ComputerUseControl & { readonly ended?: unkn
  * may show it, and unmarked if it sat idle between turns, since that turn has not asked for the
  * screen yet. A stopped card keeps its mark while idle.
  */
-export const nextTurn = <C extends ComputerUseControl>({ idle, acted, ...rest }: C) =>
+export const nextTurn = <C extends ComputerUseControl>({ idle, acted, cursor, cursorReport, ...rest }: C) =>
   idle !== true && acted === true ? { ...rest, acted } : rest;
 
 /**
@@ -115,6 +118,28 @@ export interface Interruptions {
 
 /** The agent's cursor a proxy reports, or null when the overlay draws none. */
 export type Cursor = ComputerUseAgentCursor | null;
+export type CursorTargetReport =
+  | { readonly pid: number; readonly windowId: number }
+  | { readonly cursor: Cursor }
+  | { readonly report: ComputerUseCursorReport };
+
+const sameOwner = (a: ComputerUseCursorReport, b: ComputerUseCursorReport) =>
+  a.identity.environmentId === b.identity.environmentId &&
+  a.identity.runId === b.identity.runId &&
+  a.identity.turnId === b.identity.turnId &&
+  a.identity.targetId === b.identity.targetId &&
+  a.identity.generation === b.identity.generation;
+
+export const staleCursorReport = (record: ComputerUseControl, report: ComputerUseCursorReport) => {
+  const previous = record.cursorReport;
+  if (previous === undefined) return false;
+  if (sameOwner(previous, report))
+    return report.identity.sequence <= previous.identity.sequence ||
+      ((previous.phase === "hidden" || previous.phase === "yielded") &&
+        report.phase !== "hidden" && report.phase !== "yielded");
+  if (previous.phase === "hidden" || previous.phase === "yielded") return false;
+  return report.identity.generation <= previous.identity.generation;
+};
 
 const sameCursor = (a: ComputerUseAgentCursor | undefined, b: ComputerUseAgentCursor | undefined) =>
   a === b ||
@@ -136,16 +161,30 @@ const withCursor = <C extends ComputerUseControl>(record: C, cursor: Cursor): C 
   return (next === undefined ? rest : { ...rest, cursor: next }) as C;
 };
 
+const withReport = <C extends ComputerUseControl>(record: C, report: ComputerUseCursorReport): C => {
+  const cursor =
+    report.phase !== "hidden" &&
+    report.phase !== "yielded" &&
+    report.cursor !== null &&
+    report.cursor.windowId === record.target?.windowId
+      ? report.cursor
+      : undefined;
+  const { cursor: _previous, cursorReport: _oldReport, ...rest } = record;
+  return { ...rest, cursorReport: report, ...(cursor === undefined ? {} : { cursor }) } as C;
+};
+
 /**
  * The record after a proxy's report: a new target window, which drops a cursor on the previous
  * one, or the cursor itself. Undefined when nothing changes.
  */
 export const targeted = <C extends ComputerUseControl>(
   record: C,
-  report: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+  report: CursorTargetReport,
 ): C | undefined => {
+  if ("report" in report) return staleCursorReport(record, report.report) ? undefined : withReport(record, report.report);
   if ("cursor" in report) return withCursor(record, report.cursor);
   if (record.target?.pid === report.pid && record.target.windowId === report.windowId) return;
-  const moved = { ...record, target: { pid: report.pid, windowId: report.windowId } };
+  const { cursorReport: _report, ...rest } = record;
+  const moved = { ...rest, target: { pid: report.pid, windowId: report.windowId } } as C;
   return withCursor(moved, null) ?? moved;
 };

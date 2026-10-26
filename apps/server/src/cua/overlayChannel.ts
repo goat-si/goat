@@ -23,8 +23,9 @@ const encodeLine = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ seq: Schema.Number, command: ComputerUseOverlayCommand })),
 );
 
-/** How long a command may take to reach the screen before the proxy forwards the call anyway. */
+/** How long a command may take to reach the screen. A capture needs an acknowledged hide. */
 export const OVERLAY_ACK_TIMEOUT_MS = 250;
+export type OverlayAckOutcome = "applied" | "unavailable" | "timed_out";
 
 /**
  * The proxy's end of the overlay channel: fd 3 of a macOS helper started with --mcp (#1214).
@@ -32,8 +33,8 @@ export const OVERLAY_ACK_TIMEOUT_MS = 250;
  * {seq, command}. The helper answers {ack: seq} once the change is on screen, or off it for a
  * hide. That answer is what lets the proxy forward a capture only after the overlay is gone.
  *
- * Losing the overlay never stops computer use. A closed channel or a late ack makes send
- * return after the timeout.
+ * A closed channel or a late ack never counts as an applied hide. The proxy can still forward
+ * non-capture calls; a capture checks captureHideConfirmed before forwarding.
  *
  * The helper also writes {humanInput: {source, ageMs}} lines on it while it runs (#1235): every
  * new keyboard or pointer event the system had, the agent's own included, for the proxy to sort.
@@ -44,7 +45,9 @@ export function overlayChannel(
 ) {
   let seq = 0;
   let buffered = "";
-  const waiting = new Map<number, () => void>();
+  const waiting = new Map<number, (outcome: OverlayAckOutcome) => void>();
+  let mayBeVisible = false;
+  let lastHideOutcome: OverlayAckOutcome = "unavailable";
   socket.setEncoding("utf8");
   socket.on("data", (chunk: string) => {
     buffered += chunk;
@@ -52,26 +55,45 @@ export function overlayChannel(
       const line = buffered.slice(0, end);
       buffered = buffered.slice(end + 1);
       const ack = decodeAck(line);
-      if (Option.isSome(ack)) waiting.get(ack.value.ack)?.();
+      if (Option.isSome(ack)) waiting.get(ack.value.ack)?.("applied");
       const input = decodeHumanInput(line);
       if (Option.isSome(input)) onHumanInput(input.value.humanInput);
     }
   });
   const release = () => {
-    for (const done of waiting.values()) done();
+    for (const done of waiting.values()) done("unavailable");
   };
   socket.on("close", release);
   socket.on("error", release);
 
-  return (command: ComputerUseOverlayCommand) =>
-    Effect.callback<void>((resume) => {
-      if (socket.destroyed || !socket.writable) return resume(Effect.void);
+  const send = (command: ComputerUseOverlayCommand) =>
+    Effect.callback<OverlayAckOutcome>((resume) => {
+      if (socket.destroyed || !socket.writable) return resume(Effect.succeed("unavailable"));
       const id = ++seq;
-      waiting.set(id, () => {
+      if (command.op === "show") {
+        mayBeVisible = true;
+        lastHideOutcome = "unavailable";
+      }
+      waiting.set(id, (outcome) => {
         waiting.delete(id);
-        resume(Effect.void);
+        resume(Effect.succeed(outcome));
       });
       socket.write(encodeLine({ seq: id, command }) + "\n");
       return Effect.sync(() => void waiting.delete(id));
-    }).pipe(Effect.timeoutOption(Duration.millis(OVERLAY_ACK_TIMEOUT_MS)), Effect.asVoid);
+    }).pipe(
+      Effect.timeoutOption(Duration.millis(OVERLAY_ACK_TIMEOUT_MS)),
+      Effect.map((answer) => Option.getOrElse(answer, () => "timed_out" as const)),
+      Effect.tap((outcome) =>
+        Effect.sync(() => {
+          if (command.op !== "hide") return;
+          lastHideOutcome = outcome;
+          if (outcome === "applied") mayBeVisible = false;
+        }),
+      ),
+      Effect.asVoid,
+    );
+  return Object.assign(send, {
+    captureHideConfirmed: () => !mayBeVisible || lastHideOutcome === "applied",
+    lastHideOutcome: () => lastHideOutcome,
+  });
 }

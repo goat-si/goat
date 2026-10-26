@@ -94,6 +94,7 @@ export const blockedSession = (
   target: {
     kind: "desktop",
     title: cuaAgentBlockTitle(block),
+    motionSupport: "unsupported",
   },
   owner: "agent",
   status: "permission-needed",
@@ -165,6 +166,7 @@ export const desktopSession = (
     threadId: control.threadId,
     target: {
       kind: "desktop",
+      motionSupport: base.platform === "mac" && detection.frames ? "supported" : "unsupported",
       ...(control.target === undefined
         ? {}
         : { pid: control.target.pid, windowId: control.target.windowId }),
@@ -172,6 +174,14 @@ export const desktopSession = (
       ...(control.cursor === undefined || state._tag !== "active"
         ? {}
         : { cursor: control.cursor }),
+      ...(control.cursorReport === undefined || state._tag !== "active"
+        ? {}
+        : {
+            cursorState: {
+              identity: control.cursorReport.identity,
+              phase: control.cursorReport.phase,
+            },
+          }),
       title:
         scope === undefined
           ? "Computer use"

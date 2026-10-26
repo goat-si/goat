@@ -24,7 +24,7 @@ import type { DesktopCuaGrants, DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
-import type { DesktopPreviewCaptureEvent, DesktopPreviewPointerEvent } from "./desktopBrowser.ts";
+import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -1389,7 +1389,7 @@ export interface DesktopPreviewBridge {
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
-  onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onPointerEvent: (listener: (event: DesktopPreviewCursorEvent) => void) => () => void;
   onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }

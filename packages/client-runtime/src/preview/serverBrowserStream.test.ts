@@ -169,6 +169,39 @@ describe("preview stream agent pointer", () => {
       sequence: 2,
     });
   });
+
+  it("decodes cursor-state without coordinates and rejects stale or unknown phases", () => {
+    const onPointer = vi.fn();
+    const onCursorState = vi.fn();
+    createPreviewStreamClient(target, {
+      onFrame: vi.fn(),
+      onPointer,
+      onCursorState,
+      onViewport: vi.fn(),
+      onConnectedChange: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    const identity = {
+      environmentId: "environment",
+      runId: "run",
+      turnId: "turn",
+      targetId: "target",
+      generation: 1,
+    };
+    const message = (phase: string, sequence: number) =>
+      FakeSocket.current.message(JSON.stringify({
+        type: "cursor-state",
+        cursor: { identity: { ...identity, sequence }, phase },
+      }));
+    message("thinking", 1);
+    message("unknown", 2);
+    message("hidden", 2);
+    message("acting", 1);
+    FakeSocket.current.message(JSON.stringify({ type: "pointer", phase: "move", x: 1, y: 2, sequence: 3 }));
+    expect(onCursorState).toHaveBeenCalledTimes(2);
+    expect(onCursorState).toHaveBeenLastCalledWith({ identity: { ...identity, sequence: 2 }, phase: "hidden" });
+    expect(onPointer).not.toHaveBeenCalled();
+  });
 });
 
 describe("preview frame painter privacy", () => {

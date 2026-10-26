@@ -16,6 +16,8 @@ import {
 } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   type EnvironmentId,
+  type ComputerUseCursorIdentity,
+  type ComputerUseCursorPhase,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
   ThreadId,
@@ -431,6 +433,22 @@ export function ServerBrowserSurface(props: {
             viewportRef.current,
           );
           if (placed) setAgentCursor(placed);
+        },
+        onCursorState: (state) => {
+          if (state.phase === "hidden" || state.phase === "yielded") {
+            setAgentCursor(null);
+            return;
+          }
+          setAgentCursor((current) =>
+            current?.owner !== undefined &&
+            current.owner.environmentId === state.identity.environmentId &&
+            current.owner.runId === state.identity.runId &&
+            current.owner.turnId === state.identity.turnId &&
+            current.owner.targetId === state.identity.targetId &&
+            current.owner.generation === state.identity.generation
+              ? { ...current, sequence: state.identity.sequence, cursorPhase: state.phase }
+              : null,
+          );
         },
         onClipboard: (text) => void copyPageText(text),
         onDownload: offerDownload,
@@ -955,6 +973,8 @@ interface AgentCursorPlacement {
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
+  readonly owner?: ComputerUseCursorIdentity;
+  readonly cursorPhase?: ComputerUseCursorPhase;
 }
 
 function placeAgentCursor(
@@ -970,5 +990,8 @@ function placeAgentCursor(
     sequence: pointer.sequence,
     left,
     top,
+    ...(pointer.cursor === undefined
+      ? {}
+      : { owner: pointer.cursor.identity, cursorPhase: pointer.cursor.phase }),
   };
 }

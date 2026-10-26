@@ -8,6 +8,7 @@ import {
   type PreviewStreamPointer,
   type PreviewStreamViewport,
 } from "@goat/client-runtime/preview/server-browser-stream";
+import type { ComputerUseCursorIdentity } from "@goat/contracts";
 
 import type { PreviewStreamConfiguration, PreviewStreamMessage } from "./preview-stream-document";
 
@@ -172,6 +173,21 @@ export function start(configuration: PreviewStreamConfiguration) {
       {
         onFrame: (jpeg) => painter.paint(jpeg),
         onPointer: showAgentCursor,
+        onCursorState: (state) => {
+          if (state.phase === "hidden" || state.phase === "yielded") {
+            agentCursor.style.opacity = "0";
+            agentCursorOwner = null;
+            if (agentCursorTimer !== null) clearTimeout(agentCursorTimer);
+            agentCursorTimer = null;
+          } else if (
+            agentCursorOwner === null ||
+            agentCursorOwner.environmentId !== state.identity.environmentId ||
+            agentCursorOwner.runId !== state.identity.runId ||
+            agentCursorOwner.turnId !== state.identity.turnId ||
+            agentCursorOwner.targetId !== state.identity.targetId ||
+            agentCursorOwner.generation !== state.identity.generation
+          ) agentCursor.style.opacity = "0";
+        },
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),
         onFileChooser: (chooser) => post({ type: "fileChooser", chooser }),
@@ -264,6 +280,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   }
 
   let agentCursorTimer: ReturnType<typeof setTimeout> | null = null;
+  let agentCursorOwner: ComputerUseCursorIdentity | null = null;
   const showAgentCursor = (pointer: PreviewStreamPointer) => {
     if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller === "you")
       return;
@@ -274,6 +291,7 @@ export function start(configuration: PreviewStreamConfiguration) {
     const left = (box.width - width) / 2 + (pointer.x * width) / viewport.width;
     const top = (box.height - height) / 2 + (pointer.y * height) / viewport.height;
     agentCursor.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+    agentCursorOwner = pointer.cursor?.identity ?? null;
     agentCursor.style.opacity = "1";
     if (pointer.phase === "click") {
       agentCursor.querySelector(".ping")?.remove();
