@@ -38,6 +38,7 @@ const makeDebuggee = () => {
   /** Commands the host sends on its own (no relay id), such as ending an input hold. */
   const own: Array<{ method: string; params: unknown }> = [];
   const sendWaiters: Array<() => void> = [];
+  const ownWaiters = new Map<string, () => void>();
   const debuggee = Object.assign(emitter, {
     sendCommand: (method: string, params?: { id?: number }) =>
       new Promise((resolve) => {
@@ -48,10 +49,12 @@ const makeDebuggee = () => {
         const expression = (params as { expression?: string } | undefined)?.expression;
         if (
           method === "Input.setIgnoreInputEvents" ||
+          method === "Page.stopScreencast" ||
           (method === "Runtime.evaluate" && expression?.includes("__goatAgentInputHeld"))
         ) {
           own.push({ method, params });
           resolve({});
+          ownWaiters.get(method)?.();
           return;
         }
         sent.push(params?.id);
@@ -78,6 +81,8 @@ const makeDebuggee = () => {
     sent,
     own,
     nextSend: () => new Promise<void>((resolve) => sendWaiters.push(resolve)),
+    /** Resolves when the host itself sends `method`. */
+    sentOwn: (method: string) => new Promise<void>((resolve) => ownWaiters.set(method, resolve)),
     release: () => pending.splice(0).forEach((resolve) => resolve()),
     releaseFirst: () => pending.shift()?.(),
   };
@@ -240,6 +245,23 @@ describe("DesktopBrowserHost", () => {
         ["Runtime.evaluate", { expression: "globalThis.__goatAgentInputHeld = 0" }],
       ]);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("stops the screencast a released relay left running", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      host.attach(key, debuggee.tab);
+
+      const started = debuggee.nextSend();
+      yield* command(host, 1, "Page.startScreencast");
+      yield* Effect.promise(() => started);
+      debuggee.release();
+      const stopped = debuggee.sentOwn("Page.stopScreencast");
+      yield* host.handleCommandLine(encodeJson({ type: "release", ...key }));
+      yield* Effect.promise(() => stopped);
+      expect(debuggee.own.map(({ method }) => method)).toContain("Page.stopScreencast");
+    }),
   );
 
   it.effect("drops screenshots a released relay left waiting", () =>
