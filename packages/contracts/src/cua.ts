@@ -523,6 +523,72 @@ export const ComputerUseForegroundGrant = Schema.Struct({
 });
 export type ComputerUseForegroundGrant = typeof ComputerUseForegroundGrant.Type;
 
+const primitiveId = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+const primitiveJson = Schema.Json.check(
+  Schema.makeFilter(
+    (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 64 * 1024,
+  ),
+);
+const strictPrimitive = <S extends Schema.Constraint>(schema: S) =>
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
+    [schema],
+    ([codec]) => {
+      const decode = SchemaParser.decodeUnknownEffect(codec);
+      return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
+    },
+    {
+      toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
+      toCodecJson: () => undefined,
+    },
+  );
+const primitiveCallIdentity = {
+  requestId: primitiveId,
+  registrationId: primitiveId,
+  controlId: primitiveId,
+  connectionGeneration: primitiveId,
+  runId: primitiveId,
+  turnId: primitiveId,
+  callId: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+};
+
+export const ComputerUsePrimitiveRequest = Schema.Struct({
+  state: Schema.Literal("primitive-request"),
+  ...primitiveCallIdentity,
+  deadlineMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+  tool: primitiveId,
+  args: primitiveJson,
+});
+export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
+
+export const ComputerUsePrimitiveReply = strictPrimitive(
+  Schema.Struct({
+    ...primitiveCallIdentity,
+    status: Schema.Literals(["not_started", "settled", "unknown_outcome"]),
+    result: Schema.optionalKey(primitiveJson),
+    error: Schema.optionalKey(primitiveJson),
+  }),
+);
+export type ComputerUsePrimitiveReply = typeof ComputerUsePrimitiveReply.Type;
+
+const primitiveControlReport = {
+  registrationId: primitiveId,
+  controlId: primitiveId,
+  connectionId: primitiveId,
+  driverGeneration: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+};
+export const ComputerUsePrimitiveControlReady = strictPrimitive(
+  Schema.Struct(primitiveControlReport),
+);
+export type ComputerUsePrimitiveControlReady = typeof ComputerUsePrimitiveControlReady.Type;
+export const ComputerUsePrimitiveControlCutoff = strictPrimitive(
+  Schema.Struct(primitiveControlReport),
+);
+export type ComputerUsePrimitiveControlCutoff = typeof ComputerUsePrimitiveControlCutoff.Type;
+
 /**
  * What the computer use proxy hears from its own server about the control it was started for,
  * one JSON object per line. "active" carries the apps the thread may control, absent when every
@@ -563,6 +629,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     expiresAt: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
+  ComputerUsePrimitiveRequest,
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
@@ -587,6 +654,7 @@ export const ComputerUseLeaseThreadUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     reason: ComputerUseControlEnd,
   }),
+  ComputerUsePrimitiveRequest,
 ]);
 export type ComputerUseLeaseThreadUpdate = typeof ComputerUseLeaseThreadUpdate.Type;
 
@@ -657,6 +725,9 @@ export const computerUseRefusalReason = (
 
 /** Path the proxy reads control updates from, on the server that issued its MCP credential. */
 export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+export const COMPUTER_USE_PRIMITIVE_REPLY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-replies`;
+export const COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-ready`;
+export const COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-cutoff`;
 
 const ComputerUseCallOwner = {
   controlId: TrimmedNonEmptyString,

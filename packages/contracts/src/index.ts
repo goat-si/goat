@@ -10,6 +10,7 @@ export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
 export * from "./cua.ts";
+export * from "./screenCode.ts";
 export * from "./computerUseProtocol.ts";
 export * from "./computerUseOverlay.ts";
 export * from "./builtinSkills.ts";

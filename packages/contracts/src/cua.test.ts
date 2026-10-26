@@ -7,6 +7,10 @@ import {
   ComputerUseLeaseUpdate,
   ComputerUseLeaseThreadUpdate,
   ComputerUseForegroundGrant,
+  ComputerUsePrimitiveControlCutoff,
+  ComputerUsePrimitiveControlReady,
+  ComputerUsePrimitiveReply,
+  ComputerUsePrimitiveRequest,
   ComputerUseRequestInput,
   ComputerUseRequestResult,
   CuaHostStatus,
@@ -49,6 +53,66 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("carries a bounded primitive request on both lease streams", () => {
+    const request = {
+      state: "primitive-request",
+      requestId: "request:1",
+      registrationId: "registration:1",
+      controlId: "control:1",
+      connectionGeneration: "driver:1",
+      runId: "run:1",
+      turnId: "turn:1",
+      callId: 1,
+      deadlineMillis: 10,
+      tool: "click",
+      args: { x: 1, y: 2 },
+    } as const;
+    expect(
+      Schema.encodeSync(ComputerUsePrimitiveRequest)(
+        Schema.decodeUnknownSync(ComputerUsePrimitiveRequest)(request),
+      ),
+    ).toEqual(request);
+    expect(decodeLeaseUpdate(request)).toEqual(request);
+    expect(Schema.decodeUnknownSync(ComputerUseLeaseThreadUpdate)(request)).toEqual(request);
+    expect(() =>
+      decodeLeaseUpdate({ ...request, args: { text: "x".repeat(64 * 1024) } }),
+    ).toThrow();
+  });
+
+  it("requires exact control report identity and rejects extra fields", () => {
+    const report = {
+      registrationId: "registration:1",
+      controlId: "control:1",
+      connectionId: "driver:1",
+      driverGeneration: 0,
+    };
+    for (const schema of [ComputerUsePrimitiveControlReady, ComputerUsePrimitiveControlCutoff]) {
+      const decode = Schema.decodeUnknownSync(schema);
+      expect(Schema.encodeSync(schema)(decode(report))).toEqual(report);
+      expect(() => decode({ ...report, driverGeneration: -1 })).toThrow();
+      expect(() => decode({ ...report, connectionId: "x".repeat(201) })).toThrow();
+      expect(() => decode({ ...report, threadId: "thread:forged" })).toThrow();
+    }
+  });
+
+  it("roundtrips a correlated reply and rejects excess authority", () => {
+    const reply = {
+      requestId: "request:1",
+      registrationId: "registration:1",
+      controlId: "control:1",
+      connectionGeneration: "driver:1",
+      runId: "run:1",
+      turnId: "turn:1",
+      callId: 1,
+      status: "settled",
+      result: { content: [{ type: "text", text: "ok" }] },
+    } as const;
+    const decode = Schema.decodeUnknownSync(ComputerUsePrimitiveReply);
+    expect(Schema.encodeSync(ComputerUsePrimitiveReply)(decode(reply))).toEqual(reply);
+    expect(() => decode({ ...reply, status: "replay" })).toThrow();
+    expect(() => decode({ ...reply, proxyChannelToken: "forged" })).toThrow();
+  });
+
   it("thread updates require snapshot expiry and bind each control end to its id", () => {
     const decode = Schema.decodeUnknownSync(ComputerUseLeaseThreadUpdate);
     expect(decode({ state: "waiting" })).toEqual({ state: "waiting" });
