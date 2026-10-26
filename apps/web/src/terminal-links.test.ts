@@ -228,15 +228,15 @@ describe("resolvePathLinkTarget", () => {
 
   it("keeps Windows absolute paths with forward slashes unchanged", () => {
     expect(
-      resolvePathLinkTarget("C:/Users/julius/project/src/main.ts:12", "C:\\Users\\julius\\project"),
-    ).toBe("C:/Users/julius/project/src/main.ts:12");
+      resolvePathLinkTarget("C:/Users/alex/project/src/main.ts:12", "C:\\Users\\alex\\project"),
+    ).toBe("C:/Users/alex/project/src/main.ts:12");
   });
 
   // regression: #13408 terminal links kept a trailing colon
   it("keeps the line and column of a compiler diagnostic", () => {
-    const [link] = extractTerminalLinks("/Users/julius/project/main.c:10:5: error: expected ';'");
-    expect(resolvePathLinkTarget(link?.text ?? "", "/Users/julius/project")).toBe(
-      "/Users/julius/project/main.c:10:5",
+    const [link] = extractTerminalLinks("/Users/alex/project/main.c:10:5: error: expected ';'");
+    expect(resolvePathLinkTarget(link?.text ?? "", "/Users/alex/project")).toBe(
+      "/Users/alex/project/main.c:10:5",
     );
   });
 });

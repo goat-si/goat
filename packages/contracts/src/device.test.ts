@@ -23,8 +23,8 @@ const decodeOlderState = Schema.decodeUnknownSync(
 
 describe("configured device hosts", () => {
   it("reads SSH hosts saved before hosts had a kind, and bounds EAS sessions", () => {
-    expect(decodeSshHosts([{ id: "mac", label: "Mac mini", target: "julius@mac" }])).toEqual([
-      { kind: "ssh", id: "mac", label: "Mac mini", target: "julius@mac" },
+    expect(decodeSshHosts([{ id: "mac", label: "Mac mini", target: "alex@mac" }])).toEqual([
+      { kind: "ssh", id: "mac", label: "Mac mini", target: "alex@mac" },
     ]);
     expect(decodeEas([{ kind: "eas", id: "eas", label: "EAS Simulator" }])).toEqual([
       {
