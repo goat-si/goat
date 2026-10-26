@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 
 import {
   OrchestratorMcpScheduledTask,
+  OrchestratorMcpScheduleTaskInput,
+  OrchestratorMcpUpdateScheduledTaskInput,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpPendingRequestRespondInput,
   OrchestratorMcpPendingRequestRespondResult,
@@ -483,4 +485,35 @@ it("preserves lastRun in MCP JSON and keeps legacy and future nested outcomes re
     );
   }
   expect(decode({ ...task, lastRun: { status: "future" } }).lastRun).toBeUndefined();
+});
+
+it("retains notification policy in MCP writes and future-policy task output", () => {
+  const create = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
+  const update = Schema.decodeUnknownSync(OrchestratorMcpUpdateScheduledTaskInput);
+  const base = { prompt: "Synthetic", schedule: { type: "interval", everyMs: 60000 } };
+  for (const notificationPolicy of ["all_runs", "failed_runs_only", "important_updates"]) {
+    expect(create({ ...base, notificationPolicy }).notificationPolicy).toBe(notificationPolicy);
+    expect(update({ scheduledTaskId: "task", notificationPolicy }).notificationPolicy).toBe(
+      notificationPolicy,
+    );
+  }
+  for (const notificationPolicy of [null, "future"])
+    expect(() => create({ ...base, notificationPolicy })).toThrow();
+  const task = {
+    scheduledTaskId: "task",
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: true,
+    projectId: "project",
+    boundThreadId: null,
+    schedule: base.schedule,
+    nextRunAt: null,
+    lastRunStatus: "never",
+    notificationPolicy: "future",
+  };
+  const codec = Schema.fromJsonString(OrchestratorMcpScheduledTask);
+  const decodeTask = Schema.decodeUnknownSync(OrchestratorMcpScheduledTask);
+  expect(
+    Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decodeTask(task))).notificationPolicy,
+  ).toBe("future");
 });

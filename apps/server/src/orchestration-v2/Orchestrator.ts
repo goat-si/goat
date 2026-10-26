@@ -1,3 +1,4 @@
+import { markThreadUnread } from "./ProjectionRunNotification.ts";
 import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
 import { makeRemoteDelegatedTasks } from "./goat/RemoteDelegatedTasks.ts";
@@ -1272,7 +1273,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection = { ...projection, thread: event.payload, updatedAt: event.occurredAt };
           continue;
         }
-        projection = applyToProjection(projection, event);
+        projection = applyToProjection(projection, event, { deferNotificationCursor: true });
       }
       return projection;
     });
@@ -3446,18 +3447,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       snoozedUntil = parsedSnoozedUntil.value;
     }
-    let markUnreadVisitedAt: DateTime.Utc | null = null;
+    let markUnreadCompletedAt: DateTime.Utc | null = null;
     if (command.type === "thread.mark-unread") {
       const projection = yield* loadProjectionForCommand(command, ["runs"]);
-      const latestRunCompletedAt = projection.runs.at(-1)?.completedAt ?? null;
-      if (latestRunCompletedAt === null) {
+      markUnreadCompletedAt = projection.runs.at(-1)?.completedAt ?? null;
+      if (markUnreadCompletedAt === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Thread ${command.threadId} has no completed run to mark unread.`,
         });
       }
-      markUnreadVisitedAt = DateTime.subtract(latestRunCompletedAt, { milliseconds: 1 });
     }
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
@@ -3574,7 +3574,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.mark-unread":
-          return { ...thread, lastVisitedAt: markUnreadVisitedAt };
+          return markThreadUnread(thread, markUnreadCompletedAt);
         case "thread.metadata.update": {
           const previousRecovery =
             thread.limitRecovery?.runId === command.limitRecovery?.runId &&
@@ -5370,7 +5370,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           lastVisitedAt: DateTime.subtract(now, { milliseconds: 1 }),
         },
       });
-      projection = applyToProjection(projection, event);
+      projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
 
     const continuedTaskId = projection.runs.find(

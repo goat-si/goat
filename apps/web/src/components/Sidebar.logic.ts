@@ -1,3 +1,5 @@
+import { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
+export { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -1000,6 +1002,8 @@ type ThreadStatusInput = Pick<
   | "pendingGuestMessageCount"
   | "interactionMode"
   | "latestRun"
+  | "notificationCompletedAt"
+  | "markedUnreadCompletionAt"
   | "runtime"
 > & {
   lastVisitedAt?: string | null | undefined;
@@ -1027,17 +1031,6 @@ export function resolveThreadLastVisitedAt(
   // servers.
   if (serverLastVisitedAt === undefined) return localLastVisitedAt;
   return serverLastVisitedAt ?? undefined;
-}
-
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
-  if (!thread.latestRun?.completedAt) return false;
-  const completedAt = Date.parse(thread.latestRun.completedAt);
-  if (Number.isNaN(completedAt)) return false;
-  if (!thread.lastVisitedAt) return false;
-
-  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(lastVisitedAt)) return true;
-  return completedAt > lastVisitedAt;
 }
 
 /** Writable unread completions and woke-only rows are targets of Priority's bulk visit. */

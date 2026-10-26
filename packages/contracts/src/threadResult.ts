@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, PositiveInt, RunId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  PositiveInt,
+  RunAttemptId,
+  RunId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 export { ThreadResultObservedCheck, ThreadResultTests } from "./threadResultEvidence.ts";
 
@@ -27,6 +33,9 @@ const CommitSha = Schema.String.check(Schema.isPattern(/^[0-9a-f]{7,64}$/i));
 
 /** What an agent reports about its own run with goat_thread_report_result. */
 export const ThreadResultReport = Schema.Struct({
+  runId: Schema.optional(RunId),
+  expectedAttemptId: Schema.optional(RunAttemptId),
+  notificationRelevance: Schema.optional(Schema.Literals(["important", "no_update"])),
   outcome: ThreadResultOutcome,
   summary: Schema.optional(
     Schema.String.check(Schema.isMaxLength(THREAD_RESULT_SUMMARY_MAX_CHARS)),
@@ -57,6 +66,7 @@ export const ThreadResult = Schema.Struct({
   /** When the agent reported; null when it did not. */
   reportedAt: Schema.NullOr(IsoDateTime),
   summary: Schema.optional(Schema.String),
+  notificationRelevance: Schema.optional(Schema.String),
   /** Reported pull requests first, then those linked to the thread. */
   pullRequests: Schema.Array(ThreadResultPullRequest),
   tests: Schema.optional(ThreadResultTests),

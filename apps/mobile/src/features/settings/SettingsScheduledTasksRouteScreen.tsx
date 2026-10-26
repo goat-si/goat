@@ -1,3 +1,7 @@
+import * as Schema from "effect/Schema";
+import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
+import { FormField, SelectRow } from "./ScheduledTaskFormFields";
+import { ScheduledTaskNotificationPolicySection } from "./ScheduledTaskNotificationPolicySection";
 import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { scheduledMemoryAccess } from "./scheduledTaskPresentation";
 import * as Dialog from "../../components/ui/Dialog";
@@ -18,7 +22,6 @@ import {
   MAX_WEBHOOK_FILTERS,
   resolveEnvironmentMachineKind,
 } from "@goat/contracts";
-import type { MenuAction } from "@react-native-menu/menu";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import {
   isAtomCommandInterrupted,
@@ -37,7 +40,7 @@ import {
 import { useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { AppState, Platform, Pressable, TextInput as RNTextInput, View } from "react-native";
+import { AppState, Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Button } from "../../components/ui/Button";
@@ -91,6 +94,8 @@ import {
   formatScheduledTaskInterval,
 } from "./scheduledTaskPresentation";
 
+const isNotificationPolicy = Schema.is(ScheduledTaskNotificationPolicy);
+
 type ScheduledTaskRoutes = {
   SettingsScheduledTaskNew: undefined;
   SettingsScheduledTaskEdit: undefined;
@@ -142,94 +147,6 @@ function repeatLabel(weekdays: ReadonlyArray<number>): string {
     DAYS.filter((day) => days.has(day.index))
       .map((day) => day.label)
       .join(", ") || "Choose days"
-  );
-}
-
-function FormField(props: {
-  readonly label: string;
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly keyboardType?: "decimal-pad" | "number-pad";
-  readonly disabled?: boolean;
-  readonly placeholder?: string;
-  readonly borderTop?: boolean;
-}) {
-  return (
-    <View
-      className={
-        props.borderTop ? "gap-2 border-t border-border-subtle px-4 py-3" : "gap-2 px-4 py-3"
-      }
-    >
-      <Text className="text-sm text-foreground-muted">{props.label}</Text>
-      <RNTextInput
-        accessibilityLabel={props.label}
-        value={props.value}
-        readOnly={props.disabled}
-        onChangeText={props.onChange}
-        textAlignVertical="center"
-        keyboardType={props.keyboardType}
-        placeholder={props.placeholder}
-        placeholderTextColorClassName="accent-foreground-muted"
-        className="min-h-8 font-sans text-base text-foreground"
-      />
-    </View>
-  );
-}
-
-function SelectRow(props: {
-  readonly label: string;
-  readonly value: string;
-  readonly valueIcon?: ReactNode;
-  readonly actions: MenuAction[];
-  readonly onSelect: (id: string) => void;
-  readonly borderTop?: boolean;
-}) {
-  const value = (
-    <View className="min-w-0 flex-1 flex-row items-center justify-end gap-2">
-      {props.valueIcon}
-      <Text className="shrink text-right text-base text-foreground-muted" numberOfLines={1}>
-        {props.value}
-      </Text>
-    </View>
-  );
-  if (props.actions.length === 0) {
-    return (
-      <View
-        className={
-          props.borderTop
-            ? "min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3"
-            : "min-h-14 flex-row items-center gap-3 px-4 py-3"
-        }
-      >
-        <Text className="text-lg text-foreground">{props.label}</Text>
-        {value}
-      </View>
-    );
-  }
-  return (
-    <Menu
-      actions={props.actions}
-      onPressAction={({ nativeEvent }) => props.onSelect(nativeEvent.event)}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${props.label}, ${props.value}`}
-        className={
-          props.borderTop
-            ? "min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3 active:opacity-70"
-            : "min-h-14 flex-row items-center gap-3 px-4 py-3 active:opacity-70"
-        }
-      >
-        <Text className="text-lg text-foreground">{props.label}</Text>
-        {value}
-        <SymbolView
-          name="chevron.down"
-          size={14}
-          tintColorClassName="accent-chevron"
-          type="monochrome"
-        />
-      </Pressable>
-    </Menu>
   );
 }
 
@@ -741,6 +658,9 @@ function TaskForm({
       modelSelection: draft.modelSelection,
       schedule,
       enabled: draft.enabled,
+      ...(isNotificationPolicy(draft.notificationPolicy)
+        ? { notificationPolicy: draft.notificationPolicy }
+        : {}),
       threadId: draft.task?.threadId ?? null,
       workspaceStrategy:
         draft.workspace === "root"
@@ -763,6 +683,17 @@ function TaskForm({
     if (result._tag === "Failure") {
       submissionPending.current = false;
       failure("Could not save task", result);
+      return;
+    }
+    if (
+      input.notificationPolicy !== undefined &&
+      result.value.task.notificationPolicy !== input.notificationPolicy
+    ) {
+      submissionPending.current = false;
+      Dialog.alert(
+        "Unsupported environment",
+        "This environment did not save the notification policy. Update it and try again.",
+      );
       return;
     }
     onSaved();
@@ -1119,6 +1050,11 @@ function TaskForm({
               ) : null}
             </>
           )}
+          <ScheduledTaskNotificationPolicySection
+            draft={draft}
+            disabled={saving}
+            onChange={(notificationPolicy) => setDraft({ ...draft, notificationPolicy })}
+          />
           <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
             <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>
             <ThemedSwitch

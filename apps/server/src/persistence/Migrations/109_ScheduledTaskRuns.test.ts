@@ -15,7 +15,10 @@ it.effect(
         yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count)
         VALUES (${status},'Synthetic','Synthetic',1,'{}','project','{}','{}','full-access','default','user','web','2026-10-15','2026-10-15',${status},3)`;
       }
-      assert.deepStrictEqual(yield* runMigrations(), [[109, "ScheduledTaskRuns"]]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [109, "ScheduledTaskRuns"],
+        [110, "ScheduledTaskNotificationPolicy"],
+      ]);
       assert.deepStrictEqual(yield* sql`SELECT DISTINCT last_firing_id FROM scheduled_tasks`, [
         { last_firing_id: null },
       ]);

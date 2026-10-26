@@ -216,6 +216,8 @@ it.effect(
         ProjectionStore.ProjectionStoreV2,
         ProjectionStore.ProjectionStoreV2.of({
           apply: () => Effect.void,
+          setCompletionNotification: () => Effect.die("unused notification setter"),
+          recordNotificationCompletions: () => Effect.die("unused notification cursor"),
           getLaunchedPendingQuestions: () => Effect.die("Unused launched question query"),
           getQuestionEscalationCandidates: () =>
             Effect.die("unused getQuestionEscalationCandidates"),

@@ -880,3 +880,14 @@ it("restores deduped bodies from the records it already holds, also in a partial
   );
   expect(progressed?.subagents).toEqual([{ ...subagent, progress: "step 2" }]);
 });
+
+it("retains a recorded completion decision in a detail update", () => {
+  const result = applyOrchestrationV2ProjectionEvent(emptyProjection, {
+    id: EventId.make("quiet-event"),
+    type: "run.updated",
+    threadId,
+    occurredAt: now,
+    payload: { ...run, completionNotification: "silent" },
+  });
+  expect(result?.runs[0]?.completionNotification).toBe("silent");
+});

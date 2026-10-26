@@ -267,10 +267,11 @@
       "path": "scheduled-tasks.md",
       "tier": 3,
       "title": "Scheduled tasks",
-      "scope": "Clock and webhook tasks that launch or send through orchestration services.",
+      "scope": "Clock and webhook tasks, durable firing outcomes and completion notification decisions.",
       "documents": [
         "apps/server/src/scheduledTasks/ScheduledTaskService.ts",
         "apps/server/src/scheduledTasks/Schedule.ts",
+        "apps/server/src/orchestration-v2/ScheduledTaskCompletionBatch.ts",
         "apps/server/src/scheduling/Scheduler.ts",
         "apps/server/src/scheduledTasks/webhookRoute.ts",
         "apps/server/src/scheduledTasks/webhookVerification.ts",

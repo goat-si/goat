@@ -53,6 +53,17 @@ function run(id: string, ordinal: number, status: OrchestrationV2RunStatus) {
 }
 
 describe("thread execution presentation", () => {
+  it("forwards a detail run's recorded completion decision", () => {
+    expect(
+      deriveLatestThreadRun({
+        ...v2Projection,
+        runs: [
+          { ...run("quiet", 1, "completed"), completedAt: now, completionNotification: "silent" },
+        ],
+      }),
+    ).toMatchObject({ completionNotification: "silent" });
+  });
+
   it("derives the current root failure without inheriting errors from children or previous runs", () => {
     const failed = { ...run("limited", 1, "failed"), rootNodeId: NodeId.make("root") };
     const item = {

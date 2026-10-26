@@ -1,9 +1,13 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import { McpSchema, McpServer } from "effect/ai";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as Access from "../../McpToolAccess.ts";
+import { ThreadToolkit } from "./tools.ts";
+import * as Handlers from "./handlers.ts";
 
 import { layerNoFleetSync } from "../../../goatclaw/FleetSync.testkit.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -142,4 +146,39 @@ it.effect("goat_schedule_run reports the thread the run dispatched to, not the b
       ),
     ),
   ),
+);
+
+it.effect.each(["run_mismatch", "storage"] as const)(
+  "maps report %s to the existing MCP error code",
+  (reason) =>
+    Effect.gen(function* () {
+      const toolkit = yield* ThreadToolkit.pipe(
+        Effect.provide(Access.HandlersLayer.layer(Handlers.layer)),
+      );
+      const response = yield* toolkit
+        .handle("goat_thread_report_result", { runId: RunId.make("foreign"), outcome: "succeeded" })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      expect(response.at(-1)?.result).toMatchObject({
+        code: reason === "run_mismatch" ? "invalid_request" : "orchestration_error",
+      });
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          McpToolAccessTestkit.layerPermissionProfilesOff,
+          McpToolAccessTestkit.liveThreadsLayer,
+          Layer.succeed(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            client: undefined,
+            thread: {
+              threadId: ThreadId.make("own"),
+              providerSessionId: "session",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+            },
+          }),
+          Layer.mock(ThreadResultService.ThreadResultService)({
+            report: () => Effect.fail(new ThreadResultService.ThreadResultError({ reason })),
+          }),
+        ),
+      ),
+    ),
 );

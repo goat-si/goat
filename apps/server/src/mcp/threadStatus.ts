@@ -1,6 +1,8 @@
 import {
   ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  type OrchestrationV2ThreadProjection,
+  type OrchestratorMcpThreadDetail,
   type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
   type OrchestrationV2ThreadShell,
@@ -190,6 +192,7 @@ export function statusFromShell(
         ? null
         : {
             runId: run.id,
+            activeAttemptId: run.activeAttemptId,
             status: run.status,
             ...(run.terminationCause === undefined
               ? {}
@@ -272,5 +275,31 @@ export function statusFromRead(
     lastActivityAt: thread.updatedAt,
     lastMessage: null,
     lastError: null,
+  };
+}
+
+/** What goat_thread_organize changes beyond archive, settle and snooze, so a caller can reconcile it. */
+export function threadOrganization(
+  thread: OrchestrationV2ThreadProjection["thread"],
+  latestRun: OrchestrationV2Run | undefined,
+  shell: OrchestrationV2ThreadShell,
+): Pick<OrchestratorMcpThreadDetail, "snoozedAt" | "pinned" | "unread"> {
+  const automatic =
+    shell.notificationCompletedAt === undefined
+      ? (latestRun?.completedAt ?? shell.latestRunCompletedAt)
+      : shell.notificationCompletedAt;
+  const completedAt = [automatic, shell.markedUnreadCompletionAt].reduce<DateTime.Utc | null>(
+    (latest, at) =>
+      at == null ? latest : latest === null || DateTime.isGreaterThan(at, latest) ? at : latest,
+    null,
+  );
+  return {
+    snoozedAt: thread.snoozedAt == null ? null : DateTime.formatIso(thread.snoozedAt),
+    pinned: thread.pinnedAt != null,
+    // The sidebar's rule; thread.mark-unread rewinds lastVisitedAt to just before completion.
+    unread:
+      completedAt !== null &&
+      thread.lastVisitedAt != null &&
+      DateTime.isGreaterThan(completedAt, thread.lastVisitedAt),
   };
 }

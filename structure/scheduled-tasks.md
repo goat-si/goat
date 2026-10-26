@@ -15,12 +15,18 @@ arithmetic (`nextScheduledRunAt`, `isSameSchedule`, `isMissedFixedTimeRun`) is
 sleeps 5 seconds. The scheduled-task source is registered as `"scheduled-tasks"` and calls
 `runDueTasks`. One source does not overlap itself.
 
-`runTask` marks the row running, then:
+`ScheduledTaskRuns` admits a firing receipt; `runTask` dispatches it through the existing services:
 
 - if the task has no bound thread, `ThreadLaunchService.launch` starts one;
 - if it has a bound thread, `ThreadManagementService.sendToThread` queues the prompt.
 
-Both calls become a [command commit](server.md#command-commit). The command id is derived from the
+Both calls become a [command commit](server.md#command-commit). Receipts track dispatch and actual
+run outcomes separately. The [completion batch](../apps/server/src/orchestration-v2/ScheduledTaskCompletionBatch.ts)
+freezes one notification decision before appending terminal events, using final message attribution
+and the current task policies. Any applicable firing requiring notification wins; replay consumes
+the recorded decision and retains the thread's independent notification cursor.
+
+The command id is derived from the
 task id and the fire key, so the same webhook delivery does not dispatch twice.
 
 ## Webhook

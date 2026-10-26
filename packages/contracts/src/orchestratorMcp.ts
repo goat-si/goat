@@ -14,13 +14,14 @@ import {
   PositiveInt,
   ProjectId,
   RunId,
+  RunAttemptId,
   RuntimeRequestId,
   ScheduledTaskId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import { ScheduledTaskUpsertSchedule } from "./scheduledTask.ts";
+import { ScheduledTaskNotificationPolicy, ScheduledTaskUpsertSchedule } from "./scheduledTask.ts";
 import {
   ProviderInteractionMode,
   ProviderRequestKind,
@@ -890,6 +891,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   run: Schema.NullOr(
     Schema.Struct({
       runId: RunId,
+      activeAttemptId: Schema.optional(Schema.NullOr(RunAttemptId)),
       status: OrchestrationV2RunStatus,
       terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
       requestedAt: IsoDateTime,
@@ -1101,6 +1103,7 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   projectId: OrchestratorMcpProjectTarget,
   prompt: OrchestratorMcpPrompt,
   schedule: OrchestratorMcpSchedule,
+  notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   title: Schema.optional(OrchestratorMcpTitle),
   enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
   bindToCurrentThread: Schema.optional(
@@ -1136,6 +1139,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
   title: Schema.optional(OrchestratorMcpTitle),
   schedule: Schema.optional(OrchestratorMcpSchedule),
+  notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
 });
@@ -1147,15 +1151,7 @@ export {
   OrchestratorMcpRequestSecretResult,
 } from "./secretRequestTool.ts";
 
-export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
-  scheduledTaskId: ScheduledTaskId,
-});
-export type OrchestratorMcpDeleteScheduledTaskInput =
-  typeof OrchestratorMcpDeleteScheduledTaskInput.Type;
-
-export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
-  scheduledTaskId: ScheduledTaskId,
-  deleted: Schema.Boolean,
-});
-export type OrchestratorMcpDeleteScheduledTaskResult =
-  typeof OrchestratorMcpDeleteScheduledTaskResult.Type;
+export {
+  OrchestratorMcpDeleteScheduledTaskInput,
+  OrchestratorMcpDeleteScheduledTaskResult,
+} from "./orchestratorMcpScheduledTask.ts";

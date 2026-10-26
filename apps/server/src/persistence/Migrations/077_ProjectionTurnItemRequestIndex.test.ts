@@ -64,6 +64,7 @@ it.effect(
         [107, "RemoteReportFences"],
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
+        [110, "ScheduledTaskNotificationPolicy"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

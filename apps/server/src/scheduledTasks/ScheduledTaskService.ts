@@ -1,3 +1,5 @@
+import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
+import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import * as ScheduledTaskRuns from "./ScheduledTaskRuns.ts";
 import {
   CommandId,
@@ -197,34 +199,6 @@ export interface CapturedTaskMemoryGrant {
   readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
 }
 
-interface ScheduledTaskRow {
-  readonly memory_grant_ceiling?: MemoryTaskGrantCeiling;
-  readonly task_id: string;
-  readonly title: string;
-  readonly prompt: string;
-  readonly enabled: number;
-  readonly schedule_json: string;
-  readonly project_id: string;
-  readonly thread_id: string | null;
-  readonly workspace_strategy_json: string;
-  readonly model_selection_json: string;
-  readonly runtime_mode: string;
-  readonly interaction_mode: string;
-  readonly created_by: string;
-  readonly creation_source: string;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly next_run_at: string | null;
-  readonly last_run_at: string | null;
-  readonly last_run_status: string;
-  readonly last_run_error: string | null;
-  readonly last_run_json: string | null;
-  readonly run_count: number;
-  readonly webhook_token: string | null;
-  readonly webhook_secret: string | null;
-  readonly webhook_secret_ref: string | null;
-}
-
 interface WebhookDeliveryRow {
   readonly delivery_id: string;
   readonly task_id: string;
@@ -332,6 +306,7 @@ const decodeRow = Effect.fnUntraced(
       title: row.title,
       prompt: row.prompt,
       enabled: row.enabled === 1,
+      notificationPolicy: row.notification_policy,
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
@@ -469,6 +444,7 @@ export const layer = Layer.effect(
         t.title,
         t.prompt,
         t.enabled,
+        t.notification_policy,
         t.schedule_json,
         t.project_id,
         t.thread_id,
@@ -508,6 +484,7 @@ export const layer = Layer.effect(
         t.title,
         t.prompt,
         t.enabled,
+        t.notification_policy,
         t.schedule_json,
         t.project_id,
         t.thread_id,
@@ -589,6 +566,7 @@ export const layer = Layer.effect(
           title,
           prompt,
           enabled,
+          notification_policy,
           schedule_json,
           project_id,
           thread_id,
@@ -615,6 +593,7 @@ export const layer = Layer.effect(
           ${task.title},
           ${task.prompt},
           ${task.enabled ? 1 : 0},
+          ${task.notificationPolicy ?? "all_runs"},
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
@@ -642,6 +621,7 @@ export const layer = Layer.effect(
           title = excluded.title,
           prompt = excluded.prompt,
           enabled = excluded.enabled,
+          notification_policy = excluded.notification_policy,
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
           thread_id = excluded.thread_id,
@@ -805,12 +785,10 @@ export const layer = Layer.effect(
               firing,
             };
           }
-          // A webhook prompt was rendered from the row when the request arrived.
-          const prompt = webhook?.prompt ?? active.prompt;
-
           // Finalization rechecks durable acceptance even when the dispatch call fails.
-          const dispatch =
-            active.threadId === null
+          const dispatch = Effect.gen(function* () {
+            const prompt = yield* prepareScheduledTaskNotificationPrompt(active, webhook?.prompt);
+            return yield* active.threadId === null
               ? threadLaunch
                   .launch({
                     commandId,
@@ -862,6 +840,7 @@ export const layer = Layer.effect(
                       taskError("Could not dispatch schedule task.", { cause }),
                     ),
                   );
+          });
           const result = yield* restore(dispatch).pipe(Effect.exit);
 
           return yield* Effect.uninterruptible(
@@ -1132,8 +1111,13 @@ export const layer = Layer.effect(
         existingTask !== null &&
         existingTask.enabled === input.enabled &&
         isSameSchedule(existingTask.schedule, schedule);
+      const notificationPolicy =
+        input.notificationPolicy ?? existingTask?.notificationPolicy ?? "all_runs";
+      if (notificationPolicy === "important_updates" && (input.threadId ?? null) === null)
+        return yield* taskError("Important updates requires an existing thread.", { taskId: id });
       const task: ScheduledTask = {
         id,
+        notificationPolicy,
         title: input.title,
         prompt: input.prompt,
         enabled: input.enabled,

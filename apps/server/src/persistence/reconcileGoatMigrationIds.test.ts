@@ -93,6 +93,7 @@ const laterGoatMigrations = [
   [107, "RemoteReportFences"],
   [108, "HubProvisionedLinks"],
   [109, "ScheduledTaskRuns"],
+  [110, "ScheduledTaskNotificationPolicy"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -389,6 +390,7 @@ const GOAT_SINCE_256 = [
   "RemoteReportFences",
   "HubProvisionedLinks",
   "ScheduledTaskRuns",
+  "ScheduledTaskNotificationPolicy",
 ].map(currentGoatRow);
 
 describe("upgrading a nightly 256 ledger past upstream 068", () => {

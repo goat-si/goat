@@ -60,6 +60,7 @@ function summarizeThreadRun(
     : undefined;
   return {
     runId: run.id,
+    completionNotification: run.completionNotification,
     status: run.status,
     requestedAt: DateTime.formatIso(run.requestedAt),
     startedAt: run.startedAt === null ? null : DateTime.formatIso(run.startedAt),

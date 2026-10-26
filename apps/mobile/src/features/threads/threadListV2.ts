@@ -146,16 +146,21 @@ export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
 export function threadHasUnseenCompletion(
-  thread: Pick<EnvironmentThreadShell, "latestRun" | "lastVisitedAt">,
+  thread: Pick<
+    EnvironmentThreadShell,
+    "latestRun" | "lastVisitedAt" | "notificationCompletedAt" | "markedUnreadCompletionAt"
+  >,
 ): boolean {
-  const completedAt = thread.latestRun?.completedAt;
-  if (!completedAt) return false;
-  const completedAtMs = Date.parse(completedAt);
-  if (Number.isNaN(completedAtMs)) return false;
-  if (!thread.lastVisitedAt) return false;
-  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(lastVisitedAtMs)) return true;
-  return completedAtMs > lastVisitedAtMs;
+  const automatic =
+    thread.notificationCompletedAt === undefined
+      ? thread.latestRun?.completedAt
+      : thread.notificationCompletedAt;
+  const times = [automatic, thread.markedUnreadCompletionAt]
+    .map((at) => Date.parse(at ?? ""))
+    .filter(Number.isFinite);
+  if (times.length === 0 || !thread.lastVisitedAt) return false;
+  const visited = Date.parse(thread.lastVisitedAt);
+  return Number.isNaN(visited) || Math.max(...times) > visited;
 }
 
 export function resolveThreadListV2WokeAt(

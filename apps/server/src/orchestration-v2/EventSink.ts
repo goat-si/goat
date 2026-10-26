@@ -1,3 +1,4 @@
+import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { makeCloudResultItemGuard } from "./CloudResultItemGuard.ts";
 import {
@@ -399,12 +400,11 @@ const layerBase: Layer.Layer<
       );
     };
 
+    const appendStagedEvents = makeTaskAppender(sql, eventStore, projectionStore, scheduledRuns);
+
     const applyStoredEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(function* (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) {
-        yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
-          concurrency: 1,
-        });
         const sequence = storedEvents.at(-1)?.sequence;
         if (sequence !== undefined) {
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -505,7 +505,7 @@ const layerBase: Layer.Layer<
           )
             return { committed: [], outcomes: emptyOutcomes };
           const now = yield* DateTime.now;
-          const stored = yield* eventStore.append({
+          const stored = yield* appendStagedEvents({
             events: yield* normalizeEvents([
               {
                 id: input.eventId,
@@ -583,7 +583,7 @@ const layerBase: Layer.Layer<
               ? yield* guardUserInputCancellations(events)
               : events,
           );
-          const committed = yield* eventStore.append({
+          const committed = yield* appendStagedEvents({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
@@ -642,7 +642,7 @@ const layerBase: Layer.Layer<
                 ? yield* guardUserInputCancellations(input.events)
                 : input.events,
             );
-            const storedEvents = yield* eventStore.append({
+            const storedEvents = yield* appendStagedEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
@@ -707,7 +707,7 @@ const layerBase: Layer.Layer<
               ? yield* guardUserInputCancellations(input.events)
               : input.events,
           );
-          const storedEvents = yield* eventStore.append({
+          const storedEvents = yield* appendStagedEvents({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
@@ -746,7 +746,7 @@ const layerBase: Layer.Layer<
           }
 
           const normalized = yield* normalizeEvents(input.events);
-          const storedEvents = yield* eventStore.append({ events: normalized });
+          const storedEvents = yield* appendStagedEvents({ events: normalized });
           const outcomes = yield* applyStoredEvents(storedEvents);
           return { committed: true as const, storedEvents, outcomes };
         }),
@@ -793,7 +793,7 @@ const layerBase: Layer.Layer<
           }
 
           const normalized = yield* normalizeEvents(input.events);
-          const storedEvents = yield* eventStore.append({
+          const storedEvents = yield* appendStagedEvents({
             commandId: input.commandId,
             events: normalized,
           });

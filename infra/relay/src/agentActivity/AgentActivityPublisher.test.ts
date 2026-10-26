@@ -140,6 +140,81 @@ function makeApnsDeliveries(
 }
 
 describe("AgentActivityPublisher", () => {
+  it.effect("ends running activity through null without a completion push", () => {
+    const rows = new Map<string, RelayAgentActivityState>([[state.threadId, state]]);
+    const fcm: Array<Parameters<FcmDeliveries.FcmDeliveries["Service"]["enqueue"]>[0]> = [];
+    const apple: Array<Parameters<ApnsDeliveries.ApnsDeliveries["Service"]["sendForTarget"]>[0]> =
+      [];
+    let alerts = 0;
+    const ios = { ...target("ios"), activity_push_token: "activity" };
+    const android = { ...target("android"), platform: "android" as const, ios_major_version: null };
+    return Effect.gen(function* () {
+      const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
+      const input = {
+        environmentId: state.environmentId,
+        environmentPublicKey: "key",
+        threadId: state.threadId,
+      };
+      yield* publisher.publish({ ...input, state });
+      yield* publisher.publish({ ...input, state: null });
+      expect(alerts).toBe(0);
+      expect(fcm.at(-1)?.state).toBeNull();
+      expect(apple).toHaveLength(2);
+      expect(apple.at(-1)?.aggregate).toBeNull();
+    }).pipe(
+      Effect.provide(
+        AgentActivityPublisher.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(
+                AgentActivityRows.AgentActivityRows,
+                makeAgentActivityRows({
+                  upsert: (input) =>
+                    Effect.sync(() => {
+                      rows.set(input.state.threadId, input.state);
+                    }),
+                  remove: (input) =>
+                    Effect.sync(() => {
+                      rows.delete(input.threadId);
+                    }),
+                  listForUser: () => Effect.succeed([...rows.values()]),
+                }),
+              ),
+              Layer.succeed(EnvironmentLinks.EnvironmentLinks, makeEnvironmentLinks()),
+              Layer.succeed(
+                LiveActivities.LiveActivities,
+                makeLiveActivities({ listTargets: () => Effect.succeed([ios, android]) }),
+              ),
+              Layer.succeed(
+                ApnsDeliveries.ApnsDeliveries,
+                makeApnsDeliveries({
+                  sendForTarget: (input) =>
+                    Effect.sync(() => {
+                      apple.push(input);
+                      return null;
+                    }),
+                  sendPushNotificationForTarget: () =>
+                    Effect.sync(() => {
+                      alerts++;
+                      return null;
+                    }),
+                }),
+              ),
+              Layer.succeed(FcmDeliveries.FcmDeliveries, {
+                enqueue: (input) =>
+                  Effect.sync(() => {
+                    fcm.push(input);
+                    return null;
+                  }),
+                process: () => Effect.void,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("routes Android publication and registration replay to FCM alongside iOS", () => {
     const android = { ...target("android"), platform: "android" as const, ios_major_version: null };
     const ios = target("ios");

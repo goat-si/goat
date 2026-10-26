@@ -74,6 +74,7 @@ it.effect(
         [107, "RemoteReportFences"],
         [108, "HubProvisionedLinks"],
         [109, "ScheduledTaskRuns"],
+        [110, "ScheduledTaskNotificationPolicy"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

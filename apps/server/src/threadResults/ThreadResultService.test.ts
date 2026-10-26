@@ -1,7 +1,7 @@
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { assert, it } from "@effect/vitest";
-import { RunId, ThreadId, type OrchestrationV2Run } from "@goat/contracts";
+import { RunAttemptId, RunId, ThreadId, type OrchestrationV2Run } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -173,4 +173,65 @@ it.effect("stores and returns a report without the GOAT MCP token an agent paste
     assert.strictEqual(reported.summary, "env: GOAT_MCP_BEARER_TOKEN=[redacted]");
     assert.strictEqual(stored?.summary, "env: GOAT_MCP_BEARER_TOKEN=[redacted]");
   }).pipe(Effect.provide(layerWithRuns([run(firstRun, 1, "running")]))),
+);
+
+it.effect(
+  "keeps a delayed report on its explicit run and preserves supplied attempt provenance",
+  () =>
+    Effect.gen(function* () {
+      const results = yield* ThreadResultService.ThreadResultService;
+      const report = {
+        runId: firstRun,
+        expectedAttemptId: RunAttemptId.make("attempt-A"),
+        outcome: "succeeded",
+        notificationRelevance: "no_update",
+      } as const;
+      const result = yield* results.report(threadId, report);
+      assert.strictEqual(result.runId, firstRun);
+      assert.strictEqual(result.notificationRelevance, "no_update");
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{
+        report_json: string;
+      }>`SELECT report_json FROM thread_run_results WHERE run_id = ${firstRun}`;
+      assert.strictEqual(JSON.parse(rows[0]?.report_json ?? "{}").expectedAttemptId, "attempt-A");
+      assert.strictEqual((yield* results.forRun(threadId, secondRun))?.reportedAt, null);
+    }).pipe(
+      Effect.provide(layerWithRuns([run(firstRun, 1, "completed"), run(secondRun, 2, "running")])),
+    ),
+);
+
+it.effect("rejects foreign run identity and relevance without explicit identity", () =>
+  Effect.gen(function* () {
+    const results = yield* ThreadResultService.ThreadResultService;
+    for (const report of [
+      { runId: RunId.make("foreign-run"), outcome: "succeeded" as const },
+      { notificationRelevance: "no_update" as const, outcome: "succeeded" as const },
+    ]) {
+      const error = yield* Effect.flip(results.report(threadId, report));
+      assert.strictEqual(error.reason, "run_mismatch");
+    }
+  }).pipe(Effect.provide(layerWithRuns([run(firstRun, 1, "running")]))),
+);
+
+it.effect("does not relabel a delayed attempt-A report with the already-started attempt B", () =>
+  Effect.gen(function* () {
+    const results = yield* ThreadResultService.ThreadResultService;
+    yield* results.report(threadId, {
+      runId: firstRun,
+      expectedAttemptId: RunAttemptId.make("A"),
+      outcome: "succeeded",
+      notificationRelevance: "no_update",
+    });
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{
+      report_json: string;
+    }>`SELECT report_json FROM thread_run_results WHERE run_id=${firstRun}`;
+    assert.equal(JSON.parse(rows[0]?.report_json ?? "{}").expectedAttemptId, "A");
+    yield* sql`UPDATE thread_run_results SET report_json='{"runId":"run-1","expectedAttemptId":"A","outcome":"succeeded","notificationRelevance":"future"}' WHERE run_id=${firstRun}`;
+    assert.equal((yield* results.forRun(threadId, firstRun))?.notificationRelevance, "future");
+  }).pipe(
+    Effect.provide(
+      layerWithRuns([{ ...run(firstRun, 1, "running"), activeAttemptId: RunAttemptId.make("B") }]),
+    ),
+  ),
 );
