@@ -303,7 +303,8 @@ export default defineConfig(() => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
-      devCompressionPlugin(),
+      // Worker previews repeatedly fetch large WASM assets; loopback tests need no compression.
+      process.env.VITEST ? undefined : devCompressionPlugin(),
       chunkCycleGuardPlugin(),
       builtDev
         ? undefined
