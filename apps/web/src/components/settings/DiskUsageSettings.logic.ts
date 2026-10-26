@@ -1,9 +1,12 @@
-import type {
-  HostDiskPressure,
-  HostDiskUsage,
-  HostPressureLevel,
-  StorageItem,
-  StorageItemKind,
+import {
+  STORAGE_CLEAN_MAX_ITEMS,
+  type HostDiskPressure,
+  type HostDiskUsage,
+  type HostPressureLevel,
+  type StorageCleanItem,
+  type StorageCleanResult,
+  type StorageItem,
+  type StorageItemKind,
 } from "@goat/contracts";
 
 import { formatBytes } from "~/lib/formatBytes";
@@ -62,6 +65,31 @@ export function selectionSummary(items: ReadonlyArray<StorageItem>, selected: Re
     count: chosen.length,
     bytes: chosen.reduce((sum, item) => sum + (item.bytes ?? 0), 0),
     unmeasured: chosen.filter((item) => item.bytes === null).length,
+  };
+}
+
+/** The ticked items as requests the server accepts, in order: each names at most its limit. */
+export function cleanupBatches(
+  items: ReadonlyArray<Pick<StorageItem, "id" | "token">>,
+): ReadonlyArray<ReadonlyArray<StorageCleanItem>> {
+  const batches: Array<ReadonlyArray<StorageCleanItem>> = [];
+  for (let start = 0; start < items.length; start += STORAGE_CLEAN_MAX_ITEMS)
+    batches.push(
+      items.slice(start, start + STORAGE_CLEAN_MAX_ITEMS).map(({ id, token }) => ({ id, token })),
+    );
+  return batches;
+}
+
+/** One result for every request that finished; null when none did. */
+export function mergeCleanResults(
+  results: ReadonlyArray<StorageCleanResult>,
+): StorageCleanResult | null {
+  const last = results.at(-1);
+  if (last === undefined) return null;
+  return {
+    results: results.flatMap((result) => result.results),
+    freedBytes: results.reduce((sum, result) => sum + result.freedBytes, 0),
+    logPath: last.logPath,
   };
 }
 

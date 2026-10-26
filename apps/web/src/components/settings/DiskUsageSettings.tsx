@@ -23,9 +23,11 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import {
+  cleanupBatches,
   diskSummary,
   initialSelection,
   largestWorktrees,
+  mergeCleanResults,
   selectionSummary,
   STORAGE_KIND_LABELS,
   STORAGE_STATE_LABELS,
@@ -216,13 +218,20 @@ function StorageCleanupDialog(props: {
   const run = async () => {
     setPending(true);
     setError(null);
-    const outcome = await clean({
-      environmentId: props.environmentId,
-      input: { items: summary.items.map(({ id, token }) => ({ id, token })) },
-    });
-    if (outcome._tag === "Success") setResult(outcome.value);
-    else if (!isAtomCommandInterrupted(outcome))
-      setError(failureText(squashAtomCommandFailure(outcome)));
+    // The server takes a limited number of items per request; larger selections go in turn, and
+    // what finished before a failure is still shown.
+    const finished: Array<StorageCleanResult> = [];
+    for (const items of cleanupBatches(summary.items)) {
+      const outcome = await clean({ environmentId: props.environmentId, input: { items } });
+      if (outcome._tag === "Success") {
+        finished.push(outcome.value);
+        continue;
+      }
+      if (!isAtomCommandInterrupted(outcome))
+        setError(failureText(squashAtomCommandFailure(outcome)));
+      break;
+    }
+    setResult(mergeCleanResults(finished));
     setPending(false);
   };
   const kinds = [...new Set(props.items.map((item) => item.kind))];
@@ -260,6 +269,11 @@ function StorageCleanupDialog(props: {
                   )}
                 </li>
               ))}
+              {error !== null && (
+                <li role="alert" className="text-destructive-foreground">
+                  The rest was not deleted: {error}
+                </li>
+              )}
             </ul>
           ) : (
             <div className="flex flex-col gap-4 text-xs">

@@ -78,9 +78,12 @@ export const StorageCleanItem = Schema.Struct({
 });
 export type StorageCleanItem = typeof StorageCleanItem.Type;
 
+/** Items one cleanup request may name; an approval lists every path it covers. */
+export const STORAGE_CLEAN_MAX_ITEMS = 200;
+
 export const StorageCleanItems = Schema.Array(StorageCleanItem).check(
   Schema.isMinLength(1),
-  Schema.isMaxLength(200),
+  Schema.isMaxLength(STORAGE_CLEAN_MAX_ITEMS),
 );
 
 export const StorageCleanInput = Schema.Struct({ items: StorageCleanItems });

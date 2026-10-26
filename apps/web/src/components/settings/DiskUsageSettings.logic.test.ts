@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { StorageItem } from "@goat/contracts";
+import { StorageCleanItems, type StorageCleanOutcome, type StorageItem } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 import {
+  cleanupBatches,
   diskSummary,
   initialSelection,
+  mergeCleanResults,
   selectionSummary,
   storageTotals,
 } from "./DiskUsageSettings.logic";
@@ -35,6 +38,36 @@ describe("storage cleanup selection", () => {
     const summary = selectionSummary(items, new Set([...selected, "b", "e"]));
     expect(summary.items.map((entry) => entry.id)).toEqual(["a", "d"]);
     expect(summary).toMatchObject({ count: 2, bytes: 3 * 1024, unmeasured: 1 });
+  });
+
+  it("splits 201 ticked items into requests the server accepts and merges their outcomes", () => {
+    const many = Array.from({ length: 201 }, (_, index) =>
+      item({ id: "worktree:" + index, kind: "worktree", token: "token-" + index }),
+    );
+    const batches = cleanupBatches(many);
+    expect(batches.map((batch) => batch.length)).toEqual([200, 1]);
+    for (const batch of batches)
+      expect(Schema.decodeUnknownExit(StorageCleanItems)(batch)._tag).toBe("Success");
+    expect(batches.flat()).toEqual(many.map(({ id, token }) => ({ id, token })));
+
+    const outcome = (id: string): StorageCleanOutcome => ({
+      id,
+      kind: "worktree",
+      path: "/w/" + id,
+      outcome: "removed",
+      reason: "",
+      bytes: 1,
+    });
+    expect(
+      mergeCleanResults([
+        { results: [outcome("a")], freedBytes: 5, logPath: "/logs/storage-cleanup.ndjson" },
+        { results: [outcome("b")], freedBytes: 7, logPath: "/logs/storage-cleanup.ndjson" },
+      ]),
+    ).toEqual({
+      results: [outcome("a"), outcome("b")],
+      freedBytes: 12,
+      logPath: "/logs/storage-cleanup.ndjson",
+    });
   });
 
   it("totals each kind with what cleanup could free", () => {
