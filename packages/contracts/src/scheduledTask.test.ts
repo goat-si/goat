@@ -248,3 +248,28 @@ describe("scheduled run outcomes", () => {
     ).toBe("running");
   });
 });
+
+it("accepts only known policy writes and keeps future policies on task reads", () => {
+  const base = {
+    title: "Task",
+    prompt: "Run",
+    enabled: true,
+    schedule: { type: "interval", everyMs: 60000 },
+    projectId: "project",
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: "codex", model: "model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+  };
+  const decode = Schema.decodeUnknownSync(ScheduledTaskUpsertInput);
+  for (const notificationPolicy of ["all_runs", "failed_runs_only", "important_updates"])
+    expect(decode({ ...base, notificationPolicy })).toHaveProperty(
+      "notificationPolicy",
+      notificationPolicy,
+    );
+  for (const notificationPolicy of [null, "future"])
+    expect(() => decode({ ...base, notificationPolicy })).toThrow();
+  expect(Schema.decodeUnknownSync(ScheduledTask.fields.notificationPolicy)("future")).toBe(
+    "future",
+  );
+});

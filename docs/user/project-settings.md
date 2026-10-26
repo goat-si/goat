@@ -80,7 +80,7 @@ The launched thread shows them as a collapsed **Standing instructions** block ab
 the task, with a short version code that changes whenever the text does. Threads you
 start yourself are unaffected, and an agent can ask for a launch without them.
 
-## Scheduled tasks on mobile
+## Scheduled tasks
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
 ones across your connected environments. Use the settings filter to narrow the
@@ -100,6 +100,13 @@ A run first shows Dispatching or Queued, then Running. Completed means the agent
 Failed, Interrupted and Cancelled report how that run ended. Pausing stops future scheduled
 runs; stop an active run from its thread. Older environments may show Dispatched (legacy)
 because they did not record the final outcome.
+
+Choose **Notifications** for each task: **All runs**, **Failed runs only**, or
+**Important updates** for tasks posting into an existing thread. Important updates keeps successful
+checks quiet when the agent reports nothing new or actionable. Quiet runs remain readable, and
+older unread results stay unread until you visit. Failures and requests for input or approval
+still need attention. Alerts also depend on your app settings and device permissions. Update
+older clients to use these notification choices consistently.
 
 ## Webhook automations
 

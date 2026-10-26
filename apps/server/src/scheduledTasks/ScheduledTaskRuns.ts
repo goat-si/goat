@@ -11,6 +11,7 @@ import {
   type ScheduledTask,
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
+  type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -62,6 +63,18 @@ export class ScheduledTaskRuns extends Context.Service<
         readonly run: OrchestrationV2Run | null;
         readonly sequence: number;
       },
+      ScheduledTaskError
+    >;
+    readonly resolveBatchAttributions: (
+      events: ReadonlyArray<OrchestrationV2DomainEvent>,
+    ) => Effect.Effect<
+      ReadonlyArray<{
+        readonly firingId: CommandId;
+        readonly taskId: ScheduledTaskId;
+        readonly taskCreatedAt: string;
+        readonly messageId: MessageId;
+        readonly run: OrchestrationV2Run | null;
+      }>,
       ScheduledTaskError
     >;
     readonly deliveryReceipt: (
@@ -553,24 +566,57 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     Effect.mapError(failure("Could not resolve scheduled delivery dispatch.")),
   );
 
+  // Candidate reads share record's enclosing transaction and tracing boundary.
+  const collectCandidates = Effect.fnUntraced(function* (
+    events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  ) {
+    const candidates = new Map<string, Row>();
+    for (const event of events) {
+      let rows: ReadonlyArray<Row> = [];
+      if (event.type === "run.created" || event.type === "run.updated") {
+        rows = yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE run_id=${event.payload.id}
+          UNION SELECT * FROM scheduled_task_runs WHERE message_id=${event.payload.userMessageId}`;
+      } else if (event.type === "message.updated" && event.payload.scheduledTaskId !== undefined) {
+        rows =
+          yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE message_id=${event.payload.id}`;
+      }
+      for (const row of rows) candidates.set(row.firing_id, row);
+    }
+    return candidates;
+  });
+  const resolveBatchAttributions: ScheduledTaskRuns["Service"]["resolveBatchAttributions"] =
+    Effect.fn("ScheduledTaskRuns.resolveBatchAttributions")(
+      function* (events) {
+        const candidates = yield* collectCandidates(events);
+        const resolvedById = new Map<
+          string,
+          { row: Row; resolved: Effect.Success<ReturnType<typeof resolve>> }
+        >();
+        const expanded = new Set<string>();
+        for (const row of candidates.values()) {
+          const resolved = yield* resolve(row);
+          resolvedById.set(row.firing_id, { row, resolved });
+          if (resolved.run === null || expanded.has(resolved.run.id)) continue;
+          expanded.add(resolved.run.id);
+          const peers =
+            yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE run_id=${resolved.run.id}`;
+          for (const peer of peers)
+            if (!candidates.has(peer.firing_id)) candidates.set(peer.firing_id, peer);
+        }
+        return [...resolvedById.values()].map(({ row, resolved }) => ({
+          firingId: CommandId.make(row.firing_id),
+          taskId: ScheduledTaskId.make(row.task_id),
+          taskCreatedAt: row.task_created_at,
+          messageId: resolved.messageId,
+          run: resolved.run,
+        }));
+      },
+      Effect.mapError(failure("Could not resolve scheduled batch.")),
+    );
   // Final projections are available only after EventSink has applied the entire batch.
   const record: ScheduledTaskRuns["Service"]["record"] = Effect.fnUntraced(
     function* (events) {
-      const candidates = new Map<string, Row>();
-      for (const { event } of events) {
-        let rows: ReadonlyArray<Row> = [];
-        if (event.type === "run.created" || event.type === "run.updated") {
-          rows = yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE run_id=${event.payload.id}
-          UNION SELECT * FROM scheduled_task_runs WHERE message_id=${event.payload.userMessageId}`;
-        } else if (
-          event.type === "message.updated" &&
-          event.payload.scheduledTaskId !== undefined
-        ) {
-          rows =
-            yield* sql<Row>`SELECT * FROM scheduled_task_runs WHERE message_id=${event.payload.id}`;
-        }
-        for (const row of rows) candidates.set(row.firing_id, row);
-      }
+      const candidates = yield* collectCandidates(events.map(({ event }) => event));
       const observations = [];
       for (const row of candidates.values()) {
         const resolved = yield* resolve(row);
@@ -611,6 +657,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     begin,
     finishDispatch,
     resolveAttribution,
+    resolveBatchAttributions,
     deliveryReceipt,
     deliveryDispatch,
     record,

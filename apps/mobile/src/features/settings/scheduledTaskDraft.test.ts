@@ -5,12 +5,17 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
+  type ScheduledTask,
+  ScheduledTaskId,
 } from "@goat/contracts";
 import {
   scheduledTaskDefaultModel,
   DEFAULT_SCHEDULE,
   scheduleDraftForTask,
   scheduleFromDraft,
+  editDraft,
+  createDraft,
+  hasScheduledTaskDraftChanges,
 } from "./scheduledTaskDraft";
 
 describe("scheduleDraftForTask", () => {
@@ -195,4 +200,38 @@ it("rejects dedupe keys without valid request placeholders", () => {
   expect(
     scheduleFromDraft({ ...DEFAULT_SCHEDULE, mode: "webhook", coalesceKey: "{{body.bad" }),
   ).toBeNull();
+});
+
+it("arms discard confirmation for a notification-only edit", () => {
+  const initial = createDraft(null, null);
+  expect(
+    hasScheduledTaskDraftChanges(initial, { ...initial, notificationPolicy: "failed_runs_only" }),
+  ).toBe(true);
+});
+
+it("reopens notification policy without losing future values or old-host defaults", () => {
+  const task: ScheduledTask = {
+    id: ScheduledTaskId.make("task"),
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: false,
+    schedule: { type: "interval", everyMs: 60000 },
+    projectId: ProjectId.make("project"),
+    threadId: null,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: "2026-10-15T00:00:00.000Z",
+    updatedAt: "2026-10-15T00:00:00.000Z",
+    nextRunAt: null,
+    lastRunAt: null,
+    lastRunStatus: "never",
+    lastRunError: null,
+    runCount: 0,
+  };
+  expect(editDraft(task).notificationPolicy).toBe("all_runs");
+  expect(editDraft({ ...task, notificationPolicy: "future" }).notificationPolicy).toBe("future");
 });

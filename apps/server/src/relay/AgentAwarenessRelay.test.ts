@@ -322,6 +322,23 @@ describe("AgentAwarenessRelay", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("sends a tombstone for silent completion after the existing confirmation timer", () =>
+    Effect.gen(function* () {
+      const { relay, currentShell, publications } = yield* makeTestRelay();
+      yield* relay.publishThread(THREAD_ID);
+      assert.equal(publications[0]?.state?.phase, "running");
+      yield* Ref.set(
+        currentShell,
+        shell({ status: "completed", latestRunCompletionNotification: "silent" }),
+      );
+      yield* relay.publishThread(THREAD_ID);
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 2);
+      assert.isNull(publications[1]?.state);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("coalesces queued updates and reruns a thread dirtied during publishing", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

@@ -93,6 +93,7 @@ const thread = {
   hasPendingApprovals: false,
   hasPendingUserInput: false,
   session: null as { status: string } | null,
+  completionNotification: undefined as string | undefined,
   latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
 };
 let focused = false;
@@ -143,6 +144,8 @@ function toV2ThreadShell(input: typeof thread) {
     updatedAt: SHELL_NOW,
     latestRunRequestedAt: SHELL_NOW,
     latestRunStartedAt: SHELL_NOW,
+    latestRunCompletionNotification: input.completionNotification,
+    notificationCompletedAt: null,
     latestRunCompletedAt: latestTurn.completedAt
       ? DateTime.makeUnsafe(latestTurn.completedAt)
       : undefined,
@@ -244,4 +247,89 @@ it("holds a completion through a continuation gap and notifies once it settles",
   expect(TestNotification.sent).toEqual([]);
   await vi.advanceTimersByTimeAsync(1);
   expect(TestNotification.sent.map((sent) => sent.title)).toEqual(["Thread completed"]);
+});
+
+it("keeps silent completion quiet and alerts for the next meaningful completion and approval", async () => {
+  await using app = setup();
+  state.mode = "notifications-and-sound";
+  state.inApp = true;
+  app.start();
+  using _timers = fakeTimers();
+  state.shells.set(
+    "one",
+    shell({
+      completionNotification: "silent",
+      latestTurn: { turnId: "quiet", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toHaveLength(0);
+  expect(state.sound).not.toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(0);
+  state.shells.set(
+    "one",
+    shell({
+      completionNotification: "notify",
+      latestTurn: {
+        turnId: "meaningful",
+        state: "completed",
+        completedAt: "2026-09-13T07:02:00.000Z",
+      },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toHaveLength(1);
+  expect(state.sound).toHaveBeenCalledExactlyOnceWith("completion", expect.any(Function));
+  state.shells.set(
+    "one",
+    shell({
+      completionNotification: "silent",
+      hasPendingApprovals: true,
+      latestTurn: {
+        turnId: "approval",
+        state: "completed",
+        completedAt: "2026-09-13T07:03:00.000Z",
+      },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toHaveLength(2);
+  expect(state.sound).toHaveBeenCalledTimes(2);
+  expect(state.sound).toHaveBeenLastCalledWith("input", expect.any(Function));
+});
+
+it("suppresses silent completion toasts while focused and toasts the next notifying completion", async () => {
+  await using app = setup();
+  focused = true;
+  state.inApp = true;
+  app.start();
+  using _timers = fakeTimers();
+  state.shells.set(
+    "one",
+    shell({
+      completionNotification: "silent",
+      latestTurn: { turnId: "quiet", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(state.toast).not.toHaveBeenCalled();
+  state.shells.set(
+    "one",
+    shell({
+      completionNotification: "notify",
+      latestTurn: {
+        turnId: "meaningful",
+        state: "completed",
+        completedAt: "2026-09-13T07:02:00.000Z",
+      },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(state.toast).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      type: "success",
+      title: "Thread completed",
+      description: "Test thread",
+    }),
+  );
 });

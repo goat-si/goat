@@ -43,6 +43,38 @@ describe("projectThreadAwarenessV2", () => {
     ...overrides,
   });
 
+  it("removes silent completed activity while preserving live attention and background work", () => {
+    const input = {
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: {
+        ...v2Thread(),
+        status: "completed" as const,
+        latestRunCompletionNotification: "silent",
+      },
+    };
+    expect(projectThreadAwarenessV2(input)).toBeNull();
+    expect(
+      projectThreadAwarenessV2({
+        ...input,
+        thread: { ...input.thread, activityRunStatus: "running" as const },
+      })?.phase,
+    ).toBe("running");
+    expect(
+      projectThreadAwarenessV2({
+        ...input,
+        thread: {
+          ...input.thread,
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("approval"),
+            kind: "command",
+            createdAt: updatedAt,
+          },
+        },
+      })?.phase,
+    ).toBe("waiting_for_approval");
+  });
+
   it("does not announce completion after a manual stop", () => {
     const input = {
       environmentId: "env-1" as EnvironmentId,

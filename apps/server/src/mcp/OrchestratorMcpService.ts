@@ -152,7 +152,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
-import { statusFromShell } from "./threadStatus.ts";
+import { statusFromShell, threadOrganization } from "./threadStatus.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
@@ -445,6 +445,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     projectId: task.projectId,
     boundThreadId: task.threadId,
     schedule: task.schedule,
+    notificationPolicy: task.notificationPolicy ?? "all_runs",
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
@@ -1034,26 +1035,9 @@ function threadDetail(
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
     ...threadSnooze(shell, nowMs),
-    ...threadOrganization(projection.thread, latest),
+    ...threadOrganization(projection.thread, latest, shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
-  };
-}
-
-/** What goat_thread_organize changes beyond archive, settle and snooze, so a caller can reconcile it. */
-function threadOrganization(
-  thread: OrchestrationV2ThreadProjection["thread"],
-  latest: OrchestrationV2Run | undefined,
-): Pick<OrchestratorMcpThreadDetail, "snoozedAt" | "pinned" | "unread"> {
-  const completedAt = latest?.completedAt ?? null;
-  return {
-    snoozedAt: thread.snoozedAt == null ? null : DateTime.formatIso(thread.snoozedAt),
-    pinned: thread.pinnedAt != null,
-    // The sidebar's rule; thread.mark-unread rewinds lastVisitedAt to just before completion.
-    unread:
-      completedAt !== null &&
-      thread.lastVisitedAt != null &&
-      DateTime.isGreaterThan(completedAt, thread.lastVisitedAt),
   };
 }
 
@@ -2219,6 +2203,9 @@ const make = Effect.gen(function* () {
         prompt: input.prompt,
         enabled: input.enabled ?? true,
         schedule: input.schedule,
+        ...(input.notificationPolicy === undefined
+          ? {}
+          : { notificationPolicy: input.notificationPolicy }),
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
         workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
@@ -2310,6 +2297,9 @@ const make = Effect.gen(function* () {
         prompt: input.prompt ?? existing.prompt,
         enabled: input.enabled ?? existing.enabled,
         schedule: input.schedule ?? existing.schedule,
+        ...(input.notificationPolicy === undefined
+          ? {}
+          : { notificationPolicy: input.notificationPolicy }),
         projectId: existing.projectId,
         threadId,
         workspaceStrategy,

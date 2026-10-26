@@ -213,6 +213,13 @@ export type ScheduledTaskRun = typeof ScheduledTaskRun.Type;
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
+export const ScheduledTaskNotificationPolicy = Schema.Literals([
+  "all_runs",
+  "failed_runs_only",
+  "important_updates",
+]);
+export type ScheduledTaskNotificationPolicy = typeof ScheduledTaskNotificationPolicy.Type;
+
 /**
  * Why a webhook task has no public URL. relay_not_linked: the environment is
  * not linked to GOAT Connect. managed_tunnel_not_configured: it is linked, but
@@ -245,6 +252,7 @@ export const ScheduledTask = Schema.Struct({
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
+  notificationPolicy: Schema.optional(Schema.String),
   schedule: ScheduledTaskSchedule,
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
@@ -283,6 +291,7 @@ const ScheduledTaskUpsertInputFields = Schema.Struct({
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
+  notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),

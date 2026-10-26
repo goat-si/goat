@@ -60,6 +60,7 @@ export interface DraftState {
   readonly title: string;
   readonly prompt: string;
   readonly enabled: boolean;
+  readonly notificationPolicy: string;
   readonly scheduleMode: ScheduleMode;
   readonly intervalMinutes: string;
   readonly timeOfDay: string;
@@ -90,7 +91,7 @@ export interface DraftState {
   readonly savedFilters: ReadonlyArray<WebhookFilterDraft>;
 }
 
-export const WEBHOOK_SIGNATURE_DEFAULTS = {
+const WEBHOOK_SIGNATURE_DEFAULTS = {
   signatureHeader: "x-hub-signature-256",
   signatureEncoding: "hex",
   signaturePrefix: "sha256=",
@@ -206,6 +207,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     title: task.title,
     prompt: task.prompt,
     enabled: task.enabled,
+    notificationPolicy: task.notificationPolicy ?? "all_runs",
     scheduleMode:
       schedule.type === "interval" ? "interval" : schedule.type === "webhook" ? "webhook" : "fixed",
     intervalMinutes:
@@ -285,3 +287,34 @@ export function scheduledTaskDefaultModel(
   const fallback = models.find(({ model }) => model.isDefault) ?? models[0];
   return fallback ? { instanceId: fallback.instanceId, model: fallback.model.slug } : null;
 }
+
+export const EMPTY_DRAFT: DraftState = {
+  editingId: null,
+  title: "",
+  prompt: "",
+  enabled: true,
+  notificationPolicy: "all_runs",
+  scheduleMode: "fixed",
+  intervalMinutes: "15",
+  timeOfDay: "09:00",
+  weekdays: new Set([1, 2, 3, 4, 5]),
+  projectId: "",
+  threadId: "",
+  workspaceMode: "worktree",
+  baseRef: "main",
+  startFromOrigin: true,
+  existingWorktreePath: "",
+  modelKey: "",
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  baseModelSelection: null,
+  signatureEnabled: false,
+  ...WEBHOOK_SIGNATURE_DEFAULTS,
+  signatureSecret: "",
+  maxDeliveryAgeMinutes: "",
+  replayKey: "",
+  coalesceKey: "",
+  coalesceWindowSeconds: "",
+  filters: [],
+  savedFilters: [],
+};

@@ -30,6 +30,8 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
+import { withWebhookService, webhookTaskInput } from "./ScheduledRunFixture.testkit.ts";
+
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 
 const insertRow = (
@@ -403,4 +405,34 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       assert.lengthOf((yield* service.list()).tasks, 0);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "retains omitted notification policy and rejects important updates without a bound thread",
+  () =>
+    withWebhookService(({ service }) =>
+      Effect.gen(function* () {
+        const input = yield* webhookTaskInput({ notificationPolicy: "failed_runs_only" });
+        const saved = yield* service.upsert(input);
+        assert.equal(saved.task.notificationPolicy, "failed_runs_only");
+        const { notificationPolicy: _policy, ...omitted } = input;
+        assert.equal((yield* service.upsert(omitted)).task.notificationPolicy, "failed_runs_only");
+        const error = yield* Effect.flip(
+          service.upsert({ ...input, notificationPolicy: "important_updates" }),
+        );
+        assert.include(error.message, "existing thread");
+        const bound = {
+          ...input,
+          threadId: ThreadId.make("bound"),
+          notificationPolicy: "important_updates" as const,
+        };
+        assert.equal((yield* service.upsert(bound)).task.notificationPolicy, "important_updates");
+        yield* Effect.flip(service.upsert({ ...omitted, threadId: null }));
+        assert.equal(
+          (yield* service.setEnabled({ id: saved.task.id, enabled: false })).task
+            .notificationPolicy,
+          "important_updates",
+        );
+      }),
+    ),
 );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  RunAttemptId,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2TurnItem,
@@ -71,6 +72,16 @@ describe("threadPhase", () => {
 });
 
 describe("statusFromShell", () => {
+  it("exposes the described run's own attempt provenance", () => {
+    const current = { ...run("run-1", "running"), activeAttemptId: RunAttemptId.make("attempt-A") };
+    const status = statusFromShell(
+      shell({ activeRunId: current.id, latestRunId: current.id }),
+      [current],
+      [],
+    );
+    expect(status.run).toMatchObject({ runId: "run-1", activeAttemptId: "attempt-A" });
+  });
+
   it("describes the active run, the run queued behind it, and the question it waits on", () => {
     const status = statusFromShell(
       shell({

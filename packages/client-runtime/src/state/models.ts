@@ -78,6 +78,7 @@ export interface EnvironmentThreadStructure {
 }
 
 export interface ThreadRunSummary {
+  readonly completionNotification?: string | undefined;
   readonly runId: RunId;
   readonly status: OrchestrationV2RunStatus;
   readonly requestedAt: string | null;
@@ -203,6 +204,8 @@ export interface EnvironmentThreadShell {
    * server predates visited tracking and clients should fall back to any
    * local visited state they keep.
    */
+  readonly notificationCompletedAt?: string | null | undefined;
+  readonly markedUnreadCompletionAt?: string | null | undefined;
   readonly lastVisitedAt?: string | null;
   /** Server-tracked open history for search ranking. */
   readonly opens?: import("@goat/contracts").OrchestrationV2ThreadOpens | null;
@@ -287,6 +290,7 @@ export function presentThreadShell(
                 ? updatedAt
                 : null
               : nullableIso(thread.latestRunCompletedAt),
+          completionNotification: thread.latestRunCompletionNotification,
           assistantMessageId: null,
         } satisfies ThreadRunSummary);
   const runtime = shellRuntime(thread);
@@ -296,6 +300,14 @@ export function presentThreadShell(
     runtime?.status === "starting" ||
     runtime?.status === "running";
   return {
+    notificationCompletedAt:
+      thread.notificationCompletedAt === undefined
+        ? undefined
+        : nullableIso(thread.notificationCompletedAt),
+    markedUnreadCompletionAt:
+      thread.markedUnreadCompletionAt === undefined
+        ? undefined
+        : nullableIso(thread.markedUnreadCompletionAt),
     environmentId,
     id: thread.id,
     projectId: thread.projectId,

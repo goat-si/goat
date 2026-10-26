@@ -47,6 +47,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteReportFences",
   "HubProvisionedLinks",
   "ScheduledTaskRuns",
+  "ScheduledTaskNotificationPolicy",
 ]);
 
 type MigrationEntry<E> = readonly [

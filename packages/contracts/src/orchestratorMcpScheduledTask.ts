@@ -17,6 +17,7 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
   schedule: ScheduledTaskSchedule,
+  notificationPolicy: Schema.optional(Schema.String),
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
   lastRun: ScheduledTask.fields.lastRun,
@@ -36,3 +37,16 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   ...OrchestratorMcpReconcileFields.scheduledTask,
 });
 export type OrchestratorMcpScheduledTask = typeof OrchestratorMcpScheduledTask.Type;
+
+export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+});
+export type OrchestratorMcpDeleteScheduledTaskInput =
+  typeof OrchestratorMcpDeleteScheduledTaskInput.Type;
+
+export const OrchestratorMcpDeleteScheduledTaskResult = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+  deleted: Schema.Boolean,
+});
+export type OrchestratorMcpDeleteScheduledTaskResult =
+  typeof OrchestratorMcpDeleteScheduledTaskResult.Type;

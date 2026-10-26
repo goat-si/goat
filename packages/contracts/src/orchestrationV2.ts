@@ -1,3 +1,5 @@
+import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import { Handoff, HandoffJson, HandoffActor, HandoffState } from "./handoff.ts";
 import {
   MemoryCurrentAccess,
@@ -550,6 +552,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  notificationCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  markedUnreadCompletionAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -645,20 +649,6 @@ export function idleCompactionOf(
     : undefined;
 }
 
-export const OrchestrationV2RunStatus = Schema.Literals([
-  "preparing",
-  "queued",
-  "starting",
-  "running",
-  "waiting",
-  "completed",
-  "interrupted",
-  "failed",
-  "cancelled",
-  "rolled_back",
-]);
-export type OrchestrationV2RunStatus = typeof OrchestrationV2RunStatus.Type;
-
 export const OrchestrationV2DelegatedCompletionTaskDeliveryState = Schema.Literals([
   "pending",
   "claimed",
@@ -743,6 +733,7 @@ export const OrchestrationV2Run = Schema.Struct({
   userMessageId: MessageId,
   rootNodeId: Schema.NullOr(NodeId),
   activeAttemptId: Schema.NullOr(RunAttemptId),
+  completionNotification: Schema.optional(Schema.String),
   status: OrchestrationV2RunStatus,
   terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
@@ -2232,6 +2223,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStopRequested: Schema.optional(Schema.Boolean),
+  latestRunCompletionNotification: Schema.optional(Schema.String),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(
@@ -2277,6 +2269,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  notificationCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  markedUnreadCompletionAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   opens: Schema.optional(LenientThreadOpens),
   titleRegeneration: Schema.optional(
@@ -2410,6 +2404,8 @@ export type OrchestrationV2StoredEvent = typeof OrchestrationV2StoredEvent.Type;
 
 export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((fields) => ({
   ...fields,
+  notificationCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  markedUnreadCompletionAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -2849,6 +2845,8 @@ export type OrchestrationV2LatestVisibleMessageSummaryJson =
 
 export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFields((fields) => ({
   ...fields,
+  notificationCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  markedUnreadCompletionAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),

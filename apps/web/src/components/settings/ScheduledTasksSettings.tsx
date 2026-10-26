@@ -1,3 +1,10 @@
+import * as Schema from "effect/Schema";
+import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
+import { WebhookFiltersField } from "./ScheduledTaskWebhookFiltersField";
+import {
+  Field,
+  ScheduledTaskNotificationPolicyField,
+} from "./ScheduledTaskNotificationPolicyField";
 import { scheduledTaskRunPresentation } from "@goat/client-runtime/scheduled-task-run";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@goat/client-runtime/connection";
@@ -30,15 +37,10 @@ import type {
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
 import {
   DEFAULT_WEBHOOK_PROMPT,
-  emptyWebhookFilterDraft,
   parseWebhookFilterDrafts,
-  removeWebhookFilterDraft,
-  WEBHOOK_FILTER_OPS,
-  type WebhookFilterDraft,
 } from "@goat/client-runtime/scheduled-task-webhook";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
-  MAX_WEBHOOK_FILTERS,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
@@ -82,7 +84,7 @@ import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
-  WEBHOOK_SIGNATURE_DEFAULTS,
+  EMPTY_DRAFT,
   webhookDraftErrors,
   webhookDeliveryLabel,
   matchesScheduledTaskScope,
@@ -123,6 +125,8 @@ import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
 } from "./settingsLayout";
 
+const isNotificationPolicy = Schema.is(ScheduledTaskNotificationPolicy);
+
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
@@ -132,153 +136,6 @@ const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   root: "Use the project checkout",
   existing_worktree: "Use a specific checkout",
 };
-
-const EMPTY_DRAFT: DraftState = {
-  editingId: null,
-  title: "",
-  prompt: "",
-  enabled: true,
-  scheduleMode: "fixed",
-  intervalMinutes: "15",
-  timeOfDay: "09:00",
-  weekdays: new Set([1, 2, 3, 4, 5]),
-  projectId: "",
-  threadId: "",
-  workspaceMode: "worktree",
-  baseRef: "main",
-  startFromOrigin: true,
-  existingWorktreePath: "",
-  modelKey: "",
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  baseModelSelection: null,
-  signatureEnabled: false,
-  ...WEBHOOK_SIGNATURE_DEFAULTS,
-  signatureSecret: "",
-  maxDeliveryAgeMinutes: "",
-  replayKey: "",
-  coalesceKey: "",
-  coalesceWindowSeconds: "",
-  filters: [],
-  savedFilters: [],
-};
-
-function WebhookFiltersField({
-  filters,
-  onChange,
-}: {
-  filters: ReadonlyArray<WebhookFilterDraft>;
-  onChange: (filters: ReadonlyArray<WebhookFilterDraft>) => void;
-}) {
-  const update = (index: number, patch: Partial<WebhookFilterDraft>) =>
-    onChange(filters.map((filter, at) => (at === index ? { ...filter, ...patch } : filter)));
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 space-y-1">
-          <Label>Filters</Label>
-          <p className="text-sm text-muted-foreground">
-            Run only when every filter matches. Other requests are logged as filtered. Separate “is
-            one of” values with commas; a value can't contain a comma.
-          </p>
-        </div>
-        <Button
-          className="shrink-0"
-          variant="outline"
-          size="sm"
-          disabled={filters.length >= MAX_WEBHOOK_FILTERS}
-          onClick={() => onChange([...filters, emptyWebhookFilterDraft()])}
-        >
-          <PlusIcon />
-          Add filter
-        </Button>
-      </div>
-      {filters.map((filter, index) => (
-        // Always stacked: the dialog stays narrow on wide windows, so a single line
-        // would cut off typical paths and values. The grid wrappers size each control
-        // without restyling it; a grid item stretches to its minmax(0, 1fr) track.
-        <div key={filter.id} className="space-y-2 pt-1">
-          <div className="flex items-center gap-2">
-            <div className="grid min-w-0 flex-1 grid-cols-1">
-              <Input
-                aria-label={`Filter ${index + 1} path`}
-                placeholder="body.action"
-                value={filter.path}
-                onChange={(event) => update(index, { path: event.target.value })}
-              />
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Remove filter ${index + 1}`}
-              onClick={() => onChange(removeWebhookFilterDraft(filters, filter.id))}
-            >
-              <Trash2Icon />
-            </Button>
-          </div>
-          <div className="flex items-center gap-2">
-            <Select
-              value={filter.op}
-              onValueChange={(op) => {
-                const known = WEBHOOK_FILTER_OPS.find((option) => option.op === op);
-                if (known) update(index, { op: known.op });
-              }}
-            >
-              <div className="grid w-44 shrink-0 grid-cols-1">
-                <SelectTrigger size="sm" aria-label={`Filter ${index + 1} test`}>
-                  <SelectValue>
-                    {WEBHOOK_FILTER_OPS.find((option) => option.op === filter.op)?.label}
-                  </SelectValue>
-                </SelectTrigger>
-              </div>
-              <SelectPopup>
-                {WEBHOOK_FILTER_OPS.map((option) => (
-                  <SelectItem key={option.op} value={option.op}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-            {filter.op === "exists" ? null : (
-              <div className="grid min-w-0 flex-1 grid-cols-1">
-                <Input
-                  aria-label={`Filter ${index + 1} value`}
-                  placeholder={filter.op === "in" ? "opened, reopened" : "opened"}
-                  value={filter.value}
-                  onChange={(event) => update(index, { value: event.target.value })}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  htmlFor?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="flex items-baseline justify-between" htmlFor={htmlFor}>
-        <span>{label}</span>
-        {hint ? (
-          <span className="font-normal text-2xs text-muted-foreground/80">{hint}</span>
-        ) : null}
-      </Label>
-      {children}
-    </div>
-  );
-}
 
 function splitModelKey(value: string): ModelSelection | null {
   const index = value.indexOf(":");
@@ -1259,6 +1116,9 @@ function ScheduledTaskEditorForm({
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,
+      ...(isNotificationPolicy(draft.notificationPolicy)
+        ? { notificationPolicy: draft.notificationPolicy }
+        : {}),
       schedule,
       projectId: selectedProjectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
@@ -1278,6 +1138,17 @@ function ScheduledTaskEditorForm({
       if (!isAtomCommandInterrupted(result)) {
         reportFailure("Could not save scheduled task", squashAtomCommandFailure(result));
       }
+      return;
+    }
+    if (
+      input.notificationPolicy !== undefined &&
+      result.value.task.notificationPolicy !== input.notificationPolicy
+    ) {
+      submissionPending.current = false;
+      reportFailure(
+        "Unsupported environment",
+        "This environment did not save the notification policy. Update it and try again.",
+      );
       return;
     }
     onClose();
@@ -1755,6 +1626,10 @@ function ScheduledTaskEditorForm({
             )}
           </div>
 
+          <ScheduledTaskNotificationPolicyField
+            draft={draft}
+            onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+          />
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 space-y-1">
               <Label htmlFor="scheduled-task-enabled">Enabled</Label>

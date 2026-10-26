@@ -2057,6 +2057,7 @@ layer("ProviderEventIngestorV2", (it) => {
       });
       const offered = {
         ...rootEvent.payload,
+        notificationCompletedAt: null,
         id: childThreadId,
         title: "Inspect checkout",
         activeProviderThreadId: null,
@@ -2121,7 +2122,6 @@ layer("ProviderEventIngestorV2", (it) => {
       );
     }),
   );
-
   it.effect(
     "recovers a missing Claude child once and preserves saved metadata on later recovery",
     () =>
@@ -2145,6 +2145,7 @@ layer("ProviderEventIngestorV2", (it) => {
         });
         const recovered: OrchestrationV2AppThread = {
           ...rootEvent.payload,
+          notificationCompletedAt: null,
           id: childThreadId,
           title: "Recovered subagent",
           providerInstanceId,
@@ -2174,7 +2175,6 @@ layer("ProviderEventIngestorV2", (it) => {
           ["thread.created"],
         );
         assert.deepEqual(yield* projectionStore.getThread(childThreadId), recovered);
-
         yield* ingest(
           {
             ...recovered,

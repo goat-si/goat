@@ -40,6 +40,7 @@ it.effect("081 rolls DDL back and preserves the retained destination across ledg
       [107, "RemoteReportFences"],
       [108, "HubProvisionedLinks"],
       [109, "ScheduledTaskRuns"],
+      [110, "ScheduledTaskNotificationPolicy"],
     ]);
     yield* sql`INSERT INTO memory_last_ready_space(singleton,space) VALUES (1,${space})`;
     assert.deepStrictEqual(yield* runMigrations(), []);

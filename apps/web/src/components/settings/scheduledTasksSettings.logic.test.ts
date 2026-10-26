@@ -325,3 +325,10 @@ it("rejects dedupe templates without a request placeholder", () => {
   expect(scheduleFromDraft({ ...draft, replayKey: "literal" })).toBeNull();
   expect(scheduleFromDraft({ ...draft, coalesceKey: "{{body.bad" })).toBeNull();
 });
+
+it("keeps future notification policies when opening a draft and supplies all runs for older hosts", () => {
+  expect(taskToDraft(legacyTask).notificationPolicy).toBe("all_runs");
+  expect(taskToDraft({ ...legacyTask, notificationPolicy: "future" }).notificationPolicy).toBe(
+    "future",
+  );
+});

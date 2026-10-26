@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   RunId,
+  RunAttemptId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +23,11 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+
+import {
+  withWebhookService,
+  webhookTaskInput,
+} from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 
 const layerTest = EventSink.layer.pipe(
   Layer.provideMerge(
@@ -270,4 +276,170 @@ it.effect("onSubscribed runs after acquisition and retains replay/live overlap",
       [...replay, ...live].map((e) => e.sequence),
     );
   }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect.each(["stage", "setter", "append", "receipt", "outbox"] as const)(
+  "rolls back provisional notification, log, receipt and outbox on %s failure",
+  (point) =>
+    withWebhookService(
+      ({ service, sink, projections, sql }) =>
+        Effect.gen(function* () {
+          const task = (yield* service.upsert(
+            yield* webhookTaskInput({
+              schedule: { type: "interval", everyMs: 60000 },
+              notificationPolicy: "failed_runs_only",
+            }),
+          )).task;
+          const ran = yield* service.runNow({ id: task.id });
+          const projection = yield* projections.getThreadProjection(ran.threadId!);
+          const run = projection.runs[0]!;
+          const now = yield* DateTime.now;
+          const beforeRuns = yield* sql`SELECT * FROM orchestration_v2_projection_runs`;
+          const beforeThreads = yield* sql`SELECT * FROM orchestration_v2_projection_threads`;
+          const beforeReceipts = yield* sql`SELECT * FROM scheduled_task_runs`;
+          const sequence = yield* sink.latestSequence();
+          switch (point) {
+            case "stage":
+              yield* sql`CREATE TRIGGER reject_wp2 BEFORE UPDATE ON orchestration_v2_projection_runs WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'Synthetic stage failure'); END`;
+              break;
+            case "setter":
+              yield* sql`CREATE TRIGGER reject_wp2 BEFORE UPDATE ON orchestration_v2_projection_runs WHEN NEW.completion_notification IS NOT NULL BEGIN SELECT RAISE(ABORT,'Synthetic setter failure'); END`;
+              break;
+            case "append":
+              yield* sql`CREATE TRIGGER reject_wp2 BEFORE INSERT ON orchestration_events WHEN NEW.event_id='terminal-rollback' BEGIN SELECT RAISE(ABORT,'Synthetic append failure'); END`;
+              break;
+            case "receipt":
+              yield* sql`CREATE TRIGGER reject_wp2 BEFORE UPDATE ON scheduled_task_runs WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'Synthetic receipt failure'); END`;
+              break;
+            case "outbox":
+              yield* sql`CREATE TRIGGER reject_wp2 BEFORE INSERT ON orchestration_v2_effect_outbox BEGIN SELECT RAISE(ABORT,'Synthetic outbox failure'); END`;
+              break;
+          }
+          const commandId = CommandId.make("rollback");
+          const result = yield* sink
+            .writeWithEffects({
+              commandId,
+              events: [
+                {
+                  id: EventId.make("terminal-rollback"),
+                  type: "run.updated",
+                  threadId: run.threadId,
+                  occurredAt: now,
+                  payload: { ...run, status: "completed", completedAt: now },
+                },
+              ],
+              effects: [
+                {
+                  id: "rollback-effect",
+                  commandId,
+                  threadId: run.threadId,
+                  request: { type: "provider-turn.reattach", runId: run.id },
+                },
+              ],
+            })
+            .pipe(Effect.result);
+          assert.equal(result._tag, "Failure");
+          assert.deepStrictEqual(
+            yield* sql`SELECT * FROM orchestration_v2_projection_runs`,
+            beforeRuns,
+          );
+          assert.deepStrictEqual(
+            yield* sql`SELECT * FROM orchestration_v2_projection_threads`,
+            beforeThreads,
+          );
+          assert.deepStrictEqual(yield* sql`SELECT * FROM scheduled_task_runs`, beforeReceipts);
+          assert.equal(yield* sink.latestSequence(), sequence);
+          assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_effect_outbox`, []);
+        }),
+      { runStatus: "queued" },
+    ),
+);
+
+it.effect(
+  "publishes the decorated log once and retains a superseded notified epoch in a terminal-reopen-terminal batch",
+  () =>
+    withWebhookService(
+      ({ service, sink, projections }) =>
+        Effect.gen(function* () {
+          const task = (yield* service.upsert(
+            yield* webhookTaskInput({
+              schedule: { type: "interval", everyMs: 60000 },
+              notificationPolicy: "failed_runs_only",
+            }),
+          )).task;
+          const fired = yield* service.runNow({ id: task.id });
+          const projection = yield* projections.getThreadProjection(fired.threadId!);
+          const run = projection.runs[0]!;
+          const at = yield* DateTime.now;
+          const afterSequence = yield* sink.latestSequence();
+          const acquired = yield* Deferred.make<void>();
+          const live = yield* sink
+            .stream({
+              threadId: run.threadId,
+              afterSequence,
+              onSubscribed: Deferred.succeed(acquired, undefined),
+            })
+            .pipe(Stream.take(4), Stream.runCollect, Effect.forkScoped);
+          yield* Deferred.await(acquired);
+          const commandId = CommandId.make("epoch-batch");
+          const event = {
+            id: EventId.make("notify-failure"),
+            type: "run.updated" as const,
+            threadId: run.threadId,
+            occurredAt: at,
+            payload: { ...run, status: "failed" as const, completedAt: at },
+          };
+          const later = DateTime.add(at, { seconds: 1 });
+          const stored = yield* sink.write({
+            commandId,
+            events: [
+              {
+                id: EventId.make("redacted-message"),
+                type: "message.updated",
+                threadId: run.threadId,
+                occurredAt: at,
+                payload: {
+                  ...projection.messages[0]!,
+                  text: "GOAT_MCP_BEARER_TOKEN=otherrunSyntheticMcpTokenNotARealCredential00000000",
+                },
+              },
+              event,
+              {
+                ...event,
+                id: EventId.make("reopen"),
+                payload: {
+                  ...run,
+                  status: "preparing",
+                  completedAt: null,
+                  activeAttemptId: RunAttemptId.make("next"),
+                },
+              },
+              {
+                ...event,
+                id: EventId.make("quiet-next"),
+                payload: {
+                  ...run,
+                  status: "completed",
+                  completedAt: later,
+                  activeAttemptId: RunAttemptId.make("next"),
+                },
+              },
+            ],
+          });
+          const decisions = stored.flatMap((s) =>
+            s.event.type === "run.updated" ? [s.event.payload.completionNotification] : [],
+          );
+          assert.deepStrictEqual(decisions, ["notify", undefined, "silent"]);
+          assert.deepStrictEqual(yield* Fiber.join(live), stored);
+          assert.deepStrictEqual(
+            yield* sink.readByCommandId({ commandId }).pipe(Stream.runCollect),
+            stored,
+          );
+          const final = yield* projections.getThreadProjection(run.threadId);
+          assert.deepStrictEqual(final.thread.notificationCompletedAt, at);
+          assert.equal(final.runs[0]?.completionNotification, "silent");
+          assert.equal(final.messages[0]?.text, "GOAT_MCP_BEARER_TOKEN=[redacted]");
+        }).pipe(Effect.scoped),
+      { runStatus: "queued" },
+    ),
 );

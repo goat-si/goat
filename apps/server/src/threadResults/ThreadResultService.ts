@@ -25,19 +25,26 @@ import { readObservedCheck, readObservedCheckState } from "./ObservedCheckServic
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
   {
-    reason: Schema.Literals(["run_not_found", "storage"]),
+    reason: Schema.Literals(["run_not_found", "run_mismatch", "storage"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     return this.reason === "run_not_found"
       ? "The thread has no run to report on."
-      : "Thread result storage failed.";
+      : this.reason === "run_mismatch"
+        ? "The report does not identify a run belonging to this thread."
+        : "Thread result storage failed.";
   }
 }
 
+const StoredReport = ThreadResultReport.mapFields((fields) => ({
+  ...fields,
+  notificationRelevance: Schema.optional(Schema.String),
+}));
+
 export interface StoredThreadResultReport {
-  readonly report: ThreadResultReport;
+  readonly report: typeof StoredReport.Type;
   readonly reportedAt: string;
 }
 
@@ -86,6 +93,9 @@ export function buildThreadResult(input: {
     outcome: report?.outcome ?? derivedOutcome,
     reportedAt: input.stored?.reportedAt ?? null,
     ...(report?.summary === undefined ? {} : { summary: report.summary }),
+    ...(report?.notificationRelevance === undefined
+      ? {}
+      : { notificationRelevance: report.notificationRelevance }),
     pullRequests,
     ...(report?.tests === undefined ? {} : { tests: report.tests }),
     ...(input.observedCheck == null ? {} : { observedCheck: input.observedCheck }),
@@ -117,7 +127,7 @@ export class ThreadResultService extends Context.Service<
 >()("goat/threadResults/ThreadResultService") {}
 
 const ReportRow = Schema.Struct({
-  reportJson: Schema.fromJsonString(ThreadResultReport),
+  reportJson: Schema.fromJsonString(StoredReport),
   reportedAt: Schema.String,
 });
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
@@ -200,9 +210,15 @@ const make = Effect.gen(function* () {
     // An agent's report is stored and relayed like its tool output.
     const input = redactGoatCredentialsDeep(agentReport);
     const records = yield* load(threadId);
+    if (input.notificationRelevance !== undefined && input.runId === undefined)
+      return yield* new ThreadResultError({ reason: "run_mismatch" });
     const run =
-      ThreadManagementService.latestActiveRun(records) ??
-      ThreadManagementService.latestRun(records);
+      input.runId === undefined
+        ? (ThreadManagementService.latestActiveRun(records) ??
+          ThreadManagementService.latestRun(records))
+        : records.runs.find((candidate) => candidate.id === input.runId);
+    if (input.runId !== undefined && run === undefined)
+      return yield* new ThreadResultError({ reason: "run_mismatch" });
     if (run === undefined) return yield* new ThreadResultError({ reason: "run_not_found" });
     const reportedAt = DateTime.formatIso(yield* DateTime.now);
     const reportJson = yield* encodeReport(input).pipe(Effect.mapError(storage));
