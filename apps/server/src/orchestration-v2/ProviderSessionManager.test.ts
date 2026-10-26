@@ -5941,6 +5941,7 @@ it.effect(
       const state = yield* Ref.make(emptyState);
       const enabled = yield* Ref.make(false);
       const acquires = yield* Ref.make(0);
+      const controls = yield* Ref.make<ReadonlyArray<string>>([]);
       const cuaDriver = {
         command: "/resources/cua-driver",
         args: ["mcp"],
@@ -5972,7 +5973,8 @@ it.effect(
         yield* Ref.set(enabled, true);
         const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
         assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
-        assert.isTrue(enabledDriver?.args.includes("control:every-app"));
+        assert.isTrue(enabledDriver?.args.includes(threadId));
+        assert.include(yield* Ref.get(controls), "control:every-app");
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
@@ -5998,6 +6000,7 @@ it.effect(
             cuaDriverLayer: ComputerUseTestkit.layerInteractive({
               enabled: Ref.get(enabled),
               acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
+              controlTaken: (controlId) => Ref.update(controls, (taken) => [...taken, controlId]),
             }),
           }),
         ),

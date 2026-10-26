@@ -10,13 +10,17 @@ import * as CuaDriver from "./CuaDriver.ts";
 /**
  * Computer use for provider-session test assemblies: a driver that is on while `enabled` says so
  * and starts `mcp` through `acquire`, and leases for interactive turns, with no grants, one
- * control per thread and a proxy to run.
+ * control per thread and a proxy to run. `controlTaken` sees each control id a turn takes, since the
+ * proxy's launch arguments carry only the thread.
  */
 export const layerInteractive = (input: {
   readonly enabled: Effect.Effect<boolean>;
   readonly acquire: Effect.Effect<CuaDriverMcpConfiguration>;
-}) =>
-  Layer.merge(
+  readonly controlTaken?: (controlId: string) => Effect.Effect<void>;
+}) => {
+  const take = <A extends { readonly controlId: string }>(control: A) =>
+    (input.controlTaken?.(control.controlId) ?? Effect.void).pipe(Effect.as(control));
+  return Layer.merge(
     Layer.succeed(
       CuaDriver.CuaDriver,
       CuaDriver.CuaDriver.of({
@@ -37,23 +41,22 @@ export const layerInteractive = (input: {
       channelOrigin: () => Effect.succeed(undefined),
       active: () => Effect.succeed(Option.none()),
       control: (threadId) =>
-        Effect.succeed({
+        take({
           controlId: "control:test",
           threadId,
           expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
         }),
       // A full access thread takes this one: every app, no grant (D16).
       everyAppControl: (threadId) =>
-        Effect.succeed(
-          Option.some({
-            controlId: "control:every-app",
-            threadId,
-            expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
-          }),
-        ),
+        take({
+          controlId: "control:every-app",
+          threadId,
+          expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+        }).pipe(Effect.map(Option.some)),
       // Turns here keep their run open.
       turnEnded: () => Effect.succeed(false),
     }),
   );
+};
 
 export type Leases = ComputerUseLeases.ComputerUseLeases;
