@@ -683,7 +683,9 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const now = DateTime.formatIso(yield* DateTime.now);
       switch (input.status) {
-        case "running":
+        case "running": {
+          // A GOAT Bot turn's running report is a direct message to the person unless milestone:false.
+          const milestone = input.milestone ?? (task.kind === "turn" ? true : undefined);
           yield* commitTransition(
             ledger,
             stored,
@@ -692,12 +694,13 @@ const make = Effect.gen(function* () {
               payload: {
                 generation: task.generation,
                 summary: input.summary,
-                ...(input.milestone === undefined ? {} : { milestone: input.milestone }),
+                ...(milestone === undefined ? {} : { milestone }),
               },
             },
-            { actor: "agent", eventId, narrate: input.milestone === true },
+            { actor: "agent", eventId, narrate: milestone === true },
           );
           return;
+        }
         case "waiting_input":
           if (input.question === undefined) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
