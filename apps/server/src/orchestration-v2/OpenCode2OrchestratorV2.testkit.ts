@@ -41,7 +41,7 @@ export const BACKGROUND_PARENT = "ses_f1485cda4ffeXuc6GjAU9vDiRb";
 export const BACKGROUND_CHILD = "ses_f1485c529ffea4URrYruwEg0Ja";
 export const BACKGROUND_PROMPT =
   "Use the subagent tool with background enabled to delegate to the general subagent with the prompt: 'Run the shell command `sleep 20` with the bash tool and then reply exactly CHILD_OK.' As soon as it is launched, reply exactly PARENT_OK and end your turn without waiting for it.";
-export const instanceId = ProviderInstanceId.make("opencode");
+const instanceId = ProviderInstanceId.make("opencode");
 export const bigPickle: ModelSelection = { instanceId, model: "opencode/big-pickle" };
 export const mimo: ModelSelection = { instanceId, model: "opencode/mimo-v2.6-flash-free" };
 
@@ -67,7 +67,7 @@ export const labelled = (entry: ProviderReplayEntry, label: string): ProviderRep
  * then this thread's own is allowed again (last match wins). Every managed Cua
  * Driver is denied too, since these threads have none.
  */
-export const mcpRules = (name: string) => [
+const mcpRules = (name: string) => [
   { action: "t3-code-*", resource: "*", effect: "deny" },
   { action: "goat-*", resource: "*", effect: "deny" },
   {
@@ -77,27 +77,23 @@ export const mcpRules = (name: string) => [
   },
   { action: "cua-driver-*", resource: "*", effect: "deny" },
 ];
-export const FULL_ACCESS = [{ action: "*", resource: "*", effect: "allow" }];
+const FULL_ACCESS = [{ action: "*", resource: "*", effect: "allow" }];
 
 export const goatRules = (name: string) => [...FULL_ACCESS, ...mcpRules(name)];
 
-export const BUILD_PATHS = [
+const BUILD_PATHS = [
   {
     action: "external_directory",
     resource: "/home/.local/share/opencode/tool-output/*",
     effect: "allow",
   },
 ];
-export const PLAN_PATHS = [
+const PLAN_PATHS = [
   ...BUILD_PATHS,
   { action: "edit", resource: "/home/.opencode/plan/*", effect: "allow" },
   { action: "external_directory", resource: "/home/.opencode/plan/*", effect: "allow" },
 ];
-export const agentInfo = (
-  id: string,
-  description: string,
-  permissions: ReadonlyArray<unknown>,
-) => ({
+const agentInfo = (id: string, description: string, permissions: ReadonlyArray<unknown>) => ({
   id,
   name: id === "plan" ? "Plan" : "Build",
   request: { settings: {}, headers: {}, body: {} },
@@ -185,7 +181,7 @@ export const answeredPrompt = (text: string): ReadonlyArray<ProviderReplayEntry>
 ];
 
 /** A `/api/model` entry as 2.0.18 lists it; a known window means no re-read after a turn. */
-export const catalogModel = (id: string, name: string) => ({
+const catalogModel = (id: string, name: string) => ({
   id,
   modelID: id,
   providerID: "opencode",

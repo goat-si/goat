@@ -30,7 +30,7 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 export const instanceId = ProviderInstanceId.make("codex");
-export const modelSelection = { instanceId, model: "gpt-5.1-codex" };
+const modelSelection = { instanceId, model: "gpt-5.1-codex" };
 export const adapter = {
   instanceId,
   driver: ProviderDriverKind.make("codex"),
@@ -38,7 +38,7 @@ export const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("Runs here never reach a provider"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
-export const layerDatabase = SqlitePersistence.layerMemory;
+const layerDatabase = SqlitePersistence.layerMemory;
 export const layerForAdapter = (providerAdapter: ProviderAdapter.ProviderAdapterV2["Service"]) =>
   ThreadManagementService.layer.pipe(
     Layer.provideMerge(
