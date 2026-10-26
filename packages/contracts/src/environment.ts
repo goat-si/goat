@@ -133,6 +133,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   worktreesDirectory: Schema.optionalKey(Schema.Boolean),
   /** Server answers `server.getWorktreesDirectoryStatus` and falls back when it is unavailable. */
   worktreesDirectoryStatus: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server answers `server.getStorageUsage`, `server.cleanUpStorageItems` and
+   * `server.subscribeDiskPressure`. Clients show disk usage and cleanup only for servers that set it.
+   */
+  storageUsage: Schema.optionalKey(Schema.Boolean),
   /** Server can exclude PR-linked threads from inactivity settlement. */
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),

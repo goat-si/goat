@@ -33,7 +33,7 @@ const environment = {
 
 const device = {
   deviceId: "device-1",
-  label: "Julius iPhone",
+  label: "Alex iPhone",
   platform: "ios",
   iosMajorVersion: 18,
   appVersion: null,

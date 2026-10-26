@@ -215,7 +215,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
         });
 
         yield* git(cwd, ["init"]);
-        yield* git(cwd, ["remote", "add", "origin", "git@github.com:julius/t3code.git"]);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:alex/t3code.git"]);
         if (change === "replace") {
           yield* git(cwd, ["remote", "add", "upstream", "git@github.com:T3Tools/previous.git"]);
         }
@@ -223,7 +223,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
         const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
         const initialIdentity = yield* resolver.resolve(cwd);
         expect(initialIdentity?.canonicalKey).toBe(
-          change === "add" ? "github.com/julius/t3code" : "github.com/t3tools/previous",
+          change === "add" ? "github.com/alex/t3code" : "github.com/t3tools/previous",
         );
 
         yield* git(cwd, [
@@ -251,7 +251,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       });
 
       yield* git(cwd, ["init"]);
-      yield* git(cwd, ["remote", "add", "origin", "git@github.com:julius/t3code-fork.git"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:alex/t3code-fork.git"]);
       yield* git(cwd, ["remote", "add", "upstream", "git@github.com:T3Tools/t3code.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -260,9 +260,9 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(identity?.canonicalKey).toBe("github.com/t3tools/t3code");
       expect(identity?.displayName).toBe("T3Tools/t3code");
       expect(identity?.origin).toEqual({
-        canonicalKey: "github.com/julius/t3code-fork",
-        remoteUrl: "git@github.com:julius/t3code-fork.git",
-        displayName: "julius/t3code-fork",
+        canonicalKey: "github.com/alex/t3code-fork",
+        remoteUrl: "git@github.com:alex/t3code-fork.git",
+        displayName: "alex/t3code-fork",
       });
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );

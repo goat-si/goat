@@ -49,7 +49,7 @@ const tunnelSpawner = (
     const args = commandArgs(command);
     if (args.includes("-G"))
       return Effect.succeed(
-        makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n"),
+        makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n"),
       );
     if (args.includes("-N")) return tunnel(command);
     if (isRemoteLaunch(args)) return Effect.succeed(makeSuccessfulProcess(LAUNCHED));

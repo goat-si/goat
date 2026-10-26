@@ -346,10 +346,9 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
   // even though the visible path does not.
   it.effect("recognizes a Windows standalone install through its junctioned bin dir", () =>
     Effect.gen(function* () {
-      const visiblePath =
-        "C:\\Users\\Theo\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+      const visiblePath = "C:\\Users\\Sam\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
       const realPath =
-        "C:\\Users\\Theo\\.codex\\packages\\standalone\\releases\\0.120.0-x86_64\\bin\\codex.exe";
+        "C:\\Users\\Sam\\.codex\\packages\\standalone\\releases\\0.120.0-x86_64\\bin\\codex.exe";
       const capabilities = yield* resolvePackageManagedProviderMaintenance(
         {
           provider: driver("codex"),
@@ -521,20 +520,20 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
   it.effect.each([
     {
       name: "the default home",
-      resolved: "/Users/theo/.vite-plus/bin/claude",
-      real: "/Users/theo/.vite-plus/current/bin/vp",
+      resolved: "/Users/sam/.vite-plus/bin/claude",
+      real: "/Users/sam/.vite-plus/current/bin/vp",
       platform: "darwin",
     },
     {
       name: "the XDG home",
-      resolved: "/home/theo/.local/share/vite-plus/bin/claude",
-      real: "/home/theo/.local/share/vite-plus/current/bin/vp",
+      resolved: "/home/sam/.local/share/vite-plus/bin/claude",
+      real: "/home/sam/.local/share/vite-plus/current/bin/vp",
       platform: "linux",
     },
     {
       name: "the Windows home",
-      resolved: "C:\\Users\\Theo\\AppData\\Local\\vite-plus\\bin\\claude.cmd",
-      real: "C:\\Users\\Theo\\AppData\\Local\\vite-plus\\packages\\@anthropic-ai\\claude-code\\lib\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
+      resolved: "C:\\Users\\Sam\\AppData\\Local\\vite-plus\\bin\\claude.cmd",
+      real: "C:\\Users\\Sam\\AppData\\Local\\vite-plus\\packages\\@anthropic-ai\\claude-code\\lib\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
       platform: "win32",
     },
   ] as const)("updates a Vite+ global install in $name with vp", (fixture) =>

@@ -57,7 +57,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Resource telemetry](./internals/resource-telemetry.md)
 - [Product analytics](./internals/product-analytics.md)
 - [Environment auth](./internals/environment-auth.md)
-- [GOAT Connect](./internals/t3-connect.md)
+- [GOAT Connect](./internals/goat-connect.md)
 - [Assistant citations](./internals/assistant-citations.md)
 - [Mobile navigation](./internals/mobile-navigation.md)
 - [Mobile development lifecycle](./internals/mobile-development.md)

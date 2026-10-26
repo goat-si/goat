@@ -332,7 +332,7 @@ export function hottestHost(
 export type FleetAlertTone = "destructive" | "warning" | "muted";
 
 /** The one next step an alert offers, run against the machine's own environment. */
-export type FleetAlertActionKind = "retry" | "compact" | "clean_up" | "memory_settings";
+export type FleetAlertActionKind = "retry" | "compact" | "clean_up" | "memory_settings" | "storage";
 
 export interface FleetAlert {
   readonly key: string;
@@ -549,14 +549,23 @@ export function fleetAlerts(
     // The host's own verdict, held with hysteresis there; agents running work on it are told too.
     const pressure = entry.pressure;
     if (row.tone === "ok" && pressure !== undefined && pressure.level !== "ok") {
-      const reason = pressure.reasons[0]?.message;
+      const top = pressure.reasons[0];
+      const reason = top?.message;
+      // A full disk is fixed by freeing space, not by moving lanes, so it says so and links there.
+      const disk = pressure.reasons.some((entry) => entry.signal === "disk");
       alerts.push({
         key: row.key + ":pressure",
         tone: pressure.level === "critical" ? "destructive" : "warning",
         label: row.label,
         detail:
-          (pressure.level === "critical" ? "Overloaded" : "Under heavy load") +
-          (reason === undefined ? "" : ", " + reason),
+          (top?.signal === "disk"
+            ? pressure.level === "critical"
+              ? "Almost out of disk space"
+              : "Low on disk space"
+            : pressure.level === "critical"
+              ? "Overloaded"
+              : "Under heavy load") + (reason === undefined ? "" : ", " + reason),
+        ...(disk ? act("storage") : {}),
       });
     }
     // As in Settings > Hosts, only the protocol verdict warns; builds of different versions

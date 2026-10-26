@@ -15,7 +15,7 @@ describe("ssh auth", () => {
       assert.equal(
         isSshAuthFailure(
           new Error(
-            "julius@100.65.180.100: Permission denied (publickey,password,keyboard-interactive).",
+            "alex@100.65.180.100: Permission denied (publickey,password,keyboard-interactive).",
           ),
         ),
         true,

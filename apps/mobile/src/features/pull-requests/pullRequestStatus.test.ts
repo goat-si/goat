@@ -7,7 +7,7 @@ import {
   pullRequestReviewSummary,
 } from "./pullRequestStatus";
 
-const author = { login: "julius", name: null, avatarUrl: null };
+const author = { login: "alex", name: null, avatarUrl: null };
 function review(state: string, at: string): PullRequestComment {
   return {
     id: `${state}:${at}`,
@@ -89,7 +89,7 @@ describe("mobile overview review status", () => {
         review("COMMENTED", "2026-10-10T10:00:00Z"),
       ]),
     );
-    expect(result.title).toBe("Approved by julius");
+    expect(result.title).toBe("Approved by alex");
     expect(result.reviews).toHaveLength(1);
     expect(
       pullRequestReviewSummary(
