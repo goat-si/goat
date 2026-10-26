@@ -795,7 +795,7 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("uses the native default without sending T3's default selection as a model ID", () =>
+  it.effect("uses the native default without sending GOAT's default selection as a model ID", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
       const result = yield* fixture.textGeneration.generateThreadTitle({

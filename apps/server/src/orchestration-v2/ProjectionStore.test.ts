@@ -7811,7 +7811,7 @@ it.effect(
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
-] as const)("%s shells flag only an active turn blocked solely on T3 thread waits", ([, layer]) =>
+] as const)("%s shells flag only an active turn blocked solely on GOAT thread waits", ([, layer]) =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const threadId = yield* addRolledBackRecoveryCandidate("thread-wait");

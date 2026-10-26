@@ -18,9 +18,9 @@ import type { SessionControl } from "./SessionControl.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
-  readonly format?: "text" | "markdown";
-  readonly maxChars?: number;
-  readonly timeoutMs?: number;
+  readonly format?: "text" | "markdown" | undefined;
+  readonly maxChars?: number | undefined;
+  readonly timeoutMs?: number | undefined;
 }
 
 export interface InPageFetchResult {

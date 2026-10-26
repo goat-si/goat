@@ -1,3 +1,6 @@
+import { constVoid } from "effect/Function";
+import type { CDPSession } from "playwright-core";
+
 /**
  * Page scripts and key mapping behind a viewer's input to a server browser tab.
  *
@@ -92,3 +95,40 @@ export const CLIPBOARD_SCRIPT = `(() => {
     return text;
   };
 })();`;
+
+export interface ReleasableViewerInput {
+  readonly pressedKeys: Map<string, { key: string; code: string }>;
+  readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
+  requestedSize: { width: number; height: number; order: number } | null;
+}
+
+export const releaseViewerInput = async (viewer: ReleasableViewerInput, session: CDPSession) => {
+  for (const { key, code } of viewer.pressedKeys.values()) {
+    await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code }).catch(constVoid);
+  }
+  viewer.pressedKeys.clear();
+  for (const [button, point] of viewer.pressedButtons) {
+    await session
+      .send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        button,
+        ...point,
+        buttons: 0,
+        clickCount: 1,
+      })
+      .catch(constVoid);
+  }
+  viewer.pressedButtons.clear();
+  viewer.requestedSize = null;
+};
+
+export const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+
+export const num = (value: unknown, fallback = 0) =>
+  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+export const modifiersOf = (message: Record<string, unknown>) => {
+  const value = num(message.modifiers);
+  return Number.isInteger(value) && value >= 0 && value < 16 ? value : 0;
+};

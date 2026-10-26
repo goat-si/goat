@@ -23,10 +23,10 @@ it.effect("rejects an insecure runtime relay URL override", () =>
 it.effect("rejects malformed or insecure hosted app URLs", () =>
   Effect.gen(function* () {
     for (const value of [
-      "app.t3.codes",
-      "http://app.t3.codes",
-      "https://app.t3.codes/nested",
-      "https://app.t3.codes?alias=true",
+      "app.exa.test",
+      "http://app.exa.test",
+      "https://app.exa.test/nested",
+      "https://app.exa.test?alias=true",
     ]) {
       const result = yield* hostedAppUrlConfig.pipe(
         provideEnv({ GOAT_HOSTED_APP_URL: value }),

@@ -6,10 +6,10 @@ this process derived from its base directory.
 
 ## State roots
 
-`resolveBaseDir` in `apps/server/src/os-jank.ts` joins the home directory with `.t3` when the
-caller passes an empty string. `apps/server/src/cli/config.ts` reads that value from `--base-dir`
+`resolveBaseDir` in `apps/server/src/os-jank.ts` resolves `.goat` in the home directory, or the
+legacy `.t3` while only that one holds state (`resolveGoatHome`), when the caller passes an empty string. `apps/server/src/cli/config.ts` reads that value from `--base-dir`
 or from `GOAT_HOME`. The flag help text calls it the GOAT data directory and says it is
-equivalent to `GOAT_HOME`. There is no `GOAT_HOME` environment variable on this path.
+equivalent to `GOAT_HOME`.
 
 `deriveServerPaths` in `apps/server/src/config.ts` then places runtime files under
 `<baseDir>/userdata`, or under `<baseDir>/dev` when a dev URL is set and the base directory was
@@ -38,7 +38,7 @@ is `ServerSettings` in `packages/contracts/src/settings.ts`, including `goatBotH
 
 A packaged desktop app does not use that default. `resolveDesktopBaseDir` in
 `apps/desktop/src/app/DesktopStatePaths.ts` returns `~/.goat/desktop` when the build is not a
-development build and `GOAT_HOME` is unset. A development desktop build returns `~/.t3`.
+development build and `GOAT_HOME` is unset. A development desktop build returns `~/.goat`, or `~/.t3` while only that holds its dev state.
 `resolveDesktopStateDir` still appends `userdata`, or `dev` for a development build with no
 explicit home. Electron's own profile directory is separate: `apps/desktop/src/app/DesktopUserData.ts`
 uses `goat-desktop`, `goat-desktop-dev`, and `goat-desktop-nightly`.
@@ -50,9 +50,9 @@ not the local CLI default. Host _lists_ still come from the user's OpenSSH files
 which [`ssh.md`](ssh.md) covers.
 
 A linked git worktree gets its own directory. `resolveWorktreeHome` in
-`packages/shared/src/devHome.ts` returns `<worktree>/.t3` so a worktree dev server does not open
-the installed app's `~/.t3`. An explicit `GOAT_HOME` still wins, and it counts as an explicit
-base directory, which selects `userdata` rather than `dev`.
+`packages/shared/src/devHome.ts` returns `<worktree>/.goat` (or a legacy `<worktree>/.t3` that holds
+state) so a worktree dev server does not open the installed app's home. The worktree home takes
+precedence over an ambient `GOAT_HOME`; an explicit `--home-dir` still wins and selects `userdata`.
 
 > Decision record: [ADR-0005](decisions/ADR-0005-desktop-home.md)
 

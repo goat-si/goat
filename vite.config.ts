@@ -564,7 +564,7 @@ export default defineConfig({
         rules: { "goat/no-global-process-runtime": "off" },
       },
       {
-        // The `t3` npm launcher is published as plain, dependency-free Node.
+        // The `goat` npm launcher is published as plain, dependency-free Node.
         files: ["scripts/npm-launcher/**"],
         rules: {
           "goat/no-global-process-runtime": "off",
