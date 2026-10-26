@@ -208,6 +208,7 @@
         "packages/contracts/src/codexRoute.ts",
         "apps/server/src/hubProxy",
         "apps/server/src/cua/",
+        "apps/server/src/screenCode/",
         "packages/contracts/src/cua.ts"
       ]
     },

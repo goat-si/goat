@@ -303,6 +303,11 @@ release it, and closing a driver generation fences delayed admission requests. L
 release acknowledgements retain conflicts rather than risking overlapping input. This coordinator
 is local to one GOAT server; separate servers sharing a desktop do not share reservations.
 
+`apps/server/src/screenCode/` owns bounded screen cells for a live turn. Its QuickJS guest calls
+the host bridge, which checks each tab Target against preview ownership and each app Target
+against the computer-use lease before dispatch. Completed and unknown effects stay distinct in
+the receipt. The `goat_screen_run` MCP handler decodes the request and calls this service.
+
 > Decision record: [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md)
 
 `apps/server/src/preview/PreviewSessions.ts` lists what agents drive on this host as one

@@ -6,15 +6,15 @@
 > 결과는 `ok | error | needs_human` 세 갈래로 유지하고, 끝나지 않은 작업은 반드시 `meta.operation` 핸들을 붙여 `operation.read/wait/cancel`로 다룬다.
 > 오류 코드에 `resource_exhausted`, `failed_precondition`, `unknown_outcome`을 더하고, 재시도 가능 여부는 호출마다 계산한다. 도메인 사유는 변환 전에 보존한다.
 > `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
-> `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓰고, `goat_eval`은 측정으로 필요가 입증될 때까지 보류한다.
+> `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓴다. 화면 작업에는 `goat_screen_run`이 유한한 JavaScript 셀을 제공하며, 호출마다 권한을 다시 검사한다.
 > 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
-> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21).
+> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`, `goat_screen_run`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21).
 > 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D22)과 선행 사례 비교를 끝에 둔다.
 
-This page uses two labels. **Now** describes `dev` as of 2026-10-23 with source
-paths. **Proposed** is design that does not exist yet. Unlabeled text in a Proposed
-section is also proposal. The [rollout](#rollout) table is the one place that
-tracks which parts have shipped.
+This page uses two labels. **Now** describes implemented source in this checkout;
+it does not certify a release. **Proposed** is design that does not exist yet.
+Unlabeled text in a Proposed section is also proposal. The [rollout](#rollout)
+table tracks integration status.
 
 ## Why this exists
 
@@ -569,100 +569,33 @@ listed tool's argument refusal, access checks, and result, plus
 `_meta["goat/deprecated"]`. Analytics record every call under the shipped name the
 toolkit registers, whichever name the caller used, so each tool keeps one series.
 
-## Composition: `goat_eval`
+## Screen composition: `goat_screen_run`
 
-**Proposed, gated.** `goat_eval` would run a small program of calls in one
-request. It is built only if measurement shows it pays: on a fixed set of
-multi-step tasks (wait for a project's running threads, sync a provider to every
-host, fan a review out to three models), agents on providers without code
-execution must spend at least a third fewer model turns with it than with
-`goat_call` alone, with no rise in failed runs. Agents whose harness runs code,
-such as Codex code mode or a shell with `goat call`, already compose calls in a
-language they write well, which is the finding behind Cloudflare's
-[Code Mode](https://blog.cloudflare.com/code-mode/) and Anthropic's code-execution
-work. If it is built, these rules hold.
+**Now on this branch.** `surface.screen_run` exposes `goat_screen_run` for a
+bounded JavaScript cell over GOAT-owned browser and desktop Targets. `goat_describe`
+and the built-in `screen-code` guide give agents its signature on demand. The
+service, rather than the MCP handler, owns the turn session, per-effect admission,
+limits and receipts. The guest cannot call arbitrary `goat_call` paths or use Node.
+Browser-only turns can use browser Targets; desktop Targets require the computer-use
+attachment and lease. Each effect uses the direct tool's authority boundary.
+See [screen code mode](computer-use.md#screen-code-mode).
 
-- **Syntax.** JSON only, validated by a schema. Forms: `call`, `let`, `ref` (an
-  array path such as `["t", "value", "threads", 0, "threadId"]`, so keys with
-  dots stay addressable), `seq`, `map`, `if` (on `status == "ok"` or a boolean),
-  `eq`, `not`, and `quote`. No user functions, no recursion, and no loop except
-  `map` over an existing value, so every program ends.
-- **Limits.** 32 calls in total, counting each `map` item; depth 8; `map` input
-  at most 16 items, and a longer one is `resource_exhausted` rather than a silent
-  cut; 120 s wall time with any `wait` clamped to the time left; 256 KB of
-  results; 16 KB of program. `map` runs items in order, one at a time.
-- **Authority.** Each step goes through the invocation function, so every gate
-  applies per step: the credential is checked before each step, a `map` over
-  `task.create` claims one lane per child through the existing reservation, and a
-  step with `host` is routed with the caller's ceiling. The program holds no lane
-  and no grant.
-- **Journal.** Each run has an `evalRunId`. Every completed step, reads included,
-  is stored with its result under its structural id (position in the program plus
-  `map` index) and a digest of its resolved arguments. On resume, completed read
-  results, branch choices, and `map` bindings are fixed: they come from the
-  journal and are never re-read. Write keys come from `(evalRunId, structural
-  id)`, never from a call counter.
-- **Suspension.** A step that returns `needs_human` ends the run with that status
-  and its `evalRunId`, and its journal entry holds the handoff. On
-  `goat_eval { resume: evalRunId }` the evaluator reads that handoff instead of
-  calling the step again. Declined or expired becomes the step's `error`. Completed
-  with a server-side continuation means the step's result is that operation's
-  final envelope, waited on within the wall time. Completed without one, as with
-  `provider.setup_open`, means the step's result is `ok` with the completed
-  handoff summary and the `next` the step returned. The evaluator never runs
-  `next` and never issues the original step again, since many human-step tools
-  open a new flow on every call. A program that wants the follow-up calls it
-  explicitly as a later step, which is journaled and admitted like any other call:
-  `ssh.host_prepare` after key registration is a write and passes write
-  admission. The server never continues a program by itself.
-- **Cancellation.** Cancelling the request stops before the next step and still
-  returns the journal so far with `cancelled`, as LSP requires of a cancelled
-  request. A program is not a transaction and stops at the first `error`.
+### Post-ship regression measurement
 
-### Measurement protocol (draft)
+A paired screen-task campaign measures `goat_screen_run` after integration; it is
+not a build or release gate. The existing
+[agent-surface runner](../operations/agent-surface-eval.md) uses provider and
+orchestration tasks, so its rows do not measure screen interaction.
 
-**Proposed.** The D8 gate is a measurement, so it is written before any number exists, the way
-aside-codemode wrote its [protocol](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md) and runner
-([paired-run.mjs](https://github.com/lidge-jun/aside-codemode/blob/b395d89/eval/paired-run.mjs)) after a first pass measured the wrong transport
-and the wrong unit of work. `goat_eval` stays unbuilt until this protocol runs against a
-prototype on a branch and passes. The task set, runner, and report are in
-[scripts/agent-surface/eval](../../scripts/agent-surface/eval/), and
-[Measuring `goat_eval`](../operations/agent-surface-eval.md) explains how to run them.
-
-- **Claims first, including losers.** Each workload states its claim and what falsifies it. A
-  single-call control is included and is expected to show no gain, because one call is one turn
-  either way.
-- **Workloads.** Wait for every running thread in a project; sync one provider to every connected
-  host; fan one review out to three models and collect the three results; a program that stops on
-  `needs_human` and resumes after a person approves; and the single `thread.read` control. Each
-  workload is a fixed prompt plus an oracle: the exact ids, statuses, or report text a correct
-  run returns. Reaching the end of a transcript is not correctness.
-- **Arms.** `goat_call` alone against `goat_eval` available, on the same provider and model.
-  Providers without code execution are the population the gate is about. A code-mode harness
-  (Codex code mode, or a shell with `goat call`) runs as a reference arm and is not part of the
-  pass criterion.
-- **Pairs.** Arms alternate ABBA with a schedule derived from the pair index, and the report says
-  how often each arm went first. Each run is a fresh thread on a dev server with seeded data, and
-  its fixture is created for that run. At least 10 clean runs per arm and workload, with raw rows
-  kept and a separate report step, so a disputed figure can be re-derived.
-- **Metrics.** Primary: model turns per run. GOAT records no model request count, and calls made
-  in one response arrive as consecutive items, so turns are a range from the run's items: tool
-  rounds + 1 to tool calls + 1. Secondary: tool calls, bytes of tool results that enter the
-  transcript, failed runs, and wall time. Timing alone never passes the gate.
-  aside-codemode's agent-level pairs moved wall time only 5–45% (ratio 0.553 to
-  0.952 against a target under 0.5), because about 8 s of fixed cost per model turn hid the
-  primitive's speedup ([summary.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/summary.md)). Its gains were fewer calls and
-  fewer bytes in context: one round trip instead of 24, and 356 bytes instead of 116,234 for eight
-  pages ([BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md)).
-- **Contamination.** A run that used a tool or capability its arm does not have, or that the
-  harness could not finish, is reported and excluded from every figure. A failed tool call is
-  the arm's own cost: the run keeps its extra turns in the medians, and the report counts failed
-  calls per arm. A wrong answer keeps the run in the failure rate. Excluding either would hide the first-call mistakes a new syntax adds:
-  aside-codemode counted 47 failed results in 371 runs, and the four most common were wrong
-  names and argument shapes ([ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)).
-- **Pass.** On each multi-step workload, the candidate's most model turns are at least a third
-  below the baseline's fewest, with no rise in failed runs and every oracle met, and the control
-  shows no gain. Anything else is "not built", and the result is recorded either way.
+For each fixed browser/desktop task, record an answer oracle and what would
+falsify the claimed gain. Compare available direct preview/computer-use calls
+with `goat_screen_run` on the same provider, model and seeded environment.
+Alternate arms ABBA, retain raw rows, exclude contaminated runs, and count
+failed calls and wrong outcomes rather than discarding them. Report model turns
+as a range where exact request counts are unavailable, transcript bytes and
+failed runs. A smaller turn count cannot excuse an admission, Stop, private-mode
+or receipt regression. Investigate a paired task that loses its oracle, crosses
+a safety boundary or meaningfully worsens turns or bytes.
 
 ## Human steps
 
@@ -981,7 +914,7 @@ Each PR shipped on its own and left `tools/list` unchanged until the flip (row 1
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                                                                  |
 | 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                                                                |
 | 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
-| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                                                                      |
+| 11  | `goat_screen_run`                                                             | Implemented on this branch; runtime proof pending                                                                                                                                                                         |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
 draining instead of sleeps, and one real-client pass for cards.
@@ -1000,7 +933,7 @@ draining instead of sleeps, and one real-client pass for cards.
 | [AIP-151](https://google.aip.dev/151), [AIP-155](https://google.aip.dev/155), [AIP-193](https://google.aip.dev/193)                        | One operation interface; request ids guarantee idempotency; errors keep a stable reason with metadata                          | Operations; `clientRequestId`; `reason`    |
 | [Stripe](https://docs.stripe.com/api/idempotent_requests)                                                                                  | Keys compare parameters and reject a mismatch; 24-hour retention                                                               | Digest and mismatch                        |
 | [Temporal](https://docs.temporal.io/activity-definition)                                                                                   | Replay from recorded history; a crash after a side effect and before its record needs a downstream key                         | Journal; unknown reservations              |
-| [Cloudflare Code Mode](https://blog.cloudflare.com/code-mode/), [Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp) | Models compose tools better in code; tool search with detail levels saves most of the context                                  | Gate `goat_eval`; `query`                  |
+| [Cloudflare Code Mode](https://blog.cloudflare.com/code-mode/), [Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp) | Models compose tools better in code; tool search with detail levels saves most of the context                                  | Screen-specific code mode; `query`         |
 | [R7RS Scheme](https://small.r7rs.org/)                                                                                                     | A few special forms suffice when the host supplies primitives                                                                  | The eval forms                             |
 
 ### Lessons from aside-codemode
@@ -1009,22 +942,22 @@ aside-codemode is a code-mode tool for a signed-in browser and a local filesyste
 ([lidge-jun/aside-codemode](https://github.com/lidge-jun/aside-codemode) at `b395d89`). It already
 ran into most of the problems this design addresses. What GOAT takes from it, and what it avoids:
 
-| Take or avoid | What                                                                                                                                                                                           | Source                                                                                                                                                                                                                   | Here                                                |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
-| Take          | If the implementation skipped, capped, or could not apply something requested, the result must not report full success. A cap is honest only if the reader asked for `max + 1`.                | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | [Paging](#paging), D16                              |
-| Take          | Counts are tied to the verdict: a run is never complete while a requested item is missing, every requested item gets an answer even after a stop, and results are matched by id, not position. | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | `goat_eval` journal, `map`                          |
-| Take          | An effect that started and was never confirmed is its own state, neither success nor failure, and is never retried.                                                                            | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | `unknown_outcome`                                   |
-| Take          | "A person can clear this" is a claim that has to be earned. A block that does not prove it stays a failure, and only a proven one becomes `needs_input`.                                       | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md), [session-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/session-contract.md) | `needs_human` requires a handoff (D17)              |
-| Take          | Approval ids are not run ids. Approvals are consumed once by an atomic claim, and a claim whose run never recorded an id is reported as unknown.                                               | [ADR-0007](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0007-approval-ids-are-not-run-ids.md)                                                                                        | handoff ids, operations                             |
-| Take          | "What counts as a write" is one list, the effect ledger. Two hand-kept lists drifted twice before that.                                                                                        | [ADR-0006](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0006-the-write-gate-uses-the-effect-ledger.md)                                                                               | effect from `McpToolAccess` only                    |
-| Take          | One resident tool (2.4 KB) with on-demand descriptions instead of 34 described actions (44 KB, paid every turn).                                                                               | [BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md#tool-schema)                                                                                                                      | `goat_describe`, `core` profile                     |
-| Take          | Always-on instructions carry only what no refusal can teach, such as "a successful but incomplete result is not an answer"; everything an error can correct belongs to the error.              | [ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)                                                                          | provider instructions after the flip                |
-| Avoid         | Guessing state from wording. A signed-in heuristic was wrong both ways, and its false pass was the failure the layer existed to stop.                                                          | [ADR-0003](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0003-session-proof-comes-from-the-caller.md)                                                                                 | plain-text failures stay `internal`                 |
-| Avoid         | Deciding by name lists: metadata crossed the wire by action name, so a newly added action arrived bare.                                                                                        | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | registry-derived checks; exhaustive literal table   |
-| Avoid         | Loss reported only inside text, such as a `[truncated: …]` suffix that a caller checking fields cannot see.                                                                                    | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | loss lives in fields                                |
-| Avoid         | A status in the vocabulary that nothing emits. `needs_input` was documented to agents for weeks before any code produced it.                                                                   | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | operation states ship with their producers          |
-| Avoid         | "Complete" read as "absent": a default search returned 8 of 15 known matches and still said complete.                                                                                          | [BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md), [issue #41](https://github.com/lidge-jun/aside-codemode/issues/41)                                                              | completeness never claims absence                   |
-| Avoid         | Measuring the harness, not the product: CLI numbers carried 60–70 ms of process start that the resident server never pays, and a single grep was the wrong unit of work.                       | [PROTOCOL.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md)                                                                                                                | [measurement protocol](#measurement-protocol-draft) |
+| Take or avoid | What                                                                                                                                                                                           | Source                                                                                                                                                                                                                   | Here                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| Take          | If the implementation skipped, capped, or could not apply something requested, the result must not report full success. A cap is honest only if the reader asked for `max + 1`.                | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | [Paging](#paging), D16                                    |
+| Take          | Counts are tied to the verdict: a run is never complete while a requested item is missing, every requested item gets an answer even after a stop, and results are matched by id, not position. | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | Screen receipt discipline                                 |
+| Take          | An effect that started and was never confirmed is its own state, neither success nor failure, and is never retried.                                                                            | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | `unknown_outcome`                                         |
+| Take          | "A person can clear this" is a claim that has to be earned. A block that does not prove it stays a failure, and only a proven one becomes `needs_input`.                                       | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md), [session-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/session-contract.md) | `needs_human` requires a handoff (D17)                    |
+| Take          | Approval ids are not run ids. Approvals are consumed once by an atomic claim, and a claim whose run never recorded an id is reported as unknown.                                               | [ADR-0007](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0007-approval-ids-are-not-run-ids.md)                                                                                        | handoff ids, operations                                   |
+| Take          | "What counts as a write" is one list, the effect ledger. Two hand-kept lists drifted twice before that.                                                                                        | [ADR-0006](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0006-the-write-gate-uses-the-effect-ledger.md)                                                                               | effect from `McpToolAccess` only                          |
+| Take          | One resident tool (2.4 KB) with on-demand descriptions instead of 34 described actions (44 KB, paid every turn).                                                                               | [BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md#tool-schema)                                                                                                                      | `goat_describe`, `core` profile                           |
+| Take          | Always-on instructions carry only what no refusal can teach, such as "a successful but incomplete result is not an answer"; everything an error can correct belongs to the error.              | [ADR-0011](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0011-the-block-carries-what-an-error-cannot-say.md)                                                                          | provider instructions after the flip                      |
+| Avoid         | Guessing state from wording. A signed-in heuristic was wrong both ways, and its false pass was the failure the layer existed to stop.                                                          | [ADR-0003](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/decisions/ADR-0003-session-proof-comes-from-the-caller.md)                                                                                 | plain-text failures stay `internal`                       |
+| Avoid         | Deciding by name lists: metadata crossed the wire by action name, so a newly added action arrived bare.                                                                                        | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | registry-derived checks; exhaustive literal table         |
+| Avoid         | Loss reported only inside text, such as a `[truncated: …]` suffix that a caller checking fields cannot see.                                                                                    | [result-completeness.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/result-completeness.md)                                                                                                      | loss lives in fields                                      |
+| Avoid         | A status in the vocabulary that nothing emits. `needs_input` was documented to agents for weeks before any code produced it.                                                                   | [batch-contract.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/structure/batch-contract.md)                                                                                                                | operation states ship with their producers                |
+| Avoid         | "Complete" read as "absent": a default search returned 8 of 15 known matches and still said complete.                                                                                          | [BENCHMARKS.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/BENCHMARKS.md), [issue #41](https://github.com/lidge-jun/aside-codemode/issues/41)                                                              | completeness never claims absence                         |
+| Avoid         | Measuring the harness, not the product: CLI numbers carried 60–70 ms of process start that the resident server never pays, and a single grep was the wrong unit of work.                       | [PROTOCOL.md](https://github.com/lidge-jun/aside-codemode/blob/b395d89/evidence/bench-260918/PROTOCOL.md)                                                                                                                | [measurement protocol](#post-ship-regression-measurement) |
 
 Its session contract also applies by analogy. Steps that share a signed-in session are not
 independent, so a batch over them can turn one expired session into many false successes.
@@ -1042,7 +975,7 @@ every gate runs per step (D7).
 | D5  | `operation.*` over existing stores with signed handles                                                                                                                             | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                                                                                                                                                                                                                              | A new operations table first                                                                 |
 | D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                                    | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                                                                                                                                                                                                                                   | Meta tools with their own access class                                                       |
 | D7  | Gates apply per step; composition holds no lane or grant                                                                                                                           | Lanes and ceilings are claimed by the work they bound                                                                                                                                                                                                                                                                                                       | Pre-admitting a whole program                                                                |
-| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs                                                         | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                                                                                                                                                                                                                                        | S-expression syntax; replay by index                                                         |
+| D8  | General `goat_eval` remains unbuilt; its original measurement gate is waived for the separate screen-specific `goat_screen_run`                                                    | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                                                                                                                                                                                                                                        | S-expression syntax; replay by index                                                         |
 | D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                                                | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                                                                                                                                                                                                                                        | A third store; leaving the paths inconsistent                                                |
 | D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                                                | Progressive discovery; cache safety; remotes differ                                                                                                                                                                                                                                                                                                         | Loading every schema                                                                         |
 | D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                                             | `get` and `read` both exist today                                                                                                                                                                                                                                                                                                                           | Renaming now                                                                                 |
@@ -1052,7 +985,7 @@ every gate runs per step (D7).
 | D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                                                                     | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                                                                                                                                                                                                                                          | Adopting the tasks extension now                                                             |
 | D16 | Every list and fan-out discloses loss in fields: read `limit + 1` before claiming more exists, and never report a request as complete when part of it was skipped                  | aside-codemode shipped the same silent-loss bug six times before writing the invariant                                                                                                                                                                                                                                                                      | Loss text inside values                                                                      |
 | D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                                      | A human status that does not hold makes agents hand back work no person can fix                                                                                                                                                                                                                                                                             | Inferring human steps from messages                                                          |
-| D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                                             | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                                                                                                                                                                                                                                  | A wall-clock threshold                                                                       |
+| D18 | Paired ABBA runs, an oracle per workload and model-turn accounting remain useful for post-ship screen regression measurement                                                       | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                                                                                                                                                                                                                                  | A wall-clock threshold                                                                       |
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                                         | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                                                                                                                                                                                                                            | Renaming paths to match shipped names                                                        |
 | D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                                                                                                                                                                                                      | Registering alias tools, which would list them                                               |
 | D21 | Every agent GOAT runs gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback; CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KiB per harness; D8 verifies the default and tunes the core set rather than gating it                                                                                                                                                                          | Opt-in core, measured before it became the default                                           |
@@ -1060,5 +993,5 @@ every gate runs per step (D7).
 
 ## Open questions
 
-- Which providers the `goat_eval` measurement runs on, and who owns the task set.
+- Who owns the screen-task regression set and which providers it covers.
 - How long a legacy name stays callable for SSH hosts that update rarely.

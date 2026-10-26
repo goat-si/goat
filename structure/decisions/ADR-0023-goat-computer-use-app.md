@@ -25,11 +25,12 @@
   whatever started it, whatever `cuaFullAccessAutoAdmit` says. This replaces #1396's
   off-by-default behavior. The Readiness and approvals bullet below states the decision; #1649
   implements it.
-- Amended 2026-10-26, D17 (owner decision, Jun, 2026-10-26; recorded before implementation on
-  branch `codex/unified-cua-runtime`): agents get one screen code tool that runs a bounded
+- Amended 2026-10-26, D17 (owner decision, Jun, 2026-10-26; recorded in `6c428224d6`):
+  agents get one screen code tool that runs a bounded
   JavaScript cell against built-in browser tabs and desktop apps. The agent-surface D8
   measurement gate for a general `goat_eval` does not apply to it; its measurement protocol
   becomes a post-ship regression check. The Screen code mode bullet below states the decision.
+  BEH-29's yield-on-human-input rule was considered and rejected in favor of D7.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
