@@ -55,6 +55,11 @@ export interface RemoteGoatRunnerOptions {
    * and the server's SSH dispatch set it.
    */
   readonly publishedFallback?: boolean;
+  /**
+   * Attach to the host's GOAT app server when it can serve this client, before preparing the
+   * managed runtime (see appServer.ts). The desktop app and the server's SSH dispatch set it.
+   */
+  readonly attachAppServer?: boolean;
   /** Local gh executable used for authenticated acquisition; defaults to PATH lookup. */
   readonly ghCommand?: string | undefined;
   /** Deadline for the best-effort post-install cleanup and fact warming round trip; 10 s by default. */

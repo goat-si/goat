@@ -64,7 +64,8 @@ from authentication milestones, so local mux requests do not imply new handshake
 
 A host user has one GOAT server that remote hubs and desktops reach. When the packaged GOAT app
 runs there, that is the app's own server on `~/.goat/desktop`, which holds the threads the person
-starts in the app. `launchOrReuseRemoteServer` asks `probeAppServer`
+starts in the app. For runners with `attachAppServer` (the desktop app and the server's SSH
+dispatch set it), `launchOrReuseRemoteServer` asks `probeAppServer`
 (`packages/ssh/src/appServer.ts`) first: it reads `~/.goat/desktop/userdata/server-runtime.json`,
 requires a live PID, a loopback answer on the recorded port, and the control token beside the
 record, then reads the descriptor. A server that advertises `capabilities.runtimeSessions` and
@@ -536,8 +537,9 @@ A node is one GOAT environment with one or more routes. Routes come from three s
 
 Routes with the same environment ID are one node. The ID comes from the link for linked hosts
 and, for SSH and running cloud machines, from `SshRemoteDispatch.identifyTarget`, which reads
-`environment-id` over SSH without starting a runtime: the [app server](#app-server)'s while its
-record names a live process, otherwise `$HOME/.goat/userdata/environment-id`. A route whose ID is
+`environment-id` over SSH without starting a runtime, from the server this hub's connection to the
+host uses. With no connection it is the [app server](#app-server)'s while that server could be
+attached, otherwise `$HOME/.goat/userdata/environment-id`. A route whose ID is
 unknown is its own node with ID `route:<routeId>` until a check learns it; `get` still resolves
 that ID afterwards. The hub's own ID is refused at add and dropped at merge.
 

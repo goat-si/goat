@@ -13,7 +13,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
-  HOST_ENVIRONMENT_ID_SCRIPT,
+  hostEnvironmentIdScript,
   parseAppServerProbe,
   probeAppServer,
   shouldMoveToAppServer,
@@ -35,6 +35,7 @@ import {
 } from "./tunnel.ts";
 
 const TOKEN = "app-control-secret";
+const RUNNER = { ...ARCHIVE, attachAppServer: true };
 
 interface AppServer {
   readonly port: number;
@@ -149,7 +150,7 @@ describe("GOAT app server attachment", () => {
         const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
           effect.pipe(Effect.provide(host.spawner));
 
-        const launch = yield* run(launchOrReuseRemoteServer(uploadTarget, {}, ARCHIVE));
+        const launch = yield* run(launchOrReuseRemoteServer(uploadTarget, {}, RUNNER));
         expect(launch.status).toBe("ready");
         if (launch.status !== "ready") return;
         expect(launch.remoteServerKind).toBe("app");
@@ -306,7 +307,7 @@ describe("manager on a host running the app server", () => {
       }),
     ).pipe((base) =>
       SshEnvironmentManager.layer({
-        resolveCliRunner: Effect.succeed(ARCHIVE),
+        resolveCliRunner: Effect.succeed(RUNNER),
         leaveRemoteServerRunning: true,
       }).pipe(Layer.provideMerge(base)),
     );
@@ -376,33 +377,42 @@ describe("manager on a host running the app server", () => {
   );
 
   it.live(
-    "the host's identity is the app server's while it runs, otherwise the managed home's",
+    "the host's identity is the server its connection uses, or the app server's only while it could be attached",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-host-identity-" });
-        const identify = Effect.gen(function* () {
-          const child = yield* spawner.spawn(
-            ChildProcess.make(remoteShell, ["-c", HOST_ENVIRONMENT_ID_SCRIPT], {
-              env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
-              extendEnv: false,
-            }),
-          );
-          return (yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString)).trim();
-        });
-        yield* fs.makeDirectory(`${home}/.goat/desktop/userdata`, { recursive: true });
-        yield* fs.makeDirectory(`${home}/.goat/userdata`, { recursive: true });
-        yield* fs.writeFileString(`${home}/.goat/userdata/environment-id`, "managed-env");
-        yield* fs.writeFileString(`${home}/.goat/desktop/userdata/environment-id`, "app-env");
-        expect(yield* identify).toBe("managed-env");
-        const record = `${home}/.goat/desktop/userdata/server-runtime.json`;
-        yield* fs.writeFileString(record, JSON.stringify({ pid: process.pid, port: 3773 }));
-        expect(yield* identify).toBe("app-env");
+        const app = yield* startAppServer(attachableDescriptor);
+        const tooOld = yield* startAppServer({ ...attachableDescriptor, capabilities: {} });
+        const host = yield* makeHost({ pid: process.pid, port: app.port });
+        const identify = (attached: "app" | "managed" | null) =>
+          Effect.gen(function* () {
+            const child = yield* spawner.spawn(
+              ChildProcess.make(remoteShell, ["-c", hostEnvironmentIdScript(attached)], {
+                env: { HOME: host.home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+                extendEnv: false,
+              }),
+            );
+            return (yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString)).trim();
+          });
+        yield* fs.makeDirectory(`${host.home}/.goat/userdata`, { recursive: true });
+        yield* fs.writeFileString(`${host.home}/.goat/userdata/environment-id`, "managed-env");
+        yield* fs.writeFileString(`${host.home}/.goat/desktop/userdata/environment-id`, "app-env");
+        expect(yield* identify(null)).toBe("app-env");
+        expect(yield* identify("app")).toBe("app-env");
+        // A connection kept on the managed server (busy, refused, declined) names that server.
+        expect(yield* identify("managed")).toBe("managed-env");
+
+        const record = `${host.home}/.goat/desktop/userdata/server-runtime.json`;
+        yield* fs.writeFileString(record, JSON.stringify({ pid: process.pid, port: tooOld.port }));
+        expect(yield* identify(null)).toBe("managed-env");
         const exited = yield* spawner.spawn(ChildProcess.make("true", []));
         yield* exited.exitCode;
-        yield* fs.writeFileString(record, JSON.stringify({ pid: Number(exited.pid), port: 3773 }));
-        expect(yield* identify).toBe("managed-env");
+        yield* fs.writeFileString(
+          record,
+          JSON.stringify({ pid: Number(exited.pid), port: app.port }),
+        );
+        expect(yield* identify(null)).toBe("managed-env");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

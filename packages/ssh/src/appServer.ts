@@ -81,6 +81,9 @@ const AppServerDescriptor = Schema.Struct({
 });
 const decodeAppServerDescriptor = Schema.decodeUnknownOption(fromLenientJson(AppServerDescriptor));
 
+/** Names the probe's SSH command, so traces and test doubles can tell it from other scripts. */
+export const APP_SERVER_PROBE_COMMAND = "goat-app-server-probe";
+
 const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
 const isGrantScope = Schema.is(AuthGrantScope);
 const isRuntimeMode = Schema.is(RuntimeMode);
@@ -137,7 +140,8 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
   input?: SshAuth.SshAuthOptions,
 ): Effect.fn.Return<AppServerProbe, never, AppServerContext> {
   const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
+    // The trailing word is only $1 to the script; it names this call in traces and tests.
+    remoteCommandArgs: ["sh", "-s", APP_SERVER_PROBE_COMMAND],
     stdin: applyScriptPlaceholders(APP_SERVER_PROBE_SCRIPT, {
       GOAT_ENVIRONMENT_PATH: GOAT_ENVIRONMENT_PATH,
     }),
@@ -181,7 +185,7 @@ export const issueAppServerCredential = Effect.fn("ssh/appServer.issueCredential
   AppServerContext
 > {
   const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
+    remoteCommandArgs: ["sh", "-s", "goat-app-server-credential"],
     timeoutStage: "pairing",
     stdin: buildAppServerCredentialScript(port, request),
     ...sshOptions(input),
@@ -348,11 +352,26 @@ export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
 });
 
 /**
- * Prints the host's GOAT environment id without starting anything: the app server's while its
- * record names a live process, since SSH clients attach to it then, otherwise the managed home's.
+ * Prints the GOAT environment id of the server SSH clients use on this host, starting nothing.
+ * `attached` is the kind of server a connection to it already uses. With none, the app server's
+ * id is printed only while it could be attached (live, holding its control token, advertising
+ * `runtimeSessions`), else the managed home's.
  */
-export const HOST_ENVIRONMENT_ID_SCRIPT = String.raw`home="$HOME/.goat/userdata"; app="$HOME/.goat/desktop/userdata"
-pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$app/server-runtime.json" 2>/dev/null || true)"
-if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ -f "$app/environment-id" ]; then home="$app"; fi
+export const hostEnvironmentIdScript = (attached: "app" | "external" | "managed" | null) =>
+  `attached=${attached ?? "none"}` +
+  String.raw`
+home="$HOME/.goat/userdata"; app="$HOME/.goat/desktop/userdata"
+case "$attached" in
+  app) home="$app" ;;
+  none)
+    rec="$(tr '\n' ' ' <"$app/server-runtime.json" 2>/dev/null || true)"
+    pid="$(printf '%s\n' "$rec" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    port="$(printf '%s\n' "$rec" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    if [ -n "$pid" ] && [ -n "$port" ] && kill -0 "$pid" 2>/dev/null && [ -s "$app/runtime-control.token" ] &&
+      command -v curl >/dev/null 2>&1 &&
+      curl -fsS --max-time 5 "http://127.0.0.1:$port${GOAT_ENVIRONMENT_PATH}" 2>/dev/null | grep -q '"runtimeSessions":true'; then
+      home="$app"
+    fi ;;
+esac
 if [ -f "$home/environment-id" ]; then cat "$home/environment-id"; fi
 `;

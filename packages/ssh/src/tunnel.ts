@@ -63,7 +63,7 @@ import {
   waitForHttpReady,
 } from "./sshReadiness.ts";
 export { type SshReadinessBudget, sshReadinessBudget, waitForHttpReady } from "./sshReadiness.ts";
-export { HOST_ENVIRONMENT_ID_SCRIPT } from "./appServer.ts";
+export { hostEnvironmentIdScript } from "./appServer.ts";
 import {
   type AppServerProbe,
   appServerLaunch,
@@ -339,6 +339,10 @@ export interface SshEnvironmentManagerShape {
     target: DesktopSshEnvironmentTarget,
     options: RemoteClientSessionOptions,
   ) => Effect.Effect<RemoteClientSession, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  /** The kind of server this manager's connection to the target uses, if any. */
+  readonly attachedServerKind?: (
+    target: DesktopSshEnvironmentTarget,
+  ) => Effect.Effect<"app" | "external" | "managed" | null>;
   /** Runs a POSIX `sh` script on the remote host with this manager's SSH auth. */
   readonly runRemoteScript: (
     target: DesktopSshEnvironmentTarget,
@@ -1593,9 +1597,10 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
         });
         // The host's GOAT app server comes first; see appServer.ts. It is never started, stopped,
         // replaced or updated from here, so no launch cleanup is registered for it.
-        const app: AppServerProbe = skipAppServer
-          ? { kind: "none" }
-          : yield* restore(probeAppServer(target, input));
+        const app: AppServerProbe =
+          skipAppServer || runner?.attachAppServer !== true
+            ? { kind: "none" }
+            : yield* restore(probeAppServer(target, input));
         if (app.kind === "attach") return yield* appServerLaunch(target, app, runner);
         const canFoldProbe =
           previousSelection?.reconnectProbe !== undefined &&
@@ -2791,6 +2796,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     readonly previousSelection?: ReconnectSelection;
     readonly background?: boolean;
     readonly onPhase?: SshRuntimeProgressCallback;
+    /** A request admitted under this generation; a newer one supersedes it before any launch. */
+    readonly expectedGeneration?: number;
   }): Effect.fn.Return<
     SshTunnelEntry | DesktopSshRuntimePendingResult,
     SshEnvironmentEffectError,
@@ -2802,6 +2809,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key: input.key,
     });
     const generation = generations.get(input.key) ?? 0;
+    if (input.expectedGeneration !== undefined && input.expectedGeneration !== generation)
+      return yield* supersededPreparation();
     const previousSelection =
       input.previousSelection?.revision === (selectionRevisions.get(input.key) ?? 0)
         ? input.previousSelection
@@ -4539,13 +4548,18 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             entry.attachmentInvalidated = true;
             // A disconnect or forget that arrived meanwhile wins; nothing is started for it.
             if (!options.reconnect || !current() || tunnels.get(key) !== entry) return yield* error;
-            const next = yield* ensureTunnelEntry(
+            yield* Effect.gen(function* () {
+              tunnels.delete(key);
+              yield* closeTunnelEntry(entry);
+            }).pipe(Effect.uninterruptible);
+            const next = yield* createTunnelEntry({
               key,
               resolvedTarget,
-              runner,
-              false,
-              options.keyOnly,
-            );
+              keyOnly: options.keyOnly,
+              ...(runner === undefined ? {} : { runner }),
+              previousLocalPort: entry.localPort,
+              expectedGeneration: generation,
+            });
             if (!current()) return yield* error;
             yield* publishResult(key, resolvedTarget, next, runner);
             if ("type" in next) return yield* error;
@@ -4668,6 +4682,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         ),
       ),
     );
+  });
+
+  const attachedServerKind = Effect.fn("ssh/tunnel.attachedServerKind")(function* (
+    target: DesktopSshEnvironmentTarget,
+  ) {
+    const key = targetConnectionKey(resolvedTargets.get(targetConnectionKey(target)) ?? target);
+    const kind = tunnels.get(key)?.remoteServerKind ?? null;
+    if (kind !== null) return kind;
+    // A refused app server is skipped until the refusal ends, so the managed one serves meanwhile.
+    return (appServerRefusals.get(key) ?? 0) > (yield* Clock.currentTimeMillis) ? "managed" : null;
   });
 
   const runRemoteScript = Effect.fn("ssh/tunnel.runRemoteScript")(function* (
@@ -4914,6 +4938,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
     issueClientSession: withSharing(issueClientSession),
+    attachedServerKind,
     runRemoteScript: withSharing(runRemoteScript),
   });
 });
