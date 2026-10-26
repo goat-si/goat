@@ -182,15 +182,20 @@ and the mobile composer cannot make that mention yet. A user tab must be claimed
 cleanup releases that claim without closing the tab. Temporary agent tabs close unless kept or
 handed over.
 
-Stop, takeover, private mode, lease expiry, a new user message, turn end, and a cell failure that
-closes the child fence later effects and discard computation values. When the agent did not ask
-for the reset
-itself, its next cell's result lists `context_reset` in `truncated`, so it rebinds instead of
-trusting values that are gone. A dispatched call whose result is lost or times out has an unknown
-outcome; another cell must observe again before deciding what to do. The cell never replays that
-input. Every effect needs a journal slot for its receipt, so once a cell's journal is full its
-next call is refused with `call_limit` before dispatch. At most four screen-code children can run
-on one host; a fifth request receives `live_children_limit` until a slot is released.
+A Stop of the thread or its desktop control, stop all, takeover, private mode, lease expiry, a new
+user message, turn end, and a cell failure that closes the child fence later effects and discard
+computation values. A Stop that names one tab, a person's Stop on it or the tab closing, cuts only
+a running cell that called that tab; a cell that never touched it keeps its child and values. The
+agent's own `close_tab` never cuts the cell that asked for it, and hand-back and resume restore
+authority without cutting anything, because the control generation already refuses stale input.
+A cell whose result has arrived returns it with its receipts even when a Stop lands while they are
+collected. When the agent did not ask for the reset itself, its next cell's result lists
+`context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
+dispatched call whose result is lost or times out has an unknown outcome; another cell must
+observe again before deciding what to do. The cell never replays that input. Every effect needs a
+journal slot for its receipt, so once a cell's journal is full its next call is refused with
+`call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
+request receives `live_children_limit` until a slot is released.
 
 A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
 stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
