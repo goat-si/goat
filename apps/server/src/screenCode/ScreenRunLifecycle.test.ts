@@ -155,6 +155,31 @@ it.effect("The call ceiling refuses the next effect with prior receipts", () =>
   }),
 );
 
+it.effect("a full journal refuses the next effect so no input runs without a receipt", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    let dispatched = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
+        Effect.sync(() => {
+          dispatched++;
+          return { category: "confirmed" as const, evidence: ["done"] };
+        }),
+    });
+    const limited = { ...context, limits: screenRunLimits({ journalEntries: 1 }) };
+    const first = yield* bridge.handle(call("app", 1), limited);
+    const second = yield* bridge.handle(call("app", 2), limited);
+    expect(first?.outcome).toBe("ok");
+    expect(second && "error" in second ? second.error : undefined).toMatchObject({
+      code: "call_limit",
+      effectStarted: false,
+      limit: { name: "journalEntries", maximum: 1 },
+    });
+    expect(dispatched).toBe(1);
+  }),
+);
+
 it.effect("Stop releases the tab claim while a later cell can claim fresh authority", () =>
   Effect.gen(function* () {
     const identity = {
@@ -832,71 +857,6 @@ it.live("a held cell deadline preserves unknown input receipts through the servi
           effectStarted: true,
           receipts: [{ dispatched: true, journalState: "unknown", category: "unknown_outcome" }],
         });
-      yield* Deferred.succeed(held, undefined);
-      yield* service.finishTurn({
-        runId: "run",
-        turnId: "turn",
-        threadId: "thread",
-        environmentId: "env",
-        reason: "test",
-      });
-    }).pipe(Effect.provide(serviceLayer));
-  }),
-);
-
-it.live("a full journal still reports a dispatched input as an unknown outcome at cutoff", () =>
-  Effect.gen(function* () {
-    const offered = yield* Deferred.make<void>();
-    const held = yield* Deferred.make<void>();
-    let fireDeadline: (() => void) | undefined;
-    let calls = 0;
-    const serviceLayer = ScreenRunService.layerWithRuntime({
-      invocation: {
-        command: process.execPath,
-        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-      },
-      assetResolver: () => resolveScreenRuntimeAsset("dev"),
-      scheduleDeadline: (run) => {
-        fireDeadline = run;
-        return () => {
-          fireDeadline = undefined;
-        };
-      },
-      dispatcher: {
-        availability: () => Effect.succeed([{ kind: "app", available: true }]),
-        dispatch: () =>
-          ++calls === 1
-            ? Effect.fail({
-                code: "unavailable" as const,
-                effectStarted: false,
-                nextStep: "Retry later.",
-              })
-            : Deferred.succeed(offered, undefined).pipe(
-                Effect.flatMap(() => Deferred.await(held)),
-                Effect.as({ value: true, category: "confirmed" as const }),
-              ),
-      },
-    }).pipe(Layer.provide(NodeServices.layer));
-    return yield* Effect.gen(function* () {
-      const service = yield* ScreenRunService;
-      const running = yield* service
-        .runCell({
-          runId: "run",
-          turnId: "turn",
-          threadId: "thread",
-          environmentId: "env",
-          invocation: context.invocation,
-          limits: { journalEntries: 1 },
-          source:
-            "try { await screen.list_apps(); } catch {} return await screen.list_apps();",
-        })
-        .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(offered);
-      fireDeadline?.();
-      const result = yield* Fiber.join(running);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({ code: "unknown_outcome", effectStarted: true });
       yield* Deferred.succeed(held, undefined);
       yield* service.finishTurn({
         runId: "run",

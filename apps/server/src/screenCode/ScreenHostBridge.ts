@@ -201,6 +201,12 @@ export class ScreenHostBridge {
         ...failure("pending_limit", call.callId),
         limit: { name: "pendingCalls", maximum: context.limits.pendingCalls },
       });
+    // An effect without a receipt slot could finish unseen, so a full journal refuses new calls.
+    if (state.journal.length >= context.limits.journalEntries)
+      return deny({
+        ...failure("call_limit", call.callId),
+        limit: { name: "journalEntries", maximum: context.limits.journalEntries },
+      });
     if (call.method === "type_text" || call.method === "set_value") {
       const first = Array.isArray(call.args) ? call.args[0] : undefined;
       const text =
