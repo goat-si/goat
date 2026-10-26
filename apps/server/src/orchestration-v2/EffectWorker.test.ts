@@ -15,6 +15,8 @@ import {
   ThreadId,
   VcsProcessExitError,
 } from "@goat/contracts";
+import * as AutomationHold from "../automationHold.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -677,5 +679,79 @@ it.effect.each(["read_write", "read", "none", undefined] as const)(
         assert.equal(captured[0].memoryGrantCeiling, ceiling ?? "none");
         assert.equal(captured[0].messageId, messageId);
       }
+    }),
+);
+
+it.effect(
+  "leaves copied threads unclaimed while held, runs other threads, and preserves rollback order after release",
+  () =>
+    Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      yield* Effect.gen(function* () {
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const executed: Array<string> = [];
+        const pending = (
+          id: string,
+          request: EffectOutbox.OrchestrationEffectRequestV2 = { type: "terminal.cleanup" },
+          targetThread = threadId,
+        ) => ({ id, commandId: CommandId.make(`command:${id}`), threadId: targetThread, request });
+        yield* outbox.enqueue([
+          pending("copied", {
+            type: "provider-thread.rollback",
+            providerThreadId,
+            checkpointId: CheckpointId.make("checkpoint:copied"),
+            scopeId: CheckpointScopeId.make("scope:copied"),
+          }),
+        ]);
+        yield* Effect.gen(function* () {
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          assert.isFalse(yield* worker.runOnce);
+          const copied = yield* outbox.get("copied");
+          assert.isTrue(
+            Option.isSome(copied) &&
+              copied.value.status === "pending" &&
+              copied.value.attemptCount === 0,
+          );
+          // Same clock tick: thread membership, not timestamp precision, freezes copied work.
+          yield* outbox.enqueue([
+            pending("same-thread", { type: "provider-turn.start", runId }),
+            pending("user", { type: "terminal.cleanup" }, ThreadId.make("thread:new-user")),
+          ]);
+          assert.equal(yield* worker.drain(), 1);
+          assert.deepEqual(executed, ["user"]);
+          assert.isTrue(Option.isNone(yield* worker.nextClaimableAt));
+          const waiting = yield* outbox.get("same-thread");
+          assert.isTrue(
+            Option.isSome(waiting) &&
+              waiting.value.status === "pending" &&
+              waiting.value.attemptCount === 0,
+          );
+          yield* hold.release;
+          assert.equal(yield* worker.drain(), 2);
+          assert.deepEqual(executed, ["user", "copied", "same-thread"]);
+        }).pipe(
+          Effect.provide(
+            EffectWorker.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+                  Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+                    execute: (effect) =>
+                      Effect.sync(() => {
+                        executed.push(effect.id);
+                      }),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).pipe(
+        Effect.provide(EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+        Effect.provideService(AutomationHold.AutomationHold, hold),
+      );
     }),
 );

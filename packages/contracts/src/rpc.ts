@@ -423,6 +423,7 @@ import {
   ServerSettingsPatch,
   WorktreesDirectoryStatus,
 } from "./settings.ts";
+import { AutomationResumeError } from "./automationHold.ts";
 import {
   ScheduledTaskDeleteInput,
   ScheduledTaskDeleteResult,
@@ -632,6 +633,7 @@ export const WS_METHODS = {
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
+  serverResumeAutomation: "server.resumeAutomation",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
@@ -1035,6 +1037,10 @@ const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup
   payload: Schema.Struct({}),
   success: StorageCleanupReport,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+const WsServerResumeAutomationRpc = Rpc.make(WS_METHODS.serverResumeAutomation, {
+  payload: Schema.Struct({}),
+  error: Schema.Union([AutomationResumeError, EnvironmentAuthorizationError]),
 });
 const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageCleanupReport, {
   payload: Schema.Struct({}),
@@ -2507,6 +2513,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
+  WsServerResumeAutomationRpc,
   WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,

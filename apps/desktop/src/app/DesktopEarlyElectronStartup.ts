@@ -18,6 +18,8 @@ import {
 interface EarlyDesktopSettingsInput {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
+  /** Picks the channel's state, which must match DesktopEnvironment's resolution. */
+  readonly appVersion: string;
   readonly joinPath: JoinPath;
   readonly readFileString: (path: string) => string;
 }
@@ -52,6 +54,7 @@ const isDevelopmentEnvironment = (env: NodeJS.ProcessEnv): boolean =>
 function resolveEarlyDesktopSettingsPath(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
+  readonly appVersion: string;
   readonly joinPath: JoinPath;
 }): string {
   const goatHome = Option.fromUndefinedOr(input.env.GOAT_HOME);
@@ -60,6 +63,7 @@ function resolveEarlyDesktopSettingsPath(input: {
     joinPath: input.joinPath,
     goatHome,
     isDevelopment: isDevelopmentEnvironment(input.env),
+    appVersion: input.appVersion,
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,

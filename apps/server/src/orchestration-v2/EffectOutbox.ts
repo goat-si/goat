@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { forkParked } from "../serverActivation.ts";
+import * as AutomationHold from "../automationHold.ts";
 
 export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
@@ -207,6 +208,7 @@ export class EffectOutboxError extends Schema.TaggedError<EffectOutboxError>()(
 const isEffectOutboxError = Schema.is(EffectOutboxError);
 
 export interface EffectOutboxV2Shape {
+  readonly captureHeldBacklog: Effect.Effect<void, EffectOutboxError>;
   readonly awaitAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
   /** Persist rows only. Notify workers after the surrounding transaction commits. */
@@ -281,6 +283,7 @@ type EffectRow = {
 };
 
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
+const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeRequest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationEffectRequestV2),
 );
@@ -308,6 +311,16 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
   EffectOutboxV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const hold = yield* AutomationHold.AutomationHold;
+    let backlog: { readonly effects: string; readonly threads: string } | undefined;
+    const heldBacklog = Effect.gen(function* () {
+      return (yield* hold.current) === null ? undefined : backlog;
+    });
+    const backlogFilter = (held: typeof backlog) =>
+      held === undefined
+        ? sql``
+        : sql`AND candidate.effect_id NOT IN (SELECT value FROM json_each(${held.effects}))
+              AND candidate.thread_id NOT IN (SELECT value FROM json_each(${held.threads}))`;
     const available = yield* Queue.dropping<void>(64);
     const cancellationSignals = new Map<string, Deferred.Deferred<void>>();
     const settledSignals = new Map<string, Deferred.Deferred<void>>();
@@ -384,6 +397,24 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       );
 
     const service: EffectOutboxV2Shape = {
+      captureHeldBacklog: Effect.gen(function* () {
+        if (backlog !== undefined) return;
+        // Re-snapshot on each process start while held: new work from a previous held
+        // process joins the backlog conservatively. Freeze whole threads so a copied
+        // rollback cannot be overtaken by a new turn on the same thread.
+        const rows = yield* sql<{ readonly effect_id: string; readonly thread_id: string }>`
+          SELECT effect_id, thread_id FROM orchestration_v2_effect_outbox
+          WHERE status IN ('pending', 'running')
+        `.pipe(NodeSqliteClient.readOnly);
+        backlog = {
+          effects: encodeIds(rows.map((row) => row.effect_id)),
+          threads: encodeIds([...new Set(rows.map((row) => row.thread_id))]),
+        };
+      }).pipe(
+        Effect.mapError(
+          (cause) => new EffectOutboxError({ operation: "capture-held-backlog", cause }),
+        ),
+      ),
       enqueue: Effect.fn("EffectOutbox.enqueue")(
         function* (effects) {
           const now = yield* DateTime.now;
@@ -543,6 +574,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       // The worker polls for the next effect even when there is no work to claim.
       claimNext: Effect.fnUntraced(
         function* ({ workerId, leaseDurationMs, excludeRestartContinuations = false }) {
+          const held = yield* heldBacklog;
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const leaseExpiresAt = DateTime.formatIso(
@@ -563,7 +595,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = (
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
-              WHERE ${claimableCandidatePredicate(nowIso, excludeRestartContinuations)}
+              WHERE ${claimableCandidatePredicate(nowIso, excludeRestartContinuations)}${backlogFilter(held)}
                 AND ${excludeRestartContinuations ? sql`candidate.effect_type != 'provider-runtime.continue'` : sql`1 = 1`}
               ORDER BY candidate.available_at ASC, candidate.created_at ASC, candidate.effect_id ASC
               LIMIT 1
@@ -579,10 +611,11 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         Effect.mapError((cause) => new EffectOutboxError({ operation: "claim", cause })),
       ),
       nextClaimableAt: Effect.gen(function* () {
+        const held = yield* heldBacklog;
         const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate
-          WHERE ${claimableCandidatePredicate()}
+          WHERE ${claimableCandidatePredicate()}${backlogFilter(held)}
         `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
         const availableAt = rows[0]?.available_at;
         if (availableAt === undefined || availableAt === null) return Option.none();

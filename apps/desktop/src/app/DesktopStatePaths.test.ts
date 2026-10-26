@@ -10,6 +10,7 @@ const devBaseDir = (existing: ReadonlyArray<string>) =>
     joinPath,
     goatHome: Option.none(),
     isDevelopment: true,
+    appVersion: "1.2.3",
     pathExists: (path) => existing.includes(path),
   });
 

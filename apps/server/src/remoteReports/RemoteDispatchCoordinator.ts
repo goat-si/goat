@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 // @effect-diagnostics nodeBuiltinImport:off - generate private read keys and identify the origin machine.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -231,6 +232,7 @@ const terminal = (status: string) =>
   ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(status);
 const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const sql = yield* SqlClient.SqlClient;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -1163,56 +1165,69 @@ const make = Effect.gen(function* () {
       yield* start(r.correlation_id);
     }
   });
-  const uncertainTasks = yield* rows(sql`SELECT * FROM remote_dispatches WHERE kind = 'task'
-  AND state IN ('launching', 'lost')`);
-  for (const r of uncertainTasks) {
-    yield* Effect.gen(function* () {
-      const { subagents } = yield* threads.getThreadRecords(r.origin_thread_id, ["subagents"]);
-      if (subagents.some((task) => task.id === r.task_id && task.result !== null)) {
-        // The result already landed; only a row stuck in launching still needs closing.
-        if (r.state === "launching")
-          yield* db(sql`UPDATE remote_dispatches SET state = 'lost', updated_at = ${yield* now}
-          WHERE correlation_id = ${r.correlation_id}`);
-        return;
-      }
-      if (r.launched_run_id === null)
-        yield* taskEffect(recoverUnknownRemoteTaskLaunch(taskRecord(r)));
-      else
-        yield* taskEffect(
-          recordRemoteTaskResult({
-            ...taskRecord(r),
-            status: "failed",
-            summary: "The remote task's thread or report binding is unavailable.",
+  const recoverUncertainTasks = Effect.gen(function* () {
+    const uncertainTasks = yield* rows(sql`SELECT * FROM remote_dispatches WHERE kind = 'task'
+    AND state IN ('launching', 'lost')`);
+    for (const r of uncertainTasks) {
+      yield* Effect.gen(function* () {
+        const { subagents } = yield* threads.getThreadRecords(r.origin_thread_id, ["subagents"]);
+        if (subagents.some((task) => task.id === r.task_id && task.result !== null)) {
+          // The result already landed; only a row stuck in launching still needs closing.
+          if (r.state === "launching")
+            yield* db(sql`UPDATE remote_dispatches SET state = 'lost', updated_at = ${yield* now}
+            WHERE correlation_id = ${r.correlation_id}`);
+          return;
+        }
+        if (r.launched_run_id === null)
+          yield* taskEffect(recoverUnknownRemoteTaskLaunch(taskRecord(r)));
+        else
+          yield* taskEffect(
+            recordRemoteTaskResult({
+              ...taskRecord(r),
+              status: "failed",
+              summary: "The remote task's thread or report binding is unavailable.",
+            }),
+          );
+        yield* db(sql`UPDATE remote_dispatches SET state = 'lost', last_error = ${r.launched_run_id === null ? "launch outcome unknown" : "Remote task binding or thread is unavailable."},
+        updated_at = ${yield* now} WHERE correlation_id = ${r.correlation_id}`);
+      }).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("Remote task recovery failed; continuing.", {
+            correlationId: r.correlation_id,
           }),
-        );
-      yield* db(sql`UPDATE remote_dispatches SET state = 'lost', last_error = ${r.launched_run_id === null ? "launch outcome unknown" : "Remote task binding or thread is unavailable."},
-      updated_at = ${yield* now} WHERE correlation_id = ${r.correlation_id}`);
-    }).pipe(
-      Effect.catch(() =>
-        Effect.logWarning("Remote task recovery failed; continuing.", {
-          correlationId: r.correlation_id,
-        }),
-      ),
-    );
-  }
+        ),
+      );
+    }
+  });
+  // Keep recovery synchronous on ordinary starts, without parking acquisition for held copies.
+  if ((yield* hold.current) === null) yield* recoverUncertainTasks;
+  else yield* hold.awaitRelease.pipe(Effect.andThen(recoverUncertainTasks), Effect.forkScoped);
 
-  // Recovery precedes serving requests. Launch uncertainty never triggers a re-launch.
+  // Launch uncertainty never triggers a re-launch.
   yield* db(sql`UPDATE remote_dispatches SET state = 'lost',
     last_error = 'Launch outcome unknown; check goat_thread_list with host.',
     updated_at = ${yield* now} WHERE state = 'launching' AND kind = 'thread'`);
   yield* db(sql`UPDATE remote_dispatches SET state = 'idle', updated_at = ${yield* now}
     WHERE kind = 'thread' AND reports_supported = 0 AND state = 'running'`);
   const active = yield* rows(sql`SELECT * FROM remote_dispatches WHERE state = 'running'`);
-  for (const r of active) yield* start(r.correlation_id, r.launched_run_id === null);
+  // Copied rows are another app's remote work; a person's own dispatches here start at once.
+  const resumeActive = Effect.forEach(
+    active,
+    (r) => start(r.correlation_id, r.launched_run_id === null),
+    { discard: true },
+  );
+  if ((yield* hold.current) === null) yield* resumeActive;
+  else yield* hold.awaitRelease.pipe(Effect.andThen(resumeActive), Effect.forkScoped);
   const resolveLostLaunches = resolveLostThreadLaunches({ retryAt: resolveRetryAt, start }).pipe(
     Effect.provideService(SqlClient.SqlClient, sql),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
     Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
   );
   // No pass at startup: a row the restart just marked lost is too young to ask about.
-  yield* Effect.sleep("1 minute").pipe(
-    Effect.andThen(resolveLostLaunches),
-    Effect.forever,
+  yield* hold.awaitRelease.pipe(
+    Effect.andThen(
+      Effect.sleep("1 minute").pipe(Effect.andThen(resolveLostLaunches), Effect.forever),
+    ),
     Effect.forkScoped,
   );
   return RemoteDispatchCoordinator.of({

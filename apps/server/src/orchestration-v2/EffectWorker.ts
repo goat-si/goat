@@ -28,6 +28,8 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+import * as AutomationHold from "../automationHold.ts";
+import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -37,24 +39,6 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
-
-/**
- * Do not apply this to `provider-turn.restart`: that compound effect also runs
- * detach and start. Swallowing a start failure that happens to mention
- * "is not active" would drop the outbox item without ever starting the
- * replacement turn.
- */
-function isNonRetryableProviderTurnControlFailure(effectType: string, errorText: string): boolean {
-  if (effectType !== "provider-turn.interrupt") {
-    return false;
-  }
-  return (
-    /is not active/i.test(errorText) ||
-    /hard teardown is already in progress/i.test(errorText) ||
-    /treating as already interrupted/i.test(errorText) ||
-    /treating as already stopped/i.test(errorText)
-  );
-}
 
 const isOrchestrationEffectExecutionError = Schema.is(OrchestrationEffectExecutionError);
 const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
@@ -655,6 +639,7 @@ export const layerWithOptions = (
     OrchestrationEffectWorkerV2,
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
+      if (yield* AutomationHold.isHeld) yield* outbox.captureHeldBacklog.pipe(Effect.orDie);
       const executor = yield* OrchestrationEffectExecutorV2;
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
       const leaseDurationMs = Math.max(1, options.leaseDurationMs ?? 30_000);
@@ -900,7 +885,13 @@ export const layerWithOptions = (
       );
 
       return OrchestrationEffectWorkerV2.of({
-        awaitWork: outbox.awaitAvailable,
+        awaitWork: Effect.gen(function* () {
+          const hold = yield* AutomationHold.AutomationHold;
+          if (yield* AutomationHold.isHeld) {
+            return yield* Effect.raceFirst(outbox.awaitAvailable, hold.awaitRelease);
+          }
+          return yield* outbox.awaitAvailable;
+        }),
         runOnce: runOnce(),
         runRecoveryOnce: runOnce(true),
         nextClaimableAt: outbox.nextClaimableAt.pipe(

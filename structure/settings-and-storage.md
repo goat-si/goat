@@ -38,7 +38,10 @@ is `ServerSettings` in `packages/contracts/src/settings.ts`, including `goatBotH
 
 A packaged desktop app does not use that default. `resolveDesktopBaseDir` in
 `apps/desktop/src/app/DesktopStatePaths.ts` returns `~/.goat/desktop` when the build is not a
-development build and `GOAT_HOME` is unset. A development desktop build returns `~/.goat`, or `~/.t3` while only that holds its dev state.
+development build and `GOAT_HOME` is unset, and `~/.goat/desktop-nightly` for a nightly or preview
+version. A nightly seeds that directory once from stable's; see
+[side-by-side desktop state](../docs/internals/release-channels.md#side-by-side-desktop-state).
+A development desktop build returns `~/.goat`, or `~/.t3` while only that holds its dev state.
 `resolveDesktopStateDir` still appends `userdata`, or `dev` for a development build with no
 explicit home. Electron's own profile directory is separate: `apps/desktop/src/app/DesktopUserData.ts`
 uses `goat-desktop`, `goat-desktop-dev`, and `goat-desktop-nightly`.

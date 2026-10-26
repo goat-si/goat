@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
+import { AutomationHoldNotices } from "../components/settings/AutomationHoldNotice";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useNavigateToMainApp } from "../components/sidebar/mainAppLocation";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
@@ -138,6 +139,7 @@ function SettingsContentLayout() {
         </WorkspacePageHeader>
 
         <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
+          <AutomationHoldNotices />
           <SettingsScopeBoundary pathname={location.pathname}>
             <Outlet />
           </SettingsScopeBoundary>

@@ -10,7 +10,7 @@ export const environmentEntries = {
     description:
       "Read this server's identity and selected environment preferences, including standing instructions and project overrides. Custom instructions over 4,000 characters come back truncated. Use goat_provider_list for provider and model availability.",
     guide:
-      "Returned source-control customInstructions is truncated to 4,000 Unicode characters; truncated indicates whether text was cut.\n\nGOAT prepends standingInstructions to the first message of agent-launched threads by default, through goat_thread_launch and goat_ssh_thread_launch from other machines. A launch can disable this with standingInstructions:false. Project standing instructions replace the environment policy for that project.",
+      "Returned source-control customInstructions is truncated to 4,000 Unicode characters; truncated indicates whether text was cut.\n\nGOAT prepends standingInstructions to the first message of agent-launched threads by default, through goat_thread_launch and goat_ssh_thread_launch from other machines. A launch can disable this with standingInstructions:false. Project standing instructions replace the environment policy for that project.\n\nA non-null automationHold means this server runs on a nightly app's copy of another app's data: its scheduled tasks, channel bots, goal and Fleet dispatch, and hub and remote links stay paused until a person chooses Resume automation on this app in Settings.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

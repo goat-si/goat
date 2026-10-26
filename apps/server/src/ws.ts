@@ -93,10 +93,7 @@ import {
   type AcpRegistrySetProviderInput,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
-  type ServerConfig as ClientServerConfig,
   type DiscoveredLocalServerList,
-  type EditorId,
-  type FileManagerRevealKind,
   type FilesystemBrowseFailure,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -115,8 +112,7 @@ import {
   type ProviderInstanceId,
   type PullRequestRef,
   type ScheduledTaskListResult,
-  type ServerConfigStreamEvent,
-  type ServerWorktreeCheckoutHealth,
+  AutomationResumeError,
   type ServerLifecycleStreamEvent,
   type TerminalMetadataStreamEvent,
 } from "@goat/contracts";
@@ -318,120 +314,16 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import * as AutomationHold from "./automationHold.ts";
+import {
+  resolveAvailableEditorsForConfig,
+  resolveEditorConfig,
+  resolveFileManagerRevealKindForConfig,
+  withLateEditorConfig,
+} from "./serverConfigUpdates.ts";
 import { isNetworkPath } from "@goat/shared/path";
 
-const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
-
-const resolveDiscoveryForConfig = <A, E, R>(
-  discovery: Effect.Effect<A, E, R>,
-  onTimeout: () => A,
-) =>
-  discovery.pipe(
-    Effect.timeoutOption(CONFIG_DISCOVERY_TIMEOUT),
-    Effect.map(Option.getOrElse(onTimeout)),
-  );
-
-const resolveAvailableEditorsForConfig = <A, E, R>(
-  discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
-) => resolveDiscoveryForConfig(discovery, () => []);
-
-const resolveFileManagerRevealKindForConfig = <E, R>(
-  discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
-) => resolveDiscoveryForConfig(discovery, () => undefined);
-
-type EditorDiscovery = Pick<
-  ExternalLauncher.ExternalLauncher["Service"],
-  "resolveAvailableEditors" | "resolveFileManagerRevealKind"
->;
-
-const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>(
-  availableEditors: ReadonlyArray<EditorId>,
-  revealKind: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
-) {
-  const fileManagerRevealKind = availableEditors.includes("file-manager")
-    ? yield* revealKind
-    : undefined;
-  return {
-    availableEditors,
-    ...(fileManagerRevealKind === undefined
-      ? {}
-      : {
-          shellRevealInFileManager: true,
-          shellRevealInFileManagerKind: fileManagerRevealKind,
-        }),
-  };
-});
-
-export const withLateEditorConfig = <E, R>(
-  config: ClientServerConfig,
-  liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
-  launcher: EditorDiscovery,
-  /** Defender probe results that land after the snapshot; Windows servers only. */
-  checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
-) => {
-  const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
-    Stream.filter(
-      (editors) =>
-        editors.join() !== config.availableEditors.join() ||
-        (editors.includes("file-manager") && config.shellRevealInFileManagerKind === undefined),
-    ),
-    // Unbounded, unlike the snapshot: the reveal-kind probe is not shared, so
-    // a timeout here would cancel a probe that outlasts it every time.
-    Stream.mapEffect((editors) =>
-      resolveEditorConfig(editors, launcher.resolveFileManagerRevealKind()),
-    ),
-    Stream.filter(
-      (editorConfig) =>
-        editorConfig.availableEditors.join() !== config.availableEditors.join() ||
-        editorConfig.shellRevealInFileManagerKind !== config.shellRevealInFileManagerKind,
-    ),
-    Stream.map((editorConfig) => ({ type: "editorsResolved" as const, editorConfig })),
-  );
-  const lateCheckoutHealth = checkoutHealthChanges.pipe(
-    Stream.map((health) => ({ type: "checkoutHealthResolved" as const, health })),
-  );
-
-  return Stream.merge(liveUpdates, Stream.merge(lateEditorConfig, lateCheckoutHealth)).pipe(
-    Stream.mapAccum(
-      (): ClientServerConfig => config,
-      (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
-        switch (event.type) {
-          case "checkoutHealthResolved": {
-            // Every client applies a snapshot, so this reaches ones built before the field.
-            const same =
-              current.worktreeCheckoutHealth?.defender === event.health.defender &&
-              current.worktreeCheckoutHealth?.worktreesDirectory ===
-                event.health.worktreesDirectory;
-            if (same) return [current, []];
-            const next = { ...current, worktreeCheckoutHealth: event.health };
-            return [next, [{ version: 1, type: "snapshot", config: next }]];
-          }
-          case "editorsResolved": {
-            const {
-              availableEditors: _editors,
-              shellRevealInFileManager: _reveal,
-              shellRevealInFileManagerKind: _revealKind,
-              ...rest
-            } = current;
-            const next = { ...rest, ...event.editorConfig };
-            return [next, [{ version: 1, type: "snapshot", config: next }]];
-          }
-          case "keybindingsUpdated":
-            return [{ ...current, ...event.payload }, [event]];
-          case "providerStatuses":
-            return [{ ...current, providers: event.payload.providers }, [event]];
-          case "settingsUpdated":
-            return [{ ...current, settings: event.payload.settings }, [event]];
-          // Themes and usage-limit sources never ride in a snapshot; clients
-          // carry their projected values across one.
-          default:
-            return [current, [event]];
-        }
-      },
-    ),
-  );
-};
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1495,6 +1387,7 @@ export const layerWsRpc = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const worktreeCheckoutHealth = yield* WorktreeCheckoutHealth.WorktreeCheckoutHealth;
+      const automationHold = yield* AutomationHold.AutomationHold;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -2008,6 +1901,7 @@ export const layerWsRpc = (
         const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
         const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
         const checkoutHealth = yield* worktreeCheckoutHealth.current;
+        const currentAutomationHold = yield* automationHold.current;
         const editorConfig = yield* resolveEditorConfig(
           yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
           resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
@@ -2067,6 +1961,7 @@ export const layerWsRpc = (
           newProjectsRoot: managedFolders.namedProjectsRoot,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
           ...(checkoutHealth === null ? {} : { worktreeCheckoutHealth: checkoutHealth }),
+          automationHold: currentAutomationHold,
         };
       });
 
@@ -2867,6 +2762,10 @@ export const layerWsRpc = (
             return { keybindings: keybindingsConfig, issues: [] };
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
+        [WS_METHODS.serverResumeAutomation]: () =>
+          automationHold.release.pipe(
+            Effect.mapError((error) => new AutomationResumeError({ detail: error.message })),
+          ),
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetWorktreesDirectoryStatus]: () =>
           serverSettings.getSettings.pipe(
@@ -3569,7 +3468,13 @@ export const layerWsRpc = (
 
               return Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
-                withLateEditorConfig(config, liveUpdates, externalLauncher, checkoutHealthChanges),
+                withLateEditorConfig(
+                  config,
+                  liveUpdates,
+                  externalLauncher,
+                  checkoutHealthChanges,
+                  automationHold.changes,
+                ),
               );
             }),
           ),

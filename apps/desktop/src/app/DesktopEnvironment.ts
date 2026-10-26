@@ -179,6 +179,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     goatHome: config.goatHome,
     isDevelopment,
+    appVersion: input.appVersion,
     pathExists: NodeFS.existsSync,
   });
   const rootDir = path.resolve(input.dirname, "../../..");

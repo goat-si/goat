@@ -5,11 +5,13 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import * as CloudManagedEndpointRuntime from "../cloud/ManagedEndpointRuntime.ts";
+import * as AutomationHold from "../automationHold.ts";
 import { readHoldWebhooksWhileOffline, readRelayConnection } from "../cloud/config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeRelayEnvironmentClient } from "./relayEnvironmentClient.ts";
 
 const wakeHeldHooks = Effect.fn("HeldHooksWaker.wake")(function* () {
+  if (yield* AutomationHold.isHeld) return false;
   if (!(yield* readHoldWebhooksWhileOffline)) return false;
   const connection = yield* readRelayConnection;
   if (connection === null) return false;

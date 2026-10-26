@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
+import * as NodeSqlite from "node:sqlite";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
@@ -20,6 +23,7 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ServerConfig from "./config.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as AutomationHold from "./automationHold.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Settings from "./serverSettings.ts";
@@ -33,7 +37,6 @@ import { ServerActivation } from "./serverActivation.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   ProjectId,
-  ProviderInstanceId,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -41,67 +44,10 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import {
-  storageCleanupActivityAt,
-  storageCleanupPullRequestMerged,
-  storageCleanupThreadIdle,
-} from "./storageCleanup.ts";
+import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
+import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 
-const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
-const DAY_MS = 24 * 60 * 60 * 1_000;
-
-function at(offsetMs: number): DateTime.Utc {
-  return DateTime.makeUnsafe(NOW_MS + offsetMs);
-}
-
-function shell(overrides: Partial<OrchestrationV2ThreadShell> = {}): OrchestrationV2ThreadShell {
-  return {
-    id: ThreadId.make("thread-1"),
-    projectId: ProjectId.make("project-1"),
-    title: "Thread",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: {
-      rootThreadId: ThreadId.make("thread-1"),
-      parentThreadId: null,
-      relationshipToParent: null,
-    },
-    forkedFrom: null,
-    createdBy: "user",
-    creationSource: "web",
-    activeRunId: null,
-    latestVisibleMessage: null,
-    hasActionableProposedPlan: false,
-    itemCount: 0,
-    visibleItemCount: 0,
-    lastVisitedAt: null,
-    deletedAt: null,
-    branch: null,
-    linkedPullRequest: null,
-    status: "idle",
-    activityRunStatus: null,
-    pendingRuntimeRequest: null,
-    pendingBackgroundTasks: [],
-    latestRunId: null,
-    latestRunRequestedAt: null,
-    latestRunStartedAt: null,
-    latestRunCompletedAt: null,
-    latestUserMessageAt: null,
-    createdAt: at(-30 * DAY_MS),
-    updatedAt: at(-10 * DAY_MS),
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    snoozedUntil: null,
-    snoozedAt: null,
-    pinnedAt: null,
-    ...overrides,
-  };
-}
+import { NOW_MS, DAY_MS, at, shell } from "./storageCleanup.testFixtures.ts";
 
 describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
@@ -483,7 +429,13 @@ const runCleanupTest = <A, E>(
     | Path.Path
     | Scope.Scope
   >,
-) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
+) =>
+  effect.pipe(
+    // Never the developer's home: cleanup reads other local GOAT apps' databases from it.
+    Effect.provideService(HostProcess.HomeDirectory, "/nonexistent/goat-cleanup-test-home"),
+    Effect.provide(cleanupTestLayer),
+    Effect.scoped,
+  );
 
 const submoduleCleanupFixture = () =>
   Effect.gen(function* () {
@@ -1268,11 +1220,17 @@ describe("orphan worktree reports", () => {
 });
 
 describe("storage cleanup reports and local file policies", () => {
-  it.effect("automatically removes an eligible archived thread checkout", () =>
+  it.effect("holds automatic cleanup until release and permits manual cleanup", () =>
     runCleanupTest(
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
-        const fixture = yield* cleanupFixture();
+        const hold = yield* AutomationHold.makeInMemory({
+          reason: "channel-copy",
+          heldAt: "2026-10-25T00:00:00.000Z",
+        });
+        const fixture = yield* cleanupFixture().pipe(
+          Effect.provideService(AutomationHold.AutomationHold, hold),
+        );
         fixture.setThreads([
           shell({
             branch: "feature",
@@ -1281,23 +1239,29 @@ describe("storage cleanup reports and local file policies", () => {
           }),
         ]);
         yield* fixture.activate(Stream.empty);
+        yield* TestClock.adjust(0);
+        yield* fixture.service.drain;
+        expect(yield* fixture.service.latestReport).toBeNull();
+        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+        fixture.setPolicy("any-local-files");
+        yield* fixture.fs.writeFileString(`${fixture.worktree}/.env`, "keep\n");
+        expect((yield* fixture.service.runNow).trigger).toBe("manual");
+        yield* fixture.fs.remove(`${fixture.worktree}/.env`);
+        yield* hold.release;
+        yield* TestClock.adjust("1 hour");
         const [report] = yield* fixture.service.reports.pipe(
-          Stream.filter((report) => report !== null),
+          Stream.filter((report) => report?.trigger === "automatic"),
           Stream.take(1),
           Stream.runCollect,
         );
         yield* fixture.service.drain;
-        expect(report).toMatchObject({
-          trigger: "automatic",
-          counts: { removed: 1, kept: 0, failed: 0 },
-          entries: [
-            {
-              threadId: "thread-1",
-              path: fixture.worktree,
-              outcome: "removed",
-              reason: "Inactive for 30 days",
-            },
-          ],
+        expect(report?.trigger).toBe("automatic");
+        expect(report?.counts).toEqual({ removed: 1, kept: 0, failed: 0 });
+        expect(report?.entries[0]).toMatchObject({
+          threadId: "thread-1",
+          path: fixture.worktree,
+          outcome: "removed",
+          reason: "Inactive for 30 days",
         });
         expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
       }),
@@ -1905,6 +1869,32 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
       yield* fixture.fs.writeFileString(cachePath, savedUsage);
       expect((yield* fixture.service.runNow).counts.removed).toBe(1);
       expect(yield* fixture.fs.readFileString(cachePath)).toBe(savedUsage);
+    }),
+  ),
+);
+
+it.live("keeps a worktree that another GOAT app on this machine still uses", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cleanup-home-" });
+      yield* Effect.gen(function* () {
+        const fixture = yield* cleanupFixture();
+        // A nightly copy of this app's state binds the same checkout by its absolute path.
+        const nightlyState = `${home}/.goat/desktop-nightly/userdata`;
+        yield* fs.makeDirectory(nightlyState, { recursive: true });
+        const db = new NodeSqlite.DatabaseSync(`${nightlyState}/statev2.sqlite`);
+        db.exec("CREATE TABLE orchestration_v2_projection_threads (payload_json TEXT)");
+        db.prepare("INSERT INTO orchestration_v2_projection_threads VALUES (?)").run(
+          JSON.stringify({ worktreePath: fixture.worktree }),
+        );
+        db.close();
+        expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Another GOAT app on this machine uses this worktree",
+        });
+        expect(yield* fs.exists(fixture.worktree)).toBe(true);
+      }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
     }),
   ),
 );

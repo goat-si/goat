@@ -55,7 +55,8 @@ in [`manifest.json`](manifest.json).
 - **INV-HOME-01** — An empty server base directory resolves to `~/.goat`, or to `~/.t3` while only
   that legacy home holds state. `GOAT_HOME` and
   `--base-dir` override it. See [state roots](settings-and-storage.md#state-roots).
-- **INV-DESKTOP-01** — A packaged desktop build stores its server state under `~/.goat/desktop`.
+- **INV-DESKTOP-01** — A packaged stable desktop build stores its server state under `~/.goat/desktop`,
+  and a packaged nightly or preview build under `~/.goat/desktop-nightly`.
   A development desktop build uses `~/.goat` (or a legacy `~/.t3` holding its dev state) unless
   `GOAT_HOME` is set.
 - **INV-SSH-01** — Scripts that launch GOAT on an SSH host set the remote server home to

@@ -130,8 +130,8 @@ export const renderCliShim = (input: {
 };
 
 /**
- * Nightly and stable share one GOAT home, and the server hands this path to every thread as
- * `GOAT_CLI_PATH`. Each channel keeps its own launcher so a thread runs the app that started it.
+ * The server hands this path to every thread as `GOAT_CLI_PATH`. Each channel keeps its own
+ * launcher, in its own GOAT home, so a thread runs the app that started it.
  */
 export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
   environment.path.join(

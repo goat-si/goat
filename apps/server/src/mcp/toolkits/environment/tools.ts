@@ -1,6 +1,7 @@
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
+  AutomationHold,
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
@@ -54,6 +55,7 @@ const EnvironmentReadTool = Tool.make(agentSurfaceRegistry["environment.read"].n
     serverVersion: Schema.String,
     platform: ExecutionEnvironmentDescriptor.fields.platform,
     preferences: Schema.Struct(PreferenceFields),
+    automationHold: Schema.NullOr(AutomationHold),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["environment.read"]));
 const EnvironmentPreferencesTool = Tool.make(

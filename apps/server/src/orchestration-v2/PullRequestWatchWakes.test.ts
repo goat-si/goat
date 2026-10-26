@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,6 +15,11 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 
@@ -262,6 +268,37 @@ const watchWithQueuedWake = (name: string) =>
   });
 
 describe("pull request watch wakes", () => {
+  it.effect("held: no pull request reads; release: the watch sweep reads the host", () =>
+    Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      yield* watchWithQueuedWake("automation-hold");
+      const reads = yield* Queue.unbounded<void>();
+      yield* Effect.gen(function* () {
+        const reactor = yield* PullRequestWatchReactor.make;
+        yield* reactor.start();
+        yield* TestClock.adjust("2 minutes");
+        expect(yield* Queue.size(reads)).toBe(0);
+        yield* hold.release;
+        yield* Queue.take(reads);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeCrypto.layer,
+            ServerSettings.layerTest(),
+            Layer.mock(PullRequestService.PullRequestService)({
+              watchFingerprint: () =>
+                Queue.offer(reads, undefined).pipe(Effect.andThen(Effect.never)),
+            }),
+          ),
+        ),
+        Effect.provideService(AutomationHold.AutomationHold, hold),
+        Effect.scoped,
+      );
+    }).pipe(Effect.provide(layerTest)),
+  );
   it.effect("a merged pull request's queued wake never starts a turn", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, watch, statusOf } = yield* watchWithQueuedWake("merged");
