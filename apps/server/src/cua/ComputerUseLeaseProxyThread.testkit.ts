@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import type { AgentInputReport } from "./agentInputReports.ts";
+import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 
 export const request = (id: number, method: string) =>
   JSON.stringify({ jsonrpc: "2.0", id, method, params: {} });
@@ -35,6 +36,7 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     readonly targetGate?: Deferred.Deferred<void>;
     readonly agentGate?: Deferred.Deferred<void>;
     readonly toolsAt?: (index: number) => typeof tools;
+    readonly screenshots?: LinuxScreenshotPolicy;
     /** Decorates each line for the provider, as the CLI's app guide does. */
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
   } = {},
@@ -96,6 +98,7 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
   });
   const proxy = yield* runThreadLeaseProxy({
     connectionId: "thread-proxy:test",
+    ...(options.screenshots === undefined ? {} : { screenshots: options.screenshots }),
     bundleIds: true,
     input: Stream.fromQueue(input),
     output: (line, reply) =>
