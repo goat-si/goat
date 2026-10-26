@@ -40,7 +40,10 @@ import {
   rpcInstrumentationLayer as instrumentation,
 } from "./observability/RpcInstrumentation.ts";
 import { makeMemoryImportHandlers } from "./ws.ts";
-import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
+import {
+  ProviderMemoryImportRuntime,
+  provenanceImportFormat,
+} from "./memory/imports/MemoryImportTypes.ts";
 import {
   buildMemoryImportFixture,
   captureMemoryImportInventory,
@@ -295,7 +298,7 @@ const assembledImport = (profile: MemoryImportFixtureProfile) =>
     assert.equal(item.pendingSync, false);
     assert.deepInclude(item.revision.provenance.importSource, {
       sourceId,
-      format: fixture.snapshot.format,
+      format: provenanceImportFormat(fixture.snapshot.format),
       sourceItemKey: preview.items[0]!.sourceItemKey,
       sourceFingerprint: preview.items[0]!.sourceFingerprint!,
     });
@@ -729,5 +732,191 @@ it.effect.each([1, 2] as const)(
       assert.equal(status.receipt.remaining, 2 - stopAfter);
       assert.equal(reads, readCount);
       assert.equal(commits, stopAfter);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "aside-semantic-v1 imports Current sections read-only, idempotently, with durable forget and project-only projects/",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const base = yield* fs.makeTempDirectoryScoped({ prefix: "aside-import-" });
+      const root = `${base}/u`;
+      const memory = `${root}/slot-a/memory`;
+      const stateDir = `${base}/state`;
+      NodeFS.mkdirSync(stateDir, { mode: 0o700 });
+      const write = (path: string, text: string) => {
+        NodeFS.mkdirSync(`${memory}/${path}`.split("/").slice(0, -1).join("/"), {
+          recursive: true,
+        });
+        NodeFS.writeFileSync(`${memory}/${path}`, text);
+      };
+      const page = (current: string, title = "Synthetic tools") =>
+        `---\ntitle: ${title}\naliases: [kit]\n---\n## Current\n\n${current}\n\n## History\n\n- 2026-10-01: older note.\n`;
+      const tools = (git: string) =>
+        page(
+          `Prefer small commits.\n\n### ${git}\n\nRebase before pushing.\n\n### Shell\n\nSearch with rg first.`,
+        );
+      // Derived briefings, logs, run logs and indexes sit beside the semantic pages.
+      write("MEMORY.md", page("Derived briefing."));
+      write("USER.md", page("Derived user briefing."));
+      write(".history.jsonl", "{}\n");
+      write("memory-index.json", "{}\n");
+      write("episodic/2026-10-01.md", page("Observation log."));
+      write("routines/r1/MEMORY.md", page("Routine state."));
+      write("agent/tools.md", tools("Git"));
+      write("agent/broken.md", "---\ntitle: Broken\n---\n## History\n\nNo current section.\n");
+      write("agent/huge.md", page("y".repeat(300 * 1024)));
+      const syntheticSecret = `sk-${"synthetic".repeat(4)}`;
+      write("agent/secret.md", page(`Do not import ${syntheticSecret}`));
+      write("agent/nul.md", page("Invalid\0text"));
+      write("agent/2026-10-02.md", page("Dated log."));
+      write("agent/nested/inner.md", page("Nested page."));
+      NodeFS.symlinkSync(`${memory}/MEMORY.md`, `${memory}/agent/link.md`);
+      write("projects/goat.md", page("Ship small PRs.", "GOAT"));
+      write("sites/readme.txt", "not a page");
+      // Skipped entries do not count against the 512-page budget.
+      for (let n = 0; n < 600; n++) write(`agent/2026-01-01-${n}.md`, "log");
+      for (let n = 0; n < 260; n++) {
+        NodeFS.mkdirSync(`${memory}/agent/skip-dir-${n}.md`);
+        NodeFS.symlinkSync(`${memory}/MEMORY.md`, `${memory}/agent/skip-link-${n}.md`);
+      }
+      NodeFS.mkdirSync(`${memory}/sites/folder.md`);
+      NodeFS.mkdirSync(`${memory}/people`);
+      const before = stamp(root);
+      const g = yield* graph({
+        stateDir,
+        roots: [{ format: "aside", rootSlot: "synthetic", path: root }],
+      });
+      assert.equal(g.descriptor.capabilities.memory?.asideImport, true);
+      const discovered = yield* g.call({
+        action: "discover",
+        memorySpaceId: g.space,
+        format: "aside",
+      });
+      if (discovered.action !== "discover") return assert.fail("discover");
+      assert.deepEqual(
+        discovered.sources.map((s) => [s.label, s.format, s.profile]),
+        [
+          ["slot-a/agent", "aside", "aside-semantic-v1"],
+          ["slot-a/projects", "aside", "aside-semantic-v1"],
+          ["slot-a/sites", "aside", "aside-semantic-v1"],
+        ],
+      );
+      const [agent, projects, sites] = discovered.sources.map((s) => s.sourceId);
+      const preview = (sourceId: M.MemoryImportSourceId) =>
+        g
+          .call({ action: "preview", memorySpaceId: g.space, sourceId })
+          .pipe(
+            Effect.flatMap((p) =>
+              p.action === "preview" ? Effect.succeed(p) : Effect.die("preview"),
+            ),
+          );
+      const apply = (
+        p: {
+          readonly sourceId: M.MemoryImportSourceId;
+          readonly sessionId: string;
+          readonly items: readonly M.MemoryImportPreviewItem[];
+        },
+        keep: (key: string) => boolean = () => true,
+      ) =>
+        g
+          .call({
+            action: "apply",
+            memorySpaceId: g.space,
+            sourceId: p.sourceId,
+            sessionId: p.sessionId,
+            operationId: id(),
+            items: p.items
+              .filter((item) => !item.issue && keep(item.sourceItemKey))
+              .map((item) => ({
+                sourceItemKey: item.sourceItemKey,
+                sourceFingerprint: item.sourceFingerprint!,
+                scope: { kind: "user" as const },
+              })),
+          })
+          .pipe(
+            Effect.flatMap((a) =>
+              a.action === "apply" ? Effect.succeed(a.receipt) : Effect.die("apply"),
+            ),
+          );
+
+      const first = yield* preview(agent!);
+      assert.deepEqual((yield* preview(sites!)).items, []);
+      assert.deepEqual(
+        first.items.map((item) => [item.sourceItemKey, item.issue ?? null]),
+        [
+          ["agent/broken.md#current", "unsupported_format"],
+          ["agent/huge.md#current", "limit_exceeded"],
+          ["agent/nul.md#current", "invalid_utf8"],
+          ["agent/secret.md#current", "secret_detected"],
+          ["agent/tools.md#current", null],
+          ["agent/tools.md#current:Git", null],
+          ["agent/tools.md#current:Shell", null],
+        ],
+      );
+      assert.isAbove(first.items[1]!.byteCount, 256 * 1024);
+      assert.notInclude(JSON.stringify(first), syntheticSecret);
+      const created = yield* apply(first);
+      assert.deepEqual(
+        created.items.map((item) => item.outcome),
+        ["created", "created", "created"],
+      );
+      yield* g.tick;
+      const git = created.items.find((item) => item.sourceItemKey.endsWith(":Git"))!;
+      const item = yield* g.service.read(
+        { memorySpaceId: g.space, memoryId: git.memoryId! },
+        Effect.void,
+      );
+      if (item.status !== "active") return assert.fail("active memory");
+      assert.equal(item.payload.text, "Synthetic tools: Git\n\nRebase before pushing.");
+      // Hub protocol v1 peers decode provenance formats strictly; the profile names the source.
+      assert.deepInclude(item.revision.provenance.importSource, {
+        format: "omo",
+        parserVersion: "aside-semantic-v1",
+        sourceLocator: "aside/synthetic/slot-a:agent",
+        sourceItemKey: "agent/tools.md#current:Git",
+      });
+
+      // Re-importing unchanged pages is a no-op.
+      const repeated = yield* apply(yield* preview(agent!));
+      assert.deepEqual(
+        repeated.items.map((item) => item.outcome),
+        ["noop", "noop", "noop"],
+      );
+
+      // A forgotten section stays suppressed after its H3 is renamed.
+      yield* g.service.forget(
+        {
+          memorySpaceId: g.space,
+          memoryId: git.memoryId!,
+          operationId: id(),
+          expectedHeads: [item.revision.revisionId],
+        },
+        Effect.void,
+      );
+      yield* g.tick;
+      assert.deepEqual(stamp(root), before);
+      write("agent/tools.md", tools("Git usage"));
+      const renamed = yield* preview(agent!);
+      assert.include(
+        renamed.items.map((i) => i.sourceItemKey),
+        "agent/tools.md#current:Git usage",
+      );
+      const suppressed = yield* apply(renamed, (key) => key.endsWith(":Git usage"));
+      assert.deepEqual(
+        suppressed.items.map((i) => [i.sourceItemKey, i.outcome]),
+        [["agent/tools.md#current:Git usage", "suppressed"]],
+      );
+
+      // projects/ pages need an explicit project binding.
+      const project = yield* preview(projects!);
+      assert.deepEqual(
+        project.items.map((i) => [i.sourceItemKey, i.mappingRequired]),
+        [["projects/goat.md#current", true]],
+      );
+      const refused = yield* apply(project).pipe(Effect.flip);
+      assert.equal(refused._tag, "MemoryImportRpcError");
+      if (refused._tag === "MemoryImportRpcError") assert.equal(refused.issue, "scope_unmapped");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

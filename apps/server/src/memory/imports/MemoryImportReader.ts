@@ -1,5 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- narrow non-inheriting Git process boundary.
-import * as NodeChildProcess from "node:child_process";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- snapshot digest, no provider identity derivation.
 import * as NodeCrypto from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- bounded no-follow snapshot adapter.
@@ -9,8 +7,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import {
   MemoryImportRpcError,
-  type MemoryImportFormat,
   type MemoryImportIssue,
+  type MemoryImportSourceFormat,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -22,26 +20,35 @@ import type {
   ImportDiscoveredSlot,
   ImportSlot,
   ImportSnapshot,
+  ImportSourceFile,
   MemoryImportReaderShape,
 } from "./MemoryImportTypes.ts";
 import { isSupportedGitVersion } from "./gitSupport.ts";
+import {
+  ASIDE_DIRECTORIES,
+  asidePage,
+  asideSelection,
+  absolute,
+  execute,
+  safe,
+  validateStateBoundary,
+} from "./MemoryImportReaderSupport.ts";
 
 const CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";
 const PROCESS_LIMIT = 8 * 1024 * 1024;
-const PROCESS_TIMEOUT = 10_000;
 const PROFILES = [
   "codex-handbook-v1",
   "codex-ad-hoc-v1",
   "claude-topic-v1",
   "claude-topic-metadata-v1",
   "omo-memory-core-beta63",
+  "aside-semantic-v1",
 ] as const;
-
 /** Server acquisition configuration only; no caller paths or provider settings lookup. */
 export type MemoryImportReaderConfig = {
   readonly stateDir: string;
   readonly roots: readonly {
-    readonly format: MemoryImportFormat;
+    readonly format: MemoryImportSourceFormat;
     readonly rootSlot: string;
     readonly path: string;
   }[];
@@ -294,7 +301,12 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
             }
           };
           const result: {
-            files?: { selector: string; utf8Base64: string; byteCount: number }[];
+            files?: {
+              selector: string;
+              utf8Base64: string;
+              byteCount: number;
+              issue?: MemoryImportIssue;
+            }[];
             selections?: string[];
           } = {};
           if (
@@ -372,12 +384,42 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
           } else if (input.action === "discover") {
             const root = await directory(input.root);
             result.selections = [];
-            for (const name of await names(root, 512, true)) {
-              const s = await stat(NodePath.join(root, name));
-              await child(root, name, s.isDirectory(), false, s);
-              if (s.isDirectory()) result.selections.push(name);
-              if (result.selections.length > 128) throw error("limit_exceeded");
-            }
+            if (input.format === "aside") {
+              // Reads only directory listings; page bytes are read when the user previews.
+              const folder = async (parent: string, name: string) => {
+                const path = NodePath.join(parent, name);
+                let s: Stamp;
+                try {
+                  s = await stat(path);
+                } catch (cause) {
+                  if (isFsCode(cause, "ENOENT")) return undefined;
+                  throw cause;
+                }
+                if (s.isSymbolicLink() || !s.isDirectory()) return undefined;
+                await child(parent, name, true, false, s);
+                return path;
+              };
+              for (const slot of await names(root, 512, true)) {
+                if (slot.startsWith(".") || slot.includes(":")) continue;
+                const slotPath = await folder(root, slot);
+                const memory = slotPath && (await folder(slotPath, "memory"));
+                if (!memory) continue;
+                const present = new Set(await names(memory, 4096, true));
+                for (const name of ASIDE_DIRECTORIES) {
+                  if (!present.has(name)) continue;
+                  const path = await folder(memory, name);
+                  if (!path || !(await names(path, 4096, true)).some(asidePage)) continue;
+                  result.selections.push(`${slot}:${name}`);
+                  if (result.selections.length > 128) throw error("limit_exceeded");
+                }
+              }
+            } else
+              for (const name of await names(root, 512, true)) {
+                const s = await stat(NodePath.join(root, name));
+                await child(root, name, s.isDirectory(), false, s);
+                if (s.isDirectory()) result.selections.push(name);
+                if (result.selections.length > 128) throw error("limit_exceeded");
+              }
           } else {
             const root = await directory(input.root);
             let source = root;
@@ -392,7 +434,7 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
               total = Buffer.byteLength(input.config),
               objectBytes = 0,
               sourceBytes = 0;
-            result.files = [];
+            const files: NonNullable<typeof result.files> = (result.files = []);
             const walk = async (
               parent: string,
               out: string,
@@ -400,14 +442,24 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
               depth: number,
               git: boolean,
             ): Promise<void> => {
-              for (const name of await names(parent, (git ? 4096 : 512) - count, true)) {
+              const aside = input.format === "aside";
+              // Aside folders may hold many skipped logs; only pages count against the file budget.
+              for (const name of await names(
+                parent,
+                aside ? 4096 : (git ? 4096 : 512) - count,
+                true,
+              )) {
+                if (aside && !asidePage(name)) continue;
                 const selector = rel ? `${rel}/${name}` : name;
                 safe(selector);
                 const obj = selector === "objects" || selector.startsWith("objects/");
-                if (++count > (git ? 4096 : 512) || (obj && ++objectsCount > 3584) || depth > 8)
-                  throw error("limit_exceeded");
                 const path = NodePath.join(parent, name);
                 const s = await stat(path);
+                // Aside reads only regular pages directly in the selected directory. Links,
+                // subdirectories and non-page files are skipped without being opened or followed.
+                if (aside && (s.isSymbolicLink() || !s.isFile())) continue;
+                if (++count > (git ? 4096 : 512) || (obj && ++objectsCount > 3584) || depth > 8)
+                  throw error("limit_exceeded");
                 await child(parent, name, s.isDirectory(), true, s);
                 if (
                   git &&
@@ -426,9 +478,10 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
                       (selector.startsWith("extensions/ad_hoc/notes/") &&
                         selector.split("/").length === 4 &&
                         selector.endsWith(".md"))
-                    : !selector.includes("/") &&
-                      selector.endsWith(".md") &&
-                      !["MEMORY.md", "CLAUDE.md"].includes(selector);
+                    : input.format === "aside" ||
+                      (!selector.includes("/") &&
+                        selector.endsWith(".md") &&
+                        !["MEMORY.md", "CLAUDE.md"].includes(selector));
                 if (s.isDirectory()) {
                   const copyDir =
                     git &&
@@ -447,6 +500,39 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
                   if (/^\s*\[\s*include(?:if)?\b/m.test(text)) throw error("path_rejected");
                   if (/^\s*\[\s*extensions\b/m.test(text)) throw error("unsupported_format");
                 } else if (selected) {
+                  if (input.format === "aside") {
+                    // Report each unreadable page with its own reason; never truncate or fail
+                    // the other pages in the directory.
+                    const refuse = (issue: MemoryImportIssue) =>
+                      files.push({
+                        selector,
+                        utf8Base64: "",
+                        byteCount: Number(s.size),
+                        issue,
+                      });
+                    if (s.size > 262144n) {
+                      refuse("limit_exceeded");
+                      continue;
+                    }
+                    sourceBytes += Number(s.size);
+                    if (sourceBytes > 8388608) throw error("limit_exceeded");
+                    const data = await read(path, s, 262144);
+                    try {
+                      strictText(data);
+                    } catch (cause) {
+                      if (!isImportError(cause)) throw cause;
+                      // strictText reports a NUL byte as path_rejected; for a page it is bad text.
+                      refuse(cause.issue === "path_rejected" ? "invalid_utf8" : cause.issue);
+                      continue;
+                    }
+                    files.push({
+                      selector,
+                      utf8Base64: data.toString("base64"),
+                      byteCount: data.length,
+                    });
+                    await write(out, `${files.length}.txt`, data);
+                    continue;
+                  }
                   if (git) {
                     total += Number(s.size);
                     if (obj) objectBytes += Number(s.size);
@@ -460,12 +546,12 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
                   if (git) await write(out, name, data);
                   else {
                     strictText(data);
-                    result.files!.push({
+                    files.push({
                       selector,
                       utf8Base64: data.toString("base64"),
                       byteCount: data.length,
                     });
-                    await write(out, `${result.files!.length}.txt`, data);
+                    await write(out, `${files.length}.txt`, data);
                   }
                 }
               }
@@ -494,13 +580,13 @@ type SnapshotOperation =
   | { action: "cleanup" }
   | { action: "allocate"; id: string }
   | { action: "remove"; id: string }
-  | { action: "discover"; root: string }
+  | { action: "discover"; root: string; format: MemoryImportSourceFormat }
   | {
       action: "copy";
       root: string;
       relative: string;
       snapshot: string;
-      format: MemoryImportFormat;
+      format: MemoryImportSourceFormat;
       config: string;
     };
 
@@ -517,131 +603,6 @@ const error = (issue: MemoryImportIssue) => new MemoryImportRpcError({ issue });
 const isImportError = Schema.is(MemoryImportRpcError);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const normalize = (cause: unknown) => (isImportError(cause) ? cause : error("source_unreadable"));
-const safe = (value: string) => {
-  if (
-    !value ||
-    Buffer.byteLength(value) > 512 ||
-    value.includes("\\") ||
-    value.includes("\0") ||
-    value.split("/").some((p) => !p || p === "." || p === "..")
-  )
-    throw error("path_rejected");
-  if (scanMemoryValue(value).kind === "blocked") throw error("secret_detected");
-};
-const absolute = (path: string) => {
-  if (!NodePath.isAbsolute(path) || path === "/" || NodePath.normalize(path) !== path)
-    throw error("path_rejected");
-  safe(path.slice(NodePath.parse(path).root.length).split(NodePath.sep).join("/"));
-};
-
-const validateStateBoundary = (config: MemoryImportReaderConfig) => {
-  const within = (parent: string, path: string) => {
-    const relative = NodePath.relative(parent, path);
-    return (
-      relative === "" ||
-      (!NodePath.isAbsolute(relative) &&
-        relative !== ".." &&
-        !relative.startsWith(`..${NodePath.sep}`))
-    );
-  };
-  for (const root of config.roots) {
-    absolute(root.path);
-    if (within(root.path, config.stateDir) || within(config.stateDir, root.path))
-      throw error("path_rejected");
-    if (config.gitExecutable && within(root.path, config.gitExecutable))
-      throw error("path_rejected");
-  }
-};
-
-/** A complete map: Node spawn's env replaces inheritance; host env is never enumerated. */
-const environment = (cwd: string, gitDir?: string) => ({
-  PATH: "/usr/bin:/bin",
-  HOME: cwd,
-  XDG_CONFIG_HOME: cwd,
-  LC_ALL: "C",
-  TZ: "UTC",
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_OPTIONAL_LOCKS: "0",
-  GIT_NO_LAZY_FETCH: "1",
-  GIT_NO_REPLACE_OBJECTS: "1",
-  GIT_TERMINAL_PROMPT: "0",
-  GIT_ALLOW_PROTOCOL: "",
-  ...(gitDir ? { GIT_DIR: gitDir } : {}),
-});
-
-// Owned process finishes (including timeout/interruption) before snapshot cleanup can run.
-const execute = (
-  executable: string,
-  args: readonly string[],
-  cwd: string,
-  maxBytes: number,
-  gitDir?: string,
-  onSpawn?: (pid: number) => void,
-) =>
-  Effect.callback<{ code: number; bytes: Buffer }, MemoryImportRpcError>((resume) => {
-    let child: NodeChildProcess.ChildProcessWithoutNullStreams;
-    try {
-      child = NodeChildProcess.spawn(executable, [...args], {
-        cwd,
-        env: environment(cwd, gitDir),
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    } catch {
-      resume(Effect.fail(error("source_unreadable")));
-      return;
-    }
-    child.stdin.end();
-    let size = 0;
-    let failed = false;
-    const chunks: Buffer[] = [];
-    const stop = () => {
-      failed = true;
-      child.kill("SIGKILL");
-    };
-    // @effect-diagnostics-next-line globalTimersInEffect:off -- owned OS-process watchdog; interruption waits for close, never polls.
-    const timer = setTimeout(stop, PROCESS_TIMEOUT);
-    child.stdout.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maxBytes) stop();
-      else chunks.push(chunk);
-    });
-    // Never retain or expose stderr. It has the same bound, independent of stdout.
-    let stderr = 0;
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.length;
-      if (stderr > maxBytes) stop();
-    });
-    child.on("error", () => {
-      failed = true;
-    });
-    let ended = false;
-    const waiters: (() => void)[] = [];
-    child.on("close", (code) => {
-      ended = true;
-      clearTimeout(timer);
-      for (const waiter of waiters) waiter();
-      resume(
-        failed
-          ? Effect.fail(error("source_unreadable"))
-          : Effect.succeed({ code: code ?? -1, bytes: Buffer.concat(chunks) }),
-      );
-    });
-    try {
-      if (child.pid !== undefined) onSpawn?.(child.pid);
-    } catch {
-      stop();
-    }
-    return Effect.callback<void>((done) => {
-      if (ended) done(Effect.void);
-      else {
-        waiters.push(() => done(Effect.void));
-        stop();
-      }
-    });
-  });
-
 /** L5 must await this before activation. Single server owner per stateDir is a deployment precondition. */
 export const cleanupMemoryImportSnapshots = (config: MemoryImportReaderConfig) =>
   Effect.gen(function* () {
@@ -814,13 +775,22 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
         if (slot.selection === null) throw error("path_rejected");
         safe(slot.selection);
         if (slot.selection.includes("/")) throw error("path_rejected");
+        if (slot.format === "aside") asideSelection(slot.selection);
       }
       return root;
     };
     const metadata = (slot: ImportSlot, profile: string): ImportDiscoveredSlot => {
       const sourceLocator = `${slot.format}/${slot.rootSlot}${slot.selection ? `/${slot.selection}` : ""}`;
       safe(sourceLocator);
-      return { slot, profile, parserVersion: profile, sourceLocator, label: slot.rootSlot };
+      const aside =
+        slot.format === "aside" && slot.selection ? asideSelection(slot.selection) : null;
+      return {
+        slot,
+        profile,
+        parserVersion: profile,
+        sourceLocator,
+        label: aside ? `${aside.slot}/${aside.directory}` : slot.rootSlot,
+      };
     };
     const read: MemoryImportReaderShape["read"] = ({ slot }) =>
       Effect.gen(function* () {
@@ -834,15 +804,26 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
               relative:
                 slot.format === "codex"
                   ? "memories"
-                  : `${slot.selection}/${slot.format === "claude" ? "memory" : "repo"}`,
+                  : slot.format === "aside"
+                    ? (({ slot: store, directory }) => `${store}/memory/${directory}`)(
+                        asideSelection(slot.selection!),
+                      )
+                    : `${slot.selection}/${slot.format === "claude" ? "memory" : "repo"}`,
               snapshot: repo,
               format: slot.format,
               config: slot.format === "omo" ? CONFIG : "",
             });
             if (config.onSnapshotSealed) yield* Effect.suspend(config.onSnapshotSealed);
-            let files = yield* Effect.try({
+            let files: ImportSourceFile[] = yield* Effect.try({
               try: () =>
                 (copied.files ?? []).map((file) => {
+                  if (file.issue)
+                    return {
+                      selector: file.selector,
+                      text: "",
+                      byteCount: file.byteCount,
+                      issue: file.issue,
+                    };
                   const bytes = Buffer.from(file.utf8Base64, "base64");
                   if (
                     bytes.length !== file.byteCount ||
@@ -939,6 +920,19 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
                 files.push({ selector: selector!, text, byteCount: content.length });
               }
               profile = PROFILES[4];
+            } else if (slot.format === "aside") {
+              profile = PROFILES[5];
+              // A page carrying a secret is refused on its own; its text never leaves the reader.
+              files = files.map((file) =>
+                !file.issue && scanMemoryValue(file.text).kind === "blocked"
+                  ? {
+                      selector: file.selector,
+                      text: "",
+                      byteCount: file.byteCount,
+                      issue: "secret_detected" as const,
+                    }
+                  : file,
+              );
             } else if (slot.format === "codex") {
               // One registered slot may contain both supported Codex profiles; L3 can dispatch per selector.
               profile = files.some((file) => file.selector === "MEMORY.md")
@@ -952,7 +946,8 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
                 : PROFILES[2];
             yield* Effect.try({
               try: () => {
-                if (!files.length) throw error("source_missing");
+                // An Aside folder whose entries are all skipped previews as empty.
+                if (!files.length && slot.format !== "aside") throw error("source_missing");
                 for (const file of files) {
                   safe(file.selector);
                   if (file.text.includes("\0")) throw error("path_rejected");
@@ -986,14 +981,15 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
           const selections =
             format === "codex"
               ? [null]
-              : ((yield* nodeSnapshot(config, { action: "discover", root: root.path }))
+              : ((yield* nodeSnapshot(config, { action: "discover", root: root.path, format }))
                   .selections ?? []);
           for (const selection of selections) {
             if (result.length >= 128) return yield* Effect.fail(error("limit_exceeded"));
             const slot: ImportSlot = { format, rootSlot: root.rootSlot, selection };
-            const value = yield* read({ slot });
+            // Aside has one fixed profile; discovery must not read page bytes.
+            const profile = format === "aside" ? PROFILES[5] : (yield* read({ slot })).profile;
             result.push(
-              yield* Effect.try({ try: () => metadata(slot, value.profile), catch: normalize }),
+              yield* Effect.try({ try: () => metadata(slot, profile), catch: normalize }),
             );
           }
         }

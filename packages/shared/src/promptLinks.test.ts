@@ -109,8 +109,10 @@ describe("link round trips", () => {
       provider: "claudeAgent",
       model: "opus",
     });
+    // Without a hosted app the link opens GOAT directly.
+    expect(link.startsWith("goat://new?")).toBe(true);
     const path = promptLinkAppPath(link);
-    expect(path).toBe(new URL(link).pathname + new URL(link).search);
+    expect(path).toBe("/new" + new URL(link).search);
     const parsed = parseNewThreadLink(new URL(link).search);
     expect(parsed.ok && parsed.value.kind === "new" && parsed.value.prompt.text).toBe(
       "Swear count & rating?",
@@ -121,10 +123,10 @@ describe("link round trips", () => {
     expect(promptLinkAppPath("t3code://new?prompt=hi")).toBe("/new?prompt=hi");
     expect(promptLinkAppPath("goat://new?prompt=hi")).toBe("/new?prompt=hi");
     expect(promptLinkAppPath("t3code-dev://threads/env-1/thread-1")).toBe("/env-1/thread-1");
-    expect(promptLinkAppPath("https://app.t3.codes/env-1/thread-1?prompt=go")).toBe(
-      "/env-1/thread-1?prompt=go",
-    );
-    expect(promptLinkAppPath("https://app.t3.codes/settings/general")).toBeNull();
+    // Share links written before GOAT dropped the hosted app default still open.
+    const legacyThread = "https://app.t3.codes/env-1/thread-1?prompt=go"; // goat-rename: legacy
+    expect(promptLinkAppPath(legacyThread)).toBe("/env-1/thread-1?prompt=go");
+    expect(promptLinkAppPath("https://app.t3.codes/settings/general")).toBeNull(); // goat-rename: legacy
     expect(promptLinkAppPath("https://evil.test/new?prompt=hi")).toBeNull();
     expect(promptLinkAppPath("t3code://app/index.html")).toBeNull();
   });

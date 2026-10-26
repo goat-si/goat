@@ -157,6 +157,12 @@ export const RELAY_TEXT_RULES: readonly TextRule[] = [
 
 export const RELAY_PATH_RULES: readonly PathRule[] = [
   {
+    id: "relay:marketing-schema-route",
+    category: "relay",
+    find: /^apps\/marketing\/src\/pages\/schema\/t3\.json\.ts$/g,
+    replace: "apps/marketing/src/pages/schema/goat.json.ts",
+  },
+  {
     id: "relay:internals-doc",
     category: "relay",
     find: /^docs\/internals\/t3-connect\.md$/g,
@@ -192,12 +198,6 @@ export const RELAY_KEEP_RULES: readonly KeepRule[] = [
     pattern: /"T3 Environment"/g,
     scope: (path) => path === "infra/relay/src/persistence/schema.ts",
     reason: "Matches the default in the relay's migration snapshots, which stay byte-stable.",
-  },
-  {
-    id: "relay:hosted-web-routing",
-    pattern: /(?:latest\.|nightly\.)?app\.t3\.codes|__t3code\/channel|t3code_web_channel/g,
-    scope: (path) => path === "docs/operations/release.md",
-    reason: "Upstream's hosted web router; removed with the hosted app default (wp4).",
   },
   {
     id: "relay:connect-persisted-literal",

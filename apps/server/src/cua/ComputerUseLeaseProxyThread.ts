@@ -75,7 +75,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
     ownId: (kind) => `${OWN_ID}${kind}:${sequence++}`,
-    output: options.output,
+    // A replayed handshake answer is the driver's too: its images follow the same rule (#1677).
+    output: (line) => options.output(options.screenshots?.scrub(line) ?? line),
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),

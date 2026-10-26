@@ -123,10 +123,6 @@ describe("internal remnant rules", () => {
       "scripts/dev-runner.ts",
       "    // GOAT's live data, or the legacy T3 home when GOAT has none, as migrate-dev-db picks it.",
     ],
-    [
-      "vite.config.ts",
-      "        // The `t3` npm launcher is published as plain, dependency-free Node.",
-    ],
   ])("keeps inventoried external or legacy text in %s", (path, source) => {
     expect(rename(path, source)).toBe(source);
   });

@@ -93,10 +93,20 @@ export const callResource = (call: Pick<Call, "name" | "args">): Resource | "rea
   return "desktop";
 };
 
+/**
+ * How long a call of a control that can no longer act still holds its app: longer than any proxy
+ * takes to cut its driver off (an overlay acknowledgement of at most 250 ms, then the kill).
+ */
+export const ORPHAN_CALL_GRACE_MS = 10_000;
+
 interface Ticket {
   readonly threadId: ThreadId;
   readonly call: Call;
   readonly resource: Resource;
+  /** Reservation order within the lease service; a driver runs one connection's calls in it. */
+  readonly seq: number;
+  /** When this call's control was first seen unable to act, or its proxy's stream ended. */
+  stoppedAt?: number;
 }
 
 const connectionKey = (threadId: ThreadId, call: ComputerUseCallReservation) =>
@@ -107,9 +117,63 @@ const overlaps = (a: Resource, b: Resource) =>
 /** Owned by the lease service; all operations run without a yield during admission. */
 export const makeCallReservations = () => {
   const tickets = new Map<string, Ticket>();
+  let seq = 0;
   // A delayed POST must never reopen a driver generation already cut off by its proxy.
   const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
   return {
+    /**
+     * Whether another control's ticket holds what this call would reserve. It takes nothing; a
+     * window ticket answers before the app lease around it (D17), as the narrower refusal.
+     */
+    targetBusy(threadId: ThreadId, call: Call): boolean {
+      const resource = callResource(call);
+      if (resource === "invalid" || resource === "read") return false;
+      for (const ticket of tickets.values())
+        if (
+          (ticket.threadId !== threadId || ticket.call.controlId !== call.controlId) &&
+          overlaps(resource, ticket.resource)
+        )
+          return true;
+      return false;
+    },
+    /**
+     * Another control's call still running in this window call's app: the same process, or the
+     * same app id. It holds the app whatever its control's state, until it answers or its driver
+     * is closed, so a Stop cannot hand the app over before the driver is cut off (D17).
+     */
+    appTicket(
+      threadId: ThreadId,
+      call: Call,
+      canAct: (holder: ThreadId, controlId: string) => boolean,
+      now: number,
+    ) {
+      const resource = callResource(call);
+      if (typeof resource !== "object") return undefined;
+      for (const ticket of tickets.values()) {
+        if (ticket.threadId === threadId && ticket.call.controlId === call.controlId) continue;
+        if (typeof ticket.resource !== "object") continue;
+        const sameApp =
+          call.app !== undefined &&
+          ticket.call.app !== undefined &&
+          call.app.toLowerCase() === ticket.call.app.toLowerCase();
+        if (ticket.resource.pid !== resource.pid && !sameApp) continue;
+        // Marked per call, never per control: a later call of a reused control starts unmarked.
+        if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
+          ticket.stoppedAt = now;
+        if (ticket.stoppedAt === undefined || now - ticket.stoppedAt < ORPHAN_CALL_GRACE_MS)
+          return {
+            holderThreadId: ticket.threadId,
+            app: ticket.call.app ?? call.app ?? `the app with pid ${resource.pid}`,
+          };
+      }
+      return undefined;
+    },
+    /** The control's proxy went away: the calls it has out now may only be stopping. */
+    markStopped(threadId: ThreadId, controlId: string, now: number) {
+      for (const ticket of tickets.values())
+        if (ticket.threadId === threadId && ticket.call.controlId === controlId)
+          ticket.stoppedAt ??= now;
+    },
     reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))
         return { status: "refused", detail: "replaced" };
@@ -128,7 +192,7 @@ export const makeCallReservations = () => {
           return { status: "refused", detail: "target_busy", holderThreadId: ticket.threadId };
       }
       const reservationId = NodeCrypto.randomUUID();
-      tickets.set(reservationId, { threadId, call, resource });
+      tickets.set(reservationId, { threadId, call, resource, seq: seq++ });
       return { status: "admitted", reservationId };
     },
     lookup(
@@ -156,10 +220,19 @@ export const makeCallReservations = () => {
       const key = connectionKey(threadId, call);
       if (call.action === "close" && rememberClosed)
         closed.set(key, { threadId, controlId: call.controlId });
+      const answered =
+        call.action === "release" && call.completed === true
+          ? tickets.get(call.reservationId)
+          : undefined;
+      const answeredHere =
+        answered !== undefined && connectionKey(answered.threadId, answered.call) === key;
       for (const [id, ticket] of tickets) {
+        if (connectionKey(ticket.threadId, ticket.call) !== key) continue;
+        // An answered call ends every earlier call of its connection, whose releases may be lost.
         if (
-          connectionKey(ticket.threadId, ticket.call) === key &&
-          (call.action === "close" || call.reservationId === id)
+          call.action === "close" ||
+          call.reservationId === id ||
+          (answeredHere && ticket.seq < answered.seq)
         )
           tickets.delete(id);
       }

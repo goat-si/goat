@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
+import { APP_LEASE_IDLE_MS } from "./ComputerUseAppLeases.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { foregroundGrant, revokeForegroundGrant } from "./ComputerUseForeground.testkit.ts";
@@ -246,6 +247,12 @@ describe("server computer-use call reservations", () => {
         else yield* f.close();
         yield* Deferred.succeed(gate, undefined);
         assert.deepEqual(yield* Fiber.join(confirmed), { status: "refused", detail: "replaced" });
+        // A released ticket leaves A's app lease (D17) until its idle window passes; a closed
+        // driver ends both at once.
+        if (ending === "release") {
+          assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+          yield* TestClock.adjust(APP_LEASE_IDLE_MS);
+        }
         assert.equal((yield* f.reserve(f.b)).status, "admitted");
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
@@ -431,6 +438,13 @@ describe("server computer-use call reservations", () => {
         if (admitted.status !== "admitted" || admitted.reservationId === null)
           return assert.fail("mutation needs an execution reservation");
         yield* f.release(f.a, admitted.reservationId);
+        // A's app lease (D17) outlives its released ticket: B meets the lease, not a ticket,
+        // until the lease's idle window passes.
+        assert.deepInclude(yield* f.reserve(f.b, { text: "desktop" }), {
+          detail: "app_busy",
+          holderThreadId: f.a,
+        });
+        yield* TestClock.adjust(APP_LEASE_IDLE_MS);
         assert.equal((yield* f.reserve(f.b, { text: "desktop" })).status, "admitted");
         assert.deepEqual(yield* f.reserve(f.a, window), {
           status: "refused",
@@ -496,7 +510,8 @@ describe("server computer-use call reservations", () => {
         const f = yield* fixture();
         const focus = yield* foregroundGrant(f.b, "handoff:conflict-focus");
         assert.equal((yield* f.reserve()).status, "admitted");
-        assert.equal((yield* f.reserve(f.b, { pid: 42, window_id: 8 })).status, "admitted");
+        // Another app's window: the same app's other windows are one app lease since D17.
+        assert.equal((yield* f.reserve(f.b, { pid: 43, window_id: 8 })).status, "admitted");
         assert.equal((yield* f.reserve(f.b, {}, "list_windows")).status, "admitted");
         for (const [name, args] of [
           ["type_text", { pid: 99 }],
@@ -610,6 +625,10 @@ describe("server computer-use call reservations", () => {
         yield* f.release(f.a, second.reservationId, "driver:old");
         assert.equal((yield* f.reserve(f.b)).status, "refused");
         yield* f.release(f.a, second.reservationId);
+        // A's app lease (D17) outlives its released ticket: B meets the lease, not a ticket,
+        // until the lease's idle window passes.
+        assert.deepInclude(yield* f.reserve(f.b), { detail: "app_busy", holderThreadId: f.a });
+        yield* TestClock.adjust(APP_LEASE_IDLE_MS);
         assert.equal((yield* f.reserve(f.b)).status, "admitted");
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );

@@ -88,6 +88,8 @@ const fakeLeases = (input: {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    releaseApps: () => Effect.void,
+    streamOpened: () => Effect.void,
     foregroundApprovalEpoch: Effect.die("unused"),
     approveForeground: () => Effect.die("unused"),
     foregroundAvailable: () => Effect.die("unused"),

@@ -500,53 +500,61 @@ it.effect("an identical retry answers with the first attempt instead of launchin
   }),
 );
 
-it.effect("the descendant budget refuses a third distinct launch with capacity_exceeded", () =>
+it.effect("the descendant budget refuses a fifth distinct launch with capacity_exceeded", () =>
   Effect.gen(function* () {
     const { responses, launches, records } = yield* launchFromWorker([
       "Audit one",
       "Audit two",
       "Audit three",
+      "Audit four",
+      "Audit five",
     ]);
-    expect(launches).toHaveLength(2);
-    expect(records).toHaveLength(2);
+    expect(launches).toHaveLength(4);
+    expect(records).toHaveLength(4);
     expect(responses[0]).toMatchObject({ threadId: "remote-thread" });
     expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
-    expect(responses[2]).toMatchObject({ code: "capacity_exceeded" });
+    expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[4]).toMatchObject({ code: "capacity_exceeded" });
   }),
 );
 
-it.effect("a refusal before the remote started returns the slot, so two more launches fit", () =>
+it.effect("a refusal before the remote started returns the slot, so four more launches fit", () =>
   Effect.gen(function* () {
     const { responses, launches, records } = yield* launchFromWorker(
-      ["Refused audit", "Audit one", "Audit two", "Audit three"],
+      ["Refused audit", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
       { refuseLaunchOnCalls: [0] },
     );
     expect(responses[0]).toMatchObject({ code: "orchestration_error" });
     expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
     expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
-    expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
-    expect(launches).toHaveLength(3);
-    expect(records).toHaveLength(3);
+    expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
+    expect(launches).toHaveLength(5);
+    expect(records).toHaveLength(5);
     expect(records.filter((record) => record.state === "released")).toHaveLength(1);
-    expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
+    expect(records.filter((record) => record.state === "bound")).toHaveLength(4);
   }),
 );
 
 it.effect("a failure before the launch attempt releases the reservation", () =>
   Effect.gen(function* () {
     const { responses, launches, records } = yield* launchFromWorker(
-      ["Bad attachment", "Audit one", "Audit two", "Audit three"],
+      ["Bad attachment", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
       { failValidationOnCalls: [0] },
     );
     expect(responses[0]).toMatchObject({ code: "invalid_request" });
     expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
     expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
-    expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
+    expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
+    expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
     // The validation failure never reached the coordinator.
-    expect(launches).toHaveLength(2);
-    expect(records).toHaveLength(3);
+    expect(launches).toHaveLength(4);
+    expect(records).toHaveLength(5);
     expect(records.filter((record) => record.state === "released")).toHaveLength(1);
-    expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
+    expect(records.filter((record) => record.state === "bound")).toHaveLength(4);
   }),
 );
 
@@ -555,7 +563,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const { responses, launches, records } = yield* launchFromWorker(
-        ["Stopped audit", "Audit one", "Audit two", "Audit three"],
+        ["Stopped audit", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
         { stopBeforeClaimOnCalls: [0], maxLanes: 1 },
       );
       expect(responses[0]).toMatchObject({
@@ -564,13 +572,15 @@ it.effect(
       });
       expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
       expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
-      expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
-      expect(records).toHaveLength(3);
+      expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
+      expect(records).toHaveLength(5);
       const released = records.filter((record) => record.state === "released");
       const bound = records.filter((record) => record.state === "bound");
       expect(released).toHaveLength(1);
-      expect(bound).toHaveLength(2);
-      expect(launches).toHaveLength(2);
+      expect(bound).toHaveLength(4);
+      expect(launches).toHaveLength(4);
       expect(launches.map((launch) => launch.correlationId)).not.toContain(
         childWorkCorrelationIdFor(released[0]!.childWorkId),
       );
@@ -615,7 +625,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const { responses, launches, records } = yield* launchFromWorker(
-        ["Denied audit", "Audit one", "Audit two", "Audit three"],
+        ["Denied audit", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
         { failAuthorizeOnCalls: [0] },
       );
       // The coordinator's pre-send wrap is unwrapped back to the refusal the caller can act on.
@@ -625,10 +635,12 @@ it.effect(
       });
       expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
       expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
-      expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
-      expect(launches).toHaveLength(3);
-      expect(records).toHaveLength(3);
+      expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
+      expect(launches).toHaveLength(5);
+      expect(records).toHaveLength(5);
       expect(records.filter((record) => record.state === "released")).toHaveLength(1);
-      expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
+      expect(records.filter((record) => record.state === "bound")).toHaveLength(4);
     }),
 );

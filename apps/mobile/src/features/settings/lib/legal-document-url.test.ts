@@ -14,6 +14,6 @@ describe("default legal pages", () => {
   it("accepts GOAT's own legal pages and refuses upstream T3 Code's", () => {
     expect(isLegalDocumentUrl("https://goat-si.github.io/goat/privacy-policy")).toBe(true);
     expect(isLegalDocumentUrl("https://goat-si.github.io/goat/terms-of-service/")).toBe(true);
-    expect(isLegalDocumentUrl("https://t3.codes/privacy-policy")).toBe(false);
+    expect(isLegalDocumentUrl("https://t3.codes/privacy-policy")).toBe(false); // goat-rename: legacy
   });
 });

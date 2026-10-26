@@ -23,6 +23,8 @@ const rule = (
 ): TextRule => ({ id: `leftover:${id}`, category: "leftovers", find, replace, scope });
 
 export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
+  // Keys in the packaged desktop package.json; the same build writes and reads them.
+  rule("build-keys", () => true, /\bt3code(CommitHash|WebAuthn)\b/g, "goat$1"),
   // Local console tags; the relay never reads them.
   rule(
     "connect-console-tags",

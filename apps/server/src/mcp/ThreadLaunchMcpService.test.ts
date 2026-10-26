@@ -739,9 +739,11 @@ it.effect(
         const setup = yield* withChannelAdmission(f);
         yield* setup.launch("Inspect one");
         yield* setup.launch("Inspect two");
-        const error = yield* Effect.flip(setup.launch("Inspect three"));
+        yield* setup.launch("Inspect three");
+        yield* setup.launch("Inspect four");
+        const error = yield* Effect.flip(setup.launch("Inspect five"));
         expect(error).toMatchObject({ code: "capacity_exceeded" });
-        expect(f.launched).toHaveLength(2);
+        expect(f.launched).toHaveLength(4);
       }),
     );
   },
@@ -766,13 +768,17 @@ it.effect(
         const setup = yield* withChannelAdmission(f);
         const first = yield* Effect.flip(setup.launch("Inspect one"));
         const second = yield* Effect.flip(setup.launch("Inspect two"));
+        const third = yield* Effect.flip(setup.launch("Inspect three"));
+        const fourth = yield* Effect.flip(setup.launch("Inspect four"));
         expect(first).toMatchObject({ code: "orchestration_error" });
         expect(second).toMatchObject({ code: "orchestration_error" });
-        // Both failures committed their threads, so both slots stay held.
-        const third = yield* Effect.flip(setup.launch("Inspect three"));
-        expect(third).toMatchObject({ code: "capacity_exceeded" });
-        expect(f.attempted).toHaveLength(2);
-        expect(yield* setup.states()).toEqual(["bound", "bound"]);
+        expect(third).toMatchObject({ code: "orchestration_error" });
+        expect(fourth).toMatchObject({ code: "orchestration_error" });
+        // All four failures committed their threads, so all four slots stay held.
+        const fifth = yield* Effect.flip(setup.launch("Inspect five"));
+        expect(fifth).toMatchObject({ code: "capacity_exceeded" });
+        expect(f.attempted).toHaveLength(4);
+        expect(yield* setup.states()).toEqual(["bound", "bound", "bound", "bound"]);
       }),
     );
   },
@@ -783,15 +789,18 @@ it.effect("a launch failure before the thread existed releases the reservation",
   return Effect.scoped(
     Effect.gen(function* () {
       const setup = yield* withChannelAdmission(f);
-      const first = yield* Effect.flip(setup.launch("Inspect one"));
-      const second = yield* Effect.flip(setup.launch("Inspect two"));
-      // Each pre-commit failure freed its slot, so a third launch is still admitted.
-      const third = yield* Effect.flip(setup.launch("Inspect three"));
-      expect(first).toMatchObject({ code: "orchestration_error" });
-      expect(second).toMatchObject({ code: "orchestration_error" });
-      expect(third).toMatchObject({ code: "orchestration_error" });
-      expect(f.attempted).toHaveLength(3);
-      expect(yield* setup.states()).toEqual(["released", "released", "released"]);
+      for (const label of ["one", "two", "three", "four", "five"]) {
+        const failed = yield* Effect.flip(setup.launch("Inspect " + label));
+        expect(failed).toMatchObject({ code: "orchestration_error" });
+      }
+      expect(f.attempted).toHaveLength(5);
+      expect(yield* setup.states()).toEqual([
+        "released",
+        "released",
+        "released",
+        "released",
+        "released",
+      ]);
     }),
   );
 });

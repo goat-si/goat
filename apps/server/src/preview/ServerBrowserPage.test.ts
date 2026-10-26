@@ -526,6 +526,19 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(tree).toContain('/url: "\\"data:text/plain,relative"');
   });
 
+  it("prepends the @layers header to the snapshot tree and masks dotted values in overlay names", async () => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await page.setContent(
+      "<main><h1>Article</h1>" +
+        "<p>Body text.</p>".repeat(40) +
+        '</main><input type="password" value="s3cr3t-pin"><div role="dialog" aria-modal="true" aria-label="Unlock s3cr3t-pin now" id="gate" style="position:fixed;inset:0;background:#fff"><button>Continue</button></div>',
+    );
+    const tree = String((await takeSnapshot()).accessibilityTree);
+    const firstLine = tree.split("\n")[0] ?? "";
+    expect(firstLine).toMatch(/^@layers blocking=dialog "Unlock •+ now" coverage=\d+% hint=#gate$/);
+    expect(tree).not.toContain("s3cr3t-pin");
+  });
+
   it("redacts a data: link whose scheme a password value would mask", async () => {
     await page.setContent(`
       <input type="password" aria-label="Scheme" value="data">

@@ -47,21 +47,20 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { type Cursor, markActed, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
+import { type Cursor, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
   ComputerUseControlSnapshot,
   Interruptions,
 } from "./ComputerUseControl.ts";
-import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
 import { IMPLIED_RECHECK_MS, makeRunEnd } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
-import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
+import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
@@ -188,6 +187,10 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
+    /** A control's proxy went away; the apps its calls leased are free at once (D17). */
+    readonly releaseApps: (threadId: ThreadId, controlId: string) => Effect.Effect<void>;
+    /** A lease stream for this control opened: its proxy is there (D17). */
+    readonly streamOpened: (controlId: string) => Effect.Effect<void>;
     readonly foregroundApprovalEpoch: Effect.Effect<number>;
     readonly approveForeground: (handoff: Handoff, observedEpoch: number) => Effect.Effect<void>;
     readonly foregroundAvailable: (
@@ -750,6 +753,17 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
+  const calls = makeCallReservation({
+    admission,
+    controls,
+    reservations,
+    changed,
+    controlState,
+    blocked: () => paused !== undefined || privateHost,
+    interruptions: () => interruptions.count,
+    bound: (threadId, controlId, id) => foreground.bound(id, threadId, controlId),
+  });
+
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
@@ -793,49 +807,9 @@ const make = Effect.gen(function* () {
       changed,
       settle,
     }),
-    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, request) {
-      if (request.action === "release" || request.action === "close") {
-        const current = controls.get(threadId);
-        return reservations.release(
-          threadId,
-          request,
-          current?.controlId === request.controlId && current.ended === undefined,
-        );
-      }
-      return yield* admission.withPermits(1)(
-        Effect.gen(function* () {
-          const call =
-            request.action === "validate" ? reservations.lookup(threadId, request) : request;
-          if (call === undefined) return { status: "refused", detail: "replaced" } as const;
-          if (request.action === "reserve" && markActed(controls, threadId, call)) yield* changed;
-          const before = controls.get(threadId);
-          const state = yield* controlState(threadId, call.controlId);
-          const now = DateTime.toEpochMillis(yield* DateTime.now);
-          // Release and close do not wait on admission: neither can resurrect a yielding validation.
-          if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
-            return { status: "refused", detail: "replaced" } as const;
-          const detail = callAdmissionRefusal({
-            call,
-            state,
-            current: controls.get(threadId),
-            beforeUses: before?.uses,
-            blocked: paused !== undefined || privateHost,
-            interruptions: interruptions.count,
-            now,
-            bound: (id) => foreground.bound(id, threadId, call.controlId),
-          });
-          if (detail !== undefined) return { status: "refused", detail } as const;
-          if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
-          // Confirmation retains the original ticket and its conflict coverage until cleanup.
-          return withCallPermissions(
-            request.action === "validate"
-              ? { status: "admitted", reservationId: request.reservationId }
-              : reservations.reserve(threadId, call),
-            state,
-          );
-        }),
-      );
-    }),
+    callReservation: calls.reserve,
+    releaseApps: calls.releaseApps,
+    streamOpened: calls.streamOpened,
     stop: (threadId) =>
       Effect.sync(() => end(threadId, "stopped")).pipe(
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),

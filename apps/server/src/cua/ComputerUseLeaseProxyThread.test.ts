@@ -8,6 +8,8 @@ import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
+import { linuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
+import { CROPPED_CAPTURE } from "./linuxHelper/windowCapture.ts";
 import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { call, foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
@@ -53,6 +55,26 @@ describe("thread lease proxy", () => {
       assert.equal(answer.id, 1);
       assert.include(JSON.stringify(answer.result), "list_windows({ pid: 41 })");
     }),
+  );
+
+  it.effect(
+    "a handshake answer replayed while waiting follows the Linux screenshot rule (#1677)",
+    () =>
+      Effect.gen(function* () {
+        const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg";
+        const h = yield* threadHarness({
+          screenshots: linuxScreenshotPolicy({ route: "refused", reason: CROPPED_CAPTURE }),
+          toolsAt: () => ({ tools: [{ name: image, inputSchema: { type: "object" } }] }),
+        });
+        yield* h.push({ state: "waiting" });
+        yield* h.send(initialize);
+        yield* h.next;
+        yield* h.send(initialized);
+        yield* h.send(request(101, "tools/list"));
+        const answer = JSON.stringify(yield* h.next);
+        assert.notInclude(answer, "iVBORw0KGgo");
+        assert.include(answer, CROPPED_CAPTURE);
+      }),
   );
 
   it.effect(

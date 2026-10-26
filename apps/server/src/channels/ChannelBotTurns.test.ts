@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
-import { ProjectId, ProviderInstanceId } from "@goat/contracts";
+import { MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -20,7 +21,7 @@ import {
   GOAT_BOT_ROUTING_RULE,
   GOAT_BOT_SUPERVISOR_RULE,
 } from "./channelWorkerBrief.ts";
-import { turnSteerIdsFor } from "./channelIds.ts";
+import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   botMessages,
@@ -132,6 +133,8 @@ describe("GOAT Bot turns", () => {
         assert.include(launch.initialMessage?.text ?? "", 'goat_call {path:"task.create"}');
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
+        assert.include(launch.initialMessage?.text ?? "", "goat-bot/scratch");
+        assert.include(launch.initialMessage?.text ?? "", "goat-bot/artifacts");
         assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);
@@ -624,6 +627,116 @@ describe("GOAT Bot follow-ups under failure", () => {
         assert.isUndefined(task.pendingAnswerMessageId);
         assert.strictEqual(task.task.status, "running");
         assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "creates and dispatches multiple independent coding tasks from one reception pass",
+    () => {
+      const harness = harnessWith(botModel);
+      harness.script.current = (input) => {
+        if (input.mode === "input" && input.inputText?.startsWith("multi:")) {
+          return Effect.succeed({
+            replyText: "Starting all three tasks.",
+            action: {
+              type: "create_task" as const,
+              title: "Fix PR #1718",
+              instruction: "Check CI and merge PR #1718.",
+              additionalTasks: [
+                { title: "Audit browser card", instruction: "Inspect browser card parity." },
+                { title: "Sync Aside notes", instruction: "Update Aside parity docs." },
+              ],
+            },
+          });
+        }
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const ingested = yield* gateway.ingest(
+          goatInput("multi: fix PR, audit card, sync notes", "m1"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+
+        const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+        assert.lengthOf(page.tasks, 3);
+        assert.deepStrictEqual(
+          page.tasks.map((task) => task.taskId).toSorted(),
+          [
+            taskIdFor(ingested.inputId, 0),
+            taskIdFor(ingested.inputId, 1),
+            taskIdFor(ingested.inputId, 2),
+          ].toSorted(),
+        );
+        assert.lengthOf(harness.world.launches, 3);
+        assert.deepStrictEqual(harness.world.launches.map((launch) => launch.title).toSorted(), [
+          "Audit browser card",
+          "Fix PR #1718",
+          "Sync Aside notes",
+        ]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "holds a completed turn open while its recorded child work runs, then settles when the child finishes",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, reports, turn } = yield* runningTurn;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const workerThreadId = turn.worker!.threadId;
+
+        // An unclaimed reservation ("reserved") never holds completion forever.
+        const unclaimed = yield* childWork.admit({
+          callerThreadId: workerThreadId,
+          surface: "delegate_local",
+          prompt: "abandoned before claim",
+          destinationKey: "codex/gpt-6-luna",
+        });
+        assert.strictEqual(unclaimed._tag, "admitted");
+
+        const admission = yield* childWork.admit({
+          callerThreadId: workerThreadId,
+          surface: "thread_launch",
+          prompt: "implement the fix in a worktree",
+          destinationKey: "codex/gpt-6.1-sol",
+        });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const childThreadId = ThreadId.make("thread:bot-child-1");
+        harness.world.addRun(childThreadId, MessageId.make("msg:bot-child-1"));
+        yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThreadId }));
+        yield* childWork.markBound(admission.record, { threadId: childThreadId });
+
+        // The bot's initial turn finishes after launching the child thread, while the child is still running.
+        harness.world.setStatus(
+          workerThreadId,
+          1,
+          "completed",
+          "Started the coding thread and finished the check.",
+        );
+        yield* reports.reconcile(runtime.ownerToken);
+        const held = yield* ledger.getTask(turn.taskId);
+        assert.strictEqual(held?.task.status, "running");
+        assert.strictEqual(held?.completionHold, "background");
+
+        // Once the child thread completes, runtime.drain reconciles childWork and settles the turn.
+        harness.world.background.add(childThreadId);
+        harness.world.setStatus(childThreadId, 1, "completed", "Fix landed.");
+        yield* runtime.drain;
+        // While the child still has background work, neither childWork nor the parent turn settles.
+        assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "running");
+        harness.world.background.delete(childThreadId);
+        yield* runtime.drain;
+        const settled = yield* ledger.getTask(turn.taskId);
+        assert.strictEqual(settled?.task.status, "completed");
+        assert.isUndefined(settled?.completionHold);
       }).pipe(Effect.provide(harness.layer));
     },
   );

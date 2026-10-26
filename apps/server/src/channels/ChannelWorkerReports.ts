@@ -27,6 +27,7 @@ import {
   ChannelWorkerObservation,
   channelWorkerObservationEquals,
   CommandId,
+  type ChannelChildWorkState,
   type ChannelTaskEventId,
   type ChannelTask,
   type ChannelTaskNeedsYou,
@@ -40,11 +41,13 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
+import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
@@ -161,11 +164,44 @@ const decodeStoredObservation = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ChannelWorkerObservation),
 );
 const noNeeds: ReadonlyArray<ChannelTaskNeedsYou> = [];
+const CHILD_WORK_HOLD_STATES: ReadonlySet<ChannelChildWorkState> = new Set([
+  "launched",
+  "bound",
+  "unknown",
+]);
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
+  const childWorkStore = yield* Effect.serviceOption(ChannelChildWorkStore.ChannelChildWorkStore);
+
+  /**
+   * Whether launched child work of this generation is still running. A bare reservation
+   * ("reserved") never claimed a launch, so after the worker's run ends it cannot hold completion;
+   * a store read failure returns "unknown" so the pass waits rather than settling early.
+   */
+  const hasActiveChildWork = (taskId: ChannelTask["taskId"], generation: number) =>
+    Option.isNone(childWorkStore)
+      ? Effect.succeed(false as const)
+      : childWorkStore.value.listForTask(taskId).pipe(
+          Effect.flatMap((records) =>
+            Effect.gen(function* () {
+              const current = records.filter((record) => record.generation === generation);
+              if (current.some((record) => CHILD_WORK_HOLD_STATES.has(record.state))) return true;
+              for (const record of current) {
+                const childThreadId = record.destination?.threadId;
+                if (childThreadId === undefined || record.state !== "completed") continue;
+                const pending = yield* threads
+                  .delegatedTaskResultPending(childThreadId)
+                  .pipe(Effect.orElseSucceed(() => false));
+                if (pending) return true;
+              }
+              return false;
+            }),
+          ),
+          Effect.orElseSucceed(() => "unknown" as const),
+        );
 
   /** Needs-you already stored for a remote subagent's dispatch. Reconcile does not open SSH. */
   const storedRemoteNeeds = (correlationId: string) =>
@@ -442,13 +478,15 @@ const make = Effect.gen(function* () {
       if (limit !== undefined) return latest !== stored;
 
       if (current.status === "completed") {
+        const childWorkActive = yield* hasActiveChildWork(task.taskId, latest.task.generation);
+        if (childWorkActive === "unknown") return latest !== stored;
         const held =
           completionHoldCount({
             current,
             runs,
             providerThreads: records.value.providerThreads,
             pullRequests: pullRequestLinks,
-          }) > 0;
+          }) > 0 || childWorkActive;
         if (held) {
           if (latest.completionHold !== BACKGROUND_HOLD) {
             yield* ledger.setCompletionHold({ owner, taskId: task.taskId, hold: BACKGROUND_HOLD });

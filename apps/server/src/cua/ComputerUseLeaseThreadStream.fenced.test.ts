@@ -38,6 +38,8 @@ it.effect("a control ended by a failed read is never advertised again when reads
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
           proxy: undefined,
           subscribe: PubSub.subscribe(signals),
+          streamOpened: () => Effect.void,
+          releaseApps: () => Effect.void,
           currentControl: () =>
             Effect.sync(() => Option.some({ threadId, controlId: current(), expiresAt })),
           controlState: () =>
