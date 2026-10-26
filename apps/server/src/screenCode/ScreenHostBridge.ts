@@ -386,6 +386,10 @@ export class ScreenHostBridge {
     turnId: string,
     cellId: string,
   ) {
+    return this.takeCellImagesNow(runId, turnId, cellId);
+  });
+
+  takeCellImagesNow(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
     this.cells.delete(id);
@@ -395,7 +399,7 @@ export class ScreenHostBridge {
       journal: state?.journal ?? [],
       truncated: state?.truncated ?? [],
     };
-  });
+  }
 
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
     this: ScreenHostBridge,
@@ -474,6 +478,10 @@ export class ScreenHostBridge {
     targetId: string,
     _reason: string,
   ) {
+    this.invalidateTargetNow(runId, turnId, targetId);
+  });
+
+  invalidateTargetNow(runId: string, turnId: string, targetId: string): void {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
     if (!invalid) {
@@ -484,7 +492,7 @@ export class ScreenHostBridge {
     else invalid.add(targetId);
     const ref = this.targetRefs.get(targetId);
     if (ref) this.cursorPhases?.ended(ref);
-  });
+  }
 
   finishTurn = Effect.fn("ScreenHostBridge.finishTurn")(function* (
     this: ScreenHostBridge,

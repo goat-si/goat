@@ -39,7 +39,7 @@ const snapshot = [call("s", "get_window_state"), reply("s", { width: 1000, heigh
 describe("ComputerUseOverlay", () => {
   it("keeps a hidden capture above concurrent thinking and refuses a stale show", () => {
     const owner = { environmentId: EnvironmentId.make("environment"), runId: "run", turnId: "turn", targetId: "target", generation: 1 };
-    const scoped = (sequence: number, phase: "thinking" | "idle") => ({
+    const scoped = (sequence: number, phase: "thinking" | "resting") => ({
       type: "cursor" as const,
       event: { op: "show" as const, identity: { ...owner, sequence }, phase },
     });
@@ -49,11 +49,11 @@ describe("ComputerUseOverlay", () => {
       reply("click"),
       scoped(1, "thinking"),
       call("capture", "get_window_state", WINDOW),
-      scoped(2, "idle"),
+      scoped(2, "resting"),
       scoped(1, "thinking"),
       reply("capture"),
       { type: "cursor", event: { op: "hide", identity: { ...owner, sequence: 3 }, phase: "hidden", reason: "ended" } },
-      scoped(2, "idle"),
+      scoped(2, "resting"),
     ]);
     assert.deepEqual(sent[5], [{ op: "hide", identity: { ...owner, sequence: 1 }, phase: "hidden", reason: "capture" }]);
     assert.deepEqual(sent[6], [{ op: "hide", identity: { ...owner, sequence: 2 }, phase: "hidden", reason: "capture" }]);

@@ -13,7 +13,7 @@ import {
   type CursorPoint,
   type CursorSample,
 } from "./cursorMotion";
-import type { ComputerUseCursorPhase } from "@goat/contracts";
+import type { AgentCursorState } from "@goat/contracts";
 
 const CURSOR_ACTIVE_MS = 700;
 
@@ -66,7 +66,7 @@ function AgentBrowserCursorEvent(props: {
 
 export function AgentCursorMark(props: {
   readonly phase: "move" | "click";
-  readonly cursorPhase?: ComputerUseCursorPhase;
+  readonly cursorPhase?: AgentCursorState;
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
@@ -103,6 +103,7 @@ export function AgentCursorMark(props: {
   useEffect(() => {
     const node = element.current;
     if (node === null) return;
+    node.dataset.cursorSequence = String(sequence);
     const target = { x: left, y: top };
     const previous = motion.current;
     const now = performance.now();
@@ -139,6 +140,7 @@ export function AgentCursorMark(props: {
   useEffect(() => {
     const node = halo.current;
     if (node === null) return;
+    node.dataset.cursorSequence = String(sequence);
     node.getAnimations().forEach((animation) => animation.cancel());
     if (cursorPhase !== "thinking" || reducedMotion)
       return;
@@ -156,7 +158,7 @@ export function AgentCursorMark(props: {
       ref={element}
       className="pointer-events-none absolute left-0 top-0 z-40"
       style={{
-        opacity: agentBrowserCursorOpacity(cursorPhase === undefined ? active : cursorPhase !== "idle", controller),
+        opacity: agentBrowserCursorOpacity(cursorPhase === undefined ? active : cursorPhase !== "resting", controller),
         transform: `translate3d(${left}px, ${top}px, 0)`,
       }}
       aria-hidden="true"

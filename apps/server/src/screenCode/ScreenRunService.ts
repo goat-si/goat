@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Cell IDs are local, opaque UUIDs.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -13,6 +13,7 @@ import type {
   ScreenRunLimits,
   ScreenRunResult,
   ScreenRunError,
+  ScreenJournalEntry,
 } from "@goat/contracts";
 import { ScreenTargetRef, ThreadId } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -23,6 +24,7 @@ import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
@@ -78,7 +80,9 @@ export class ScreenRunService extends Context.Service<
       readonly threadId?: string;
       readonly tabId?: string;
       readonly controlId?: string;
-    }) => Effect.Effect<void>;
+    }) => Effect.Effect<{ readonly cleanupFailures: number }>;
+    readonly journalSnapshot: (input: { readonly runId: string; readonly turnId: string }) =>
+      Effect.Effect<readonly ScreenJournalEntry[]>;
     readonly finishRun: (input: { readonly threadId: string; readonly runId: string; readonly reason: string }) => Effect.Effect<void, ScreenRunError>;
   }
 >()("goat/screenCode/ScreenRunService") {
@@ -99,10 +103,11 @@ export function layerWithTabHost() {
       const leases = yield* ComputerUseLeases;
       const broker = yield* PreviewAutomationBroker;
       const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const browser = yield* ServerBrowser.ServerBrowser;
       const cursorPublisher = yield* ScreenCursorPublisher;
       const desktopHost = createDesktopTargetHost({ primitiveChannel, leases });
       const tabHost = yield* makePreviewTargetHost(broker);
-      return yield* make({ primitiveChannel, leases, orchestrator, dispatcher: createScreenDispatchRouter({
+      return yield* make({ primitiveChannel, leases, orchestrator, browser, dispatcher: createScreenDispatchRouter({
         app: desktopHost,
         tab: tabHost,
       }), desktopHost, tabHost, cursorPublisher });
@@ -114,6 +119,7 @@ interface ScreenRuntimeOptions {
   readonly primitiveChannel?: ComputerUsePrimitiveChannel["Service"];
   readonly leases?: ComputerUseLeases["Service"];
   readonly orchestrator?: Orchestrator.OrchestratorV2["Service"];
+  readonly browser?: Pick<ServerBrowser.ServerBrowser["Service"], "onAuthorityChange">;
   readonly dispatcher?: ScreenHostDispatcher;
   readonly desktopHost?: DesktopTargetHost;
   readonly tabHost?: PreviewTargetHost;
@@ -121,10 +127,10 @@ interface ScreenRuntimeOptions {
   readonly cursorPublisher?: ScreenCursorPublisher["Service"];
   readonly invocation?: SelfInvocation;
   readonly assetResolver?: () => Effect.Effect<{ path: string; sha256: string }, ScreenRunError>;
+  readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }
 
-const make = (options: ScreenRuntimeOptions = {}) =>
-  Effect.gen(function* () {
+const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
     const invocation = options.invocation ?? (yield* resolveSelfInvocation());
     const orchestrator = options.orchestrator ?? Option.getOrUndefined(yield* Effect.serviceOption(Orchestrator.OrchestratorV2));
     const callbackContext = yield* Effect.context();
@@ -196,6 +202,7 @@ const make = (options: ScreenRuntimeOptions = {}) =>
             hostBridge: bridge,
             invocation,
             runCallback,
+            ...(options.scheduleDeadline ? { scheduleDeadline: options.scheduleDeadline } : {}),
           }));
         }),
       );
@@ -207,15 +214,50 @@ const make = (options: ScreenRuntimeOptions = {}) =>
     const resetNext = new Set<string>();
     const closingTurns = new Set<string>();
     const activeCells = new Map<string, string>();
+    const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
     const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
-    const releaseForeground = (threadId: string, targets: readonly string[]) =>
-      Effect.gen(function* () {
+    const recordCleanupFailure = (runId: string, turnId: string, tabId?: string) => {
+      const id = turnKey(runId, turnId);
+      const entries = cleanupJournal.get(id) ?? [];
+      if (entries.length >= 64) return;
+      entries.push({ sequence: entries.length + 1, truncated: false,
+        receipt: { callId: 0, method: "close_tab", journalState: "unknown",
+          category: "unknown_outcome", dispatched: true,
+          evidence: ["cleanup_failed:close_ephemeral", ...(tabId ? [`tab:${tabId.slice(0, 80)}`] : [])] } });
+      cleanupJournal.set(id, entries);
+      if (cleanupJournal.size > 1024) {
+        const oldest = cleanupJournal.keys().next().value;
+        if (oldest !== undefined) cleanupJournal.delete(oldest);
+      }
+    };
+    const releaseForeground = Effect.fn("ScreenRunService.releaseForeground")(
+      function* (threadId: string, targets: readonly string[]) {
         if (!options.leases?.releaseForeground || !options.desktopHost) return;
         const controls = new Set(targets.map((targetId) =>
           options.desktopHost?.controlIdForTarget(targetId)).filter((id): id is string => id !== undefined));
         for (const controlId of controls)
           yield* options.leases.releaseForeground({ threadId: ThreadId.make(threadId), controlId });
       });
+    const fenceNow = (change: { threadId: string; tabId?: string; controlId?: string }) => {
+      for (const [id, turn] of turns) {
+        if (turn.threadId !== change.threadId) continue;
+        const [runId, turnId] = id.split("\u0000");
+        if (!runId || !turnId) continue;
+        const cellId = activeCells.get(id);
+        let touched = cellId !== undefined;
+        if (cellId) bridge.cutCellNow(runId, turnId, cellId);
+        for (const [targetId, route] of routes) {
+          if (route.runId !== runId || route.turnId !== turnId) continue;
+          if (!cellId && change.tabId !== undefined && route.tabId !== change.tabId) continue;
+          if (!cellId && change.controlId !== undefined &&
+              options.desktopHost?.matchesControl(targetId, change.controlId) !== true) continue;
+          touched = true;
+          bridge.invalidateTargetNow(runId, turnId, targetId);
+          options.desktopHost?.invalidateTarget(targetId);
+        }
+        if (touched) resetNext.add(id);
+      }
+    };
     const service: ScreenRunService["Service"] = {
       runCell: Effect.fn("ScreenRunService.runCell")(function* (input: ScreenRunInput) {
         if (orchestrator) {
@@ -235,7 +277,7 @@ const make = (options: ScreenRuntimeOptions = {}) =>
         if (screenBytes(input.source) > cellLimits.sourceBytes)
           return yield* Effect.fail({ ...fail("source_limit"), limit: { name: "sourceBytes", maximum: cellLimits.sourceBytes } });
         const running = yield* getSupervisor();
-        const cellId = randomUUID();
+        const cellId = NodeCrypto.randomUUID();
         const id = turnKey(input.runId, input.turnId);
         if (closingTurns.has(id)) return yield* Effect.fail(fail("stale_run"));
         const previous = turns.get(id);
@@ -279,11 +321,24 @@ const make = (options: ScreenRuntimeOptions = {}) =>
           )
           .pipe(
             Effect.mapError((cause) => ({ ...fail(cause.code),
+              effectStarted: cause.effectStarted === true,
+              ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
               ...(cause.code === "wall_limit" ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
                 : cause.code === "live_children_limit" ? { limit: { name: "activeChildren", maximum: cellLimits.activeChildren } }
                   : cause.code === "output_limit" ? { limit: { name: "returnBytes", maximum: cellLimits.returnBytes } }
                     : {}),
             })),
+            Effect.flatMap((result) => {
+              const notices = cleanupJournal.get(id) ?? [];
+              cleanupJournal.delete(id);
+              const journal = [...result.journal, ...notices.map((entry, index) => ({
+                ...entry, sequence: result.journal.length + index + 1,
+              }))].slice(-64);
+              return result.error
+                ? Effect.fail({ ...result.error,
+                  receipts: journal.slice(-16).map((entry) => entry.receipt) })
+                : Effect.succeed({ ...result, journal });
+            }),
             Effect.ensuring(Effect.sync(() => {
               if (activeCells.get(id) === cellId) activeCells.delete(id);
             })),
@@ -338,19 +393,20 @@ const make = (options: ScreenRuntimeOptions = {}) =>
           ? yield* Effect.exit(options.tabHost.finishTurn(input)) : undefined;
         const outcomes = cleanup && Exit.isSuccess(cleanup) ? cleanup.value : [];
         if (supervisor) yield* supervisor.finishTurn(input.runId, input.turnId, input.reason);
+        yield* bridge.finishTurn(input.runId, input.turnId);
+        yield* Effect.promise(() => Promise.all(closing.map(([targetId]) =>
+          deliveries.get(targetId) ?? Promise.resolve())));
         for (const [targetId] of closing) { routes.delete(targetId); deliveries.delete(targetId); }
         options.desktopHost?.finishTurn(input.runId, input.turnId);
-        yield* bridge.finishTurn(input.runId, input.turnId);
         turns.delete(turnKey(input.runId, input.turnId));
         resetNext.delete(turnKey(input.runId, input.turnId));
         const failed = outcomes.filter((outcome) => outcome.status === "failed");
-        if (failed.length || (cleanup && !Exit.isSuccess(cleanup))) return yield* Effect.fail({
+        for (const outcome of failed) recordCleanupFailure(input.runId, input.turnId, outcome.tabId);
+        if (cleanup && !Exit.isSuccess(cleanup)) recordCleanupFailure(input.runId, input.turnId);
+        const notices = cleanupJournal.get(id) ?? [];
+        if (notices.length) return yield* Effect.fail({
           code: "cleanup_failed", effectStarted: true,
-          receipts: failed.slice(0, 16).map((outcome, index) => ({
-            callId: index, method: "close_tab" as const, journalState: "unknown" as const,
-            category: "unknown_outcome" as const, dispatched: true,
-            evidence: [`close_ephemeral:${outcome.tabId.slice(0, 80)}`],
-          })),
+          receipts: notices.slice(-16).map((entry) => entry.receipt),
           nextStep: "Inspect the affected tab and close it manually if needed.",
         } satisfies ScreenRunError);
       }),
@@ -366,7 +422,8 @@ const make = (options: ScreenRuntimeOptions = {}) =>
         tabId?: string;
         controlId?: string;
       }) {
-        if (input.kind === "resume" || input.kind === "handBack") return;
+        if (input.kind === "resume" || input.kind === "handBack") return { cleanupFailures: 0 };
+        let cleanupFailures = 0;
         for (const [id, turn] of turns) {
           if (input.threadId !== undefined && turn.threadId !== input.threadId) continue;
           const [runId, turnId] = id.split("\u0000");
@@ -388,8 +445,16 @@ const make = (options: ScreenRuntimeOptions = {}) =>
           if (options.tabHost && (input.kind === "stop" || input.kind === "stopAll" || input.kind === "credentialRevoked")) {
             const cleanup = yield* Effect.exit(options.tabHost.releaseControl({ runId, turnId,
               ...(input.tabId === undefined ? {} : { tabId: input.tabId }) }));
-            if (!Exit.isSuccess(cleanup))
-              yield* Effect.logWarning("screen tab claim release failed", { runId });
+            if (Exit.isSuccess(cleanup)) {
+              for (const outcome of cleanup.value) {
+                if (outcome.status !== "failed") continue;
+                recordCleanupFailure(runId, turnId, outcome.tabId);
+                cleanupFailures++;
+              }
+            } else {
+              recordCleanupFailure(runId, turnId);
+              cleanupFailures++;
+            }
           }
           if (supervisor) yield* supervisor.finishTurn(runId, turnId, input.kind);
           for (const [targetId, route] of routes) {
@@ -400,6 +465,12 @@ const make = (options: ScreenRuntimeOptions = {}) =>
           }
           resetNext.add(id);
         }
+        return { cleanupFailures };
+      }),
+      journalSnapshot: Effect.fn("ScreenRunService.journalSnapshot")(function* (input: {
+        runId: string; turnId: string;
+      }) {
+        return [...(cleanupJournal.get(turnKey(input.runId, input.turnId)) ?? [])];
       }),
       finishRun: Effect.fn("ScreenRunService.finishRun")(function* (input: {
         threadId: string; runId: string; reason: string;
@@ -417,14 +488,18 @@ const make = (options: ScreenRuntimeOptions = {}) =>
     };
     if (options.leases?.onAuthorityChange) {
       const unsubscribe = options.leases.onAuthorityChange((change) => {
-        for (const [id, turn] of turns) {
-          if (turn.threadId !== change.threadId) continue;
-          const cellId = activeCells.get(id);
-          const [runId, turnId] = id.split("\u0000");
-          if (cellId && runId && turnId) bridge.cutCellNow(runId, turnId, cellId);
-        }
+        fenceNow(change);
         void runCallback(service.controlChanged(change).pipe(
           Effect.catchCause((cause) => Effect.logWarning("screen desktop cutoff failed", { cause })),
+        ));
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+    }
+    if (options.browser?.onAuthorityChange) {
+      const unsubscribe = options.browser.onAuthorityChange((change) => {
+        fenceNow(change);
+        void runCallback(service.controlChanged(change).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("screen browser cutoff failed", { cause })),
         ));
       });
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));

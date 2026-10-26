@@ -12,7 +12,7 @@ const ref = {
 };
 
 describe("ScreenCursorPhases", () => {
-  it("rearms thinking for each host call and never emits idle motion after end", () => {
+  it("rearms thinking for each host call and never emits resting motion after end", () => {
     const events: Array<{ phase: string; sequence: number }> = [];
     const phases = new ScreenCursorPhases((event) => events.push({ phase: event.phase, sequence: event.identity.sequence }));
     phases.hostCallStarted(ref, 1);
@@ -22,7 +22,7 @@ describe("ScreenCursorPhases", () => {
     phases.hostCallSettled(ref, 2);
     expect(events).toEqual([
       { phase: "thinking", sequence: 1 },
-      { phase: "idle", sequence: 2 },
+      { phase: "resting", sequence: 2 },
       { phase: "thinking", sequence: 3 },
       { phase: "hidden", sequence: 4 },
     ]);

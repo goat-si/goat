@@ -38,7 +38,7 @@ const turnOf = (claim: Pick<TabIdentity, "runId" | "turnId">) =>
   `${claim.runId}\u0000${claim.turnId}`;
 
 export class TabClaims extends Context.Service<TabClaims, {
-  readonly claimUserTab: (input: TabIdentity & { readonly owner: "unclaimed" | "agent" | "human"; readonly ownedByCaller: boolean }) => Effect.Effect<TabClaim, TabClaimError>;
+  readonly acquireTab: (input: TabIdentity & { readonly owner: "unclaimed" | "agent" | "human"; readonly ownedByCaller: boolean }) => Effect.Effect<TabClaim, TabClaimError>;
   readonly recordOpened: (input: TabIdentity) => Effect.Effect<TabClaim, TabClaimError>;
   readonly assertCurrent: (input: TabIdentity) => Effect.Effect<TabClaim, TabClaimError>;
   readonly keep: (input: TabIdentity, reason: "deliverable" | "handoff") => Effect.Effect<void, TabClaimError>;
@@ -50,7 +50,8 @@ export class TabClaims extends Context.Service<TabClaims, {
   readonly releaseTurn: (identity: Pick<TabIdentity, "runId" | "turnId">, authority: CleanupAuthority) => Effect.Effect<readonly CleanupOutcome[]>;
 }>()("goat/screenCode/TabClaims") {}
 
-export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => Effect.gen(function* () {
+export const makeTabClaims = Effect.fn("TabClaims.make")(
+  function* (close: (tab: TabClaim) => Effect.Effect<void>) {
   const claims = yield* SynchronizedRef.make(new Map<string, TabClaim>());
   const deferred = new Map<string, TabClaim[]>();
   const consumed = yield* SynchronizedRef.make(new Set<string>());
@@ -80,7 +81,7 @@ export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => 
     }),
   );
   return TabClaims.of({
-    claimUserTab: (input) => {
+    acquireTab: (input) => {
       if (input.owner === "human" || (input.owner === "agent" && !input.ownedByCaller))
         return Effect.fail({ code: "unavailable" } as const);
       return claim(input, input.owner === "agent" ? "existing-agent" : "user-claimed");
@@ -116,7 +117,7 @@ export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => 
           turnOf(tab) === turnOf(identity) &&
           (options?.tabId === undefined || tab.tabId === options.tabId)) }, all] as const;
     }),
-    releaseTurn: (identity, authority) => Effect.gen(function* () {
+    releaseTurn: Effect.fn("TabClaims.releaseTurn")(function* (identity, authority) {
       if (authority.runId !== identity.runId || authority.turnId !== identity.turnId) return [];
       const token = `${turnOf(identity)}\u0000${authority.epoch}`;
       const fresh = yield* SynchronizedRef.modify(consumed, (all) => {

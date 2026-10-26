@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Target and image IDs are host-owned opaque values.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import type { ScreenBindingHints, ScreenHostCall, ScreenImage, ScreenImageMetadata, ScreenRunError, ScreenTargetRef } from "@goat/contracts";
 import type { PreviewAutomationSnapshot, PreviewAutomationStatus, PreviewTabId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -35,8 +35,8 @@ interface BoundTarget {
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
-export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">) =>
-  Effect.gen(function* () {
+export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(
+  function* (broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs">) {
     const observations = new ScreenObservations();
     const targets = new Map<string, BoundTarget>();
     const bindingHints = new Map<string, ScreenBindingHints>();
@@ -61,7 +61,7 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
     };
     const tabScopes = new Map<string, ScreenHostContext["invocation"]>();
     const claims = yield* makeTabClaims(close);
-    const authorize = (context: ScreenHostContext) => Effect.gen(function* () {
+    const authorize = Effect.fn("PreviewTargetHost.authorize")(function* (context: ScreenHostContext) {
       if (!context.invocation.reauthorize) return yield* Effect.fail(fail("permission_denied", "Refresh the credential."));
       const result = yield* context.invocation.reauthorize([]).pipe(Effect.result);
       if (result._tag === "Failure" || !context.invocation.capabilities.has("preview"))
@@ -78,7 +78,7 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
       tabId: bound.tab.tabId, controlGeneration: bound.tab.controlGeneration,
     });
     const bind = (tab: BoundPreviewTab, context: ScreenHostContext): ScreenTargetRef => {
-      const ref: ScreenTargetRef = { id: randomUUID(), kind: "tab", environmentId: context.environmentId,
+      const ref: ScreenTargetRef = { id: NodeCrypto.randomUUID(), kind: "tab", environmentId: context.environmentId,
         runId: context.runId, turnId: context.turnId, generation: 0 };
       targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
       return ref;
@@ -95,7 +95,7 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
       tabId: tab.tabId,
       ...(expected ? { controlGeneration: tab.controlGeneration, origin: originOf(tab.url) } : {}),
     });
-    const status = (bound: BoundTarget, context: ScreenHostContext) => Effect.gen(function* () {
+    const status = Effect.fn("PreviewTargetHost.status")(function* (bound: BoundTarget, context: ScreenHostContext) {
       const current = yield* broker.invoke<PreviewAutomationStatus>({
         scope: context.invocation, operation: "status", input: {}, exact: exact(bound.tab, false),
         updateCurrentTab: false,
@@ -168,7 +168,7 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
         const current = yield* status(bound, context);
         const claimIdentity = identity(bound, context);
         if (call.method === "claim_tab") {
-          const claim = yield* claims.claimUserTab({ ...claimIdentity,
+          const claim = yield* claims.acquireTab({ ...claimIdentity,
             owner: current.control?.owner ?? "human", ownedByCaller: current.control?.ownedByCaller ?? false,
           }).pipe(Effect.mapError(() => fail("permission_denied", "This tab is already controlled or claimed.")));
           return { value: claim, category: "confirmed", evidence: ["Turn claim acquired"] };
@@ -196,8 +196,8 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
             return { value: observation, category: "confirmed", evidence: ["Current tab tree observed"] };
           }
           const metadata: ScreenImageMetadata = {
-            imageRef: randomUUID(), callId: call.callId, targetId: bound.ref.id,
-            observationId: observation.observationId, regionId: randomUUID(), region: screenshot.region,
+            imageRef: NodeCrypto.randomUUID(), callId: call.callId, targetId: bound.ref.id,
+            observationId: observation.observationId, regionId: NodeCrypto.randomUUID(), region: screenshot.region,
             pixelWidth: screenshot.width, pixelHeight: screenshot.height,
             scale: screenshot.scale, mimeType: screenshot.mimeType,
           };
@@ -316,17 +316,22 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
         return [{ kind: "tab" as const, available: Option.isSome(available) && available.value.length > 0,
           ...(Option.isSome(available) && available.value.length > 0 ? {} : { reason: "no_host" as const }) }];
       });
-    const finishTurn = (input: Pick<ScreenHostContext, "runId" | "turnId">) => Effect.gen(function* () {
-      const authority = yield* claims.captureCleanup(input);
-      const outcomes = yield* claims.releaseTurn(input, authority);
-      tabScopes.delete(`${input.runId}\u0000${input.turnId}`);
-      bindingHints.delete(turnKey(input));
-      for (const [id, target] of targets)
-        if (target.ref.runId === input.runId && target.ref.turnId === input.turnId) targets.delete(id);
-      return outcomes;
-    });
-    const releaseControl = (input: Pick<ScreenHostContext, "runId" | "turnId"> & { tabId?: string }) =>
-      claims.suspendClaims(input, input.tabId);
+    const finishTurn = Effect.fn("PreviewTargetHost.finishTurn")(
+      function* (input: Pick<ScreenHostContext, "runId" | "turnId">) {
+        const authority = yield* claims.captureCleanup(input);
+        const outcomes = yield* claims.releaseTurn(input, authority);
+        tabScopes.delete(`${input.runId}\u0000${input.turnId}`);
+        bindingHints.delete(turnKey(input));
+        for (const [id, target] of targets)
+          if (target.ref.runId === input.runId && target.ref.turnId === input.turnId) targets.delete(id);
+        return outcomes;
+      });
+    const releaseControl = Effect.fn("PreviewTargetHost.releaseControl")(
+      function* (input: Pick<ScreenHostContext, "runId" | "turnId"> & { tabId?: string }) {
+        const authority = yield* claims.captureCleanup(input, { fence: false,
+          ...(input.tabId === undefined ? {} : { tabId: input.tabId }) });
+        return yield* claims.releaseTurn(input, authority);
+      });
     const setBindingHints = (identity: Pick<ScreenHostContext, "runId" | "turnId">, hints: ScreenBindingHints) => {
       bindingHints.set(turnKey(identity), hints);
     };

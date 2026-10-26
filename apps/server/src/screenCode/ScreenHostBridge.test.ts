@@ -192,6 +192,6 @@ it.effect("trusted host call phases end when the cell is cut", () =>
     const reply = yield* bridge.handle(call(1), context(() => Effect.void));
     expect(reply?.outcome).toBe("ok");
     yield* bridge.cutCell("r", "t", "c", "stopped");
-    expect(events).toEqual(["thinking", "idle", "hidden"]);
+    expect(events).toEqual(["thinking", "resting", "hidden"]);
   }),
 );

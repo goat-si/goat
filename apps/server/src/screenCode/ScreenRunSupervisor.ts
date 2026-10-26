@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off preferSchemaOverJson:off - This module owns one exact child process and its watchdog.
-import * as NodeChild from "node:child_process";
+import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as Effect from "effect/Effect";
@@ -10,6 +10,8 @@ import {
   type ScreenRunBoot,
   type ScreenRunLimits,
   type ScreenRunResult,
+  ScreenRunError,
+  ScreenEffectReceipt,
 } from "@goat/contracts";
 import { ScreenHostBridge, type ScreenHostContext } from "./ScreenHostBridge.ts";
 
@@ -29,15 +31,25 @@ const SupervisorCode = Schema.Literals([
   "pending_limit",
   "output_limit",
   "wall_limit",
+  "unknown_outcome",
 ]);
 export class ScreenSupervisorFailure extends Schema.TaggedError<ScreenSupervisorFailure>()(
   "ScreenSupervisorFailure",
-  { code: SupervisorCode },
+  { code: SupervisorCode,
+    effectStarted: Schema.optionalKey(Schema.Boolean),
+    receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt)),
+  },
 ) {}
-const failure = (code: typeof SupervisorCode.Type) => new ScreenSupervisorFailure({ code });
+const failure = (code: typeof SupervisorCode.Type, options: {
+  effectStarted?: boolean;
+  receipts?: readonly ScreenEffectReceipt[];
+} = {}) => new ScreenSupervisorFailure({ code,
+  ...(options.effectStarted === undefined ? {} : { effectStarted: options.effectStarted }),
+  ...(options.receipts === undefined ? {} : { receipts: [...options.receipts] }),
+});
 
 interface Session {
-  readonly child: NodeChild.ChildProcessWithoutNullStreams;
+  readonly child: NodeChildProcess.ChildProcessWithoutNullStreams;
   readonly lines: NodeReadline.Interface;
   readonly key: string;
   readonly runId: string;
@@ -60,6 +72,7 @@ export function createScreenRunSupervisor(deps: {
   readonly hostBridge: ScreenHostBridge;
   readonly invocation: SelfInvocation;
   readonly runCallback: <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => Promise<A>;
+  readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }) {
   const sessions = new Map<string, Session>();
   const spawnSession = (runId: string, turnId: string, limits: ScreenRunLimits) => {
@@ -72,7 +85,7 @@ export function createScreenRunSupervisor(deps: {
     for (const name of ["PATH", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"])
       if (process.env[name] !== undefined) env[name] = process.env[name];
     if (isElectron) env.ELECTRON_RUN_AS_NODE = "1";
-    const child = NodeChild.spawn(command, [...args], {
+    const child = NodeChildProcess.spawn(command, [...args], {
       stdio: ["pipe", "pipe", "pipe"],
       env,
       windowsHide: true,
@@ -137,9 +150,10 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
+            const hostErrors = new Map<number, ScreenRunError>();
             const callAbort = new AbortController();
             const cleanup = () => {
-              clearTimeout(timer);
+              cancelDeadline();
               signal.removeEventListener("abort", onAbort);
               session.lines.off("line", onLine);
               session.child.off("exit", onExit);
@@ -151,10 +165,17 @@ export function createScreenRunSupervisor(deps: {
               if (settled) return;
               settled = true;
               cleanup();
-              deps.hostBridge.discardCellNow(identity.runId, identity.turnId, cellId);
+              deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
+              const journal = deps.hostBridge.takeCellImagesNow(identity.runId, identity.turnId, cellId).journal;
+              const receipts = journal.slice(-16).map(({ receipt }) =>
+                receipt.journalState === "settled" ? receipt
+                  : receipt.dispatched
+                    ? { ...receipt, journalState: "unknown" as const, category: "unknown_outcome" as const }
+                    : { ...receipt, journalState: "settled" as const, category: "refused" as const });
+              const effectStarted = receipts.some((receipt) => receipt.dispatched);
               callAbort.abort();
               close(session);
-              reject(failure(code));
+              reject(failure(effectStarted ? "unknown_outcome" : code, { effectStarted, receipts }));
             };
             const onAbort = () => failRun("stopped");
             const onExit = () => failRun("runtime_unavailable");
@@ -180,6 +201,8 @@ export function createScreenRunSupervisor(deps: {
                   .runCallback(deps.hostBridge.handle(call, identity.context), callAbort.signal)
                   .then(
                     (reply) => {
+                      if (reply?.outcome === "error" && reply.error)
+                        hostErrors.set(call.callId, reply.error);
                       if (reply && !session.closed && session.active === cellId)
                         session.child.stdin.write(`${JSON.stringify(reply)}\n`);
                     },
@@ -205,7 +228,12 @@ export function createScreenRunSupervisor(deps: {
                 console?: string[];
                 truncated?: string[];
                 unawaitedCallIds?: number[];
+                error?: unknown;
               };
+              const error = Schema.is(ScreenRunError)(result.error) &&
+                result.error.callId !== undefined &&
+                hostErrors.get(result.error.callId)?.code === result.error.code
+                  ? hostErrors.get(result.error.callId) : undefined;
               const collect = Effect.gen(function* () {
                 if (result.status === "failed")
                   yield* deps.hostBridge.cutCell(
@@ -237,6 +265,7 @@ export function createScreenRunSupervisor(deps: {
                     turnId: identity.turnId,
                     cellId,
                     status: result.status,
+                    ...(error === undefined ? {} : { error }),
                     ...(result.value === undefined ? {} : { value: result.value }),
                     console: Array.isArray(result.console) ? result.console : [],
                     truncated: [
@@ -258,10 +287,12 @@ export function createScreenRunSupervisor(deps: {
                 },
               );
             };
-            const timer = setTimeout(
-              () => failRun("wall_limit"),
-              identity.context.limits.cellWallMs + 250,
-            );
+            const cancelDeadline = deps.scheduleDeadline
+              ? deps.scheduleDeadline(() => failRun("wall_limit"), identity.context.limits.cellWallMs + 250)
+              : (() => {
+                const timer = setTimeout(() => failRun("wall_limit"), identity.context.limits.cellWallMs + 250);
+                return () => clearTimeout(timer);
+              })();
             session.abortActive = failRun;
             signal.addEventListener("abort", onAbort, { once: true });
             session.lines.on("line", onLine);

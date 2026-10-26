@@ -140,7 +140,7 @@ final class AgentOverlay {
     {
       point = CGPoint(x: fx, y: fy)
     }
-    let phase = command["phase"] as? String ?? "idle"
+    let phase = command["phase"] as? String ?? "resting"
     view.acting = phase == "acting" || phase == "moving"
     target = (CGWindowID(windowId), point)
     place(animate: phase == "moving" || phase == "acting")

@@ -18,17 +18,14 @@ import {
   ThreadId,
   type BrowserProfile,
   type ComputerUseCursorState,
-  type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
-  type PreviewAutomationConsoleEntry,
   type PreviewAutomationDialogInput,
   type PreviewAutomationDragInput,
   type PreviewAutomationEvaluateInput,
   type PreviewAutomationFetchInput,
   type PreviewAutomationHoverInput,
   type PreviewAutomationNavigateInput,
-  type PreviewAutomationNetworkEntry,
   type PreviewAutomationOpenInput,
   type PreviewAutomationPressInput,
   type PreviewAutomationReloadInput,
@@ -71,7 +68,6 @@ import * as NodePath from "node:path";
 import type {
   BrowserContext,
   CDPSession,
-  Dialog,
   Download,
   FileChooser,
   Frame,
@@ -95,6 +91,7 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import type { EncoderWindow, Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTypes.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
@@ -253,6 +250,11 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
+    readonly onAuthorityChange?: (listener: (change: {
+      readonly kind: "stop" | "private" | "takeover" | "handBack";
+      readonly threadId: string;
+      readonly tabId: string;
+    }) => void) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -269,97 +271,6 @@ export class ServerBrowser extends Context.Service<
     }) => Effect.Effect<boolean>;
   }
 >()("goat/preview/ServerBrowser") {}
-
-interface ViewerState {
-  readonly id: string;
-  readonly canOperate: boolean;
-  readonly pressedKeys: Map<string, { key: string; code: string }>;
-  readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
-  readonly push: (output: ServerBrowserViewerOutput) => void;
-  readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
-  scrolledAt: number;
-
-  requestedSize: { width: number; height: number; order: number } | null;
-}
-
-interface EncoderWindow {
-  __goatRecorder: {
-    cursor(x: number, y: number, click: boolean): void;
-    frame(data: string, width: number): Promise<boolean>;
-    stop(): Promise<{ mimeType: string | null; count: number; bytes: number }>;
-    chunk(index: number): Promise<string>;
-  };
-}
-
-interface Recording {
-  readonly encoder: Page;
-  readonly session: CDPSession;
-  readonly startedAt: string;
-  readonly framesInFlight: Set<Promise<void>>;
-}
-
-interface ServerTab {
-  readonly threadId: ThreadId;
-  readonly tabId: string;
-  readonly page: Page;
-  readonly cdp: CDPSession;
-  readonly frameSessions: Map<Frame, CDPSession>;
-  readonly createdAt: number;
-  usedAt: number;
-  readonly viewers: Set<ViewerState>;
-  readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
-  readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
-  readonly diagnostics: ServerBrowserDiagnostics;
-  readonly actionTimeline: Array<PreviewAutomationActionEvent>;
-  readonly control: SessionControl;
-  agentOperating: boolean;
-  fileChooserIntercepted: boolean;
-  readonly onFileChooser: (chooser: FileChooser) => void;
-
-  readonly isolatedContext: boolean;
-
-  readonly desktop: { readonly close: () => Promise<void> } | null;
-  readonly profileId: string | undefined;
-  readonly openerTabId: string | undefined;
-
-  readonly downloads: Array<ServerDownload>;
-  fileChooser: {
-    readonly id: string;
-    readonly chooser: FileChooser;
-    readonly accept: string;
-    readonly offeredTo: string | null;
-  } | null;
-  dialog: Dialog | null;
-  setting: PreviewViewportSetting;
-  colorScheme: PreviewAppearancePreference;
-  zoomFactor: number;
-  loading: boolean;
-  closing: boolean;
-  recording: Recording | null;
-  initialNavigation: Promise<void> | null;
-  navigationGeneration: number;
-
-  abortedNavigation: {
-    readonly url: string;
-    readonly generation: number;
-    readonly timer: ReturnType<typeof setTimeout>;
-  } | null;
-
-  recordingStart: Promise<Recording> | null;
-  captureLock: Promise<void>;
-  capturing: number;
-}
-
-interface ServerDownload {
-  readonly id: string;
-  readonly fileName: string;
-  readonly path: string;
-  readonly sizeBytes: number;
-  readonly url: string;
-  readonly completedAt: string;
-}
-
 /** Read-only operations remain available during human control; evaluate requires control because scripts can mutate the page. */
 const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new Set([
   "status",
@@ -412,6 +323,18 @@ const make = Effect.gen(function* () {
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
+  const authorityListeners = new Set<(change: {
+    kind: "stop" | "private" | "takeover" | "handBack";
+    threadId: string;
+    tabId: string;
+  }) => void>();
+  const notifyAuthority = (change: {
+    kind: "stop" | "private" | "takeover" | "handBack";
+    threadId: string;
+    tabId: string;
+  }) => {
+    for (const listener of authorityListeners) listener(change);
+  };
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
 
@@ -611,6 +534,7 @@ const make = Effect.gen(function* () {
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
+    notifyAuthority({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
     tab.closing = true;
     tab.diagnostics.dispose();
@@ -695,7 +619,6 @@ const make = Effect.gen(function* () {
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
       ServerBrowserPage.invalidateRefs(page),
     );
-    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     control.onDispatchCut(inputFence(cdp));
     const diagnostics = new ServerBrowserDiagnostics(page);
     const tab: ServerTab = {
@@ -818,7 +741,22 @@ const make = Effect.gen(function* () {
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
-    tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
+    let observedGeneration = tab.control.generation;
+    tab.control.onChange(() => {
+      if (tab.control.generation !== observedGeneration) {
+        observedGeneration = tab.control.generation;
+        notifyAuthority({
+          kind: tab.control.isPrivate ? "private"
+            : tab.control.isAgentStopped ? "stop"
+              : tab.control.controller !== null ? "takeover" : "handBack",
+          threadId: tab.threadId,
+          tabId: tab.tabId,
+        });
+      }
+      broadcastControl(tab);
+      reportLiveTabs();
+    });
+    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     reportLiveTabs();
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
@@ -2599,6 +2537,10 @@ const make = Effect.gen(function* () {
     answerFileChooser,
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
+    onAuthorityChange: (listener) => {
+      authorityListeners.add(listener);
+      return () => void authorityListeners.delete(listener);
+    },
     stopAllAgents: Effect.sync(() => {
       for (const tab of tabs.values()) tab.control.stopAgents();
     }),

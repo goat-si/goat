@@ -4,13 +4,18 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeUrl from "node:url";
-import { EnvironmentAuthorizationError, type EnvironmentId, type ProviderInstanceId,
+import * as NodeURL from "node:url";
+import { EnvironmentAuthorizationError, PreviewTabId, type EnvironmentId, type ProviderInstanceId,
+  type OrchestrationV2DomainEvent, type OrchestrationV2ThreadProjection,
   type ScreenHostCall, type ThreadId } from "@goat/contracts";
+import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { screenRunLimits } from "./ScreenRunLimits.ts";
 import { makeTabClaims, TabClaims } from "./TabClaims.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
+import { handleScreenRunEvent } from "./ScreenRunTurnEnd.ts";
+import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const context = {
@@ -31,11 +36,10 @@ const call = (kind: "tab" | "app", callId: number): ScreenHostCall => ({
   method: "click", args: {}, deadlineMillis: 100,
 });
 
-for (const [first, next, title] of [
-  ["app", "tab", "desktop private during a mixed cell blocks the next browser effect"],
-  ["tab", "app", "tab Stop during a mixed cell blocks the next desktop effect"],
-] as const) {
-  it.effect(title, () => Effect.gen(function* () {
+it.effect.each([
+  { first: "app", next: "tab", title: "desktop private during a mixed cell blocks the next browser effect" },
+  { first: "tab", next: "app", title: "tab Stop during a mixed cell blocks the next desktop effect" },
+] as const)("$title", ({ first, next }) => Effect.gen(function* () {
     const bridge = new ScreenHostBridge();
     const started = yield* Deferred.make<void>();
     const finish = yield* Deferred.make<void>();
@@ -64,7 +68,6 @@ for (const [first, next, title] of [
       journalState: "unknown", category: "unknown_outcome", dispatched: true,
     });
   }));
-}
 
 it.effect("Turn completion closes a temporary tab before releasing its claim and records failure", () =>
   Effect.gen(function* () {
@@ -162,8 +165,10 @@ it.live("Pause kills the current child and requires a fresh binding before the n
     expect(first.status).toBe("completed");
     yield* service.controlChanged({ kind: "pause", threadId: "thread" });
     const stale = yield* service.runCell({ ...request,
-      source: "return 2;" });
-    expect(stale.status).toBe("completed");
+      source: `return await screen.observe({targetRef: ${JSON.stringify(first.value)}});` })
+      .pipe(Effect.result);
+    expect(stale._tag).toBe("Failure");
+    if (stale._tag === "Failure") expect(stale.failure.code).toBe("stale_reference");
     expect(observations).toBe(0);
     const fresh = yield* service.runCell({ ...request,
       source: "const tab = await screen.tab({tabId: 'tab'}); return await tab.observe();" });
@@ -173,7 +178,7 @@ it.live("Pause kills the current child and requires a fresh binding before the n
       environmentId: "env", reason: "test" });
   }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
     invocation: { command: process.execPath,
-      entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
     assetResolver: () => resolveScreenRuntimeAsset("dev"),
     dispatcher: {
       availability: () => Effect.succeed([{ kind: "tab", available: true }]),
@@ -186,3 +191,191 @@ it.live("Pause kills the current child and requires a fresh binding before the n
     },
   }).pipe(Layer.provide(NodeServices.layer))));
 });
+
+it.live("Stop cleanup failure appears in the turn journal and next cell result", () => {
+  let opened = false;
+  const tab = { environmentId: "env", browserInstanceId: "server-browser", connectionId: "connection",
+    threadId: "thread", tabId: PreviewTabId.make("temporary"), title: "Page",
+    url: "https://example.test/", owner: "agent" as const, ownedByCaller: true,
+    controlGeneration: 1 };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed(opened ? [tab] : []),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      request.operation === "close" ? Effect.die(new Error("close failed"))
+        : Effect.sync(() => {
+          if (request.operation === "open") opened = true;
+          return (request.operation === "status"
+            ? { tabId: tab.tabId, url: tab.url,
+              control: { owner: "agent", ownedByCaller: true, generation: 1 } }
+            : { tabId: tab.tabId }) as A;
+        }),
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const request = { runId: "run", turnId: "turn", threadId: "thread", environmentId: "env",
+        invocation: context.invocation };
+      const created = yield* service.runCell({ ...request,
+        source: "return (await screen.openTab({url: 'https://example.test/'})).targetRef;" });
+      expect(created.status).toBe("completed");
+      const stop = yield* service.controlChanged({ kind: "stop", threadId: "thread",
+        tabId: "temporary" });
+      expect(stop.cleanupFailures).toBe(1);
+      expect((yield* service.journalSnapshot(request))[0]?.receipt).toMatchObject({
+        method: "close_tab", journalState: "unknown", category: "unknown_outcome",
+        evidence: ["cleanup_failed:close_ephemeral", "tab:temporary"],
+      });
+      const next = yield* service.runCell({ ...request, source: "return 1;" });
+      expect(next.journal.some((entry) => entry.receipt.evidence.includes("cleanup_failed:close_ephemeral"))).toBe(true);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
+      tabHost, dispatcher: tabHost,
+      invocation: { command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+    }).pipe(Layer.provide(NodeServices.layer))));
+  });
+});
+
+it.live("private mode cuts an in-flight browser wait before its late reply can dispatch input", () =>
+  Effect.gen(function* () {
+    const offered = yield* Deferred.make<void>();
+    const held = yield* Deferred.make<void>();
+    let changed: ((change: { kind: "private"; threadId: string; tabId: string }) => void) | undefined;
+    let clicks = 0;
+    const serviceLayer = ScreenRunService.layerWithRuntime({
+      browser: { onAuthorityChange: (listener) => {
+        changed = listener;
+        return () => { changed = undefined; };
+      } },
+      invocation: { command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      dispatcher: {
+        availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+        dispatch: (call) => call.method === "bind_tab"
+          ? Effect.succeed({ value: { targetRef: { id: "tab-target", kind: "tab" as const,
+              environmentId: "env", runId: "run", turnId: "turn", generation: 0 },
+              tab: { tabId: "tab" } }, category: "confirmed" as const, evidence: ["bound"] })
+          : call.method === "wait_for"
+            ? Deferred.succeed(offered, undefined).pipe(Effect.flatMap(() => Deferred.await(held)),
+              Effect.as({ value: { status: "met" }, category: "confirmed" as const, evidence: ["met"] }))
+            : Effect.sync(() => { clicks++; return { category: "confirmed" as const, evidence: ["clicked"] }; }),
+      },
+    }).pipe(Layer.provide(NodeServices.layer));
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const running = yield* service.runCell({ runId: "run", turnId: "turn", threadId: "thread",
+        environmentId: "env", invocation: context.invocation,
+        source: "const tab = await screen.tab({tabId: 'tab'}); await tab.waitFor({text: 'ready'}); await tab.click({}); return true;",
+      }).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(offered);
+      expect(changed).toBeDefined();
+      changed?.({ kind: "private", threadId: "thread", tabId: "tab" });
+      const outcome = yield* Fiber.join(running);
+      expect(outcome._tag).toBe("Failure");
+      yield* Deferred.succeed(held, undefined);
+      expect(clicks).toBe(0);
+      yield* service.finishTurn({ runId: "run", turnId: "turn", threadId: "thread",
+        environmentId: "env", reason: "test" });
+    }).pipe(Effect.provide(serviceLayer));
+  }),
+);
+
+it.live("terminal run cleanup is exact and a queued user message invalidates old handles", () => {
+  let runAStatus: "waiting" | "completed" = "waiting";
+  let binding = 0;
+  const orchestratorLayer = Layer.mock(Orchestrator.OrchestratorV2)({
+    getThreadProjection: () => Effect.sync(() => ({ runs: [
+      { id: "run-a", status: runAStatus }, { id: "run-b", status: "running" },
+    ] } as unknown as OrchestrationV2ThreadProjection)),
+  });
+  const serviceLayer = ScreenRunService.layerWithRuntime({
+    invocation: { command: process.execPath,
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+    assetResolver: () => resolveScreenRuntimeAsset("dev"),
+    dispatcher: {
+      availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+      dispatch: (call) => Effect.succeed(call.method === "bind_tab"
+        ? { value: { targetRef: { id: `binding-${++binding}`, kind: "tab" as const,
+            environmentId: "env", runId: call.runId, turnId: call.turnId, generation: 0 },
+            tab: { tabId: "tab" } }, category: "confirmed" as const, evidence: ["bound"] }
+        : { value: { tree: "fresh" }, category: "confirmed" as const, evidence: ["observed"] }),
+    },
+  });
+  const event = (type: "run.updated" | "message.updated", payload: unknown) => ({
+    type, threadId: "thread", payload,
+  }) as OrchestrationV2DomainEvent;
+  const request = { turnId: "turn", threadId: "thread", environmentId: "env",
+    invocation: context.invocation };
+  return Effect.gen(function* () {
+    const screen = yield* ScreenRunService;
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* screen.runCell({ ...request, runId: "run-a", source: "return 1;" });
+    const firstB = yield* screen.runCell({ ...request, runId: "run-b",
+      source: "return (await screen.tab({tabId: 'tab'})).targetRef;" });
+    yield* handleScreenRunEvent({ screen, orchestrator,
+      event: event("run.updated", { id: "run-a", status: "waiting" }) });
+    runAStatus = "completed";
+    yield* handleScreenRunEvent({ screen, orchestrator,
+      event: event("run.updated", { id: "run-a", status: "completed" }) });
+    const closedA = yield* screen.runCell({ ...request, runId: "run-a", source: "return 2;" })
+      .pipe(Effect.result);
+    expect(closedA._tag).toBe("Failure");
+    const survivingB = yield* screen.runCell({ ...request, runId: "run-b", source: "return 3;" });
+    expect(survivingB.value).toBe(3);
+    yield* handleScreenRunEvent({ screen, orchestrator,
+      event: event("message.updated", { id: "queued-message", role: "user", runId: "queued-run" }) });
+    const stale = yield* screen.runCell({ ...request, runId: "run-b",
+      source: `return await screen.observe({targetRef: ${JSON.stringify(firstB.value)}});` })
+      .pipe(Effect.result);
+    expect(stale._tag).toBe("Failure");
+    if (stale._tag === "Failure") expect(stale.failure.code).toBe("stale_reference");
+    const fresh = yield* screen.runCell({ ...request, runId: "run-b",
+      source: "return (await screen.tab({tabId: 'tab'})).targetRef;" });
+    expect(fresh.value).toMatchObject({ id: "binding-2" });
+    yield* screen.finishTurn({ ...request, runId: "run-b", reason: "test" });
+  }).pipe(Effect.provide(Layer.merge(serviceLayer, orchestratorLayer).pipe(
+    Layer.provide(NodeServices.layer))));
+});
+
+it.live("a held cell deadline preserves unknown input receipts through the service error", () =>
+  Effect.gen(function* () {
+    const offered = yield* Deferred.make<void>();
+    const held = yield* Deferred.make<void>();
+    let fireDeadline: (() => void) | undefined;
+    const serviceLayer = ScreenRunService.layerWithRuntime({
+      invocation: { command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      scheduleDeadline: (run) => { fireDeadline = run; return () => { fireDeadline = undefined; }; },
+      dispatcher: {
+        availability: () => Effect.succeed([{ kind: "app", available: true }]),
+        dispatch: () => Deferred.succeed(offered, undefined).pipe(
+          Effect.flatMap(() => Deferred.await(held)),
+          Effect.as({ value: true, category: "confirmed" as const, evidence: ["late"] }),
+        ),
+      },
+    }).pipe(Layer.provide(NodeServices.layer));
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const running = yield* service.runCell({ runId: "run", turnId: "turn",
+        threadId: "thread", environmentId: "env", invocation: context.invocation,
+        source: "return await screen.list_apps();",
+      }).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(offered);
+      expect(fireDeadline).toBeDefined();
+      fireDeadline?.();
+      const result = yield* Fiber.join(running);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure).toMatchObject({
+        code: "unknown_outcome", effectStarted: true,
+        receipts: [{ dispatched: true, journalState: "unknown", category: "unknown_outcome" }],
+      });
+      yield* Deferred.succeed(held, undefined);
+      yield* service.finishTurn({ runId: "run", turnId: "turn", threadId: "thread",
+        environmentId: "env", reason: "test" });
+    }).pipe(Effect.provide(serviceLayer));
+  }),
+);

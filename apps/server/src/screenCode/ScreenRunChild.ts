@@ -10,6 +10,7 @@ import {
   type ScreenHostCall,
   type ScreenRunLimits,
   type ScreenRunResult,
+  ScreenRunError,
 } from "@goat/contracts";
 import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
 import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
@@ -33,7 +34,7 @@ const methods = [
   "set_value",
   "bring_to_front",
   "launch_app",
-  "release_foreground",
+  "end_foreground",
   "list_tabs", "bind_tab", "open_tab", "claim_tab", "keep_tab",
   "navigate_tab", "reload_tab", "back_tab", "forward_tab", "close_tab",
   "observe", "select", "select_text", "wait_for",
@@ -44,6 +45,7 @@ type ChildResult = Pick<
   "cellId" | "status" | "value" | "console" | "truncated"
 > & {
   t: "result";
+  error?: ScreenRunResult["error"];
   unawaitedCallIds?: number[];
 };
 
@@ -187,7 +189,7 @@ export async function runScreenChild(
           verifyState: (arg = {}) => call('verify_state', arg),
           screenshot: (arg = {}) => call('screenshot', arg),
           bringToFront: () => call('bring_to_front'),
-          releaseForeground: () => call('release_foreground'),
+          endForeground: () => call('end_foreground'),
         });
       };
       globalThis.screen = Object.freeze({ values: __values,
@@ -281,6 +283,20 @@ export async function runScreenChild(
           (outcome) => {
             if (cellId !== cell.cellId) {
               (outcome.error ?? outcome.value)?.dispose();
+              return;
+            }
+            if (outcome.error) {
+              const dumped = vm.dump(outcome.error);
+              outcome.error.dispose();
+              let error: ScreenRunResult["error"];
+              if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
+                try {
+                  const candidate: unknown = JSON.parse(dumped);
+                  if (Schema.is(ScreenRunError)(candidate)) error = candidate;
+                } catch { /* An ordinary guest exception has no host error receipt. */ }
+              }
+              finish({ t: "result", cellId, status: Date.now() >= deadline ? "deadline" : "failed",
+                ...(error ? { error } : {}), console: linesOut, truncated });
               return;
             }
             const resultHandle = vm.unwrapResult(outcome);

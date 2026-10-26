@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeUrl from "node:url";
+import * as NodeURL from "node:url";
 import type { ComputerUsePrimitiveReply, ScreenElementRef, ScreenHostCall, ScreenTargetRef, ThreadId } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -133,7 +133,7 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
     yield* host.invoke(call("set_value", { value: "hello", elementRef }, ref), context);
     yield* host.invoke(call("bring_to_front", {}, ref), context);
     yield* host.invoke(call("launch_app", {}, ref), context);
-    const released = yield* host.invoke(call("release_foreground", {}, ref), context);
+    const released = yield* host.invoke(call("end_foreground", {}, ref), context);
     expect(released.value).toEqual({ released: true });
     expect(sent.map((entry) => entry.tool)).toEqual([
       "list_apps", "list_windows", "get_window_state", "click", "right_click", "drag", "scroll",
@@ -172,7 +172,7 @@ it.live("one cell invokes two desktop primitives in order through the admitted c
     yield* service.finishTurn({ runId: "r", turnId: "t", threadId: "thread", environmentId: "env", reason: "test" });
   }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
     dispatcher: host,
-    invocation: { command: process.execPath, entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+    invocation: { command: process.execPath, entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
     assetResolver: () => resolveScreenRuntimeAsset("dev"),
   }).pipe(Layer.provide(NodeServices.layer))));
 });

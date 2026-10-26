@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeUrl from "node:url";
+import * as NodeURL from "node:url";
 import { PreviewTabId, type EnvironmentId, type ProviderInstanceId, type ThreadId } from "@goat/contracts";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -45,11 +45,11 @@ it.live("a live cell host call publishes thinking for its bound target and hidde
     expect(result.value).toBe(true);
     yield* service.finishTurn({ runId: "run", turnId: "turn", threadId: "thread", environmentId: "env", reason: "test" });
     expect(events.map((event) => `${event.identity.targetId}:${event.phase}`)).toEqual([
-      "target:thinking", "target:idle", "target:hidden",
+      "target:thinking", "target:resting", "target:hidden",
     ]);
   }).pipe(Effect.provide(
     ScreenRunService.layerWithRuntime({
-      invocation: { command: process.execPath, entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      invocation: { command: process.execPath, entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
       assetResolver: () => resolveScreenRuntimeAsset("dev"),
       dispatcher: {
         availability: () => Effect.succeed([{ kind: "tab", available: true }]),
@@ -141,7 +141,7 @@ it.live("a later cell uses the renewed invocation for preview reauthorization", 
       ScreenRunService.layerWithRuntime({
         invocation: {
           command: process.execPath,
-          entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
         },
         assetResolver: () => resolveScreenRuntimeAsset("dev"),
         dispatcher: {
@@ -185,7 +185,7 @@ it.live("asset failure is retried and a successful load is cached", () => {
       ScreenRunService.layerWithRuntime({
         invocation: {
           command: process.execPath,
-          entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
         },
         assetResolver: () =>
           ++attempts === 1
@@ -243,7 +243,7 @@ it.live("one cell reads a tab and an app through one Target API", () => {
       yield* service.finishTurn({ runId: "r", turnId: "t", threadId: "thread", environmentId: "env", reason: "test" });
     }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
       dispatcher: createScreenDispatchRouter({ app: appHost, tab: tabHost }), tabHost,
-      invocation: { command: process.execPath, entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      invocation: { command: process.execPath, entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
       assetResolver: () => resolveScreenRuntimeAsset("dev"),
     }).pipe(Layer.provide(NodeServices.layer))));
   });

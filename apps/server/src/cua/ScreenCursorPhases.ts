@@ -61,7 +61,7 @@ export class ScreenCursorPhases {
     this.publish({
       op: "show",
       identity: { ...state.owner, sequence: ++state.sequence },
-      phase: "idle",
+      phase: "resting",
     });
   }
 

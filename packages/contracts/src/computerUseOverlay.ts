@@ -37,10 +37,10 @@ export const ComputerUseOverlayHideReason = Schema.Literals([
 ]);
 export type ComputerUseOverlayHideReason = typeof ComputerUseOverlayHideReason.Type;
 
-export const ComputerUseCursorPhase = Schema.Literals([
-  "moving", "acting", "thinking", "idle", "yielded", "hidden",
+export const AgentCursorState = Schema.Literals([
+  "moving", "acting", "thinking", "resting", "yielded", "hidden",
 ]);
-export type ComputerUseCursorPhase = typeof ComputerUseCursorPhase.Type;
+export type AgentCursorState = typeof AgentCursorState.Type;
 
 export const ComputerUseCursorIdentity = Schema.Struct({
   environmentId: EnvironmentId,
@@ -54,7 +54,7 @@ export type ComputerUseCursorIdentity = typeof ComputerUseCursorIdentity.Type;
 
 export const ComputerUseCursorState = Schema.Struct({
   identity: ComputerUseCursorIdentity,
-  phase: ComputerUseCursorPhase,
+  phase: AgentCursorState,
 });
 export type ComputerUseCursorState = typeof ComputerUseCursorState.Type;
 
@@ -62,7 +62,7 @@ export const ComputerUseCursorEvent = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("show"),
     identity: ComputerUseCursorIdentity,
-    phase: Schema.Literals(["moving", "acting", "thinking", "idle"]),
+    phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
     pid: Schema.optionalKey(Schema.Int),
     windowId: Schema.optionalKey(Schema.Int),
     point: Schema.optionalKey(ComputerUseOverlayPoint),
@@ -83,7 +83,7 @@ export const ComputerUseOverlayCommand = Schema.Union([
     pid: Schema.Int,
     windowId: Schema.Int,
     point: Schema.optionalKey(ComputerUseOverlayPoint),
-    phase: Schema.Literals(["moving", "acting", "thinking", "idle"]),
+    phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
   }),
   Schema.Struct({
     op: Schema.Literal("hide"),
@@ -111,13 +111,13 @@ export type ComputerUseOverlayCommand = typeof ComputerUseOverlayCommand.Type;
 export const ComputerUseAgentCursor = Schema.Struct({
   windowId: Schema.Int,
   point: ComputerUseOverlayPoint,
-  phase: Schema.Literals(["moving", "acting", "thinking", "idle", "resting"]),
+  phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
 });
 export type ComputerUseAgentCursor = typeof ComputerUseAgentCursor.Type;
 
 export const ComputerUseCursorReport = Schema.Struct({
   identity: ComputerUseCursorIdentity,
   cursor: Schema.NullOr(ComputerUseAgentCursor),
-  phase: ComputerUseCursorPhase,
+  phase: AgentCursorState,
 });
 export type ComputerUseCursorReport = typeof ComputerUseCursorReport.Type;

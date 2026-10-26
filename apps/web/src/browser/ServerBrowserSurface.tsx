@@ -17,7 +17,7 @@ import {
 import {
   type EnvironmentId,
   type ComputerUseCursorIdentity,
-  type ComputerUseCursorPhase,
+  type AgentCursorState,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
   ThreadId,
@@ -100,7 +100,6 @@ interface TouchProbe {
 
 const buttonOf = (button: number): PreviewStreamMouseButton =>
   button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "none";
-
 const pressedButtonOf = (buttons: number): PreviewStreamMouseButton =>
   buttons & 1 ? "left" : buttons & 2 ? "right" : buttons & 4 ? "middle" : "none";
 
@@ -967,16 +966,14 @@ export function ServerBrowserSurface(props: {
     </div>
   );
 }
-
 interface AgentCursorPlacement {
   readonly phase: PreviewStreamPointer["phase"];
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
   readonly owner?: ComputerUseCursorIdentity;
-  readonly cursorPhase?: ComputerUseCursorPhase;
+  readonly cursorPhase?: AgentCursorState;
 }
-
 function placeAgentCursor(
   pointer: PreviewStreamPointer,
   canvas: HTMLCanvasElement | null,

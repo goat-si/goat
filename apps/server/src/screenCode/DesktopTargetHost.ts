@@ -1,5 +1,5 @@
 // @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off - Driver replies are bounded by the primitive channel; target IDs are opaque UUIDs.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -131,7 +131,7 @@ export const createDesktopTargetHost = (deps: {
           targets.delete(id);
         }
       const ref: ScreenTargetRef = {
-        id: randomUUID(), kind: "app", environmentId: context.environmentId,
+        id: NodeCrypto.randomUUID(), kind: "app", environmentId: context.environmentId,
         runId: context.runId, turnId: context.turnId, generation: ++epoch,
       };
       const bound: BoundWindow = { ref, pid, windowId: requestedWindow, appId: string(matches[0]?.bundle_id) ?? string(matches[0]?.name) ?? appId, epoch, connectionGeneration: windowsReply.connectionGeneration, controlId: current.controlId };
@@ -190,8 +190,8 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(fail("downstream_failure"));
       const mimeType = imagePart.mimeType === "image/jpeg" ? "image/jpeg" as const : "image/png" as const;
       const metadata: ScreenImageMetadata = {
-        imageRef: randomUUID(), callId: call.callId, targetId: bound.ref.id,
-        observationId: observation.observationId, regionId: randomUUID(),
+        imageRef: NodeCrypto.randomUUID(), callId: call.callId, targetId: bound.ref.id,
+        observationId: observation.observationId, regionId: NodeCrypto.randomUUID(),
         region: {
           kind: "window", x: typeof bounds?.x === "number" ? bounds.x : 0,
           y: typeof bounds?.y === "number" ? bounds.y : 0,
@@ -211,7 +211,7 @@ export const createDesktopTargetHost = (deps: {
     function* (call, context) {
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
-      if (call.method === "release_foreground") {
+      if (call.method === "end_foreground") {
         const current = Option.getOrUndefined(yield* deps.leases.currentControl(context.invocation.thread.threadId));
         if (!current || current.controlId !== bound.controlId || !deps.leases.releaseForeground || !(yield* deps.leases.releaseForeground({
           threadId: context.invocation.thread.threadId, controlId: current.controlId,
