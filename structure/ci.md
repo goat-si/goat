@@ -42,11 +42,13 @@ updates the hash in the guard.
 goat-ci runs on pull requests and by hand. It does not run on push, so merging into `dev` starts
 nothing. On a pull request the `goat-scope` job diffs the merge commit against its base, and
 `.github/scripts/goat-ci-scope.cjs` picks the matrix. A pull request, draft or ready, gets a quick
-run: `check`, `typecheck`, and `test-changed`, the test files beside the changed files that
-`vp run check:changed` runs before a push (`scripts/lib/changed-tests.ts`, so the two never pick
-different files). Suites that find their files another way are added: shared prompt text adds the
-replay suites, and a changed or deleted non-test `.ts`/`.tsx` file under an app's `src` adds that
-app's `reactCompilerCoverage` suite when it has one (web and mobile do).
+run: `check`, `typecheck`, and `test-changed`. The shared selector
+(`scripts/lib/changed-tests.ts`) picks changed tests, companion tests, and tests that import a
+changed source directly or through testkit/fixture files, so `vp run check:changed` and the PR
+run pick the same files. Production importer chains remain in broader lanes. Existing special
+suites also run: shared prompt text adds replay suites, and a changed or deleted non-test
+`.ts`/`.tsx` file under an app's `src` adds that app's `reactCompilerCoverage` suite when it has
+one (web and mobile do).
 Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
 full suite runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.

@@ -1,10 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 
 const CODE = /\.[cm]?[jt]sx?$/;
 const TEST = /\.test\.[cm]?[jt]sx?$/;
+const TEST_HELPER = /\.(?:testkit|fixture)\.[cm]?[jt]sx?$/;
+const GRAPH_SOURCE = /^(?:apps|packages|scripts)\//;
+const { buildImportGraph } = NodeModule.createRequire(import.meta.url)(
+  "../../.github/scripts/goat-ci-imports.cjs",
+) as {
+  buildImportGraph: (root: string) => {
+    files: ReadonlySet<string>;
+    importers: ReadonlyMap<string, ReadonlySet<string>>;
+  };
+};
 /** An app's src directory, every .ts/.tsx of which its React Compiler coverage suite compiles. */
 const APP_SOURCE = /^apps\/[^/]+\/src\//;
 const COMPILED = /\.tsx?$/;
@@ -87,11 +98,10 @@ function compilerCoverageSuite(root: string, file: string): string | undefined {
 }
 
 /**
- * Changed test files, and the test files beside a changed source file
- * (foo.ts -> foo.test.ts, foo.browser.test.tsx). Vitest's import-graph
- * `related` reaches most of a package: one leaf server file pulled in 252 of
- * 406 server test files and took 7 minutes. CI runs the rest. Prompt text and an app's React
- * Compiler coverage suite are the exceptions; see promptTextTests and compilerCoverageSuite.
+ * Changed tests, companion tests, and direct importers reached through testkit or fixture files.
+ * Vitest's `related` reaches most of a package: one leaf server file pulled in 252 of 406 server
+ * tests and took 7 minutes. Production importer chains stay with the broader CI lanes. Prompt
+ * text and React Compiler coverage also select suites; see the selectors above.
  *
  * `code` includes deleted files: they select no test beside them, but still select the suites
  * that read them through another path.
@@ -127,5 +137,22 @@ export function testsForChanges(
   }
   if (code.some((file) => PROMPT_TEXT.test(file) && !TEST.test(file)))
     for (const test of promptTextTests(root)) tests.add(test);
+  const sources = present.filter(
+    (file) => GRAPH_SOURCE.test(file) && CODE.test(file) && !TEST.test(file),
+  );
+  if (sources.length > 0) {
+    const graph = buildImportGraph(root);
+    const queue = sources.filter((file) => graph.files.has(file));
+    const visited = new Set(queue);
+    for (const file of queue) {
+      for (const importer of graph.importers.get(file) ?? []) {
+        if (TEST.test(importer)) tests.add(importer);
+        else if (TEST_HELPER.test(importer) && !visited.has(importer)) {
+          visited.add(importer);
+          queue.push(importer);
+        }
+      }
+    }
+  }
   return tests;
 }
