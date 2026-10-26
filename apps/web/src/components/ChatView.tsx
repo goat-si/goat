@@ -224,8 +224,8 @@ import {
   primaryServerKeybindingsAtom,
   serverEnvironment,
 } from "../state/server";
-import { providerSkillsWithBuiltIns } from "./chat/providerSkillsWithBuiltIns";
 import { threadEnvironment, useThreadFamily } from "../state/threads";
+import { useOfferedSkills } from "./chat/providerSkillsWithBuiltIns";
 import { vcsEnvironment } from "../state/vcs";
 import {
   type EnvironmentPresentation,
@@ -2883,7 +2883,8 @@ export default function ChatView(props: ChatViewProps) {
     isDesktop: isElectron,
   });
   const getShortcutContextStable = useStableCallback(getShortcutContext);
-  const timelineSkills = providerSkillsWithBuiltIns(activeProviderStatus, gitCwd, settings);
+  const skillScope = { environmentId, projectId: activeThreadProjectId };
+  const timelineSkills = useOfferedSkills(activeProviderStatus, gitCwd, settings, skillScope);
   const threadFindEnabled =
     isServerThread && serverConfig?.threadFind === true && !paintOnlyDisplayedTimeline;
   const isThreadFindActive = useThreadFindOpen(activeThreadRef, threadFindEnabled);

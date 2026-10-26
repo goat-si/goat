@@ -1,6 +1,7 @@
 import {
   AuthGrantScope,
   type DesktopSshEnvironmentTarget,
+  EnvironmentId,
   GOAT_RUNTIME_CONTROL_HEADER,
   GOAT_RUNTIME_SESSION_PATH,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -36,9 +37,9 @@ import {
 // and the app's holds the person's own threads, so an SSH client attaches to it whenever it runs
 // and can be attached. Only otherwise does it start or reuse the managed server. Windows hosts are
 // skipped: these POSIX scripts cannot reach the app there.
-const APP_SERVER_PREAMBLE = String.raw`set -eu
+const serverPreamble = (kind: "app" | "managed") => String.raw`set -eu
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
-app_userdata="$HOME/.goat/desktop/userdata"
+app_userdata="$HOME/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}"
 app_record="$app_userdata/server-runtime.json"
 app_token="$app_userdata/runtime-control.token"
 app_none() { printf 'GOAT_APP_SERVER=%s\n' "$1"; exit 0; }
@@ -54,13 +55,51 @@ command -v curl >/dev/null 2>&1 || app_none no-curl
 [ -f "$app_token" ] && [ ! -L "$app_token" ] && [ -s "$app_token" ] || app_none no-token
 `;
 
-const APP_SERVER_PROBE_SCRIPT = String.raw`${APP_SERVER_PREAMBLE}app_descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || app_none unreachable
+const appServerProbeScript = (
+  kind: "app" | "managed",
+) => String.raw`${serverPreamble(kind)}app_descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || app_none unreachable
 printf 'GOAT_APP_SERVER=live %s %s\n%s\n' "$app_pid" "$app_port" "$app_descriptor"
+`;
+
+const existingServerProbeScript = (kind: "app" | "managed") => String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
+home="$HOME/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}"
+record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
+fail() { printf 'GOAT_EXISTING=%s\n' "$1"; exit 0; }
+# A clean shutdown removes the record but keeps the identity and database, which may own a
+# legacy watch; only a home with neither has no other server.
+if [ ! -f "$record" ]; then
+  if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then fail unusable; fi
+  fail absent
+fi
+[ ! -L "$record" ] && [ -f "$identity" ] && [ ! -L "$identity" ] || fail unusable
+[ -f "$token" ] && [ ! -L "$token" ] && [ -s "$token" ] || fail unusable
+line="$(tr '\n' ' ' <"$record")"
+pid="$(printf '%s\n' "$line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+port="$(printf '%s\n' "$line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+case "$pid:$port" in *[!0-9:]* | :* | *:) fail unusable ;; esac
+[ "$pid" -gt 0 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail unusable
+[ "$origin" = "http://127.0.0.1:$port" ] || fail unusable
+# A stopped recorded server may own a legacy watch; its database is not disproven.
+kill -0 "$pid" 2>/dev/null || fail unusable
+command -v curl >/dev/null 2>&1 || fail unusable
+descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || fail unusable
+printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
 `;
 
 // The token reaches curl through its config on stdin, never argv. The record must still name the
 // port the probe saw, so a credential request never goes to whatever replaced that server.
-const APP_SERVER_SESSION_SCRIPT = String.raw`${APP_SERVER_PREAMBLE}[ "$app_port" = @@GOAT_PORT@@ ] || { printf 'The GOAT app server on this host restarted; reconnect.\n' >&2; exit 1; }
+const serverSessionScript = (
+  kind: "app" | "managed",
+) => String.raw`${serverPreamble(kind)}[ "$app_port" = @@GOAT_PORT@@ ] || { printf 'The GOAT server on this host restarted; reconnect.\n' >&2; exit 1; }
+expected_id=@@GOAT_ID@@
+if [ -n "$expected_id" ]; then
+  [ "$(cat "$app_userdata/environment-id" 2>/dev/null)" = "$expected_id" ] || exit 1
+  descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || exit 1
+  descriptor_id="$(printf '%s\n' "$descriptor" | sed -n 's/.*"environmentId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  [ "$descriptor_id" = "$expected_id" ] || exit 1
+fi
 app_secret="$(tr -d '\r\n' <"$app_token")"
 printf 'header = "@@GOAT_HEADER@@: %s"\n' "$app_secret" |
   curl -sS --max-time 20 -K - -H 'content-type: application/json' --data-binary @@GOAT_BODY@@ \
@@ -68,6 +107,7 @@ printf 'header = "@@GOAT_HEADER@@: %s"\n' "$app_secret" |
 `;
 
 const AppServerDescriptor = Schema.Struct({
+  environmentId: Schema.optionalKey(EnvironmentId),
   serverVersion: Schema.String,
   sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Number),
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Number),
@@ -97,6 +137,58 @@ export type AppServerProbe =
   | { readonly kind: "attach"; readonly port: number; readonly version: string }
   | { readonly kind: "declined"; readonly reason: string }
   | { readonly kind: "none" };
+
+export type ExistingServerProbe =
+  | {
+      readonly kind: "live";
+      readonly environmentId: EnvironmentId;
+      readonly port: number;
+      readonly version: string;
+    }
+  | { readonly kind: "absent" | "unusable" };
+
+const isEnvironmentId = Schema.is(EnvironmentId);
+
+export const parseExistingServerProbe = (stdout: string): ExistingServerProbe => {
+  const lines = stdout.split(/\r?\n/u);
+  const index = lines.findIndex((line) => line.startsWith("GOAT_EXISTING="));
+  const marker = lines[index]?.slice("GOAT_EXISTING=".length);
+  if (marker === "absent") return { kind: "absent" };
+  if (marker === undefined || !marker.startsWith("live ")) return { kind: "unusable" };
+  const [, portText, diskId] = marker.split(" ");
+  const port = Number(portText);
+  const descriptor = decodeAppServerDescriptor(lines[index + 1] ?? "");
+  if (
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !isEnvironmentId(diskId) ||
+    Option.isNone(descriptor) ||
+    descriptor.value.environmentId !== diskId ||
+    descriptor.value.capabilities.runtimeSessions !== true ||
+    compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, descriptor.value) !== "compatible"
+  )
+    return { kind: "unusable" };
+  return { kind: "live", environmentId: diskId, port, version: descriptor.value.serverVersion };
+};
+
+export const probeExistingServer = Effect.fn("ssh/appServer.probeExisting")(function* (
+  target: DesktopSshEnvironmentTarget,
+  kind: "app" | "managed",
+  input?: SshAuth.SshAuthOptions,
+): Effect.fn.Return<ExistingServerProbe, never, AppServerContext> {
+  const result = yield* runSshCommand(target, {
+    remoteCommandArgs: ["sh", "-s", "goat-existing-server-probe"],
+    stdin: applyScriptPlaceholders(existingServerProbeScript(kind), {
+      GOAT_ENVIRONMENT_PATH,
+    }),
+    timeoutMs: 20_000,
+    ...sshOptions(input),
+  }).pipe(Effect.option);
+  return Option.isNone(result)
+    ? { kind: "unusable" }
+    : parseExistingServerProbe(result.value.stdout);
+});
 
 /** Reads the probe script's answer. Exported for tests. */
 export const parseAppServerProbe = (stdout: string): AppServerProbe => {
@@ -142,7 +234,7 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
   const result = yield* runSshCommand(target, {
     // The trailing word is only $1 to the script; it names this call in traces and tests.
     remoteCommandArgs: ["sh", "-s", APP_SERVER_PROBE_COMMAND],
-    stdin: applyScriptPlaceholders(APP_SERVER_PROBE_SCRIPT, {
+    stdin: applyScriptPlaceholders(appServerProbeScript("app"), {
       GOAT_ENVIRONMENT_PATH: GOAT_ENVIRONMENT_PATH,
     }),
     timeoutMs: 20_000,
@@ -162,9 +254,16 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
 });
 
 /** The script that asks the app server on `port` for a credential. */
-const buildAppServerCredentialScript = (port: number, request: RuntimeSessionRequest) =>
-  applyScriptPlaceholders(APP_SERVER_SESSION_SCRIPT, {
+const buildServerCredentialScript = (
+  kind: "app" | "managed",
+  port: number,
+  request: RuntimeSessionRequest,
+  expectedEnvironmentId?: EnvironmentId,
+) =>
+  applyScriptPlaceholders(serverSessionScript(kind), {
     GOAT_PORT: String(port),
+    GOAT_ID: shellSingleQuote(expectedEnvironmentId ?? ""),
+    GOAT_ENVIRONMENT_PATH,
     GOAT_HEADER: GOAT_RUNTIME_CONTROL_HEADER,
     GOAT_BODY: shellSingleQuote(JSON.stringify(request)),
     GOAT_SESSION_PATH: GOAT_RUNTIME_SESSION_PATH,
@@ -174,11 +273,13 @@ const buildAppServerCredentialScript = (port: number, request: RuntimeSessionReq
  * Issues a credential from the app server attached on `port` and returns the JSON body, the
  * same output `goat auth ... --json` prints, so the callers' existing decoders read it.
  */
-export const issueAppServerCredential = Effect.fn("ssh/appServer.issueCredential")(function* (
+export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCredential")(function* (
   target: DesktopSshEnvironmentTarget,
+  kind: "app" | "managed",
   port: number,
   request: RuntimeSessionRequest,
   input?: SshAuth.SshAuthOptions,
+  expectedEnvironmentId?: EnvironmentId,
 ): Effect.fn.Return<
   string,
   SshCommandError | SshInvalidTargetError | SshPairingError,
@@ -187,7 +288,7 @@ export const issueAppServerCredential = Effect.fn("ssh/appServer.issueCredential
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s", "goat-app-server-credential"],
     timeoutStage: "pairing",
-    stdin: buildAppServerCredentialScript(port, request),
+    stdin: buildServerCredentialScript(kind, port, request, expectedEnvironmentId),
     ...sshOptions(input),
   });
   const marker = /^GOAT_HTTP_STATUS=(\d{3})$/mu.exec(result.stdout);
@@ -203,6 +304,13 @@ export const issueAppServerCredential = Effect.fn("ssh/appServer.issueCredential
   });
   return body;
 });
+
+export const issueAppServerCredential = (
+  target: DesktopSshEnvironmentTarget,
+  port: number,
+  request: RuntimeSessionRequest,
+  input?: SshAuth.SshAuthOptions,
+) => issueExistingServerCredential(target, "app", port, request, input);
 
 /**
  * The session request matching what a remote session script would pass to `goat auth`, or none

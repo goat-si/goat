@@ -134,7 +134,7 @@ it("activates the caller, flies its frozen capture, and retains the landed image
   expect(shell.timers.size).toBe(0);
 });
 
-it("waits for T3 to remap and cancels that wait when disabled", async () => {
+it("waits for GOAT to remap and cancels that wait when disabled", async () => {
   const { feedback } = begin();
   const activation = feedback.activate(":1.23", "T3");
   expect(shell.activate).not.toHaveBeenCalled();

@@ -635,6 +635,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                                 .register({
                                   launcherThreadId: launcher.id,
                                   host: result.host,
+                                  ...(result.sourceEnvironmentId === undefined
+                                    ? {}
+                                    : { sourceEnvironmentId: result.sourceEnvironmentId }),
                                   threadId: ThreadId.make(result.threadId),
                                   projectId: null,
                                   title: input.title,
@@ -658,6 +661,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                                   .watchExternal({
                                     owner: scope.requestNamespace,
                                     host: result.host,
+                                    ...(result.sourceEnvironmentId === undefined
+                                      ? {}
+                                      : { sourceEnvironmentId: result.sourceEnvironmentId }),
                                     threadId: ThreadId.make(result.threadId),
                                     projectId: null,
                                     title: input.title,
@@ -683,8 +689,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           ),
                         )
                       : false;
+                  const { sourceEnvironmentId: _sourceEnvironmentId, ...publicResult } = result;
                   return {
-                    ...result,
+                    ...publicResult,
                     watching,
                     ...(pressure === undefined ? {} : { pressure }),
                     ...(ceilingAdvice === undefined ? {} : { ceiling: ceilingAdvice }),

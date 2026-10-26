@@ -95,7 +95,9 @@ describe("ChannelChildWork launch claims (#1387)", () => {
             assert.strictEqual(yield* stateOf(taskId, running), "cancelled");
             // Its slot still counts.
             yield* threadChild("third");
-            const refused = yield* Effect.flip(threadChild("fourth"));
+            yield* threadChild("fourth");
+            yield* threadChild("fifth");
+            const refused = yield* Effect.flip(threadChild("sixth"));
             assert.strictEqual(isChildWorkError(refused) && refused.reason, "at_capacity");
             yield* childWork.markBound(launching.record);
           }),
@@ -143,7 +145,9 @@ describe("ChannelChildWork launch claims (#1387)", () => {
       assert.strictEqual(yield* stateOf(taskId, failing), "bound");
       assert.strictEqual(yield* stateOf(taskId, stopping), "cancelled");
       yield* threadChild("third");
-      const refused = yield* Effect.flip(threadChild("fourth"));
+      yield* threadChild("fourth");
+      yield* threadChild("fifth");
+      const refused = yield* Effect.flip(threadChild("sixth"));
       assert.strictEqual(isChildWorkError(refused) && refused.reason, "at_capacity");
     }).pipe(
       Effect.provide(makeLayer(new Map(), new Map([[childThread, new Error("connection reset")]]))),

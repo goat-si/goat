@@ -21,8 +21,8 @@ it("shows a prompt that arrived before the dialog mounted", async () => {
     listener({
       requestId: "ssh-1",
       destination: "devbox",
-      username: "julius",
-      prompt: "julius@devbox's password:",
+      username: "alex",
+      prompt: "alex@devbox's password:",
       expiresAt: "2999-01-01T00:00:00.000Z",
     });
   }

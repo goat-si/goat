@@ -12,7 +12,9 @@ name: goat-ci
 #
 # A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
-# beside the changes that check:changed also runs before a push. The full suite runs on request.
+# selected by check:changed: changed, companion, and importing tests (directly or through
+# testkit/fixture files), plus special suites. Production chains belong to broader lanes.
+# The full suite runs on request.
 # Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
 # reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
 # memory growth suite). Nothing runs on push, so merging into dev starts no CI. Run the workflow by
@@ -249,7 +251,8 @@ jobs:
         if: matrix.task == 'test'
         run: vp run --filter @goat/web test
 
-      # The test files beside the changes, as check:changed runs them: from the repository root,
+      # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
+      # special suites, as check:changed runs them: from the repository root,
       # whose Vitest config hands each file to its package's config. CI script tests use node:test.
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
       # without running a test it chose.
@@ -497,3 +500,32 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: node .github/scripts/goat-ci-result-mirror.cjs
+
+  # A re-run stays in its run's original suite, so an ignored event's republished goat-ci-result in a
+  # newer suite would keep the first verdict (#1691). On a re-run attempt this job re-runs that
+  # ignored run, cancelling it first while it still runs, so it repeats this attempt's verdict. It is
+  # the only goat-ci job that may write to Actions, and it reports nothing as goat-ci-result itself.
+  refresh-republished:
+    name: goat-ci republish refresh
+    needs: [result]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.run_attempt > 1 && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Re-run the ignored run that republished an earlier verdict
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/goat-ci-rerun-republish.cjs

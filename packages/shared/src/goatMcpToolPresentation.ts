@@ -53,6 +53,8 @@ export type GoatMcpToolSummaryAction =
   | "worktree-inventory"
   | "worktree-remove"
   | "worktree-cleanup"
+  | "storage-usage"
+  | "storage-clean"
   | "project-list"
   | "project-read"
   | "repository-snapshot"
@@ -430,8 +432,23 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Clean up", "Cleaning up", "Cleaned up", "stale worktrees"],
     "worktree-cleanup",
   ),
+  goat_storage_usage: tool(["Read", "Reading", "Read", "GOAT disk usage"], "storage-usage"),
+  goat_storage_clean: tool(
+    ["Clean up", "Cleaning up", "Cleaned up", "GOAT storage"],
+    "storage-clean",
+  ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  goat_preview_fetch: tool(
+    ["Fetch", "Fetching", "Fetched", "from the preview page"],
+    "browser",
+    "browser",
+  ),
+  goat_preview_scroll_collect: tool(
+    ["Collect", "Collecting", "Collected", "from the scrolling preview page"],
+    "browser",
+    "browser",
+  ),
   goat_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",

@@ -1,5 +1,4 @@
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@goat/contracts";
@@ -14,6 +13,7 @@ import * as Schema from "effect/Schema";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import { AGENT_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAgentItems";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
 import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
 import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
@@ -839,22 +839,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["refresh availability versions auth state models background probes seconds off"],
     providerSettingsOnly: true,
   },
-  {
-    id: "agent-browser-access",
-    title: "Agent browser access",
-    to: "/settings/integrations",
-    scope: "project-defaults",
-    searchTerms: ["allow disable enable open drive preview tools sessions project override"],
-  },
-  {
-    id: "agent-tool-listing",
-    title: "GOAT tools agents see",
-    to: "/settings/integrations",
-    scope: "environment-defaults",
-    searchTerms: [
-      "agent tool listing core all full mcp tools list describe call prompt context size",
-    ],
-  },
+  ...AGENT_SETTINGS_SEARCH_ITEMS,
   {
     id: "device-hosts",
     title: "Device hosts",
@@ -1379,7 +1364,7 @@ export function settingsForThisPlatform(
     (item) =>
       (isElectron || item.desktopOnly !== true) &&
       (!item.requiresDesktopWindowMaterial || hasDesktopWindowMaterialApi()) &&
-      (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
+      (!item.releaseChannelOnly || isElectron) &&
       (!item.macOnly || isMacPlatform(platform)) &&
       (!item.windowsOnly || isWindowsPlatform(platform)),
   );

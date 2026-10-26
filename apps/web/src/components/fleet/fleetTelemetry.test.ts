@@ -686,6 +686,47 @@ describe("fleetAlerts", () => {
     });
   });
 
+  it("calls a host with a low disk low on space and links to freeing it, not to moving lanes", () => {
+    const low = (level: "elevated" | "critical", message: string): HostStatusEntry => ({
+      ...entry(null),
+      pressure: {
+        level,
+        since: "2026-10-20T11:50:00.000Z",
+        reasons: [{ signal: "disk", level, message }],
+        loadPerCore: null,
+        eventLoopDelayMs: null,
+      },
+    });
+    expect(
+      view(
+        fleetAlerts(
+          oneMachine([low("elevated", "disk 40 GiB free (2%), under 50 GiB and 15%")]),
+          new Map(),
+          NOW,
+          { environmentOf },
+        ),
+      ),
+    ).toEqual([
+      ["warning", "Low on disk space, disk 40 GiB free (2%), under 50 GiB and 15%", "storage"],
+    ]);
+    expect(
+      view(
+        fleetAlerts(
+          oneMachine([low("critical", "disk 9 GiB free (0%), under 15 GiB and 5%")]),
+          new Map(),
+          NOW,
+          { environmentOf },
+        ),
+      ),
+    ).toEqual([
+      [
+        "destructive",
+        "Almost out of disk space, disk 9 GiB free (0%), under 15 GiB and 5%",
+        "storage",
+      ],
+    ]);
+  });
+
   it("rewords an older server's bare fetch failure", () => {
     const rows = oneMachine([
       entry(null),

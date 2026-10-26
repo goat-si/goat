@@ -1,6 +1,6 @@
 # GOAT Connect setup
 
-> **Status:** T3 Connect (Clerk sign-in, hosted relay, and managed Cloudflare
+> **Status:** GOAT Connect (Clerk sign-in, hosted relay, and managed Cloudflare
 > tunnels) is disabled in every build by `GOAT_CONNECT_ENABLED=false` in
 > [`@goat/shared/goatConnect`](../../packages/shared/src/goatConnect.ts).
 > GOAT Connect is coming soon. Public configuration does not enable it. This
@@ -10,7 +10,7 @@
 > Stored links are retained without tunnel restoration; previously linked servers
 > start normally.
 
-Deployment and client configuration for GOAT Connect. The [architecture note](../internals/t3-connect.md)
+Deployment and client configuration for GOAT Connect. The [architecture note](../internals/goat-connect.md)
 explains the trust boundaries; the [relay README](../../infra/relay/README.md#deployment) owns relay
 provisioning instructions.
 
@@ -26,10 +26,10 @@ cp .env.example .env
 For another deployment, set these values in the repository-root `.env` or `.env.local`:
 
 ```dotenv
-T3CODE_CLERK_PUBLISHABLE_KEY=<publishable key>
-T3CODE_CLERK_JWT_TEMPLATE=<JWT template name>
-T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
-T3CODE_RELAY_URL=https://relay.example.com
+GOAT_CLERK_PUBLISHABLE_KEY=<publishable key>
+GOAT_CLERK_JWT_TEMPLATE=<JWT template name>
+GOAT_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
+GOAT_RELAY_URL=https://relay.example.com
 ```
 
 Process variables take precedence over `.env.local`, then `.env`. Use these canonical names;
@@ -54,19 +54,19 @@ In Clerk's OAuth applications settings:
 4. Enable **Device authorization grant** on the application. Headless and SSH authorization use
    it, and Clerk only advertises the device endpoint once it is on. The feature is in beta and
    Clerk enables it per account on request.
-5. Set `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
+5. Set `GOAT_CLERK_CLI_OAUTH_CLIENT_ID` to the generated public client ID in local and release
    build environments.
 
 ## JWT template
 
-Create a Clerk JWT template named `t3-relay` with claims:
+Create a Clerk JWT template named `goat-relay` with claims:
 
 ```json
-{ "aud": "t3-code-relay" }
+{ "aud": "goat-relay" }
 ```
 
-Set `T3CODE_CLERK_JWT_TEMPLATE=t3-relay` for clients and
-`CLERK_JWT_AUDIENCE=t3-code-relay` for the relay. The production relay deployment environment
+Set `GOAT_CLERK_JWT_TEMPLATE=goat-relay` for clients and
+`CLERK_JWT_AUDIENCE=goat-relay` for the relay. The production relay deployment environment
 also defines `CLERK_JWT_TEMPLATE`. The audience stays the same across relay stages; the relay
 URL selects the deployment.
 
@@ -118,7 +118,7 @@ Local signed builds additionally use:
 GOAT_APPLE_TEAM_ID=ABC1234567
 GOAT_MACOS_PROVISIONING_PROFILE=/absolute/path/to/goat.provisionprofile
 # Override only when the RP domain differs from the Clerk Frontend API hostname.
-T3CODE_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
+GOAT_CLERK_PASSKEY_RP_DOMAINS=example.clerk.accounts.dev,clerk.example.com
 ```
 
 Without the override, the build derives the RP domain from the Clerk publishable key.

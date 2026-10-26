@@ -26,6 +26,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadResults from "../threadResults/ThreadResultService.ts";
 import * as HostThreads from "./HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
+import { newLaunchWatch } from "./launchWatch.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestions from "./PendingQuestionsMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -94,6 +95,7 @@ const runService = <A, E>(
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
     readonly beforeAuthorize?: () => void;
+    readonly watchOrigin?: EnvironmentId;
   },
   body: (service: PendingQuestions.PendingQuestionsMcpService["Service"]) => Effect.Effect<A, E>,
 ) => {
@@ -194,9 +196,24 @@ const runService = <A, E>(
     Layer.provide(Layer.mock(ThreadResults.ThreadResultService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(
-      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
-        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
-      ),
+      Layer.mock(LaunchWatchService.LaunchWatchService)({
+        find: () =>
+          Effect.succeed(
+            options.watchOrigin === undefined
+              ? null
+              : newLaunchWatch({
+                  launcherThreadId: callerId,
+                  host: "box",
+                  threadId: targetId,
+                  sourceEnvironmentId: options.watchOrigin,
+                  projectId: null,
+                  title: null,
+                  incarnation: "watch",
+                  notifyWebhook: false,
+                  now: 0,
+                }),
+          ),
+      }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
     ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(transport),
@@ -328,6 +345,7 @@ describe("PendingQuestionsMcpService", () => {
     Effect.gen(function* () {
       const { result, calls } = yield* runService(
         {
+          watchOrigin: EnvironmentId.make("managed-owner"),
           hostCall: (call) =>
             Effect.succeed(
               call.tool === "goat_pending_request_list"
@@ -350,6 +368,10 @@ describe("PendingQuestionsMcpService", () => {
       expect(calls.map((call) => [call.tool, call.arguments, call.writes])).toEqual([
         ["goat_pending_request_list", { threadId: targetId }, false],
         ["goat_pending_request_read", { threadId: targetId, requestId }, false],
+      ]);
+      expect(calls.map((call) => call.environmentId)).toEqual([
+        EnvironmentId.make("managed-owner"),
+        EnvironmentId.make("managed-owner"),
       ]);
     }),
   );

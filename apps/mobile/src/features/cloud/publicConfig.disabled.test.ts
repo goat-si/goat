@@ -32,7 +32,7 @@ describe("default-off mobile public config", () => {
     expect(hasCloudPublicConfig()).toBe(false);
     expect(hasTracingPublicConfig()).toBe(false);
     expect(() => resolveRelayClerkTokenOptions()).toThrow(
-      "T3CODE_CLERK_JWT_TEMPLATE is not configured.",
+      "GOAT_CLERK_JWT_TEMPLATE is not configured.",
     );
   });
 });

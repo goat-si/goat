@@ -27,11 +27,11 @@ const config = RelayConfiguration.RelayConfiguration.of({
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "goat-relay",
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
   managedEndpointBaseDomain: "t3code.test",
-  managedEndpointNamespace: "dev_julius",
+  managedEndpointNamespace: "dev_alex",
 });
 
 interface TunnelCall {
@@ -368,9 +368,9 @@ function layerProvider(
 }
 
 const MANAGED_ENDPOINT_HASHES: Record<string, string> = {
-  "user_ABC:env_ABC": "d101ac68108a423e",
-  "user_ABC:env_shared": "d7e6356aaf8863aa",
-  "user_DEF:env_shared": "a2fc84ac1b8c1c35",
+  "user_ABC:env_ABC": "fe70a0e4f4b8eb87",
+  "user_ABC:env_shared": "388b28a52f055d1a",
+  "user_DEF:env_shared": "c416de8b81d55645",
 };
 
 function expectedManagedEndpointHash(environmentId: string, userId: string): string {
@@ -380,11 +380,11 @@ function expectedManagedEndpointHash(environmentId: string, userId: string): str
 }
 
 function expectedManagedHostname(environmentId: string, userId = "user_ABC"): string {
-  return `dev-julius-${expectedManagedEndpointHash(environmentId, userId)}.t3code.test`;
+  return `dev-alex-${expectedManagedEndpointHash(environmentId, userId)}.t3code.test`;
 }
 
 function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
-  return `t3coderelay-managedendpoint-dev-julius-${expectedManagedEndpointHash(environmentId, userId)}`;
+  return `goatrelay-managedendpoint-dev-alex-${expectedManagedEndpointHash(environmentId, userId)}`;
 }
 
 describe("ManagedEndpointProvider", () => {
@@ -520,7 +520,7 @@ describe("ManagedEndpointProvider", () => {
           | { readonly name?: string }
           | undefined
       )?.name;
-      expect(requestedName).toMatch(/^t3coderelay-managedendpoint-dev-julius-[a-f0-9]{16}$/);
+      expect(requestedName).toMatch(/^goatrelay-managedendpoint-dev-alex-[a-f0-9]{16}$/);
       const configBody = (
         tunnelCalls.find((call) => call.operation === "putConfiguration")?.input as
           | { readonly tunnelConfig?: unknown }
@@ -529,7 +529,7 @@ describe("ManagedEndpointProvider", () => {
       expect(configBody).toMatchObject({
         ingress: [
           {
-            hostname: expect.stringMatching(/^dev-julius-[a-f0-9]{16}\.t3code\.test$/),
+            hostname: expect.stringMatching(/^dev-alex-[a-f0-9]{16}\.t3code\.test$/),
           },
           { service: "http_status:404" },
         ],

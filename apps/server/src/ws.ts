@@ -204,6 +204,7 @@ import * as HubParity from "./hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "./hub/OpenCodexManagedUpdate.ts";
 import { makeOpenCodexRpcHandlers } from "./hub/opencodexRpc.ts";
 import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
+import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
 import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -268,7 +269,6 @@ import {
 } from "./orchestration-v2/threadHistoryPaging.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import { dedupeSnapshotBodies } from "@goat/shared/orchestrationV2DedupedBodies";
-import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -309,6 +309,7 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { storageRpcHandlers } from "./storage/storageRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -1492,7 +1493,6 @@ export const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
-      const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
@@ -1656,7 +1656,10 @@ export const layerWsRpc = (
             client: { sessionId: currentSessionId, label: "GOAT client", access },
           } satisfies McpInvocationScope;
         });
-      const opencodexRpc = yield* makeOpenCodexRpcHandlers(hubScope("full-access"));
+      const opencodexRpc = yield* makeOpenCodexRpcHandlers(
+        hubScope("full-access"),
+        currentSessionId,
+      );
       // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
       const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
         ? { sessionId: currentSessionId, scopes: currentSession.scopes }
@@ -2992,9 +2995,8 @@ export const layerWsRpc = (
               ),
             ),
           ),
-        [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
-        [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
         [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
+        ...(yield* storageRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:
@@ -3805,6 +3807,7 @@ export const layer = Layer.unwrap(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
     const opencodexSync = yield* OpenCodexSync.OpenCodexSync;
+    const childBootstrap = yield* ChildBootstrap.OpenCodexChildBootstrap;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
@@ -3913,6 +3916,7 @@ export const layer = Layer.unwrap(
                 Layer.mergeAll(
                   Layer.succeed(HubMembership.HubMembership, hubMembershipService),
                   Layer.succeed(OpenCodexSync.OpenCodexSync, opencodexSync),
+                  Layer.succeed(ChildBootstrap.OpenCodexChildBootstrap, childBootstrap),
                   Option.match(opencodexUpdateService, {
                     onNone: () => Layer.empty,
                     onSome: (service) =>

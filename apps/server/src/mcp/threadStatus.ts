@@ -191,6 +191,9 @@ export function statusFromShell(
         : {
             runId: run.id,
             status: run.status,
+            ...(run.terminationCause === undefined
+              ? {}
+              : { terminationCause: run.terminationCause }),
             requestedAt: DateTime.formatIso(run.requestedAt),
             startedAt: iso(run.startedAt),
             completedAt: iso(run.completedAt),
@@ -252,6 +255,9 @@ export function statusFromRead(
         : {
             runId: run.runId,
             status: run.status,
+            ...(run.terminationCause === undefined
+              ? {}
+              : { terminationCause: run.terminationCause }),
             requestedAt: run.requestedAt,
             startedAt: run.startedAt,
             completedAt: run.completedAt,

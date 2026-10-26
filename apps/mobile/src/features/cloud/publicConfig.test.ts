@@ -14,13 +14,13 @@ describe("resolveCloudPublicConfig", () => {
   it("rejects an insecure relay URL", () => {
     expect(
       resolveCloudPublicConfig({
-        clerk: { publishableKey: "pk_test_example", jwtTemplate: "t3-relay" },
+        clerk: { publishableKey: "pk_test_example", jwtTemplate: "goat-relay" },
         relay: { url: "http://relay.example.test" },
       }),
     ).toEqual({
       clerk: {
         publishableKey: "pk_test_example",
-        jwtTemplate: "t3-relay",
+        jwtTemplate: "goat-relay",
       },
       relay: {
         url: null,

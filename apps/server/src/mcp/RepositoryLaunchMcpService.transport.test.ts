@@ -60,6 +60,7 @@ it.effect(
         .mockReturnValue(Effect.succeed(targets));
       using _manager = vi.spyOn(SshTunnel.SshEnvironmentManager, "layer").mockReturnValue(
         Layer.mock(SshTunnel.SshEnvironmentManager)({
+          attachedServerKind: () => Effect.succeed(null),
           readyEnvironment: (target) =>
             Effect.sync(() => {
               events.push(`ready:${target.alias}`);

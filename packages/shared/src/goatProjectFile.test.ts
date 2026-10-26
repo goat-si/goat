@@ -28,7 +28,7 @@ describe("parseGoatProjectFile", () => {
   it("reads project defaults from JSONC with a URL in a block comment", () => {
     expect(
       parseGoatProjectFile(`{
-        /* See https://t3.codes/schema/t3.json */
+        /* See https://exa.test/schema/t3.json */
         "defaultThreadEnvMode": "worktree"
       }`),
     ).toEqual({ defaultThreadEnvMode: "worktree" });

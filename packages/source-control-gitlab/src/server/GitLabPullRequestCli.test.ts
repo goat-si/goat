@@ -806,7 +806,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
                   {
                     id: 2,
                     body: "done",
-                    author: { username: "julius" },
+                    author: { username: "alex" },
                     created_at: "2026-07-01T01:00:00Z",
                   },
                 ],
@@ -902,7 +902,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
           output(
             JSON.stringify([
               { id: 5, name: "thumbsup", user: { username: "bilal" } },
-              { id: 6, name: "thumbsup", user: { username: "julius" } },
+              { id: 6, name: "thumbsup", user: { username: "alex" } },
             ]),
           ),
         ),

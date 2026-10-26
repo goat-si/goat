@@ -9,7 +9,7 @@ import {
 describe("relayOwnsManagedEndpointZone", () => {
   it("keeps the shared Cloudflare zone owned by production", () => {
     expect(relayOwnsManagedEndpointZone("prod")).toBe(true);
-    expect(relayOwnsManagedEndpointZone("dev_julius")).toBe(false);
+    expect(relayOwnsManagedEndpointZone("dev_alex")).toBe(false);
   });
 });
 
@@ -28,6 +28,6 @@ describe("managed endpoint names", () => {
   it("rejects hostnames outside the relay zone", () => {
     expect(isManagedEndpointHostname("internal.example.net", "example.com")).toBe(false);
     expect(isManagedEndpointHostname("example.com.attacker.test", "example.com")).toBe(false);
-    expect(isManagedEndpointHostname("dev-julius.example.com.", "example.com")).toBe(false);
+    expect(isManagedEndpointHostname("dev-alex.example.com.", "example.com")).toBe(false);
   });
 });

@@ -1,10 +1,16 @@
 import * as NodeEvents from "node:events";
 
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
-import { chromium, type Browser, type BrowserContext, type BrowserType } from "playwright-core";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserType,
+  type CDPSession,
+} from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
 const launches = vi.hoisted(() => ({
   launch: vi.fn<BrowserType["launch"]>(),
@@ -224,4 +230,143 @@ describe("ServerBrowserContexts", () => {
     expect(browser.close).toHaveBeenCalledTimes(1);
     expect(browser.contexts[0]?.close).toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "enables hardware GPU and ignores SwiftShader on darwin by default",
+      platform: "darwin" as const,
+      env: {},
+      expectDisableGpu: false,
+      expectIgnoreSwiftShader: true,
+    },
+    {
+      name: "enables hardware GPU and ignores SwiftShader on win32 by default",
+      platform: "win32" as const,
+      env: {},
+      expectDisableGpu: false,
+      expectIgnoreSwiftShader: true,
+    },
+    {
+      name: "disables GPU on linux by default",
+      platform: "linux" as const,
+      env: {},
+      expectDisableGpu: true,
+      expectIgnoreSwiftShader: false,
+    },
+    {
+      name: "honors GOAT_SERVER_BROWSER_GPU=0 on darwin",
+      platform: "darwin" as const,
+      env: { GOAT_SERVER_BROWSER_GPU: "0" },
+      expectDisableGpu: true,
+      expectIgnoreSwiftShader: false,
+    },
+    {
+      name: "honors GOAT_SERVER_BROWSER_GPU=1 on linux",
+      platform: "linux" as const,
+      env: { GOAT_SERVER_BROWSER_GPU: "1" },
+      expectDisableGpu: false,
+      expectIgnoreSwiftShader: true,
+    },
+  ])("$name", async ({ platform, env, expectDisableGpu, expectIgnoreSwiftShader }) => {
+    const browser = makeBrowser();
+    launches.launch.mockResolvedValue(browser as unknown as Browser);
+    const pool = new ServerBrowserContexts({ ...options(), platform, env });
+    await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID);
+    const call = launches.launch.mock.calls[0]?.[0];
+    const ignoreDefaultArgs = Array.isArray(call?.ignoreDefaultArgs) ? call.ignoreDefaultArgs : [];
+    expect(call?.args).toContain("--headless=new");
+    expect(call?.args?.includes("--disable-gpu")).toBe(expectDisableGpu);
+    expect(ignoreDefaultArgs).toContain("--enable-automation");
+    expect(ignoreDefaultArgs).toContain("--headless");
+    expect(ignoreDefaultArgs.includes("--enable-unsafe-swiftshader")).toBe(expectIgnoreSwiftShader);
+    await pool.close();
+  });
+});
+
+describe("presentAsChrome", () => {
+  it.each([
+    {
+      name: "maps Darwin 24/25/27 and HeadlessChrome to reduced Chrome UA and full Sec-CH-UA metadata",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.8037.92 Safari/537.36",
+      product: "HeadlessChrome/154.0.8037.92",
+      host: { platform: "darwin" as const, arch: "arm64", release: "24.4.0" },
+      expectedUa:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+      expectedPlatform: "macOS",
+      expectedPlatformVersion: "15.0.0",
+      expectedFullVersion: "154.0.8037.92",
+    },
+    {
+      name: "maps Darwin 25 to macOS 26.0.0 and preserves 4-part version from product when UA is already reduced",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+      product: "Chrome/154.0.8037.92",
+      host: { platform: "darwin" as const, arch: "arm64", release: "25.1.0" },
+      expectedUa:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+      expectedPlatform: "macOS",
+      expectedPlatformVersion: "26.0.0",
+      expectedFullVersion: "154.0.8037.92",
+    },
+    {
+      name: "maps Darwin 27 to macOS 27.0.0",
+      userAgent: "Mozilla/5.0 HeadlessChrome/154.0.8037.92",
+      product: "HeadlessChrome/154.0.8037.92",
+      host: { platform: "darwin" as const, arch: "arm64", release: "27.2.0" },
+      expectedUa: "Mozilla/5.0 Chrome/154.0.0.0",
+      expectedPlatform: "macOS",
+      expectedPlatformVersion: "27.0.0",
+      expectedFullVersion: "154.0.8037.92",
+    },
+    {
+      name: "maps Windows 11 build >= 22000 to platformVersion 15.0.0",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HeadlessChrome/154.0.8037.92",
+      product: "HeadlessChrome/154.0.8037.92",
+      host: { platform: "win32" as const, arch: "x64", release: "10.0.22631" },
+      expectedUa: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/154.0.0.0",
+      expectedPlatform: "Windows",
+      expectedPlatformVersion: "15.0.0",
+      expectedFullVersion: "154.0.8037.92",
+    },
+    {
+      name: "normalizes Linux kernel release to x.y.z",
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.8037.92",
+      product: "HeadlessChrome/154.0.8037.92",
+      host: { platform: "linux" as const, arch: "x64", release: "6.8.0-45-generic" },
+      expectedUa: "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0",
+      expectedPlatform: "Linux",
+      expectedPlatformVersion: "6.8.0",
+      expectedFullVersion: "154.0.8037.92",
+    },
+  ])(
+    "$name",
+    async ({
+      userAgent,
+      product,
+      host,
+      expectedUa,
+      expectedPlatform,
+      expectedPlatformVersion,
+      expectedFullVersion,
+    }) => {
+      const send = vi.fn(async (method: string) => {
+        if (method === "Browser.getVersion") return { userAgent, product };
+        return {};
+      });
+      await presentAsChrome({ send } as unknown as CDPSession, host);
+      expect(send).toHaveBeenCalledWith("Emulation.setUserAgentOverride", {
+        userAgent: expectedUa,
+        userAgentMetadata: expect.objectContaining({
+          platform: expectedPlatform,
+          platformVersion: expectedPlatformVersion,
+          fullVersionList: [
+            { brand: "Chromium", version: expectedFullVersion },
+            { brand: "Google Chrome", version: expectedFullVersion },
+            { brand: "Not A(Brand", version: "99.0.0.0" },
+          ],
+        }),
+      });
+    },
+  );
 });

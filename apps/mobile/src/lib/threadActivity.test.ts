@@ -1210,7 +1210,7 @@ describe("buildThreadFeed", () => {
     expect(activity?.getCopyText().split("\n")[0]).toBe("Read a GOAT thread");
   });
 
-  it("uses canonical T3 orchestration summaries in compact work groups", () => {
+  it("uses canonical GOAT orchestration summaries in compact work groups", () => {
     const rows = [
       projected(command("2026-06-20T00:00:01.000Z"), 0),
       ...["mcp__t3-code__goat_thread_send", "t3_code.goat_thread_send", "goat_thread_send"].map(
@@ -2049,5 +2049,5 @@ it("shows commands that only inspect files as reads and listings", () => {
   ]);
   expect(activities.map((activity) => activity.icon)).toEqual(["eye", "folder"]);
   // Expanded, the row shows the command it ran.
-  expect(workEntryRowLabel(activities[0]!.workEntry, true)).toBe("nl -ba src/env.ts");
+  expect(workEntryRowLabel(activities[0]!.workEntry, true)).toBe("Ran nl -ba src/env.ts");
 });

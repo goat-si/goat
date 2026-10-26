@@ -88,7 +88,7 @@ export class EnvironmentLinker extends Context.Service<
       EnvironmentLinkError
     >;
   }
->()("t3code-relay/environments/EnvironmentLinker") {}
+>()("goat-relay/environments/EnvironmentLinker") {}
 
 const decodeProof = Schema.decodeUnknownEffect(RelayEnvironmentLinkProofPayload);
 
@@ -183,7 +183,7 @@ const make = Effect.gen(function* () {
           expiresAt: DateTime.formatIso(DateTime.makeUnsafe(candidate.exp * 1_000)),
         });
       }
-      const issuer = `t3-env:${candidate.environmentId}`;
+      const issuer = `goat-env:${candidate.environmentId}`;
       const relayIssuer = normalizeRelayIssuer(config.relayIssuer);
       const verified = yield* verifyRelayJwt({
         publicKey: candidate.environmentPublicKey,

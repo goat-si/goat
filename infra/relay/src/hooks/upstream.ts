@@ -11,8 +11,8 @@ import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import { withoutRedirects } from "../environments/EnvironmentConnector.ts";
 
-const RELAY_DELIVERY_ID_HEADER = "x-t3-relay-delivery-id";
-const RELAY_RECEIVED_AT_HEADER = "x-t3-relay-received-at";
+const RELAY_DELIVERY_ID_HEADER = "x-goat-relay-delivery-id";
+const RELAY_RECEIVED_AT_HEADER = "x-goat-relay-received-at";
 const MAX_RESPONSE_BYTES = 64 * 1024;
 export const RELAY_HOOK_UPSTREAM_TIMEOUT_MS = 8_000;
 // Cloudflare answers 530 when the tunnel for a hostname has no connected origin.
@@ -99,7 +99,7 @@ export const sendUpstream = Effect.fn("upstream.sendUpstream")(function* (
     Effect.flatMap((response) =>
       readCapped(response).pipe(
         Effect.map((body): UpstreamResponse => {
-          const outcome = response.headers["x-t3-hook-outcome"];
+          const outcome = response.headers["x-goat-hook-outcome"];
           return {
             status: response.status,
             contentType: response.headers["content-type"],

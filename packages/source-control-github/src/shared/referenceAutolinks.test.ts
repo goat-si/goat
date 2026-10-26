@@ -10,13 +10,13 @@ describe("gitHubReferenceAutolinks", () => {
   it("links references, cross-repository references, commits and mentions", () => {
     expect(
       linked(
-        "Closes #123, fixes other/project#9; other#4 @julius @team/mobile abc1234 other/project@abcdef1",
+        "Closes #123, fixes other/project#9; other#4 @alex @team/mobile abc1234 other/project@abcdef1",
       ),
     ).toEqual([
       ["#123", "https://github.com/team/repo/issues/123", "reference"],
       ["other/project#9", "https://github.com/other/project/issues/9", "reference"],
       ["other#4", "https://github.com/other/repo/issues/4", "reference"],
-      ["@julius", "https://github.com/julius", "mention"],
+      ["@alex", "https://github.com/alex", "mention"],
       ["@team/mobile", "https://github.com/orgs/team/teams/mobile", "mention"],
       ["abc1234", "https://github.com/team/repo/commit/abc1234", "commit"],
       ["other/project@abcdef1", "https://github.com/other/project/commit/abcdef1", "commit"],

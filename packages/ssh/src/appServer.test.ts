@@ -15,7 +15,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   hostEnvironmentIdScript,
   parseAppServerProbe,
+  parseExistingServerProbe,
   probeAppServer,
+  probeExistingServer,
   shouldMoveToAppServer,
 } from "./appServer.ts";
 import {
@@ -141,6 +143,86 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
 });
 
 describe("GOAT app server attachment", () => {
+  it.live("probes two live server IDs and refuses a stale descriptor", () =>
+    Effect.gen(function* () {
+      const appId = "11111111-1111-4111-8111-111111111111";
+      const managedId = "22222222-2222-4222-8222-222222222222";
+      const app = yield* startAppServer({ ...attachableDescriptor, environmentId: appId });
+      const managed = yield* startAppServer({ ...attachableDescriptor, environmentId: managedId });
+      const host = yield* makeHost({ pid: process.pid, port: app.port });
+      const fs = yield* FileSystem.FileSystem;
+      const managedHome = `${host.home}/.goat/userdata`;
+      expect(
+        (yield* probeExistingServer(uploadTarget, "managed").pipe(Effect.provide(host.spawner)))
+          .kind,
+      ).toBe("absent");
+      yield* fs.makeDirectory(managedHome, { recursive: true });
+      yield* fs.writeFileString(`${host.home}/.goat/desktop/userdata/environment-id`, `${appId}\n`);
+      yield* fs.writeFileString(`${managedHome}/environment-id`, `${managedId}\n`);
+      yield* fs.writeFileString(`${managedHome}/runtime-control.token`, `${TOKEN}\n`);
+      yield* fs.writeFileString(
+        `${managedHome}/server-runtime.json`,
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: managed.port,
+          origin: `http://127.0.0.1:${managed.port}`,
+        }),
+      );
+      const probe = (kind: "app" | "managed") =>
+        probeExistingServer(uploadTarget, kind).pipe(Effect.provide(host.spawner));
+      expect(yield* probe("app")).toEqual({
+        kind: "live",
+        environmentId: appId,
+        port: app.port,
+        version: attachableDescriptor.serverVersion,
+      });
+      expect(yield* probe("managed")).toEqual({
+        kind: "live",
+        environmentId: managedId,
+        port: managed.port,
+        version: attachableDescriptor.serverVersion,
+      });
+      yield* fs.writeFileString(`${managedHome}/environment-id`, `${appId}\n`);
+      expect((yield* probe("managed")).kind).toBe("unusable");
+      yield* fs.writeFileString(`${managedHome}/environment-id`, `${managedId}\n`);
+      yield* fs.remove(`${managedHome}/runtime-control.token`);
+      expect((yield* probe("managed")).kind).toBe("unusable");
+      yield* fs.writeFileString(`${managedHome}/runtime-control.token`, `${TOKEN}\n`);
+      yield* fs.writeFileString(
+        `${managedHome}/server-runtime.json`,
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: app.port,
+          origin: `http://127.0.0.1:${app.port}`,
+        }),
+      );
+      expect((yield* probe("managed")).kind).toBe("unusable");
+      yield* fs.writeFileString(
+        `${managedHome}/server-runtime.json`,
+        JSON.stringify({
+          version: 1,
+          pid: 99999999,
+          port: managed.port,
+          origin: `http://127.0.0.1:${managed.port}`,
+        }),
+      );
+      expect((yield* probe("managed")).kind).toBe("unusable");
+      // A clean shutdown removes the record but keeps the identity and database.
+      yield* fs.remove(`${managedHome}/server-runtime.json`);
+      expect((yield* probe("managed")).kind).toBe("unusable");
+      expect(
+        parseExistingServerProbe(
+          `GOAT_EXISTING=live ${managed.port} ${managedId}\n${JSON.stringify({
+            ...attachableDescriptor,
+            environmentId: managedId,
+            protocol: { ...attachableDescriptor.protocol, ssh: { min: 9999, max: 9999 } },
+          })}\n`,
+        ).kind,
+      ).toBe("unusable");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.live(
     "a host running the app server serves SSH clients from it, credentials included, and starts no managed server",
     () =>

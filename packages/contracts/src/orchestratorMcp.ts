@@ -43,6 +43,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import { TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
@@ -731,6 +732,7 @@ export const OrchestratorMcpThreadRun = Schema.Struct({
   runId: RunId,
   ordinal: PositiveInt,
   status: OrchestrationV2RunStatus,
+  terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
   requestedAt: IsoDateTime,
@@ -891,6 +893,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
     Schema.Struct({
       runId: RunId,
       status: OrchestrationV2RunStatus,
+      terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
       requestedAt: IsoDateTime,
       startedAt: Schema.NullOr(IsoDateTime),
       completedAt: Schema.NullOr(IsoDateTime),

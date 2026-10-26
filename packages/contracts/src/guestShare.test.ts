@@ -13,8 +13,8 @@ describe("GuestRedeemRequest", () => {
       "Maya owner",
       "Maya owner",
       "Maya\u0007",
-      "Theo\u202E (owner)",
-      "Theo\u2066x",
+      "Sam\u202E (owner)",
+      "Sam\u2066x",
     ]) {
       expect(isRedeem({ credential: "invite", name })).toBe(false);
     }

@@ -27,6 +27,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as WorktreeInventoryService from "../../WorktreeInventoryService.ts";
 import * as WorktreeMcpService from "../../WorktreeMcpService.ts";
 import { withClientRequestId } from "../keyedParameters.ts";
+import { StorageCleanTool, StorageUsageTool } from "../storage/tools.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -119,4 +120,6 @@ export const WorktreeToolkit = Toolkit.make(
   WorktreeInventoryTool,
   WorktreeRemoveTool,
   WorktreeCleanupTool,
+  StorageUsageTool,
+  StorageCleanTool,
 );

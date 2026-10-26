@@ -115,7 +115,7 @@ describe("decodePullRequestJson", () => {
           pullRequest({
             participants: [
               {
-                user: { nickname: "julius", display_name: "Julius" },
+                user: { nickname: "alex", display_name: "Alex" },
                 role: "REVIEWER",
                 approved: true,
                 state: "approved",
@@ -137,7 +137,7 @@ describe("decodePullRequestJson", () => {
     expect(decoded.reviews).toHaveLength(1);
     expect(decoded.reviews[0]).toMatchObject({
       kind: "review",
-      author: { login: "julius" },
+      author: { login: "alex" },
       reviewState: "approved",
       createdAt: "2026-06-17T09:00:00.000Z",
     });

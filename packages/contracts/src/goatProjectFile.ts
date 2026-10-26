@@ -7,7 +7,7 @@ import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.t
 
 export const GOAT_PROJECT_FILE_NAME = "goat.json";
 
-export const GOAT_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json"; // goat-rename: legacy
+export const GOAT_PROJECT_FILE_SCHEMA_URL = "https://goat-si.github.io/goat/schema/goat.json";
 
 const GOAT_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const GOAT_PROJECT_FILE_MAX_SCRIPTS = 50;

@@ -6,9 +6,9 @@ describe("device host changes across environments", () => {
     kind: "ssh" as const,
     id: "shared",
     label: "Mac mini",
-    target: "julius@macmini",
+    target: "alex@macmini",
   };
-  const local = { kind: "ssh" as const, id: "other", label: "Android", target: "julius@android" };
+  const local = { kind: "ssh" as const, id: "other", label: "Android", target: "alex@android" };
 
   it("adds to differing host lists without losing environment-specific hosts, including on retry", () => {
     const environments = [[], [local], [shared, local]];
@@ -19,7 +19,7 @@ describe("device host changes across environments", () => {
 
   // regression: #11541 device settings edits must apply to selected environments only
   it("edits and removes the shared host while preserving unrelated hosts", () => {
-    const edited = { ...shared, target: "julius@new-address" };
+    const edited = { ...shared, target: "alex@new-address" };
     const saved = [[shared], [local, shared]].map((hosts) =>
       updateDeviceHosts(hosts, edited, false),
     );
@@ -29,7 +29,7 @@ describe("device host changes across environments", () => {
 
   it("recognizes a host added separately on another environment and preserves its local ID", () => {
     const remote = { ...shared, id: "remote-id" };
-    const edited = { ...shared, target: "julius@new-address" };
+    const edited = { ...shared, target: "alex@new-address" };
     expect(updateDeviceHosts([remote, local], shared, false)).toEqual([remote, local]);
     const saved = updateDeviceHosts([remote, local], edited, false, shared);
     expect(saved).toEqual([{ ...edited, id: remote.id }, local]);

@@ -179,7 +179,7 @@ describe("decodeThreadsJson", () => {
                 {
                   id: 1,
                   content: "Second remark.",
-                  author: { displayName: "Julius", uniqueName: "julius@acme.dev" },
+                  author: { displayName: "Alex", uniqueName: "alex@acme.dev" },
                   publishedDate: "2026-07-03T00:00:00Z",
                 },
               ],

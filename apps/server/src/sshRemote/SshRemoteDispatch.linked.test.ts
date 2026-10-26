@@ -126,7 +126,7 @@ describe("SshRemoteDispatch with a linked host", () => {
       });
       expect(
         record.filter((entry) => entry.method === "tools/call").map((entry) => entry.tool),
-      ).toEqual(["goat_project_list", "goat_thread_launch"]);
+      ).toEqual(["goat_environment_read", "goat_project_list", "goat_thread_launch"]);
     }),
   );
 
@@ -170,7 +170,7 @@ describe("SshRemoteDispatch with a linked host", () => {
       });
       expect(
         record.filter((entry) => entry.method === "tools/call").map((entry) => entry.tool),
-      ).toEqual(["goat_project_list"]);
+      ).toEqual(["goat_environment_read", "goat_project_list"]);
     }),
   );
 

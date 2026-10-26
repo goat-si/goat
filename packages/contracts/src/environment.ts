@@ -101,6 +101,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       generationHold: Schema.optionalKey(Schema.Boolean),
       /** Separate diagnostics/read and Settings reconcile RPCs; absent on older servers. */
       hubDiagnostics: Schema.optionalKey(Schema.Boolean),
+      /** Server accepts the opt-in `aside` import source format; absent on older servers. */
+      asideImport: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -128,12 +130,23 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   worktreesDirectory: Schema.optionalKey(Schema.Boolean),
   /** Server answers `server.getWorktreesDirectoryStatus` and falls back when it is unavailable. */
   worktreesDirectoryStatus: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server answers `server.getStorageUsage`, `server.cleanUpStorageItems` and
+   * `server.subscribeDiskPressure`. Clients show disk usage and cleanup only for servers that set it.
+   */
+  storageUsage: Schema.optionalKey(Schema.Boolean),
   /** Server can exclude PR-linked threads from inactivity settlement. */
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
   /** Hide the switch when absent; older servers silently drop per-project provider patches. */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server delivers the goat-discipline built-in skill to a turn that names it and honors a
+   * project's `builtInSkills` switch. Older servers would leave the mention as plain text and drop
+   * the switch, so clients list the skill and show its settings only when this is true.
+   */
+  devDisciplineSkill: Schema.optionalKey(Schema.Boolean),
   threadSnooze: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.promote. Same version-skew contract as threadSettlement. */
   threadPromotion: Schema.optionalKey(Schema.Boolean),

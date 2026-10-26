@@ -302,7 +302,7 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
               sourceItemKey: c.sourceItemKey,
               sourceFingerprint: c.sourceFingerprint,
               byteCount: c.byteCount,
-              mappingRequired: !previous,
+              mappingRequired: !previous || c.requiresProject === true,
               ...(previous
                 ? {
                     priorOutcome: suppressed ? ("suppressed" as const) : previous.outcome,
@@ -480,6 +480,12 @@ export const makeProviderMemoryImport: MakeProviderMemoryImport = (
               row.candidate.sourceFingerprint !== selector.sourceFingerprint)
           )
             return yield* new M.MemoryImportRpcError({ issue: "source_changed" });
+          // Refused before any commit: such rows import only into an explicitly bound project.
+          if (
+            (row.kind === "candidate" ? row.candidate.requiresProject : row.requiresProject) &&
+            (selector.scope.kind !== "project" || !selector.project)
+          )
+            return yield* new M.MemoryImportRpcError({ issue: "scope_unmapped" });
           const raw: ImportCandidate =
             row.kind === "candidate"
               ? row.candidate

@@ -89,7 +89,7 @@ describe("SSH manager shutdown ownership", () => {
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
           if (command.args.includes("-G"))
-            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (command.args.includes("-N")) return makeRunningProcess(() => {});
           if (isRemoteLaunch(command.args)) {
             count.launches++;
@@ -192,7 +192,7 @@ describe("SSH manager shutdown ownership", () => {
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
           if (command.args.includes("-G"))
-            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (command.args.includes("-N")) return makeRunningProcess(() => {});
           const stdin = command.options.stdin;
           const script =

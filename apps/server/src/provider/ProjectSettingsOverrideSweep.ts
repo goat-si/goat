@@ -1,4 +1,8 @@
-import { type ProjectId, type ServerSettings } from "@goat/contracts";
+import {
+  PROJECT_SETTINGS_OVERRIDES_REMOVAL,
+  type ProjectId,
+  type ServerSettings,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -25,7 +29,7 @@ export const sweep = Effect.gen(function* () {
 
   yield* serverSettings.updateSettings({
     projectSettingsOverrides: Object.fromEntries(
-      orphanedProjectIds.map((projectId) => [projectId, null]),
+      orphanedProjectIds.map((projectId) => [projectId, PROJECT_SETTINGS_OVERRIDES_REMOVAL]),
     ),
   });
 }).pipe(

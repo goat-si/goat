@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { hubDeviceList, type ChildSetup } from "@goat/client-runtime/hub-devices";
+import {
+  cloudAutoJoinSaveError,
+  hubDeviceList,
+  type ChildSetup,
+} from "@goat/client-runtime/hub-devices";
 import {
   canRemoveHubNode,
   HUB_NODE_IMPORT_NOTICE,
@@ -26,6 +30,7 @@ import { useEnvironments, type EnvironmentPresentation } from "../../state/envir
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -135,6 +140,10 @@ function HubDevicesList({
 }) {
   const listed = useEnvironmentQuery(serverEnvironment.hubNodesLive({ environmentId, input: {} }));
   const status = useEnvironmentQuery(serverEnvironment.hostStatus({ environmentId, input: {} }));
+  const { environments } = useEnvironments();
+  const hubSettings =
+    environments.find((entry) => entry.environmentId === environmentId)?.serverConfig?.settings
+      .hub ?? null;
   const hosts = status.data?.hosts ?? [];
   const unsupported = isHubNodesUnsupportedError(listed.cause);
   const rows = hubDeviceList({
@@ -160,6 +169,14 @@ function HubDevicesList({
   const check = useAtomCommand(serverEnvironment.checkHubNodes, { reportFailure: false });
   const remove = useAtomCommand(serverEnvironment.removeHubNode, { reportFailure: false });
   const dismiss = useAtomCommand(serverEnvironment.dismissHubNodeNotice, { reportFailure: false });
+  const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const canOptIn = useAtomValue(
+    serverEnvironment.setHubDeviceChildOptIn.permissionAtom(environmentId),
+  );
+  const setOptIn = useAtomCommand(serverEnvironment.setHubDeviceChildOptIn, {
+    reportFailure: false,
+  });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now);
@@ -180,11 +197,41 @@ function HubDevicesList({
     }
   };
   const linkKnown = status.isSuccess;
+  // An older hub drops the field and answers on, since it always joins its cloud machines.
+  const saveCloudAutoJoin = (autoJoinCloudMachines: boolean) =>
+    void run("cloud-auto-join", async () => {
+      const result = await updateSettings({
+        environmentId,
+        input: { patch: { hub: { autoJoinCloudMachines } } },
+      });
+      if (result._tag === "Success")
+        setError(
+          cloudAutoJoinSaveError(autoJoinCloudMachines, result.value.hub.autoJoinCloudMachines),
+        );
+      return result;
+    });
   return (
     <View className="gap-4">
       <Text className="text-sm text-foreground-muted">
         Add devices from the hub's Settings on desktop or web.
       </Text>
+      {hubSettings === null ? null : (
+        <View className="flex-row items-center gap-3 rounded-xl bg-grouped-card p-4">
+          <View className="flex-1 gap-1">
+            <Text className="text-foreground">Join new cloud machines</Text>
+            <Text className="text-sm text-foreground-muted">
+              A cloud machine this hub creates gets its OpenCodex and joins as a Child the first
+              time it is used. Off: new machines stay standalone, and linked ones stay linked.
+            </Text>
+          </View>
+          <ThemedSwitch
+            accessibilityLabel="Join new cloud machines"
+            value={hubSettings.autoJoinCloudMachines}
+            disabled={!canConfigure || !hubSettings.enabled || busy !== null}
+            onValueChange={saveCloudAutoJoin}
+          />
+        </View>
+      )}
       {unsupported ? (
         <Text className="text-sm text-foreground-muted">
           This hub runs an older GOAT without a device list. Update GOAT on the hub to manage its
@@ -231,7 +278,7 @@ function HubDevicesList({
           {listed.data === null && !listed.error ? "Loading devices…" : "No devices added yet."}
         </Text>
       ) : null}
-      {rows.map(({ key, label: rowLabel, node, device, childSetup }) => {
+      {rows.map(({ key, label: rowLabel, node, device, childSetup, childOptIn }) => {
         const link =
           device !== null
             ? HUB_TRANSPORT_LABEL[device.transport]
@@ -276,6 +323,33 @@ function HubDevicesList({
                 {childSetup.detail === null ? null : (
                   <Text className="text-sm text-foreground-muted">{childSetup.detail}</Text>
                 )}
+              </View>
+            )}
+            {childOptIn === null ? null : (
+              <View className="flex-row items-center gap-3">
+                <View className="flex-1 gap-1">
+                  <Text className="text-sm text-foreground">
+                    Join as OpenCodex Child after each SSH setup
+                  </Text>
+                  <Text className="text-sm text-foreground-muted">
+                    Turning this off keeps an existing link.
+                  </Text>
+                </View>
+                <ThemedSwitch
+                  accessibilityLabel={`Join ${rowLabel} as OpenCodex Child after each SSH setup`}
+                  value={childOptIn.enabled}
+                  disabled={!canOptIn || busy !== null}
+                  onValueChange={(enabled) =>
+                    void run(`opt-in:${childOptIn.host}`, async () => {
+                      const result = await setOptIn({
+                        environmentId,
+                        input: { deviceAlias: childOptIn.host, enabled },
+                      });
+                      status.refresh();
+                      return result;
+                    })
+                  }
+                />
               </View>
             )}
             {node === null ? null : (

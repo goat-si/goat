@@ -770,7 +770,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const f = yield* fixture;
         yield* f.shiftHostClock(60);
         let forwardAlive = true;
-        let configuration = "hostname devbox.example.com\nuser julius\nport 2222\n";
+        let configuration = "hostname devbox.example.com\nuser alex\nport 2222\n";
         let runner: RemoteGoatRunnerOptions = {
           ...f.runner,
           refreshOwnedRuntimeOnFirstConnection: true,
@@ -895,7 +895,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         yield* f.fs.writeFileString(pinPath, "devbox ssh-ed25519 AAAA\n");
         yield* f.fs.writeFileString(
           `${directory}/devbox.conf`,
-          `Host devbox\n  HostName devbox.example.com\n  User julius\n  Port 2222\n  HostKeyAlias devbox\n  UserKnownHostsFile "${pinPath}"\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  HostKeyAlgorithms ssh-ed25519\n`,
+          `Host devbox\n  HostName devbox.example.com\n  User alex\n  Port 2222\n  HostKeyAlias devbox\n  UserKnownHostsFile "${pinPath}"\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  HostKeyAlgorithms ssh-ed25519\n`,
         );
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -929,7 +929,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (command._tag === "StandardCommand" && command.args.includes("-G"))
             return Effect.succeed(
               makeSuccessfulProcess(
-                `hostname devbox.example.com\nuser julius\nport 2222\nhostkeyalias devbox\nuserknownhostsfile ${pinPath}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
+                `hostname devbox.example.com\nuser alex\nport 2222\nhostkeyalias devbox\nuserknownhostsfile ${pinPath}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
               ),
             );
           if (command._tag === "StandardCommand" && command.args.includes("-N")) {
@@ -1001,7 +1001,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const resolved = yield* Deferred.make<void>();
           let pause = false;
           let forwardAlive = true;
-          let configuration = "hostname devbox.example.com\nuser julius\nport 2222\n";
+          let configuration = "hostname devbox.example.com\nuser alex\nport 2222\n";
           const logger = Logger.make(({ message }) => {
             if (
               String(message).startsWith("ssh.environment.target.resolved") &&

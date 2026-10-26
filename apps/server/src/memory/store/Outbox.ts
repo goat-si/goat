@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import type { CoreReads } from "./CoreReads.ts";
 import type { ImportLineage } from "./ImportLineage.ts";
@@ -320,6 +321,8 @@ export const makeOutbox = (
     );
     const slots = Math.min(limit, M.MEMORY_PENDING_FORGET_INTENTS_MAX - (counts[0]?.count ?? 0));
     if (slots > 0) {
+      // This scan of every memory event runs on each sweep and only finds candidates; the writes
+      // below re-check them. On the reader it no longer occupies the writer the server shares.
       const deferred = yield* stored(
         "deferred-forget-intents",
         sql<{
@@ -337,7 +340,7 @@ export const makeOutbox = (
         AND EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=e.memory_space_id AND t.memory_id=e.memory_id)
         AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents p WHERE p.space=e.memory_space_id AND p.memory_id=e.memory_id)
         AND NOT EXISTS (SELECT 1 FROM (SELECT memory_space_id AS space,receipt_json FROM memory_events UNION ALL SELECT space,receipt_json FROM memory_compact_receipts) r WHERE r.space=e.memory_space_id AND json_extract(r.receipt_json,'$.forgetRetryOf.operationId')=e.operation_id AND json_extract(r.receipt_json,'$.outcome')!='rejected')
-        ORDER BY e.sequence LIMIT ${slots}`,
+        ORDER BY e.sequence LIMIT ${slots}`.pipe(NodeSqliteClient.readOnly),
       );
       for (const row of deferred)
         yield* preserveForgetIntent({

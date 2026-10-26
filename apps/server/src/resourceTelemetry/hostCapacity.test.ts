@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerConfig from "../config.ts";
 import * as HostResources from "./HostResources.ts";
 import {
   diskFromStatfs,
@@ -18,20 +19,21 @@ const statfsOk = (path: string, calls: Array<string>) => {
   return Promise.resolve({ bsize: 4096n, blocks: 100n, bavail: 40n });
 };
 
-it.effect("reads the linux root filesystem and its load average", () =>
+it.effect("reads the linux volume of the GOAT home and its load average", () =>
   Effect.gen(function* () {
     const calls: Array<string> = [];
     const extras = yield* readHostCapacityExtras({
       platform: "linux",
-      home: "/home/goat",
+      dataDir: "/home/goat/.goat",
       loadavg: [1.5, 1.25, 0.5],
       statfs: (path) => statfsOk(path, calls),
     });
-    expect(calls).toEqual(["/"]);
+    expect(calls).toEqual(["/home/goat/.goat"]);
     expect(extras).toEqual({
       loadAvg: { oneMinute: 1.5, fiveMinutes: 1.25, fifteenMinutes: 0.5 },
-      disk: { path: "/", availableBytes: 40 * 4096, totalBytes: 100 * 4096 },
+      disk: { path: "/home/goat/.goat", availableBytes: 40 * 4096, totalBytes: 100 * 4096 },
     });
+    expect(diskPathForPlatform("linux", "relative/.goat")).toBe("/");
   }),
 );
 
@@ -40,7 +42,7 @@ it.effect("reads the macOS home volume and its load average", () =>
     const calls: Array<string> = [];
     const extras = yield* readHostCapacityExtras({
       platform: "darwin",
-      home: "/Users/goat",
+      dataDir: "/Users/goat",
       loadavg: [0.2, 0.4, 0.6],
       statfs: (path) => statfsOk(path, calls),
     });
@@ -57,7 +59,7 @@ it.effect("reads the Windows home drive and omits the load average", () =>
     const calls: Array<string> = [];
     const extras = yield* readHostCapacityExtras({
       platform: "win32",
-      home: "C:/Users/goat",
+      dataDir: "C:/Users/goat",
       loadavg: [0, 0, 0],
       statfs: (path) => statfsOk(path, calls),
     });
@@ -74,7 +76,7 @@ it.effect("treats a Windows statfs failure as no disk", () =>
   Effect.gen(function* () {
     const extras = yield* readHostCapacityExtras({
       platform: "win32",
-      home: "D:\\Users\\goat",
+      dataDir: "D:\\Users\\goat",
       loadavg: [1, 1, 1],
       statfs: () => Promise.reject(Object.assign(new Error("ENOSYS"), { code: "ENOSYS" })),
     });
@@ -92,7 +94,7 @@ it.effect("does not call statfs for an unknown platform", () =>
     let called = false;
     const extras = yield* readHostCapacityExtras({
       platform: "freebsd",
-      home: "/home/goat",
+      dataDir: "/home/goat",
       loadavg: [1, 1, 1],
       statfs: () => {
         called = true;
@@ -115,15 +117,24 @@ it("drops a non-finite load average and an overflowing disk", () => {
   ).toBeNull();
 });
 
-it.effect("HostResources publishes load and disk with the CPU sample", () =>
+it.effect("HostResources publishes load and the disk that holds the GOAT home", () =>
   Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
     const resources = yield* HostResources.HostResources;
     const pending = yield* Effect.forkChild(resources.read);
     yield* TestClock.adjust("1 second");
     const snapshot = yield* Fiber.join(pending);
     expect(snapshot.cpuCount).toBeGreaterThan(0);
     expect(snapshot.loadAvg?.oneMinute).toEqual(expect.any(Number));
-    expect(snapshot.disk?.path).toBe("/");
+    // Worktrees and GOAT's data fill the volume GOAT's home is on, not necessarily / or the login home.
+    expect(snapshot.disk?.path).toBe(config.baseDir);
     expect(snapshot.disk?.totalBytes).toBeGreaterThan(0);
-  }).pipe(Effect.provide(HostResources.layer.pipe(Layer.provide(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      HostResources.layer.pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "host-resources-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
 );

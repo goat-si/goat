@@ -4,10 +4,11 @@
 // job its matrix.
 //
 // A pull request, draft or ready, gets a quick run: check, typecheck (unless only documents
-// changed), and test-changed, the test files beside its changes that check:changed runs before a
-// push (scripts/lib/changed-tests.ts). The full suite runs on request: the ci:full label, or a
-// manual run of the branch, whose lane is all by default. The integrated lane=all runs on dev that
-// gate the nightly are manual runs, so they stay full.
+// changed), and test-changed: changed, companion, and importing tests (directly or through
+// testkit/fixture files), plus special suites, as check:changed runs before a push
+// (scripts/lib/changed-tests.ts). Production chains belong to broader lanes. The full suite runs
+// on request: the ci:full label, or a manual run of the branch, whose lane is all by default.
+// The integrated lane=all runs on dev that gate the nightly are manual runs, so they stay full.
 //
 // The ci:affected label runs the tasks the changes reach instead: a change reaches a task when it
 // touches a workspace package the task tests or builds, directly or through workspace dependencies
@@ -30,7 +31,7 @@ const AFFECTED_LABEL = "ci:affected";
 const SERVER_LABEL = "ci:server";
 const MEMORY_LABEL = "ci:memory";
 const LANES = ["all", "server", "memory-growth", "quick"];
-/** The quick run's test task: the test files beside the changed files. */
+/** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
 const NODE_TEST_RE = /^\.github\/scripts\/[^/]+\.test\.cjs$/;

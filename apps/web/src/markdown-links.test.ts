@@ -13,8 +13,8 @@ import {
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("preserves encoded octets so file paths are decoded only once later", () => {
-    expect(rewriteMarkdownFileUriHref("file:///Users/julius/project/file%2520name.md")).toBe(
-      "/Users/julius/project/file%2520name.md",
+    expect(rewriteMarkdownFileUriHref("file:///Users/alex/project/file%2520name.md")).toBe(
+      "/Users/alex/project/file%2520name.md",
     );
   });
 
@@ -58,34 +58,32 @@ describe("relative links inside a rendered host file", () => {
 
 describe("resolveInlineCodeFileLinkMeta", () => {
   it("links bare filenames only when a line suffix marks them as file references", () => {
-    expect(resolveInlineCodeFileLinkMeta("script.ts:10", "/Users/julius/project")).toMatchObject({
-      targetPath: "/Users/julius/project/script.ts:10",
+    expect(resolveInlineCodeFileLinkMeta("script.ts:10", "/Users/alex/project")).toMatchObject({
+      targetPath: "/Users/alex/project/script.ts:10",
       line: 10,
     });
-    expect(resolveInlineCodeFileLinkMeta("AGENTS.md", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("AGENTS.md", "/Users/alex/project")).toBeNull();
   });
 
   it("does not treat arbitrary name:digits shapes as files", () => {
-    expect(resolveInlineCodeFileLinkMeta("error:1", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("TODO:12", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("exit:0", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("port:3000", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("http:80", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("error:1", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("TODO:12", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("exit:0", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("port:3000", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("http:80", "/Users/alex/project")).toBeNull();
   });
 
   it("ignores hosts, ports, and versions", () => {
-    expect(resolveInlineCodeFileLinkMeta("127.0.0.1:3000", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("localhost:3000", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("127.0.0.1:3000", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("localhost:3000", "/Users/alex/project")).toBeNull();
     expect(
-      resolveInlineCodeFileLinkMeta("example.com/index.html", "/Users/julius/project"),
+      resolveInlineCodeFileLinkMeta("example.com/index.html", "/Users/alex/project"),
     ).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("example.com:8080", "/Users/julius/project")).toBeNull();
-    expect(resolveInlineCodeFileLinkMeta("10.0.0.1:80:1", "/Users/julius/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("example.com:8080", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("10.0.0.1:80:1", "/Users/alex/project")).toBeNull();
+    expect(resolveInlineCodeFileLinkMeta("localhost/index.html", "/Users/alex/project")).toBeNull();
     expect(
-      resolveInlineCodeFileLinkMeta("localhost/index.html", "/Users/julius/project"),
-    ).toBeNull();
-    expect(
-      resolveInlineCodeFileLinkMeta("example.uk/index.html", "/Users/julius/project"),
+      resolveInlineCodeFileLinkMeta("example.uk/index.html", "/Users/alex/project"),
     ).toBeNull();
   });
 });

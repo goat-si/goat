@@ -7,7 +7,7 @@ interface LineRecordHighlighter {
 }
 
 /**
- * Stands in for the T3Highlights native module with the WebAssembly build it is
+ * Stands in for the GoatHighlights native module with the WebAssembly build it is
  * compiled from. Mock `expo`'s `requireOptionalNativeModule` with this.
  */
 export function createWasmHighlightsModule() {

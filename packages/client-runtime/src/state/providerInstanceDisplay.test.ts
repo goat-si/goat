@@ -22,7 +22,7 @@ describe("providerInstanceInitials", () => {
   it("treats punctuation as a word break but keeps apostrophes between letters", () => {
     expect(providerInstanceInitials("Codex (hub)")).toBe("CH");
     expect(providerInstanceInitials("work_codex")).toBe("WC");
-    expect(providerInstanceInitials("Theo's Codex")).toBe("TC");
+    expect(providerInstanceInitials("Sam's Codex")).toBe("SC");
     expect(providerInstanceInitials("Codex 'hub'")).toBe("CH");
     expect(providerInstanceInitials("‘hub’")).toBe("HU");
     expect(providerInstanceInitials("(hub)")).toBe("HU");

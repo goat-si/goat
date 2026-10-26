@@ -37,7 +37,7 @@ export function layerFromConfig(config: TracingConfig | null, resource: TracingR
       ? "dev"
       : RELEASE_CHANNEL_BY_VARIANT[resource.appVariant];
   return RelayTracing.layer(config, {
-    serviceName: "t3code-mobile",
+    serviceName: "goat-mobile",
     serviceVersion: resource.serviceVersion,
     runtime: "react-native",
     serviceInstanceId: resource.serviceInstanceId,

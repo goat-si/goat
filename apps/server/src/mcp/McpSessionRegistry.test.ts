@@ -165,6 +165,45 @@ it.effect("does not keep credentials of other threads alive", () =>
   }),
 );
 
+it.effect("names the missing scope on a live provider credential", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-read-grant"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      grantedScopes: ["orchestration:read"],
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const invocation = yield* registry.resolve(token);
+    expect(invocation).toBeDefined();
+    yield* invocation!.reauthorize!(["orchestration:read"]);
+    const refusal = yield* invocation!.reauthorize!(["orchestration:operate"]).pipe(Effect.flip);
+    expect(refusal.requiredScope).toBe("orchestration:operate");
+    expect(refusal.message).toContain("orchestration:operate");
+    expect(refusal.message).not.toContain(token);
+  }),
+);
+
+it.effect("reports a revoked provider credential without claiming a missing scope", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const threadId = ThreadId.make("thread-revoked-read");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      grantedScopes: ["orchestration:read"],
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const invocation = yield* registry.resolve(token);
+    expect(invocation).toBeDefined();
+    yield* registry.revokeThread(threadId);
+    const refusal = yield* invocation!.reauthorize!(["orchestration:read"]).pipe(Effect.flip);
+    expect(refusal.message).toContain("no longer active");
+    expect(refusal.message).not.toContain("missing required scope");
+    expect(refusal.message).not.toContain(token);
+  }),
+);
+
 it.effect(
   "epoch drift, unready policy, ended callers and revoked handles withdraw memory authority",
   () =>

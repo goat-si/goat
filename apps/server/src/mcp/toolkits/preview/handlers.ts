@@ -15,6 +15,8 @@ import {
   type PreviewAutomationResizeResult,
   type PreviewAutomationSelectResult,
   type PreviewAutomationSetColorSchemeResult,
+  type PreviewAutomationFetchResult,
+  type PreviewAutomationScrollCollectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
   type PreviewAutomationStatus,
@@ -72,9 +74,17 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     ...(tabId === undefined ? {} : { tabId }),
   });
   if (
-    ["status", "open", "navigate", "back", "forward", "reload", "snapshot", "logs"].includes(
-      operation,
-    )
+    [
+      "status",
+      "open",
+      "navigate",
+      "back",
+      "forward",
+      "reload",
+      "snapshot",
+      "logs",
+      "fetch",
+    ].includes(operation)
   )
     return { result };
   const statusTabId =
@@ -238,6 +248,12 @@ const handlers = {
   }),
   preview_logs: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationLogs>("logs", input),
+  ),
+  goat_preview_fetch: McpToolAccess.readsAsCaller((input) =>
+    invokeTargeted<PreviewAutomationFetchResult>("fetch", input, input.timeoutMs),
+  ),
+  goat_preview_scroll_collect: McpToolAccess.actsAsCaller((input) =>
+    invokeTargeted<PreviewAutomationScrollCollectResult>("scrollCollect", input, input.timeoutMs),
   ),
   preview_click: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) => invokeTargeted<object>("click", input, input.timeoutMs)),

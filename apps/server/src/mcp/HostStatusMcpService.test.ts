@@ -143,6 +143,8 @@ const run = <A, E>(
     readonly listFails?: boolean;
     readonly shell?: ReturnType<typeof liveThreadShell>;
     readonly children?: Readonly<Record<string, OpenCodexChildBootstrapStatus>>;
+    /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
+    readonly optIns?: Readonly<Record<string, boolean>>;
     readonly hostCall?: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -268,6 +270,7 @@ const run = <A, E>(
     Layer.provide(
       Layer.mock(OpenCodexChildBootstrap.OpenCodexChildBootstrap)({
         status: (alias) => Effect.succeed(options.children?.[alias]),
+        sshOptIn: (alias) => Effect.succeed(options.optIns?.[alias]),
       }),
     ),
     Layer.provide(
@@ -354,6 +357,28 @@ it.effect("shows this Home's Child setup on the cloud machine it is joining", ()
     expect(hosts.find((host) => host.host === "boat-builder")?.opencodexChild).toEqual(blocked);
     expect(hosts.find((host) => host.host === "box")?.opencodexChild).toBeUndefined();
     expect(hosts.find((host) => host.host === null)?.opencodexChild).toBeUndefined();
+  }),
+);
+
+it.effect("says which SSH hosts this hub joins as Children after their setup", () =>
+  Effect.gen(function* () {
+    const { value } = yield* run(
+      {
+        hosts: ["boat-builder", "box", "lab"],
+        optIns: { box: true, lab: false },
+        hostCall: () => Effect.succeed(remoteOk(9)),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const hosts = decode(value.success).hosts;
+    expect(hosts.map((host) => [host.host, host.opencodexChildOptIn])).toEqual([
+      [null, undefined],
+      ["boat-builder", undefined],
+      ["box", true],
+      ["lab", false],
+    ]);
   }),
 );
 

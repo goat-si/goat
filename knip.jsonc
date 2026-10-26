@@ -11,14 +11,13 @@
       "entry": [
         // CodeRabbit loads its configuration by filename.
         ".coderabbit.config.ts",
-        ".github/scripts/thread-transfer-report.cjs",
       ],
       "vite": { "entry": [".github/**/*.test.cjs"] },
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly. release-desktop.yml bundles the
+      // Knip loads its preprocessor through a CLI option; native verification,
+      // worktree setup (from goat.json) and worktree creation run directly. release-desktop.yml bundles the
       // Windows verify script with esbuild through a path knip does not trace,
       // electron-builder loads the macOS signer by path, and mobile-e2e.ts runs
       // agent-device's CLI by path.
@@ -42,7 +41,7 @@
         "computer-use-windows-capture-guard-smoke.ts",
       ],
       "ignoreDependencies": ["agent-device", "esbuild"],
-      // The `t3` npm package's files: copied into the package, never imported.
+      // The `@goat-si/goat` npm package's files: copied into the package, never imported.
       // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
       // knip run beside it in check:changed must not report.
       "ignore": ["npm-launcher/**", ".knip-test-*/**"],
@@ -139,7 +138,7 @@
         "@goat/mobile-terminal-native",
       ],
     },
-    "apps/mobile/modules/t3-source-text": {
+    "apps/mobile/modules/goat-source-text": {
       // React Native codegen discovers component specifications by filename.
       "entry": ["src/*NativeComponent.ts!"],
     },

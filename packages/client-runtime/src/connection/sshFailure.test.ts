@@ -29,7 +29,7 @@ describe("sshPreparationFailure", () => {
   });
 
   it.each([
-    "julius@100.65.180.100: Permission denied (publickey,password).",
+    "alex@100.65.180.100: Permission denied (publickey,password).",
     "Key-based login failed for goat-mbp; agents use only SSH keys or ssh-agent.",
   ])("blocks a rejected login instead of retrying it on a timer: %s", (message) => {
     const error = sshPreparationFailure(new Error(`${IPC}${message}`));

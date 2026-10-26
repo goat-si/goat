@@ -205,11 +205,11 @@ describe("SSH dispatch tool compatibility", () => {
         expect(result.failure.message).toContain(
           "Unknown tool: goat_project_list; legacy catalog only",
         );
-        expect(calls).toEqual(["goat_project_list"]);
+        expect(calls).toEqual(["goat_environment_read", "goat_project_list"]);
         expect(projectsCreated).toBe(0);
         expect(threadsLaunched).toBe(0);
-        // One session reads the tool catalog for launch admission, then one calls goat_project_list.
-        expect(fetchEndpoint).toHaveBeenCalledTimes(6);
+        // The launch reads its destination identity before looking up a project.
+        expect(fetchEndpoint).toHaveBeenCalledTimes(9);
       } finally {
         vi.unstubAllGlobals();
         managerLayer.mockRestore();
@@ -1722,6 +1722,7 @@ it.effect("a Git Bash host reuses its project stored in Windows form", () =>
         );
         expect(result.projectId).toBe("windows");
         expect(record.tools.map((call) => call.name)).toEqual([
+          "goat_environment_read",
           "goat_project_list",
           "goat_thread_launch",
         ]);
@@ -1735,6 +1736,7 @@ it.effect("existing remote project retains scripts", () =>
       const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
       yield* dispatch.launchThread({ ...launchInput, scripts: [] }, Effect.void);
       expect(record.tools.map((call) => call.name)).toEqual([
+        "goat_environment_read",
         "goat_project_list",
         "goat_thread_launch",
       ]);
@@ -3391,7 +3393,9 @@ describe("SshRemoteDispatch SSH attachments", () => {
               );
             const assertTrace = (events: ReadonlyArray<string>) => {
               expect(record.events).toEqual(events);
-              expect(record.tools.map((c) => c.name)).toEqual(
+              expect(
+                record.tools.map((c) => c.name).filter((name) => name !== "goat_environment_read"),
+              ).toEqual(
                 events.flatMap((event) =>
                   event === "project_list"
                     ? [project]
@@ -3880,7 +3884,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
     (
       [
         ["sends no prepare after authority drops during initialize", 2, ["project_list"]],
-        ["does not launch after authority drops during final initialize", 5, rollback],
+        ["does not launch after authority drops during final initialize", 6, rollback],
       ] as const
     ).map(([name, blockInitialize, expected]) => ({ name, blockInitialize, expected })),
   )("$name", ({ blockInitialize, expected }) =>

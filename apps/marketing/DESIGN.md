@@ -86,10 +86,10 @@ and manifest field is built from the base path.
 | 404      | One page in both languages, since a static host serves a single `404.html` for every missing path             |
 
 `/privacy-policy`, `/terms-of-service` and `/security-policy` stay as routes so links to those
-paths on this site keep working; each renders the matching part of the legal page. Links in the app
-still point at `t3.codes` (`apps/web/src/legalLinks.ts`, `packages/contracts/src/goatProjectFile.ts`);
-moving them is a separate decision. `/schema/t3.json` stays because `goat.json` files name that
-path. `/95` (an upstream easter egg) is removed and falls through to the 404 page.
+paths on this site keep working; each renders the matching part of the legal page. The app's legal
+links (`apps/web/src/legalLinks.ts`) and the `goat.json` schema URL
+(`packages/contracts/src/goatProjectFile.ts`, served at `/schema/goat.json`) point at this site.
+`/95` (an upstream easter egg) is removed and falls through to the 404 page.
 
 Legal content is honest about gaps. GOAT has not published its own privacy policy, terms or security
 contact, so the legal page says so. It never republishes upstream T3 Tools Inc. text, and it never

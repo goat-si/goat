@@ -403,8 +403,8 @@ export default defineConfig({
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
       // Vendored and generated C.
-      "apps/mobile/modules/t3-highlights/Vendor/**",
-      "apps/mobile/modules/t3-highlights/cpp/generated/**",
+      "apps/mobile/modules/goat-highlights/Vendor/**",
+      "apps/mobile/modules/goat-highlights/cpp/generated/**",
       "*.icon/**",
     ],
     sortPackageJson: {},
@@ -607,7 +607,7 @@ export default defineConfig({
         rules: { "goat/no-global-process-runtime": "off" },
       },
       {
-        // The `t3` npm launcher is published as plain, dependency-free Node.
+        // The `goat` npm launcher is published as plain, dependency-free Node.
         files: ["scripts/npm-launcher/**"],
         rules: {
           "goat/no-global-process-runtime": "off",
@@ -885,8 +885,8 @@ export default defineConfig({
           "apps/mobile/src/features/threads/thread-list-items.tsx",
           "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
           "apps/mobile/src/lib/useMobileNavigationTheme.ts",
-          "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
-          "apps/mobile/src/native/T3ComposerEditor.native.tsx",
+          "apps/mobile/src/native/GoatComposerEditor.ios.tsx",
+          "apps/mobile/src/native/GoatComposerEditor.native.tsx",
           "apps/mobile/src/native/SelectableMarkdownText.tsx",
           "apps/mobile/src/native/useEnrichedLinkVariants.ts",
         ],

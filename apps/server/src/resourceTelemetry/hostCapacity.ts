@@ -3,19 +3,18 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 /**
- * Where `fs.statfs` should look. Linux uses the root filesystem. macOS uses
- * the home directory so the sample is the data volume rather than the small
- * system volume. Windows uses the home drive's root; a path without a drive
- * letter is not passed to statfs, which throws on those paths.
+ * Where `fs.statfs` should look: the volume holding GOAT's home, where worktrees, builds and
+ * GOAT's data fill the disk (on Linux /home or a GOAT_HOME elsewhere is often its own volume).
+ * A relative path falls back to the root filesystem. Windows uses the folder's drive root; a path
+ * without a drive letter is not passed to statfs, which throws on those paths.
  */
-export function diskPathForPlatform(platform: NodeJS.Platform, home: string): string | null {
+export function diskPathForPlatform(platform: NodeJS.Platform, dataDir: string): string | null {
   switch (platform) {
     case "linux":
-      return "/";
     case "darwin":
-      return home.startsWith("/") ? home : "/";
+      return dataDir.startsWith("/") ? dataDir : "/";
     case "win32": {
-      const drive = /^([A-Za-z]:)/.exec(home.replaceAll("/", "\\"));
+      const drive = /^([A-Za-z]:)/.exec(dataDir.replaceAll("/", "\\"));
       return drive === null ? null : `${drive[1]}\\`;
     }
     default:
@@ -76,7 +75,8 @@ export function diskFromStatfs(
 
 export function readHostCapacityExtras(input: {
   readonly platform: NodeJS.Platform;
-  readonly home: string;
+  /** GOAT's home folder; its volume is the disk sampled. */
+  readonly dataDir: string;
   readonly loadavg: readonly number[];
   readonly statfs: (path: string) => Promise<{
     readonly bsize: bigint;
@@ -89,7 +89,7 @@ export function readHostCapacityExtras(input: {
 }> {
   return Effect.gen(function* () {
     const loadAvg = loadAverageForPlatform(input.platform, input.loadavg);
-    const path = diskPathForPlatform(input.platform, input.home);
+    const path = diskPathForPlatform(input.platform, input.dataDir);
     if (path === null) return { loadAvg, disk: null };
     // statfs throws ENOSYS on some Windows libuv builds, and a bad mount
     // should not fail the rest of the host sample.

@@ -10,8 +10,8 @@ const github = changeRequestReferenceAutolinker({
 
 describe("linkReferenceAutolinks", () => {
   it("links the host's references in prose", () => {
-    expect(linkReferenceAutolinks("Closes #123, see @julius", github)).toBe(
-      "Closes [#123](https://github.com/team/repo/issues/123), see [@julius](https://github.com/julius)",
+    expect(linkReferenceAutolinks("Closes #123, see @alex", github)).toBe(
+      "Closes [#123](https://github.com/team/repo/issues/123), see [@alex](https://github.com/alex)",
     );
   });
 

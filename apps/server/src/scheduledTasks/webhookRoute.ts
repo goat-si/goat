@@ -18,7 +18,7 @@ import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 export const WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 
 // The relay records this outcome header.
-const WEBHOOK_OUTCOME_HEADER = "x-t3-hook-outcome";
+const WEBHOOK_OUTCOME_HEADER = "x-goat-hook-outcome";
 
 const json = (status: number, body: Record<string, string>, outcome: string) =>
   HttpServerResponse.jsonUnsafe(body, { status, headers: { [WEBHOOK_OUTCOME_HEADER]: outcome } });
@@ -57,7 +57,7 @@ export const layer = HttpApiBuilder.group(
       const tooLarge = (error: string) =>
         Metrics.increment(Metrics.webhookDeliveriesTotal, {
           outcome: "body_too_large",
-          source: request.headers["x-t3-relay-delivery-id"] ? "relay" : "direct",
+          source: request.headers["x-goat-relay-delivery-id"] ? "relay" : "direct",
         }).pipe(Effect.as(json(413, { error }, "body_too_large")));
       if (Option.isNone(body)) return yield* tooLarge("body_too_large_or_unreadable");
       if (body.value.byteLength > WEBHOOK_MAX_BODY_BYTES) {

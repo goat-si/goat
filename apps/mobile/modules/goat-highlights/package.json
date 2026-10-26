@@ -1,0 +1,17 @@
+{
+  "name": "@goat/mobile-highlights-native",
+  "version": "0.0.0",
+  "private": true,
+  "expo-module": {
+    "ios": {
+      "modules": [
+        "GoatHighlightsModule"
+      ]
+    },
+    "android": {
+      "modules": [
+        "expo.modules.goathighlights.GoatHighlightsModule"
+      ]
+    }
+  }
+}

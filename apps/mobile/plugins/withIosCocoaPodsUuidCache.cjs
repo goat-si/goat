@@ -3,7 +3,8 @@ const path = require("node:path");
 
 const { withDangerousMod } = require("expo/config-plugins");
 
-const MARKER = "# t3code: repair cached CocoaPods UUID allocation before SPM integration";
+// Existing Podfiles carry this marker; renaming it would patch them twice.
+const MARKER = "# t3code: repair cached CocoaPods UUID allocation before SPM integration"; // goat-rename: legacy
 const UUID_REPAIR = `${MARKER}
     pods_project = installer.pods_project
     existing_uuids = pods_project.objects.map(&:uuid)

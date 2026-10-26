@@ -29,6 +29,7 @@ const CHILD_REASON_LABEL: Record<ChildSetupReason, string> = {
   runtime_unhealthy: "OpenCodex not answering",
   unreachable: "machine unreachable",
   link_failed: "link failed",
+  consent_revoked: "turned off because the session that allowed it lost access",
 };
 
 const CHILD_STATE = {
@@ -53,6 +54,12 @@ export function presentChildSetup(
   };
 }
 
+/** The SSH host alias the switch writes to, and whether it is on. */
+export interface ChildOptIn {
+  readonly host: string;
+  readonly enabled: boolean;
+}
+
 export interface HubDeviceRow {
   readonly key: string;
   readonly label: string;
@@ -61,6 +68,11 @@ export interface HubDeviceRow {
   /** The machine as the hub's OpenCodex sees it; null when it is not linked or not read. */
   readonly device: HubDevice | null;
   readonly childSetup: ChildSetup | null;
+  /**
+   * Whether the hub joins this SSH host as its Child after each successful setup. Null when the
+   * hub does not offer it for the host: a cloud machine, a host GOAT did not set up, or an older hub.
+   */
+  readonly childOptIn: ChildOptIn | null;
 }
 
 function routeNames(node: HubNode): ReadonlyArray<string> {
@@ -113,6 +125,7 @@ export function hubDeviceList(input: {
     node,
     device: deviceOf.get(node) ?? null,
     childSetup: null,
+    childOptIn: null,
   }));
   for (const device of devices) {
     if (!placed.has(device))
@@ -122,10 +135,11 @@ export function hubDeviceList(input: {
         node: null,
         device,
         childSetup: null,
+        childOptIn: null,
       });
   }
 
-  // Each setup belongs to exactly one row, by the same rule: route, then unique label, then device.
+  // Each host's setup belongs to exactly one row, by the same rule: route, unique label, device.
   const rowOf = (host: string) => {
     const node = byRoute.get(host) ?? labelled(host);
     if (node !== undefined) return rows.findIndex((row) => row.node === node);
@@ -134,7 +148,11 @@ export function hubDeviceList(input: {
   for (const entry of input.hosts) {
     if (entry.host === null) continue;
     const childSetup = presentChildSetup(entry.opencodexChild);
-    if (childSetup === null) continue;
+    const childOptIn =
+      entry.opencodexChildOptIn === undefined
+        ? null
+        : { host: entry.host, enabled: entry.opencodexChildOptIn };
+    if (childSetup === null && childOptIn === null) continue;
     const index = rowOf(entry.host);
     const row = rows[index];
     if (index === -1)
@@ -144,8 +162,24 @@ export function hubDeviceList(input: {
         node: null,
         device: null,
         childSetup,
+        childOptIn,
       });
-    else if (row !== undefined && row.childSetup === null) rows[index] = { ...row, childSetup };
+    else if (row !== undefined)
+      rows[index] = {
+        ...row,
+        childSetup: row.childSetup ?? childSetup,
+        childOptIn: row.childOptIn ?? childOptIn,
+      };
   }
   return rows;
+}
+
+/**
+ * Checks a saved cloud auto-join switch against what the hub answered. An older hub has no switch:
+ * its answer decodes as on, which is true there, since it always joins its cloud machines.
+ */
+export function cloudAutoJoinSaveError(requested: boolean, saved: boolean): string | null {
+  return requested === saved
+    ? null
+    : "This hub runs an older GOAT that always joins its cloud machines. Update GOAT there to turn this off.";
 }

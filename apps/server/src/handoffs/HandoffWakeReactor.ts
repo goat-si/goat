@@ -13,6 +13,7 @@ import {
   CommandId,
   Handoff,
   MessageId,
+  STORAGE_CLEAN_HANDOFF_PATH,
   endsWithItsRun,
   isHubDeviceHandoffPath,
   type OrchestrationV2DomainEvent,
@@ -97,6 +98,8 @@ const continuation = (handoff: Handoff, applied: Applied | undefined) => {
     return `Call ${goatCallText(handoff.target.path === "hub.device_join" ? "hub.device_join" : handoff.target.path === "hub.device_leave" ? "hub.device_leave" : "hub.device_repair")} again with decisionId "${handoff.handoffId}" to continue.`;
   if (handoff.target.path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH)
     return `Call ${goatCallText("cloud_agent.launch")} again with the same arguments and handoffId "${handoff.handoffId}".`;
+  if (handoff.target.path === STORAGE_CLEAN_HANDOFF_PATH)
+    return `Call ${goatCallText("storage.clean")} again with dryRun:false, the same items and approvalId "${handoff.handoffId}".`;
   if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
     return `This turn has the cua-driver tools until the admission ends; ${goatCallText("computer_use.request")} reports it.`;
   return "GOAT continues it; check its status before acting.";

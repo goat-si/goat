@@ -9,6 +9,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -116,6 +117,7 @@ const layer = (world: World, fleet: FleetSettings = {}) =>
         Layer.succeed(HostPressureMonitor.HostPressureMonitor, {
           current: Effect.sync(() => world.local),
           sample: Effect.sync(() => world.local),
+          disk: Stream.empty,
         }),
         Layer.mock(HostStatusMcpService.HostStatusMcpService)({
           readForClient: () =>
@@ -317,6 +319,7 @@ it.effect("constructs admission without watch or host-status services", () =>
             Layer.succeed(HostPressureMonitor.HostPressureMonitor, {
               current: Effect.succeed(pressure("critical")),
               sample: Effect.succeed(pressure("critical")),
+              disk: Stream.empty,
             }),
           ),
         ),

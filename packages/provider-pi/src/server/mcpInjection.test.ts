@@ -22,7 +22,7 @@ const mcpSession = {
   browserToolsAvailable: true,
 };
 
-describe("pi T3 MCP injection", () => {
+describe("pi GOAT MCP injection", () => {
   it("hands the session's Cua Driver to GOAT's extension only, never from the parent", () => {
     const cuaDriver = {
       command: "/resources/cua-driver",

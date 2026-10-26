@@ -1179,7 +1179,6 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             },
           }),
         );
-
         expect(error.detail).toBe(`Claude CLI command failed: ${expected}`);
       }),
     ),
@@ -1207,6 +1206,7 @@ it.layer(layerClaudeTextGenerationTest)("channel reception", (it) => {
             remember: "",
             rememberQuote: "",
             notesChangeRequested: "",
+            additionalTasks: [],
             clarifyAbout: "other",
           },
         }),

@@ -58,10 +58,12 @@ describe("env names", () => {
     );
   });
 
-  it("keeps relay keys, runner shell names and unrelated words", () => {
-    const kept =
-      "T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY T3_ARCHIVE_VERSION T3_LOCK uint32_t";
+  it("keeps runner shell names and unrelated words", () => {
+    const kept = "T3_ARCHIVE_VERSION T3_LOCK uint32_t";
     expect(rename(kept)).toBe(kept);
+    expect(rename("T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY")).toBe(
+      "GOAT_RELAY_URL VITE_GOAT_RELAY_URL GOAT_CLERK_PUBLISHABLE_KEY",
+    );
   });
 
   it("renames upstream SSH auth while protecting the legacy runtime handoff line", () => {
@@ -235,13 +237,16 @@ describe("wp9 compatibility scopes", () => {
       "apps/server/replay/a.ndjson",
       "pnpm-lock.yaml",
       "apps/marketing/a.ts",
-      "infra/relay/a.ts",
-      ".devcontainer/devcontainer.json",
+      "infra/ingest/a.ts",
+      "infra/relay/migrations/0001_init.sql",
       "assets/icon.svg",
     ]) {
       expect(isExempt(path)).toBe(true);
     }
     expect(isExempt("apps/server/src/a.ts")).toBe(false);
+    // GOAT runs these, so the rules rewrite them and the check reads them.
+    expect(isExempt(".devcontainer/devcontainer.json")).toBe(false);
+    expect(isExempt(".github/ISSUE_TEMPLATE/config.yml")).toBe(false);
   });
 
   it("keeps legacy test input only inside test scopes", () => {
@@ -252,19 +257,23 @@ describe("wp9 compatibility scopes", () => {
 
   it("keeps native identities and operator services", () => {
     expect(
-      findResidue(
+      applyTextRules(
         "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
-        "t3-source-text T3SourceTextView T3MenuDismissTouchGate T3WorkspaceNavigationView T3PresentationSources t3-agent-alert t3-agent-activity",
+        "t3-source-text T3SourceTextView RCTT3SourceTextViewProtocol Java_expo_modules_t3terminal_x t3_menu",
+        TEXT_RULES,
         KEEP_RULES,
-      ),
-    ).toEqual([]);
+      ).text,
+    ).toBe(
+      "goat-source-text GoatSourceTextView RCTGoatSourceTextViewProtocol Java_expo_modules_goatterminal_x goat_menu",
+    );
     expect(
       findResidue(
-        "apps/server/src/cloud/relayTracing.ts",
-        't3code-server "service.namespace": "t3code"',
+        "apps/mobile/modules/goat-agent-notifications/android/src/main/java/A.kt",
+        'STORE = "t3-agent-notifications"; TAG = "t3-agent-alert"; data["t3_kind"]',
         KEEP_RULES,
       ),
     ).toEqual([]);
+    expect(isExempt("infra/relay/src/worker.ts")).toBe(false);
     expect(
       findResidue("apps/desktop/a.ts", "t3-resource-monitor t3code-desktop", KEEP_RULES),
     ).toHaveLength(1);
@@ -339,14 +348,9 @@ describe("remaining local symbols and compatibility contracts", () => {
 
   it("explains persisted metadata, OS identities and protocol samples", () => {
     for (const [path, source] of [
-      ["apps/desktop/src/app/DesktopAppIdentity.ts", "t3codeCommitHash"],
       ["apps/desktop/src/app/DesktopEnvironment.ts", '"com.t3tools.T3Code.Development.desktop"'],
       ["apps/server/src/cli/invocation.ts", '"./bin/t3.js"'],
       ["packages/contracts/src/providerSetup.ts", '"t3"'],
-      [
-        "apps/mobile/modules/t3-source-text/ios/T3SourceText.mm",
-        "RCTT3SourceTextViewProtocol T3PresentationSourceView",
-      ],
       ["apps/mobile/src/features/showcase/showcaseAgentActivity.ts", "t3_kind"],
       ["packages/shared/src/goatMcpToolPresentation.ts", "t3_thread_start"],
       ["packages/shared/src/codexAuthHandoff.ts", '"t3code-dev"'],
@@ -421,7 +425,7 @@ describe("repository hygiene on an upstream checkout", () => {
       ".agents/skills/test-goat-mobile/scripts/pair-client.sh",
     );
     expect(applyPathRules("t3.json", PATH_RULES)).toBe("goat.json");
-    for (const path of ["apps/marketing/src/pages/schema/t3.json.ts", "apps/web/t3.json"]) {
+    for (const path of ["apps/marketing/src/pages/t3.json.ts", "apps/web/t3.json"]) {
       expect(applyPathRules(path, PATH_RULES)).toBe(path);
     }
   });
@@ -461,19 +465,11 @@ const keptVisibleCopy = [
   ],
   [
     "apps/server/scripts/acp-mock-agent.ts",
-    '              Content: { url: "https://t3.codes", content: "T3 Code page" },',
+    '              Content: { url: "https://exa.test", content: "T3 Code page" },',
   ],
   [
     "apps/server/scripts/acp-mock-agent.ts",
     '            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],',
-  ],
-  [
-    "apps/server/scripts/threadTitleEvaluationCases.ts",
-    '    request: "How can we improve title generation in T3 Code?",',
-  ],
-  [
-    "apps/server/scripts/threadTitleEvaluationCases.ts",
-    '      { role: "user", text: "How can we improve title gen further in T3 Code?" },',
   ],
   [
     "apps/server/src/cloud/bootService.ts",

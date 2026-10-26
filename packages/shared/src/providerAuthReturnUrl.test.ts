@@ -17,5 +17,7 @@ describe("provider auth return destinations", () => {
     "t3code://attacker/welcome",
     "t3code://app/welcome/../evil",
     "https://attacker.example/welcome",
+    // Upstream's hosted app is not a GOAT origin.
+    "https://app.t3.codes/welcome", // goat-rename: legacy
   ])("rejects %s", (url) => expect(providerAuthReturnUrl(url)).toBeUndefined());
 });

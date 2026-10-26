@@ -29,6 +29,7 @@ import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
+import { linuxScreenshotPolicy, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
 import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
@@ -135,6 +136,16 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
   for (const variable of descriptor.environment) childEnvironment[variable.name] = variable.value;
+  // On Linux the agent's screenshots follow the helper's capture route (#1677).
+  const screenshots =
+    platform === "linux"
+      ? linuxScreenshotPolicy(
+          proxyCaptureRoute({
+            x11Display: Option.getOrUndefined(x11Display),
+            driverEnvironment: childEnvironment,
+          }),
+        )
+      : undefined;
   // The macOS helper in agent connection mode draws the cursor overlay from fd 3 (#1214).
   const drawsOverlay = platform === "darwin" && descriptor.args.includes("--mcp");
 
@@ -265,6 +276,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     // A handshake child never draws or watches input (#1604): on macOS the helper starts its
     // overlay and input feed only when the proxy opens their channel.
     startHandshakeDriver: startDriver(false),
+    ...(screenshots === undefined ? {} : { screenshots }),
     ...(placement === undefined
       ? {}
       : {

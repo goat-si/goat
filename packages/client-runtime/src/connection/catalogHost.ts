@@ -6,6 +6,7 @@ import type {
   SavedConnection,
   SavedConnectionRoute,
 } from "@goat/contracts";
+import { LEGACY_CONNECT_ROUTE_KIND } from "@goat/contracts/legacyT3Names";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -40,7 +41,7 @@ function savedConnection(entry: ConnectionCatalogEntry): SavedConnection {
       });
       addedBy ??= profile.addedBy;
     } else if (route.target._tag === "RelayConnectionTarget") {
-      routes.push({ kind: "t3-connect" });
+      routes.push({ kind: LEGACY_CONNECT_ROUTE_KIND });
     } else if (profile?._tag === "BearerConnectionProfile") {
       routes.push({ kind: "direct", httpBaseUrl: profile.httpBaseUrl });
     } else if (profile?._tag === "HubProxyConnectionProfile") {

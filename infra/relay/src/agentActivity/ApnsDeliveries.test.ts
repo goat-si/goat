@@ -38,7 +38,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
   apnsDeliveryJobSigningSecret: Redacted.make("job-signing-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "goat-relay",
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
   managedEndpointBaseDomain: undefined,
@@ -72,7 +72,7 @@ const state: RelayAgentActivityState = {
 };
 
 const aggregate: RelayAgentActivityAggregateState = {
-  title: "T3 Code",
+  title: "GOAT",
   subtitle: "Agent work in progress",
   activeCount: 1,
   updatedAt: state.updatedAt,
@@ -119,7 +119,7 @@ const notificationsDisabledPreferences = JSON.stringify({
 });
 
 const target: LiveActivities.TargetRow = {
-  user_id: "dev:julius",
+  user_id: "dev:alex",
   device_id: "device-1",
   platform: "ios",
   ios_major_version: 18,

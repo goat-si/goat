@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type CuaDriverMcpConfiguration,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -87,6 +88,8 @@ const fakeLeases = (input: {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    releaseApps: () => Effect.void,
+    streamOpened: () => Effect.void,
     foregroundApprovalEpoch: Effect.die("unused"),
     approveForeground: () => Effect.die("unused"),
     foregroundAvailable: () => Effect.die("unused"),
@@ -197,6 +200,28 @@ describe("computerUseAttachment", () => {
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
       assert.deepEqual(leases.minted, [Option.none()]);
+    }),
+  );
+
+  it.effect("drops the skill only for the project that switched it off", () =>
+    Effect.gen(function* () {
+      const optedOut = ProjectId.make("project-cua-off");
+      const skills = (projectId: ProjectId) =>
+        decide(fakeDriver({ enabled: true, running: true }), {
+          leases: fakeLeases({}).leases,
+          projectId,
+        }).pipe(
+          Effect.map((attached) => (attached._tag === "proxied" ? attached.skills : null)),
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({
+              projectSettingsOverrides: {
+                [optedOut]: { builtInSkills: { "computer-use": { enabled: false } } },
+              },
+            }),
+          ),
+        );
+      assert.deepEqual(yield* skills(optedOut), []);
+      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use"]);
     }),
   );
 
@@ -627,10 +652,10 @@ describe("computerUseAttachment", () => {
       args: [
         "/goat/bin.mjs",
         "cua-lease-proxy",
-        "--control",
-        "control:unattended",
-        "--expires",
-        "2026-10-21T13:00:00.000Z",
+        "--thread",
+        "thread-cua",
+        "--driver-fingerprint",
+        "c92dbd15a4346d598492ae617191d83ff9a12ebe91406e454fa3e7009b8401d7",
       ],
       environment: [
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },

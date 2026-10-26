@@ -35,6 +35,12 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D17: recovery guidance names the tool recorded by older crashed sessions.",
   ),
   keep(
+    "marketing-design-attribution",
+    ["apps/marketing/DESIGN.md"],
+    /upstream T3 Tools Inc\. text|The store listings belong to T3 Code\./g,
+    "Marketing design notes say which text and store listings are upstream's, not GOAT's.",
+  ),
+  keep(
     "upstream-vendor-product-attribution",
     [
       "patches/@ff-labs__fff-node@0.11.0.patch",
@@ -87,50 +93,16 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "ADR-0014: initial package name owns the existing encryption key.",
   ),
   keep(
-    "native-frozen-additions",
-    [
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ChipIcons.kt",
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ContextChip.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/java/expo/modules/t3nativecontrols/T3FoldPostureModule.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/java/expo/modules/t3nativecontrols/T3WorkspaceNavigationModule.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_menu.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_new_thread.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_settings.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_usage.xml",
-      "apps/mobile/modules/t3-native-controls/expo-module.config.json",
-      "apps/mobile/modules/t3-native-controls/ios/T3NativeControls.podspec",
-      "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
-      "apps/mobile/modules/t3-native-controls/ios/T3SegmentedControlView.swift",
-      "apps/mobile/modules/t3-native-controls/ios/T3SidebarTabBarView.swift",
-      "apps/mobile/src/native/AndroidHingeObserver.android.tsx",
-    ],
-    /\b(?:T3ChipIcons|T3FoldPosture(?:Module|View)?|T3NativeControlIcons|T3SegmentedControlView|T3SidebarTabBarView|t3_menu|t3_new_thread|t3_settings|t3_usage)\b/g,
-    "ADR-0014: native classes, resource bundles and drawable ids share the frozen native fingerprint.",
-  ),
-  keep(
     "upstream-native-dependency-provenance",
     ["apps/mobile/deps/README.md", "docs/operations/mobile-screens-fork.md"],
     /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.(?:43|45)|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
     "D12/D18: dependency repository branches, pack commands and provenance metadata belong to the vendor.",
   ),
   keep(
-    "relay-telemetry-input",
-    [".env.example"],
-    /t3-code-mobile-traces-dev/g,
-    "D7/D14: dataset selected by the upstream telemetry service.",
-  ),
-  keep(
     "relay-wrapped-troubleshooting",
     ["docs/user/t3-connect-troubleshooting.md"],
     /block T3$/g,
     "D14: wrapped sentence names the upstream relay, not the host product.",
-  ),
-  keep(
-    "relay-native-services",
-    ["docs/operations/android-notifications.md"],
-    /T3's existing production publishable key|existing T3 services/g,
-    "D7/D14: Clerk configuration and hosted delivery belong to upstream.",
   ),
   keep(
     "relay-help-anchors",
@@ -346,12 +318,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ["docs/operations/observability.md"],
     /t3code-(?:server|desktop|web|\*)|`t3code`|t3-(?:server|web)|t3\.runtime\.\*|sent to the T3$/g,
     "D12/D17: dashboard migration examples distinguish historical services and the upstream relay dataset.",
-  ),
-  keep(
-    "relay-dataset-identities",
-    ["docs/operations/relay-observability.md", "docs/operations/connect-setup.md"],
-    /t3-code-(?:relay(?:-traces-prod|-traces-dev-julius|-otel-ingest-prod|-recent-spans-prod|-health)?|mobile-otel-ingest-prod|relay-client-otel-ingest-prod)\b/g,
-    "D7/D14: configured JWT audience, dataset, token and dashboard names belong to the upstream relay.",
   ),
   keep(
     "legacy-connect-callbacks",

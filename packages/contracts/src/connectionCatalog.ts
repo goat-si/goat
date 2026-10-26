@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { LEGACY_CONNECT_ROUTE_KIND } from "./legacyT3Names.ts";
 
 /**
  * Legacy desktop catalog bridge. The hub owns agent-managed nodes; after hub mutations the
@@ -29,7 +30,7 @@ export const SavedConnectionRoute = Schema.Union([
     port: Schema.NullOr(Schema.Number),
   }),
   Schema.Struct({ kind: Schema.Literal("direct"), httpBaseUrl: Schema.String }),
-  Schema.Struct({ kind: Schema.Literal("t3-connect") }),
+  Schema.Struct({ kind: Schema.Literal(LEGACY_CONNECT_ROUTE_KIND) }),
   /** Through another environment acting as the hub; the hub holds the node's session. */
   Schema.Struct({
     kind: Schema.Literal("hub-proxy"),

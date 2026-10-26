@@ -335,6 +335,7 @@
               "apps/server/src/remoteReports/RemoteReportInbox.ts",
               "apps/server/src/remoteReports/RemoteReportService.ts",
               "apps/server/src/resourceTelemetry/DesktopTelemetryReceiver.ts",
+              "apps/server/src/resourceTelemetry/HostResources.ts",
               "apps/server/src/runtimeAdmission.ts",
               "apps/server/src/runtimeDrain.ts",
               "apps/server/src/scheduledTasks/ScheduledTaskService.ts",
@@ -346,6 +347,7 @@
               "apps/server/src/sshRemote/testkit/LinkedHostFixture.ts",
               "apps/server/src/sshRemote/testkit/SshHostPrepareFixture.ts",
               "apps/server/src/sshRemote/testkit/SshHostSetupTestkit.ts",
+              "apps/server/src/storage/localGoatServers.ts",
               "apps/server/src/textGeneration/TextGeneration.ts",
               "apps/server/src/threadResults/ObservedCheckService.ts",
               "apps/server/src/threadResults/ThreadResultService.ts",
@@ -392,6 +394,7 @@
               "apps/server/src/cloudAgents/CloudAgentService.ts",
               "apps/server/src/cua/ComputerUseAttachment.idle.test.ts",
               "apps/server/src/cua/ComputerUseAttachment.test.ts",
+              "apps/server/src/cua/ComputerUseAttachment.thread.testkit.ts",
               "apps/server/src/cua/ComputerUseDriverExit.ts",
               "apps/server/src/cua/ComputerUseForeground.attachment.test.ts",
               "apps/server/src/cua/ComputerUseLeaseProxyHandshake.ts",
@@ -399,7 +402,9 @@
               "apps/server/src/cua/ComputerUseLeases.testkit.ts",
               "apps/server/src/cua/CuaDriver.ts",
               "apps/server/src/cua/linuxFrames/LinuxFrameSource.test.ts",
+              "apps/server/src/hub/HubMembership.testkit.ts",
               "apps/server/src/hub/HubParity.ts",
+              "apps/server/src/hub/HubProvisionedLinks.test.ts",
               "apps/server/src/mcp/HostStatusMcpService.test.ts",
               "apps/server/src/mcp/McpSessionRegistry.test.ts",
               "apps/server/src/mcp/OrchestratorMcpService.ts",
@@ -447,6 +452,7 @@
               "apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts",
               "apps/server/src/persistence/DatabaseStorage.ts",
               "apps/server/src/provider/ProviderSettings.ts",
+              "apps/server/src/server.memoryImportGraph.test.ts",
               "apps/server/src/vcs/GitVcsDriverCore.ts",
               "packages/provider-grok/src/server/driver.ts"
             ],
@@ -464,10 +470,12 @@
               "apps/server/src/cua/CuaDriver.ts",
               "apps/server/src/hubProxy/HubProxySessions.ts",
               "apps/server/src/mcp/LaunchWatchService.ts",
+              "apps/server/src/orchestration-v2/BuiltInSkillText.ts",
               "apps/server/src/orchestration-v2/RunExecutionService.test.ts",
               "apps/server/src/serverSettings.ts",
               "apps/server/src/sshRemote/SshDeviceAdd.ts",
-              "apps/server/src/vcs/gitMetadataFingerprint.ts"
+              "apps/server/src/vcs/gitMetadataFingerprint.ts",
+              "apps/server/src/workspace/workspaceLease.ts"
             ],
             "options": { "diagnosticSeverity": { "mapSomeToAsSome": "suggestion" } }
           },
@@ -510,6 +518,8 @@
               "apps/server/src/orchestration-v2/CloudIngress.integration.test.ts",
               "apps/server/src/orchestration-v2/CloudRegisteredAttach.integration.test.ts",
               "apps/server/src/orchestration-v2/DevinCloud.integration.test.ts",
+              "apps/server/src/orchestration-v2/ProviderTurnControlService.test.ts",
+              "apps/server/src/orchestration-v2/ProviderTurnStartService.localCommand.testkit.ts",
               "apps/server/src/orchestration-v2/PullRequestWatchWakes.test.ts",
               "apps/server/src/orchestration-v2/ThreadLaunchService.test.ts",
               "apps/server/src/orchestration-v2/runtimeLayer.receiptStore.test.ts",
@@ -520,7 +530,8 @@
               "apps/server/src/sshRemote/SshDeviceAdd.ts",
               "apps/server/src/sshRemote/SshRemoteDispatchLive.test.ts",
               "apps/server/src/threadResults/ObservedCheckService.test.ts",
-              "apps/server/src/vcs/gitMetadataFingerprint.ts"
+              "apps/server/src/vcs/gitMetadataFingerprint.ts",
+              "apps/server/src/workspace/workspaceLease.ts"
             ],
             "options": { "diagnosticSeverity": { "preferSucceedSomeOrNone": "suggestion" } }
           },
@@ -531,6 +542,7 @@
               "apps/server/src/channels/ChannelTaskExport.test.ts",
               "apps/server/src/channels/channelRunOutcome.test.ts",
               "apps/server/src/hub/HubMembership.ts",
+              "apps/server/src/hub/hubOcxJson.ts",
               "apps/server/src/hubProxy/HubProxySessions.ts",
               "apps/server/src/mcp/OrchestratorMcpService.reviewLedger.test.ts",
               "apps/server/src/mcp/launchWatch.test.ts",
@@ -620,9 +632,11 @@
               "apps/server/src/orchestration-v2/ThreadManagementService.ts",
               "apps/server/src/provider/CodexProvider.ts",
               "apps/server/src/remoteReports/RemoteDispatchCoordinator.test.ts",
+              "apps/server/src/sshRemote/SshRemoteDispatch.ts",
               "apps/web/src/connection/storage.ts",
               "packages/client-runtime/src/state/commandPermissions.ts",
               "packages/client-runtime/src/state/hubProxy.test.ts",
+              "packages/ssh/src/existingServer.ts",
               "scripts/build-desktop-artifact.ts"
             ],
             "options": { "diagnosticSeverity": { "unnecessaryFailYieldableError": "suggestion" } }

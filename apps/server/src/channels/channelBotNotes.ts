@@ -28,11 +28,19 @@ export interface ChannelBotFiles {
   readonly dir: string;
   readonly notes: string;
   readonly skills: string;
+  readonly scratch: string;
+  readonly artifacts: string;
 }
 
 export const channelBotFilesFor = (path: Path.Path, stateDir: string): ChannelBotFiles => {
   const dir = path.join(stateDir, "goat-bot");
-  return { dir, notes: path.join(dir, "memory.md"), skills: path.join(dir, "skills") };
+  return {
+    dir,
+    notes: path.join(dir, "memory.md"),
+    skills: path.join(dir, "skills"),
+    scratch: path.join(dir, "scratch"),
+    artifacts: path.join(dir, "artifacts"),
+  };
 };
 
 /** The newest notes, or an empty string when there are none or they cannot be read. */

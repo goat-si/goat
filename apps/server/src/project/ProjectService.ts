@@ -1,4 +1,5 @@
 import {
+  PROJECT_SETTINGS_OVERRIDES_REMOVAL,
   CommandId,
   type OrchestrationProjectShell,
   ProjectId,
@@ -484,15 +485,19 @@ export const make = Effect.gen(function* () {
 
   // Best-effort cleanup releases disabled instances kept alive by overrides; crashes have no replay to revisit deletion.
   const clearProjectSettingsOverrides = (projectId: ProjectId) =>
-    serverSettings.updateSettings({ projectSettingsOverrides: { [projectId]: null } }).pipe(
-      Effect.asVoid,
-      Effect.catchCause((cause) =>
-        Effect.logWarning(
-          `Failed to clear settings overrides for deleted project ${projectId}.`,
-          cause,
+    serverSettings
+      .updateSettings({
+        projectSettingsOverrides: { [projectId]: PROJECT_SETTINGS_OVERRIDES_REMOVAL },
+      })
+      .pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Failed to clear settings overrides for deleted project ${projectId}.`,
+            cause,
+          ),
         ),
-      ),
-    );
+      );
 
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {

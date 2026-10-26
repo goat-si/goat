@@ -13,6 +13,8 @@ import {
   gateJob,
   gitExecutable,
   lightRunner,
+  refreshPermissions,
+  refreshWorkflow,
   removeFixtures,
   runnerLabels,
   screenshotPermissions,
@@ -157,6 +159,38 @@ describe("goat pre-push workflow guard", () => {
     const result = f.hook(f.record(f.sha));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(message);
+  });
+
+  it("allows refresh-republished with exactly contents: read and actions: write on the hosted image", () => {
+    const f = fixture({ workflow: refreshWorkflow() });
+    expect(f.hook(f.record(f.sha)).status).toBe(0);
+  });
+
+  it.each([
+    ["an EPYC runner", { "runs-on": lightRunner }],
+    ["no Actions write", { permissions: { contents: "read" } }],
+    ["an extra write scope", { permissions: { ...refreshPermissions, checks: "write" } }],
+    ["contents write", { permissions: { contents: "write", actions: "write" } }],
+  ])("rejects refresh-republished with %s", (_name, patch) => {
+    const f = fixture({ workflow: refreshWorkflow(patch) });
+    const result = f.hook(f.record(f.sha));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("jobs.refresh-republished must run on ubuntu-24.04");
+  });
+
+  it("rejects Actions access on any other job and at the workflow level", () => {
+    const onJob = fixture({
+      workflow: workflow({ ...baseJob, permissions: { actions: "write" } }),
+    });
+    expect(onJob.hook(onJob.record(onJob.sha)).stderr).toContain(
+      "jobs.ci.permissions.actions is forbidden",
+    );
+    const onWorkflow = fixture({
+      workflow: refreshWorkflow({}, { permissions: { actions: "read" } }),
+    });
+    expect(onWorkflow.hook(onWorkflow.record(onWorkflow.sha)).stderr).toContain(
+      "permissions.actions is forbidden at the workflow level",
+    );
   });
 
   it("allows deletion-only pushes without node, yaml or gh", () => {
@@ -359,17 +393,17 @@ describe("goat pre-push workflow guard", () => {
     [
       "extra job",
       JSON.stringify({ on: { push: null }, jobs: { ci: baseJob, extra: baseJob } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
     ],
     [
       "missing jobs",
       JSON.stringify({ on: { push: null } }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
     ],
     [
       "jobs array",
       JSON.stringify({ on: { push: null }, jobs: [] }),
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
     ],
     ["nonmapping ci", workflow(null), "jobs.ci must be a mapping"],
     [

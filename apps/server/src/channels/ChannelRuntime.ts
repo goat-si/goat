@@ -150,14 +150,14 @@ const make = Effect.gen(function* () {
       yield* reception.narrate(pending, owner);
       started += 1;
     }
-    started += yield* reports.reconcile(owner);
     // Child-work records settle against their destinations in the same pass, so capacity freed
-    // by a finished child is visible before the next admission.
+    // by a finished child is visible before worker reports check completion holds or admit more.
     started += yield* childWork.reconcile.pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("channel child-work reconcile failed", { cause }).pipe(Effect.as(0)),
       ),
     );
+    started += yield* reports.reconcile(owner);
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* delivery.deliverDue(owner);

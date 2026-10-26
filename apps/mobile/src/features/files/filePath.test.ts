@@ -26,7 +26,7 @@ describe("resolveFileLinkPath", () => {
 describe("resolveWorkspaceRelativeFilePath", () => {
   it("converts absolute paths inside the workspace", () => {
     expect(
-      resolveWorkspaceRelativeFilePath("/Users/julius/repo", "/Users/julius/repo/src/main.ts"),
+      resolveWorkspaceRelativeFilePath("/Users/alex/repo", "/Users/alex/repo/src/main.ts"),
     ).toBe("src/main.ts");
     expect(resolveWorkspaceRelativeFilePath("C:\\repo", "c:\\repo\\src\\main.ts")).toBe(
       "src/main.ts",

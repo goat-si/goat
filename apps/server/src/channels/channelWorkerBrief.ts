@@ -50,7 +50,7 @@ const REPORT_RESULT = `Before you end, call ${goatCallText("thread.report_result
 const FINISH = "When you finish, end with a short summary of the result.";
 
 /** The opening every worker gets: the instruction, then which task it belongs to. */
-export const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instruction">) => [
+const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instruction">) => [
   task.instruction,
   "",
   "---",
@@ -84,17 +84,18 @@ export const channelWorkerRules = (reporting: "local" | "remote") =>
 
 /**
  * GOAT Bot runs with full access so reading anything never stops on an approval, which makes
- * read-only a promise this text alone keeps. Work that changes things is a coding task.
+ * repository safety a promise this text keeps: only its own scratch and artifacts folders are
+ * writable during a turn, while repository or system changes go to a coding thread.
  */
 export const GOAT_BOT_READ_ONLY_RULE =
-  "You run with full access and are read-only by instruction: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. Change nothing yourself: no file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
+  "You run with full access and are read-only outside your own scratch and artifacts folders: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. You may write temporary scripts or intermediate files only inside your scratch folder and user-visible reports or outputs only inside your artifacts folder. Outside those folders, change nothing yourself: no repository file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a repository or system change, that is a coding thread: launch it by the routing rule instead of changing anything yourself; if it is unclear whether the person wants the change, ask them first.";
 
 /**
  * The grok-bot split a GOAT Bot turn applies: settle small lookups from its own reads, delegate
- * investigations to one bounded subagent, and hand coding work to a worktree thread whose result
+ * investigations to bounded subagents, and hand coding work to worktree threads whose results
  * comes back into the same conversation.
  */
-export const GOAT_BOT_ROUTING_RULE = `Route what this needs one of three ways. Small lookups you settle yourself: read the files, notes, memory, or task status that answer it, and reply. Investigations that take several steps or parallel searching go to a bounded subagent with ${goatCallText("task.create")}: wait for it and fold what it found into your answer; never paste its output raw. Work that changes anything goes to a coding thread: ${goatCallText("thread.launch")} here or ${goatCallText("ssh.thread_launch")} on another machine, always with a worktree workspace; when GOAT tells you that thread ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.`;
+export const GOAT_BOT_ROUTING_RULE = `Route what this needs one of three ways. Small lookups and basic tasks you settle yourself: read the files, notes, memory, or task status that answer it, or run a bounded script or report in your scratch or artifacts folder, and reply. Investigations that take several steps or parallel searching go to bounded subagents with ${goatCallText("task.create")} (up to 8 in parallel, using mode "async" when fanning out or doing other work in parallel): wait for them when needed and fold what they found into your answer; never paste their output raw. Work that changes a repository goes to a coding thread: ${goatCallText("thread.launch")} here or ${goatCallText("ssh.thread_launch")} on another machine, always with a worktree workspace (up to 4 in parallel); when you launch background subagents or coding threads, send an immediate update to the person with ${goatCallText("channel.task_report")} (status "running", milestone true, and a new eventId) so they hear right away, and when GOAT tells you that child work ended, report its result back into this conversation. Follow-ups from the person arrive while you work: acknowledge each one, answer what you can between waits on children, and fold the rest in when the child completes.`;
 
 /**
  * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
@@ -112,6 +113,48 @@ export const GOAT_BOT_SUPERVISOR_RULE = [
   GOATCLAW_SUPERVISOR_ASKS,
   "Fold each manager's report into your answer with its exact heads, check totals, and NOT RUN line.",
 ].join(" ");
+
+/** What the worker thread is told besides the instruction itself. */
+export const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
+  [
+    ...workerHeader(task),
+    "Standing notes from the person are in " +
+      files.notes +
+      "; follow them. Reusable procedures (skills) are in " +
+      files.skills +
+      "; read the one the instruction names.",
+    task.notesChangeRequested === undefined
+      ? "Leave the notes file unchanged; this task did not ask to change a note."
+      : "The person asked to change or forget a note (" +
+        JSON.stringify(task.notesChangeRequested) +
+        "). Edit the notes file only to make that change.",
+    ...channelWorkerRules("local"),
+  ].join("\n");
+
+/** What a GOAT Bot turn is told besides the person's request. */
+export const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: boolean) =>
+  [
+    ...workerHeader(task),
+    "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
+    "Look things up directly: read and search files, read GOAT Bot's notes (" +
+      files.notes +
+      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads.",
+    "Your scratch folder for temporary files is " +
+      files.scratch +
+      " and your artifacts folder for saved outputs is " +
+      files.artifacts +
+      " (create them when you first write there).",
+    GOAT_BOT_ROUTING_RULE,
+    GOAT_BOT_READ_ONLY_RULE,
+    GOAT_BOT_DISPATCH_RULE,
+    ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
+    task.notesChangeRequested === undefined
+      ? "Leave the notes file unchanged; this message did not ask to change a note."
+      : "The person asked to change or forget a note (" +
+        JSON.stringify(task.notesChangeRequested) +
+        "). This is the one change you may make yourself: edit the notes file only to make that change.",
+    ...channelWorkerRules("local"),
+  ].join("\n");
 
 /**
  * The first message of a worker on another machine, carrying the home machine's notes. When it

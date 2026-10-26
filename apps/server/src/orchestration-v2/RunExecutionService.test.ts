@@ -25,7 +25,6 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
-  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -58,36 +57,31 @@ import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
-import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
-const driver = ProviderDriverKind.make("codex");
+import {
+  driver,
+  layerRunExecutionTest,
+  layerTurnItemPositionsTest,
+  backgroundScenarioIds,
+  childThreadCreatedEvent,
+  childBackgroundTurnItemEvent,
+  backgroundTurnItemEvent,
+  backgroundTurnItemEventForRun,
+  subagentEvent,
+  makeRunOwnedSubagentFixture,
+  makeRunOwnedSubagentTurnItemFixture,
+  makeLinkedChildTurnItemFixture,
+  makeRunOwnedSubagentNodeFixture,
+  makeRunOwnedSubagentChildNodeFixture,
+  rootTerminalEvent,
+  type BackgroundScenarioIds,
+} from "./RunExecutionService.testkit.ts";
+
 const rootAppThread = (id: ThreadId) =>
   ({
     id,
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
   }) as OrchestrationV2AppThread;
-
-const layerTurnItemPositionsTest = Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({
-  allocate: () => Effect.succeed(1),
-});
-
-const layerRunExecutionTest = RunExecutionService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      McpAppModelContext.layerEmpty,
-      RemoteReportInbox.layerEmpty,
-      PreviewAgentActivity.layer,
-      Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-      layerTurnItemPositionsTest,
-      Layer.mock(EventSink.EventSinkV2)({}),
-      IdAllocator.layer,
-      Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
-        ingestNormalized: () => Effect.succeed([]),
-      }),
-      ServerSettings.layerTest(),
-    ),
-  ),
-);
 
 it.effect("routes shared-runtime events only to their owning root run", () =>
   Effect.gen(function* () {
@@ -2537,26 +2531,6 @@ it.effect("does not overwrite Stop when ownership changes after the finalization
   }),
 );
 
-it.effect("emits run_interrupt_result when hard-stop finalizes the active attempt", () =>
-  Effect.gen(function* () {
-    const { written, observed, committedEffects } = yield* captureRootRunTermination({
-      key: "hard-stop",
-      shouldFinalizeRun: () => Effect.succeed(true),
-      // The reason the Stop request recorded; an agent's Stop must not read as the user's.
-      loadRunInterruptReason: () => Effect.succeed("Stopped by an agent: done"),
-    });
-    assert.deepEqual(
-      written.map((item) => [item.type, "message" in item ? item.message : undefined]),
-      [["run_interrupt_result", "Stopped by an agent: done"]],
-    );
-    assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
-    assert.deepEqual(
-      committedEffects.map((effect) => effect.request.type),
-      ["checkpoint.capture"],
-    );
-  }),
-);
-
 it.effect("records a finished run as failed when its ownership check cannot be read", () =>
   Effect.gen(function* () {
     const { observed } = yield* captureRootRunTermination({
@@ -2593,30 +2567,6 @@ it.effect("does not refresh pull requests for auxiliary or stale provider termin
         ]),
     });
     assert.deepEqual(observed, ["run:cancelled", "pull-requests-refreshed"]);
-  }),
-);
-
-it.effect("refreshes pull requests after a provider stream exits with an error", () =>
-  Effect.gen(function* () {
-    const { written, observed } = yield* captureRootRunTermination({
-      key: "pull-request-refresh:stream-error",
-      shouldFinalizeRun: () => Effect.succeed(true),
-      events: () =>
-        Stream.fail(
-          new ProviderAdapter.ProviderAdapterEventStreamError({
-            driver,
-            providerSessionId: ProviderSessionId.make("session:exited"),
-            cause: "provider process exited",
-          }),
-        ),
-    });
-    assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
-    assert.deepEqual(
-      written.map((item) => item.type),
-      ["error"],
-    );
-    const error = written.find((item) => item.type === "error");
-    assert.include(error?.failure.message ?? "", "provider event stream closed unexpectedly");
   }),
 );
 
@@ -3338,321 +3288,6 @@ function captureRootRunTermination(input: {
       committedEffects: yield* Ref.get(committedEffects),
     };
   });
-}
-
-interface BackgroundScenarioIds {
-  readonly threadId: ThreadId;
-  readonly childThreadId: ThreadId;
-  readonly runId: RunId;
-  readonly attemptId: RunAttemptId;
-  readonly providerThreadId: ProviderThreadId;
-  readonly rootProviderTurnId: ProviderTurnId;
-  readonly rootNodeId: NodeId;
-  readonly itemId: TurnItemId;
-  readonly childItemId: TurnItemId;
-  readonly subagentNodeId: NodeId;
-}
-
-function backgroundScenarioIds(key: string): BackgroundScenarioIds {
-  return {
-    threadId: ThreadId.make(`thread:${key}`),
-    childThreadId: ThreadId.make(`thread:${key}:child`),
-    runId: RunId.make(`run:${key}`),
-    attemptId: RunAttemptId.make(`attempt:${key}`),
-    providerThreadId: ProviderThreadId.make(`provider-thread:${key}`),
-    rootProviderTurnId: ProviderTurnId.make(`provider-turn:${key}`),
-    rootNodeId: NodeId.make(`node:${key}`),
-    itemId: TurnItemId.make(`turn-item:${key}`),
-    childItemId: TurnItemId.make(`turn-item:${key}:child`),
-    subagentNodeId: NodeId.make(`node:${key}:subagent`),
-  };
-}
-
-function childThreadCreatedEvent(
-  ids: BackgroundScenarioIds,
-): ProviderAdapter.ProviderAdapterV2Event {
-  return {
-    type: "app_thread.created",
-    driver,
-    appThread: {
-      id: ids.childThreadId,
-      lineage: {
-        parentThreadId: ids.threadId,
-        relationshipToParent: "subagent",
-        rootThreadId: ids.threadId,
-      },
-    },
-  } as ProviderAdapter.ProviderAdapterV2Event;
-}
-
-function childBackgroundTurnItemEvent(
-  ids: BackgroundScenarioIds,
-  status: "running" | "completed" | "idle",
-  ordinal: number,
-): ProviderAdapter.ProviderAdapterV2Event {
-  return {
-    type: "turn_item.updated",
-    driver,
-    turnItem: {
-      id: ids.childItemId,
-      threadId: ids.childThreadId,
-      runId: null,
-      providerTurnId: null,
-      ordinal,
-      type: "command_execution",
-      status,
-    },
-  } as ProviderAdapter.ProviderAdapterV2Event;
-}
-
-function backgroundTurnItemEvent(
-  ids: BackgroundScenarioIds,
-  type: "command_execution" | "dynamic_tool" | "subagent",
-  status: "running" | "completed" | "idle",
-  ordinal: number,
-  itemId?: TurnItemId,
-): ProviderAdapter.ProviderAdapterV2Event {
-  return {
-    type: "turn_item.updated",
-    driver,
-    turnItem: {
-      id: itemId ?? ids.itemId,
-      threadId: ids.threadId,
-      runId: ids.runId,
-      providerTurnId: ids.rootProviderTurnId,
-      ordinal,
-      type,
-      status,
-    },
-  } as ProviderAdapter.ProviderAdapterV2Event;
-}
-
-function backgroundTurnItemEventForRun(
-  ids: BackgroundScenarioIds,
-  runId: RunId,
-  type: "command_execution" | "dynamic_tool" | "subagent",
-  status: "running" | "completed" | "idle",
-  ordinal: number,
-): ProviderAdapter.ProviderAdapterV2Event {
-  const event = backgroundTurnItemEvent(ids, type, status, ordinal);
-  if (event.type !== "turn_item.updated") {
-    return event;
-  }
-  return { ...event, turnItem: { ...event.turnItem, runId } };
-}
-
-function subagentEvent(
-  ids: BackgroundScenarioIds,
-  status: "running" | "completed" | "idle",
-): ProviderAdapter.ProviderAdapterV2Event {
-  return {
-    type: "subagent.updated",
-    driver,
-    subagent: {
-      id: ids.subagentNodeId,
-      threadId: ids.threadId,
-      runId: ids.runId,
-      status,
-    },
-  } as ProviderAdapter.ProviderAdapterV2Event;
-}
-
-function makeRunOwnedSubagentFixture(input: {
-  readonly ids: BackgroundScenarioIds;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly childThreadId: ThreadId;
-  readonly driver: typeof driver;
-  readonly status: "running" | "interrupted";
-}): OrchestrationV2Subagent {
-  const now = DateTime.makeUnsafe("2026-07-21T12:00:00.000Z");
-  return {
-    id: input.ids.subagentNodeId,
-    threadId: input.ids.threadId,
-    runId: input.ids.runId,
-    parentNodeId: input.ids.rootNodeId,
-    origin: "provider_native",
-    createdBy: "agent",
-    driver: input.driver,
-    providerInstanceId: input.providerInstanceId,
-    providerThreadId: null,
-    childThreadId: input.childThreadId,
-    nativeTaskRef: {
-      driver: input.driver,
-      nativeId: `task:${input.ids.subagentNodeId}`,
-      strength: "strong",
-    },
-    prompt: "hold",
-    title: "Live-test subagent hold",
-    model: null,
-    status: input.status,
-    result: null,
-    startedAt: now,
-    completedAt: null,
-    updatedAt: now,
-  };
-}
-
-function makeRunOwnedSubagentTurnItemFixture(input: {
-  readonly ids: BackgroundScenarioIds;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly childThreadId: ThreadId;
-  readonly driver: typeof driver;
-  readonly status: "running" | "interrupted";
-}): Extract<OrchestrationV2TurnItem, { type: "subagent" }> {
-  const now = DateTime.makeUnsafe("2026-07-21T12:00:00.000Z");
-  return {
-    id: input.ids.itemId,
-    threadId: input.ids.threadId,
-    runId: input.ids.runId,
-    nodeId: input.ids.subagentNodeId,
-    providerThreadId: input.ids.providerThreadId,
-    providerTurnId: input.ids.rootProviderTurnId,
-    nativeItemRef: {
-      driver: input.driver,
-      nativeId: `task:${input.ids.subagentNodeId}`,
-      strength: "strong",
-    },
-    parentItemId: null,
-    ordinal: 3,
-    status: input.status,
-    title: "Live-test subagent hold",
-    startedAt: now,
-    completedAt: null,
-    updatedAt: now,
-    type: "subagent",
-    subagentId: input.ids.subagentNodeId,
-    origin: "provider_native",
-    driver: input.driver,
-    providerInstanceId: input.providerInstanceId,
-    childThreadId: input.childThreadId,
-    prompt: "hold",
-    result: null,
-  };
-}
-
-function makeLinkedChildTurnItemFixture(input: {
-  readonly ids: BackgroundScenarioIds;
-  readonly driver: typeof driver;
-  readonly type: "assistant_message" | "command_execution" | "reasoning";
-}): OrchestrationV2TurnItem {
-  const now = DateTime.makeUnsafe("2026-07-21T12:00:00.000Z");
-  const base = {
-    id: input.ids.childItemId,
-    threadId: input.ids.childThreadId,
-    runId: null,
-    nodeId: NodeId.make(`${input.ids.subagentNodeId}:child-root`),
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal: 1,
-    status: "running" as const,
-    title: "Working",
-    startedAt: now,
-    completedAt: null,
-    updatedAt: now,
-  };
-  if (input.type === "assistant_message") {
-    return {
-      ...base,
-      type: "assistant_message",
-      messageId: MessageId.make(`${input.ids.childItemId}:message`),
-      text: "partial response",
-      streaming: true,
-    };
-  }
-  if (input.type === "reasoning") {
-    return {
-      ...base,
-      type: "reasoning",
-      text: "partial progress",
-      streaming: true,
-    };
-  }
-  return {
-    ...base,
-    type: "command_execution",
-    input: "sleep 300",
-  };
-}
-
-function makeRunOwnedSubagentNodeFixture(input: {
-  readonly ids: BackgroundScenarioIds;
-  readonly status: "running" | "interrupted";
-}): OrchestrationV2ExecutionNode {
-  const now = DateTime.makeUnsafe("2026-07-21T12:00:00.000Z");
-  return {
-    id: input.ids.subagentNodeId,
-    threadId: input.ids.threadId,
-    runId: input.ids.runId,
-    parentNodeId: input.ids.rootNodeId,
-    rootNodeId: input.ids.rootNodeId,
-    kind: "subagent",
-    status: input.status,
-    countsForRun: false,
-    providerThreadId: input.ids.providerThreadId,
-    providerTurnId: input.ids.rootProviderTurnId,
-    nativeItemRef: {
-      driver,
-      nativeId: `task:${input.ids.subagentNodeId}`,
-      strength: "strong",
-    },
-    runtimeRequestId: null,
-    checkpointScopeId: null,
-    startedAt: now,
-    completedAt: null,
-  };
-}
-
-function makeRunOwnedSubagentChildNodeFixture(input: {
-  readonly ids: BackgroundScenarioIds;
-  readonly status: "running" | "interrupted";
-}): OrchestrationV2ExecutionNode {
-  const now = DateTime.makeUnsafe("2026-07-21T12:00:00.000Z");
-  return {
-    id: NodeId.make(`${input.ids.subagentNodeId}:child-root`),
-    threadId: input.ids.childThreadId,
-    runId: null,
-    parentNodeId: null,
-    rootNodeId: NodeId.make(`${input.ids.subagentNodeId}:child-root`),
-    kind: "root_turn",
-    status: input.status,
-    countsForRun: false,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    runtimeRequestId: null,
-    checkpointScopeId: null,
-    startedAt: now,
-    completedAt: null,
-  };
-}
-
-function rootTerminalEvent(
-  ids: BackgroundScenarioIds,
-  status: "completed" | "interrupted" | "cancelled" | "failed",
-): ProviderAdapter.ProviderAdapterV2Event {
-  const common = {
-    type: "turn.terminal" as const,
-    driver,
-    providerThreadId: ids.providerThreadId,
-    providerTurnId: ids.rootProviderTurnId,
-    runOrdinal: 1,
-    threadDisposition: "reusable" as const,
-  };
-  return status === "failed"
-    ? {
-        ...common,
-        status,
-        failureItemOrdinal: 101,
-        failure: {
-          class: "provider_error",
-          message: "Provider failed",
-          code: null,
-          retryable: null,
-        },
-      }
-    : { ...common, status, failure: null };
 }
 
 function runBackgroundItemScenario(

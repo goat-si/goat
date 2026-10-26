@@ -18,6 +18,101 @@ namespace Goat.ComputerUse
         // Mandatory label RIDs (winnt.h).
         public const int IntegrityMedium = 0x2000;
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern int GetClassNameW(IntPtr window, StringBuilder name, int max);
+
+        /// <summary>
+        /// System, credential and security processes whose windows computer use never observes
+        /// or drives, even if they appear on the interactive desktop.
+        /// </summary>
+        public static readonly string[] ProtectedProcesses = {
+            "consent.exe",
+            "logonui.exe",
+            "winlogon.exe",
+            "credentialuibroker.exe",
+            "lockapp.exe",
+            "lsass.exe",
+            "securityhealthhost.exe",
+            "securityhealthsystray.exe",
+        };
+
+        /// <summary>Desktop shell and tray window classes that are never app window targets.</summary>
+        public static readonly string[] ProtectedWindowClasses = {
+            "Progman",
+            "WorkerW",
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+        };
+
+        public static string ExecutableName(string imagePathOrName)
+        {
+            if (string.IsNullOrEmpty(imagePathOrName)) return "";
+            string trimmed = imagePathOrName.Trim();
+            int slash = Math.Max(trimmed.LastIndexOf('\\'), trimmed.LastIndexOf('/'));
+            return slash >= 0 ? trimmed.Substring(slash + 1) : trimmed;
+        }
+
+        public static bool IsProtectedProcess(string imagePathOrName)
+        {
+            string exe = ExecutableName(imagePathOrName);
+            if (exe.Length == 0) return false;
+            foreach (string candidate in ProtectedProcesses)
+                if (string.Equals(exe, candidate, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public static bool IsProtectedWindowClass(string className)
+        {
+            if (string.IsNullOrEmpty(className)) return false;
+            string trimmed = className.Trim();
+            if (trimmed.Length == 0) return false;
+            foreach (string candidate in ProtectedWindowClasses)
+                if (string.Equals(trimmed, candidate, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public static string ProtectedSurfaceRefusal(string imagePathOrName, string className)
+        {
+            if (IsProtectedProcess(imagePathOrName))
+                return "Protected system process " + ExecutableName(imagePathOrName) + " cannot be observed or controlled.";
+            if (IsProtectedWindowClass(className))
+                return "Protected shell surface " + className.Trim() + " cannot be observed or controlled.";
+            return null;
+        }
+
+        public static string WindowClass(IntPtr window)
+        {
+            if (window == IntPtr.Zero) return "";
+            var name = new StringBuilder(256);
+            return GetClassNameW(window, name, name.Capacity) > 0 ? name.ToString() : "";
+        }
+
+        public static string ProcessImage(int processId)
+        {
+            IntPtr process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (process == IntPtr.Zero) return null;
+            try
+            {
+                var name = new StringBuilder(1024);
+                int size = name.Capacity;
+                return NativeMethods.QueryFullProcessImageNameW(process, 0, name, ref size) ? name.ToString() : null;
+            }
+            finally
+            {
+                NativeMethods.CloseHandle(process);
+            }
+        }
+
+        public static string ProtectedWindowRefusal(IntPtr window, int processId)
+        {
+            return ProtectedSurfaceRefusal(ProcessImage(processId), WindowClass(window));
+        }
+
+        public static bool IsProtectedWindow(IntPtr window, int processId)
+        {
+            return ProtectedWindowRefusal(window, processId) != null;
+        }
+
         /// <summary>
         /// The virtual desktop each window was last seen on. The shell sometimes answers with an
         /// empty id for a window that did not move, which would otherwise read as a new epoch.
@@ -204,16 +299,26 @@ namespace Goat.ComputerUse
             // UIPI drops input from a lower integrity level, and a non-elevated helper must never
             // reach an elevated window; a token we cannot read counts as higher.
             int targetIntegrity = -1;
+            string imagePath = null;
             IntPtr process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
             if (process != IntPtr.Zero)
             {
                 targetIntegrity = IntegrityOf(process);
+                var imageName = new StringBuilder(1024);
+                int imageSize = imageName.Capacity;
+                if (NativeMethods.QueryFullProcessImageNameW(process, 0, imageName, ref imageSize))
+                    imagePath = imageName.ToString();
                 NativeMethods.CloseHandle(process);
             }
             int own = OwnIntegrity();
+            string className = WindowClass(window);
+            string protectedRefusal = ProtectedSurfaceRefusal(imagePath, className);
+            result["windowClass"] = className;
+            result["protectedSurface"] = protectedRefusal != null;
+            if (protectedRefusal != null) result["protectedSurfaceReason"] = protectedRefusal;
             result["targetIntegrity"] = targetIntegrity;
             result["helperIntegrity"] = own;
-            result["elevatedTarget"] = targetIntegrity < 0 || targetIntegrity > own;
+            result["elevatedTarget"] = targetIntegrity < 0 || targetIntegrity > own || protectedRefusal != null;
 
             string desktopName = InputDesktop();
             result["inputDesktop"] = desktopName;

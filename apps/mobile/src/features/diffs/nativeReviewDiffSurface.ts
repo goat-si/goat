@@ -14,7 +14,7 @@ import { requireNativeView } from "expo";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { NativeViewResolutionError } from "../../native/nativeViewResolutionError";
 
-const NATIVE_REVIEW_DIFF_MODULE_NAME = "T3ReviewDiffSurface";
+const NATIVE_REVIEW_DIFF_MODULE_NAME = "GoatReviewDiffSurface";
 const NATIVE_REVIEW_DIFF_PAYLOAD_RETRY_FRAMES = 60;
 
 interface ExpoGlobalWithViewConfig {
@@ -188,7 +188,7 @@ export function isPendingNativeViewRegistration(error: unknown): boolean {
   return (
     error.message.includes(`Unable to find the '${NATIVE_REVIEW_DIFF_MODULE_NAME}' view`) ||
     (error.message.includes("Unable to find the class") &&
-      error.message.includes("T3ReviewDiffView view with tag"))
+      error.message.includes("GoatReviewDiffView view with tag"))
   );
 }
 

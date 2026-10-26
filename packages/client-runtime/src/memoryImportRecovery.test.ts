@@ -13,6 +13,7 @@ import {
   createMemoryImportWorkflow,
   memoryImportChunks,
   memoryImportIssueReason,
+  memoryImportFormats,
   memoryImportRequestFailureMessage,
   sameMemoryImportFence,
   reduceMemoryImportProgress,
@@ -882,6 +883,30 @@ describe("import subscription isolation and admission", () => {
 });
 
 describe("memoryImportIssueReason", () => {
+  it("distinguishes an oversized or secret-bearing page from a whole-request refusal", () => {
+    expect(memoryImportIssueReason("limit_exceeded", "item")).toBe(
+      "This memory exceeds the import size limit.",
+    );
+    expect(memoryImportIssueReason("secret_detected", "item")).toBe(
+      "This file contains sensitive content.",
+    );
+    expect(memoryImportIssueReason("secret_detected")).toBe(
+      "Import stopped because sensitive content was found.",
+    );
+  });
+
+  it("offers Aside only when the destination server explicitly advertises it", () => {
+    expect(memoryImportFormats(undefined)).toEqual(["codex", "claude", "omo"]);
+    expect(
+      memoryImportFormats({ repositoryIdentity: false, memory: { protocolVersion: 1 } }),
+    ).toEqual(["codex", "claude", "omo"]);
+    expect(
+      memoryImportFormats({
+        repositoryIdentity: false,
+        memory: { protocolVersion: 1, asideImport: true },
+      }),
+    ).toEqual(["codex", "claude", "omo", "aside"]);
+  });
   it("names the refusals a person can act on", () => {
     expect(memoryImportIssueReason("limit_exceeded")).toBe("This folder has more than 128 items.");
     expect(memoryImportIssueReason("scope_unmapped")).toBe(

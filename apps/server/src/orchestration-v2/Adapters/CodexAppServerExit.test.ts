@@ -6,6 +6,8 @@ import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
@@ -195,4 +197,17 @@ it.effect(
         ),
       );
     }).pipe(Effect.scoped),
+);
+
+it.effect("marks unexpected app-server exit as provider process exit", () =>
+  Effect.gen(function* () {
+    const terminated = yield* Deferred.make<unknown>();
+    const client = {
+      terminated: Deferred.await(terminated),
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const events = yield* makeCodexSessionEvents(client, providerSessionId);
+    yield* Deferred.succeed(terminated, new Error("app-server exited"));
+    const failure = yield* Queue.take(events).pipe(Effect.flip);
+    assert.equal(failure.source, "provider_process_exit");
+  }).pipe(Effect.scoped),
 );

@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Runtime from "effect/Runtime";
 import * as Scope from "effect/Scope";
 import { TestClock } from "effect/testing";
 
@@ -72,39 +74,43 @@ describe("server owner lock", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("fails a server outside the service once the handoff grace runs out", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const stateDir = yield* fs.makeTempDirectoryScoped();
-      const holder = tryAcquireServerOwnerLock(stateDir, "service:1.0.0")!;
-      yield* fs.writeFileString(
-        `${stateDir}/server-runtime.json`,
-        JSON.stringify({
-          version: 1,
-          pid: 4242,
-          port: 3773,
-          host: "127.0.0.1",
-          origin: "http://127.0.0.1:3773",
-          startedAt: "2026-10-13T00:00:00.000Z",
-        }),
-      );
-      const fiber = yield* acquireServerOwnerLock({
-        stateDir,
-        owner: "server:desktop",
-        serverRuntimeStatePath: `${stateDir}/server-runtime.json`,
-        waitForOwner: false,
-        handoffGrace: Duration.seconds(2),
-        pollInterval: Duration.seconds(1),
-      }).pipe(Effect.flip, Effect.forkScoped);
-      yield* TestClock.adjust(Duration.seconds(2));
-      const error = yield* Fiber.join(fiber);
-      holder.release();
-      assert.equal(error._tag, "ServerOwnerConflictError");
-      assert.include(
-        error.message,
-        `Another GOAT server is using ${stateDir} (pid 4242, http://127.0.0.1:3773).`,
-      );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  it.effect(
+    "fails a server outside the service once the handoff grace runs out, with the exit code the desktop stops restarting on",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped();
+        const holder = tryAcquireServerOwnerLock(stateDir, "service:1.0.0")!;
+        yield* fs.writeFileString(
+          `${stateDir}/server-runtime.json`,
+          JSON.stringify({
+            version: 1,
+            pid: 4242,
+            port: 3773,
+            host: "127.0.0.1",
+            origin: "http://127.0.0.1:3773",
+            startedAt: "2026-10-13T00:00:00.000Z",
+          }),
+        );
+        const fiber = yield* acquireServerOwnerLock({
+          stateDir,
+          owner: "server:desktop",
+          serverRuntimeStatePath: `${stateDir}/server-runtime.json`,
+          waitForOwner: false,
+          handoffGrace: Duration.seconds(2),
+          pollInterval: Duration.seconds(1),
+        }).pipe(Effect.flip, Effect.forkScoped);
+        yield* TestClock.adjust(Duration.seconds(2));
+        const error = yield* Fiber.join(fiber);
+        holder.release();
+        assert.equal(error._tag, "ServerOwnerConflictError");
+        assert.include(
+          error.message,
+          `Another GOAT server is using ${stateDir} (pid 4242, http://127.0.0.1:3773).`,
+        );
+        // The desktop restarts any other exit, so a second app on the same data respawned forever.
+        assert.strictEqual(Runtime.getErrorExitCode(error), SERVER_EXIT_CODE_STATE_DIR_OWNED);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("makes a service-managed server wait until the owner exits", () =>

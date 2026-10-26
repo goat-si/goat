@@ -383,7 +383,7 @@ describe("ssh tunnel scripts", () => {
     const target = {
       alias: "devbox",
       hostname: "devbox.example.com",
-      username: "julius",
+      username: "alex",
       port: 2222,
     } as const;
     const spawnedCommands: Array<ReadonlyArray<string>> = [];
@@ -420,7 +420,7 @@ describe("ssh tunnel scripts", () => {
         const target = {
           alias: "devbox",
           hostname: "devbox.example.com",
-          username: "julius",
+          username: "alex",
           port: 2222,
         } as const;
         const started = yield* Deferred.make<void>();
@@ -507,7 +507,7 @@ describe("ssh tunnel scripts", () => {
     const target = {
       alias: "devbox",
       hostname: "devbox.example.com",
-      username: "julius",
+      username: "alex",
       port: 2222,
     } as const;
     const spawner = makeProtocolTestSpawner((command) =>
@@ -559,7 +559,7 @@ describe("ssh tunnel scripts", () => {
           Effect.sync(() => {
             const args = commandArgs(command);
             if (args.includes("-G"))
-              return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+              return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
             if (args.includes("-N")) {
               forwards++;
               return makeRunningProcess(() => {
@@ -639,7 +639,7 @@ describe("ssh tunnel scripts", () => {
         Effect.sync(() => {
           const args = commandArgs(command);
           if (args.includes("-G"))
-            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (args.includes("-N")) {
             forwards++;
             return makeRunningProcess(() => {
@@ -747,7 +747,7 @@ describe("ssh tunnel scripts", () => {
       const target = {
         alias: "devbox",
         hostname: "devbox.example.com",
-        username: "julius",
+        username: "alex",
         port: 2222,
       } as const;
 
@@ -762,7 +762,7 @@ describe("ssh tunnel scripts", () => {
         assert.include(firstTunnelArgs, "ControlMaster=no");
         assert.include(firstTunnelArgs, "ControlPath=none");
         assert.include(firstTunnelArgs, "ControlPersist=no");
-        assert.deepEqual(firstTunnelArgs?.slice(-2), ["--", "julius@devbox"]);
+        assert.deepEqual(firstTunnelArgs?.slice(-2), ["--", "alex@devbox"]);
 
         const disconnected = yield* Effect.result(manager.disconnectEnvironment(target));
         if (mode === "failed stop") {
@@ -1415,7 +1415,7 @@ else {
         Effect.sync(() => {
           const args = commandArgs(command);
           if (args.includes("-G"))
-            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (args.includes("-N")) return makeRunningProcess(() => undefined);
           if (
             args.includes("-s") &&

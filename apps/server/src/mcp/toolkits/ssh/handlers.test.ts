@@ -62,7 +62,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as SshHandlers from "./handlers.ts";
-import { scope, threadId } from "./handlers.testkit.ts";
+import { profileLayer, scope, threadId } from "./handlers.testkit.ts";
 import { SshToolkit } from "./tools.ts";
 import { launchFromThread, launchRaw } from "./launch.testkit.ts";
 
@@ -73,6 +73,141 @@ const decodedMcpFailure = (response: McpSchema.CallToolResult) =>
   response.content.map((item) =>
     item.type === "text" ? Option.getOrElse(decodeFailureText(item.text), () => item.text) : item,
   );
+
+it.effect("SSH launch records origin on both watch paths without changing the public result", () =>
+  Effect.gen(function* () {
+    const origin = EnvironmentId.make("managed-owner");
+    for (const outsideClient of [false, true]) {
+      const registrations: Array<
+        Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0]
+      > = [];
+      const external: Array<
+        Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0]
+      > = [];
+      const callerId = ThreadId.make("caller");
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const caller = {
+        id: callerId,
+        title: "Caller",
+        projectId: ProjectId.make("caller-project"),
+        providerInstanceId,
+        modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        activeRunId: "active-run",
+        archivedAt: null,
+        deletedAt: null,
+      } as OrchestrationV2ThreadShell;
+      const launch = {
+        host: "box",
+        cwd: "/remote/project",
+        projectId: "remote-project",
+        projectCreated: false,
+        threadId: "remote-thread",
+        runId: "remote-run",
+        reportsSupported: true,
+        workspaceStrategy: { type: "root" as const },
+        runtimeMode: "full-access" as const,
+        remoteServerKind: "managed" as const,
+        sourceEnvironmentId: origin,
+        notes: ["Remote launch succeeded."],
+      };
+      const dependencies = Layer.mergeAll(
+        profileLayer(),
+        PermissionSettings.layerTest(),
+        NodeCrypto.layer,
+        Layer.succeed(McpInvocationContext.McpInvocationContext, {
+          environmentId: EnvironmentId.make("hub"),
+          requestNamespace: "session",
+          thread: outsideClient
+            ? undefined
+            : { threadId: callerId, providerSessionId: "session", providerInstanceId },
+          client: outsideClient
+            ? { sessionId: "client", label: "Outside agent", access: "full-access" as const }
+            : undefined,
+          issuedAt: 0,
+          capabilities: new Set(["orchestration" as const]),
+        }),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({
+          getDescriptor: Effect.succeed({
+            environmentId: EnvironmentId.make("hub"),
+            label: "hub",
+          } as never),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(caller),
+        }),
+        Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+        Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+        Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({
+          check: () => Effect.succeed([]),
+        }),
+        Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
+        Layer.mock(SshHostSetup.SshHostSetup)({}),
+        Layer.mock(CloudMachineService.CloudMachineService)({}),
+        Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+          validateLaunchAttachments: (requested) => Effect.succeed(requested),
+          launchThread: (_input, beforeLaunch) => beforeLaunch.pipe(Effect.as(launch)),
+        }),
+        Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+          launch: (_input, beforeLaunch) =>
+            beforeLaunch.pipe(Effect.as({ correlationId: "rr", launch, reportsSupported: true })),
+        }),
+        Layer.mock(LaunchWatchService.LaunchWatchService)({
+          register: (input) =>
+            Effect.sync(() => {
+              registrations.push(input);
+              return newLaunchWatch({
+                ...input,
+                host: input.host ?? null,
+                incarnation: "watch",
+                notifyWebhook: false,
+                now: 0,
+              });
+            }),
+          watchExternal: (input) =>
+            Effect.sync(() => {
+              external.push(input);
+              return newLaunchWatch({
+                ...input,
+                launcherThreadId: null,
+                host: input.host ?? null,
+                incarnation: "external-watch",
+                notifyWebhook: input.route.notifyWebhook,
+                webhookTarget: input.route.webhookTarget,
+                now: 0,
+              });
+            }),
+          resolveRoute: () => Effect.succeed({ notifyWebhook: true, webhookTarget: null }),
+          releaseRoute: () => Effect.void,
+        }),
+      );
+      const toolkit = yield* SshToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(SshHandlers.layer).pipe(Layer.provide(dependencies)),
+        ),
+      );
+      const response = yield* toolkit
+        .handle("goat_ssh_thread_launch", {
+          host: "box",
+          cwd: "/remote/project",
+          title: "Audit",
+          message: "Review",
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      const result = response.at(-1)?.result;
+      expect(result).toMatchObject({ watching: true, threadId: "remote-thread" });
+      expect(result).not.toHaveProperty("sourceEnvironmentId");
+      if (outsideClient) {
+        expect(external).toHaveLength(1);
+        expect(external[0]?.sourceEnvironmentId).toBe(origin);
+      } else {
+        expect(registrations).toHaveLength(1);
+        expect(registrations[0]?.sourceEnvironmentId).toBe(origin);
+      }
+    }
+  }),
+);
 
 it.effect("refuses an unverified repository before launching or registering a watch", () =>
   Effect.gen(function* () {

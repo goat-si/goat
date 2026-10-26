@@ -70,12 +70,12 @@ describe("ssh command", () => {
       assert.deepEqual(
         parseSshResolveOutput(
           "devbox",
-          ["hostname devbox.example.com", "user julius", "port 2222", ""].join("\n"),
+          ["hostname devbox.example.com", "user alex", "port 2222", ""].join("\n"),
         ),
         {
           alias: "devbox",
           hostname: "devbox.example.com",
-          username: "julius",
+          username: "alex",
           port: 2222,
         },
       );
@@ -166,7 +166,7 @@ describe("ssh command", () => {
           {
             alias: "devbox",
             hostname: "devbox.example.com",
-            username: "julius",
+            username: "alex",
             port: 2222,
           },
           { remoteCommandArgs: ["sh", "-s"] },
@@ -442,13 +442,13 @@ process.stderr.write('reader waiting');`,
       "host-unreachable",
     ],
     [
-      'Authenticated to jump using "publickey".\ndebug1: Authenticating to devbox.example.com:2222 as "julius"\n',
+      'Authenticated to jump using "publickey".\ndebug1: Authenticating to devbox.example.com:2222 as "alex"\n',
       {},
       "SSH connection to devbox (devbox.example.com:2222) timed out after 1ms before authentication began. Check the network or SSH ProxyCommand.",
       "host-unreachable",
     ],
     [
-      'Authenticated to jump using "publickey".\ndebug1: channel_connect_stdio_fwd: devbox.example.com:2222\ndebug1: Authenticating to devbox.example.com:2222 as "julius"\ndebug1: SSH2_MSG_SERVICE_ACCEPT received\n',
+      'Authenticated to jump using "publickey".\ndebug1: channel_connect_stdio_fwd: devbox.example.com:2222\ndebug1: Authenticating to devbox.example.com:2222 as "alex"\ndebug1: SSH2_MSG_SERVICE_ACCEPT received\n',
       {},
       "SSH authentication timed out for devbox (devbox.example.com:2222) after 1ms. Unlock your SSH key or ssh-agent, then reconnect.",
       "authentication",
@@ -526,7 +526,7 @@ process.stderr.write('reader waiting');`,
               {
                 alias: "devbox",
                 hostname: "devbox.example.com",
-                username: "julius",
+                username: "alex",
                 port: 2222,
               },
               { timeoutMs: 1, ...options },

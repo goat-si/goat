@@ -123,22 +123,23 @@ describe("internal remnant rules", () => {
       "scripts/dev-runner.ts",
       "    // GOAT's live data, or the legacy T3 home when GOAT has none, as migrate-dev-db picks it.",
     ],
-    [
-      "vite.config.ts",
-      "        // The `t3` npm launcher is published as plain, dependency-free Node.",
-    ],
   ])("keeps inventoried external or legacy text in %s", (path, source) => {
     expect(rename(path, source)).toBe(source);
   });
 
   it.each([
-    [".env.example", "# T3CODE_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev"],
     [
       "apps/web/vite/warmBundledDev.ts",
       '"t3code-desktop"; "t3code:web-remote"; "t3code:other-plugin"',
     ],
   ])("keeps relay identities in %s", (path, source) => {
     expect(rename(path, source)).toBe(source);
+  });
+
+  it("renames GOAT Connect telemetry env and datasets in .env.example", () => {
+    expect(
+      rename(".env.example", "# T3CODE_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev"),
+    ).toBe("# GOAT_MOBILE_OTLP_TRACES_DATASET=goat-mobile-traces-dev");
   });
 
   it("leaves PR1 product lines to its own family", () => {

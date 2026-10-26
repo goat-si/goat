@@ -60,6 +60,15 @@ struct HumanInputTests {
     check(
       "the tap asks for no keyboard type",
       !PointerTap.types.contains { [.keyDown, .keyUp, .flagsChanged].contains($0) })
+    check(
+      "driver-tagged pointer events carry the GOAT eventSourceUserData constant and are skipped",
+      PointerTap.driverEventUserData == 0x474F_4154_4355_4131
+        && PointerTap.isDriverOwned(userData: PointerTap.driverEventUserData)
+        && !PointerTap.isDriverOwned(userData: 0)
+        && PointerTap.report(.mouseMoved, userData: PointerTap.driverEventUserData, at: 0.25) == nil
+        && PointerTap.report(.leftMouseDown, userData: PointerTap.driverEventUserData, at: 0.30) == nil
+        && PointerTap.report(.mouseMoved, userData: 0, at: 0.25) == 0.25
+        && PointerTap.report(.leftMouseDown, userData: 42, at: 0.30) == 0.30)
 
     exit(failures == 0 ? 0 : 1)
   }

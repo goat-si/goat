@@ -248,7 +248,7 @@ export const make = Effect.gen(function* () {
         generationHold: true,
         hubDiagnostics: true,
         ...(importRuntime._tag === "Some"
-          ? { importProvider: true, importTurnStartFit: true }
+          ? { importProvider: true, importTurnStartFit: true, asideImport: true }
           : {}),
       },
       repositoryIdentity: true,
@@ -270,10 +270,12 @@ export const make = Effect.gen(function* () {
       settledWorktreeCleanup: true,
       worktreesDirectory: true,
       worktreesDirectoryStatus: true,
+      storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
+      devDisciplineSkill: true,
       threadSnooze: true,
       threadPromotion: true,
       environmentThemes: true,

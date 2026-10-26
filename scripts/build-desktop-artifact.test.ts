@@ -1681,7 +1681,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const configuration = resolveMacPasskeySigningConfiguration({
       GOAT_APPLE_TEAM_ID: "abc1234567",
       GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
+      GOAT_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
     });
 
     assert.deepStrictEqual(configuration, {
@@ -1696,7 +1696,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const configuration = resolveMacPasskeySigningConfiguration({
       GOAT_APPLE_TEAM_ID: "ABC1234567",
       GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS:
+      GOAT_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
     const entitlements = renderMacPasskeyEntitlements(configuration, {
@@ -1797,7 +1797,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     const missingProfileError = captureError({
       GOAT_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      GOAT_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
     });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
@@ -1810,7 +1810,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const invalidDomainError = captureError({
       GOAT_APPLE_TEAM_ID: "ABC1234567",
       GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
+      GOAT_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
     });
     assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
     assert.equal(invalidDomainError.reason, "scheme-not-allowed");
@@ -1828,18 +1828,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         resolveMacPasskeySigningConfiguration({
           GOAT_APPLE_TEAM_ID: "ABC1234567",
           GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-          T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
+          GOAT_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
         }),
       /Invalid passkey RP domain/u,
     );
     const invalidPublishableKeyError = captureError({
       GOAT_APPLE_TEAM_ID: "ABC1234567",
       GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
+      GOAT_CLERK_PUBLISHABLE_KEY: "pk_test_%",
     });
     assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
     assert.ok(invalidPublishableKeyError.cause);
-    assert.equal(invalidPublishableKeyError.message, "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.");
+    assert.equal(invalidPublishableKeyError.message, "GOAT_CLERK_PUBLISHABLE_KEY is invalid.");
     assert.notProperty(invalidPublishableKeyError, "publishableKey");
     assert.notInclude(invalidPublishableKeyError.message, "pk_test_%");
   });
@@ -2134,7 +2134,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {
         GOAT_APPLE_TEAM_ID: "ABC1234567",
         GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/goat.provisionprofile",
-        T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+        GOAT_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
       },
     );
     assert.equal(entitled?.appId, "si.goat.desktop.nightly");

@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import type { AgentInputReport } from "./agentInputReports.ts";
+import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 
 export const request = (id: number, method: string) =>
   JSON.stringify({ jsonrpc: "2.0", id, method, params: {} });
@@ -35,6 +36,11 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     readonly targetGate?: Deferred.Deferred<void>;
     readonly agentGate?: Deferred.Deferred<void>;
     readonly toolsAt?: (index: number) => typeof tools;
+    readonly leaseUpdates?: Stream.Stream<ComputerUseLeaseThreadUpdate>;
+    readonly reservation?: (
+      call: ComputerUseCallReservation,
+    ) => Effect.Effect<ComputerUseCallAdmission>;
+    readonly screenshots?: LinuxScreenshotPolicy;
     /** Decorates each line for the provider, as the CLI's app guide does. */
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
   } = {},
@@ -96,16 +102,18 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
   });
   const proxy = yield* runThreadLeaseProxy({
     connectionId: "thread-proxy:test",
+    ...(options.screenshots === undefined ? {} : { screenshots: options.screenshots }),
     bundleIds: true,
     input: Stream.fromQueue(input),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
-    leaseUpdates: Stream.fromQueue(updates),
+    leaseUpdates: options.leaseUpdates ?? Stream.fromQueue(updates),
     onThreadUpdate: (u) => Queue.offer(taken, u).pipe(Effect.asVoid),
     onLeaseUpdateApplied: (u) => Queue.offer(applied, u).pipe(Effect.asVoid),
     startDriver,
     revokeSessions: () => Effect.void,
     reservation: (call) => {
+      if (options.reservation !== undefined) return options.reservation(call);
       if (call.action === "close") {
         log.push(`close ${call.controlId}`);
         return Queue.offer(closed, call).pipe(
@@ -163,6 +171,7 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     ),
     started: Queue.take(started),
     applied: Queue.take(applied),
+    update: Queue.take(taken),
     closed: Queue.take(closed),
     target: Queue.take(target),
     agents: Queue.take(agents),

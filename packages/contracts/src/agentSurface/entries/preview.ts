@@ -592,4 +592,50 @@ export const previewEntries = {
     humanSteps: [],
     annotations: { title: "Read browser diagnostics", idempotentHint: true, openWorldHint: true },
   }),
+  "preview.fetch": entry({
+    resource: "preview",
+    verb: "fetch",
+    name: "goat_preview_fetch",
+    toolkit: "preview",
+    summary: "Fetch a URL inside a browser tab without navigating",
+    description:
+      "Fetch an HTTP(S) URL inside a browser tab using its same-origin session and return bounded, credential-redacted Markdown or text without navigating the tab.",
+    guide:
+      "Requires the thread's preview MCP capability. An explicit tabId selects that tab; otherwise the broker uses this session's current tab or a visible/recent tab in the thread. Sends cookies only to the same origin (credentials=same-origin) and follows redirects. HTML bodies are parsed with an inert DOMParser (dropping scripts, styles, templates, hidden elements, and form fields) and rendered as Markdown or plain text; non-text responses return format='raw' with empty text. Response headers other than content-type never leave the page, and browser cookies for the request, redirect target, or tab (including HttpOnly) plus echoed authorization headers and credential-like JSON keys are redacted before returning. Refuses when a browser dialog is open or while the tab is in private mode (or if a private period overlapped the fetch). Another agent's tab and any human-driven tab can be observed.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Fetch URL inside browser tab",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "preview.scroll_collect": entry({
+    resource: "preview",
+    verb: "scroll_collect",
+    name: "goat_preview_scroll_collect",
+    toolkit: "preview",
+    summary: "Scroll a browser tab and collect matching JSON responses",
+    description:
+      "Wheel-scroll a browser tab and collect items from JSON array responses matching a URL substring until minItems, maxItems, maxScrolls, or two rounds without growth.",
+    guide:
+      "Requires the thread's preview MCP capability. The caller may act on its own tab or an unclaimed tab while no human controls it; another agent session's tabs permit observation only. Each round drains pending JSON responses, checks stopping conditions (maxItems, minItems, maxScrolls, or two rounds with neither scrollHeight growth nor new items), dispatches a wheel scroll of 90% viewport height at the viewport center, and waits up to settleMs for the next matching response. Refuses and withholds all collected items if the tab enters private mode at any point during collection.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "Scrolls the live shared page and collects network responses; inspect preview.snapshot or collected items before deciding to scroll again.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Scroll and collect JSON responses",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
 } as const;

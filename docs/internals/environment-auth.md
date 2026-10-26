@@ -2,7 +2,7 @@
 
 The environment issues its own sessions and enforces their capabilities. Cloud
 identity and relay credentials belong to a separate trust boundary, described in
-[GOAT Connect](./t3-connect.md). A relay token is never an environment login.
+[GOAT Connect](./goat-connect.md). A relay token is never an environment login.
 
 ## Authority survives transport changes
 

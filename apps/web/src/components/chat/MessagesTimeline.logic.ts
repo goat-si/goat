@@ -16,6 +16,7 @@ import {
 } from "@goat/client-runtime/work-log/command-label";
 import {
   formatCommandActionsLabel,
+  commandVerb,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -27,7 +28,6 @@ import {
   type ToolGroupSummaryKind,
 } from "@goat/client-runtime/work-log/presentation";
 export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
-import { commandVerb } from "./commandVerb";
 import {
   deriveRevertTurnCountByUserMessageId,
   formatDuration,

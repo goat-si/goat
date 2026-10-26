@@ -133,6 +133,7 @@ export interface ChannelTailEntry {
   readonly receivedAt: string;
   readonly replyText: string | undefined;
 }
+type CreatedTask = { readonly task: ChannelTask; readonly event: ChannelTaskEvent };
 
 export class ChannelLedger extends Context.Service<
   ChannelLedger,
@@ -183,9 +184,8 @@ export class ChannelLedger extends Context.Service<
       readonly receptionId: ChannelReceptionId;
       readonly replyText: string;
       readonly decision: ChannelReceptionResult;
-      readonly createdTask?:
-        | { readonly task: ChannelTask; readonly event: ChannelTaskEvent }
-        | undefined;
+      readonly createdTask?: CreatedTask | undefined;
+      readonly createdTasks?: ReadonlyArray<CreatedTask> | undefined;
       readonly taskEvents?: ReadonlyArray<ChannelTaskEventWrite> | undefined;
       readonly deliveries: ReadonlyArray<ChannelOutboxInsert>;
       readonly now: string;
@@ -1002,8 +1002,10 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            const created =
+              input.createdTasks ?? (input.createdTask === undefined ? [] : [input.createdTask]);
             const taskIds = [
-              ...(input.createdTask === undefined ? [] : [input.createdTask.task.taskId]),
+              ...created.map(({ task }) => task.taskId),
               ...(input.taskEvents ?? []).map((write) => write.next.taskId),
             ];
             const rows = yield* sql<{ readonly owner_id: string }>`
@@ -1018,9 +1020,7 @@ const make = Effect.gen(function* () {
             `;
             const row = rows[0];
             if (row === undefined) return false;
-            if (input.createdTask !== undefined) {
-              yield* insertTask(input.createdTask.task, row.owner_id, input.createdTask.event);
-            }
+            for (const item of created) yield* insertTask(item.task, row.owner_id, item.event);
             for (const write of input.taskEvents ?? []) yield* writeTaskEvent(write);
             yield* insertDeliveries(input.deliveries, input.now);
             return true;

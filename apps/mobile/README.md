@@ -20,7 +20,7 @@ Names, URL schemes (`goat`, `goat-preview`, `goat-dev`) and bundle ids live in
 
 Run commands from `apps/mobile`.
 
-GOAT Connect is coming soon. T3 Connect is disabled in every build by
+GOAT Connect is coming soon. Upstream's Connect stack is disabled in every build by
 `GOAT_CONNECT_ENABLED=false` in `@goat/shared/goatConnect`, even with public configuration.
 Use [direct pairing or Tailscale](../../docs/user/remote-access.md#tailscale-https).
 Dormant Connect configuration belongs in the repository-root `.env` or `.env.local`,
@@ -91,7 +91,7 @@ entitlement, and native Sign in with Apple entitlement; builds without this opt-
 
 ```bash
 GOAT_IOS_PERSONAL_TEAM=1 \
-GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code.dev \
+GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.goat.dev \
 vp run ios:dev
 ```
 
@@ -105,7 +105,7 @@ The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
 GOAT_IOS_PERSONAL_TEAM=1 \
-GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
+GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.goat \
 vp run ios:release
 ```
 

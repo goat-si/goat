@@ -2,6 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
 
+it("requires environment maintenance authority for storage item deletion", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.serverGetStorageUsage, {})).not.toContain(
+    "environment:maintain",
+  );
+  expect(clientRpcRequiredScopes(WS_METHODS.serverCleanUpStorageItems, {})).toEqual([
+    "environment:maintain",
+  ]);
+});
+
 it("lets readers follow computer use status without granting control", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.computerUseStatusChanges, {})).toEqual([
     "orchestration:read",

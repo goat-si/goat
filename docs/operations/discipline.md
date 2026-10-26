@@ -5,6 +5,13 @@ This page says how much process a change needs and what counts as proof that it 
 [testing policy](testing.md) says what a test must prove, [code budgets](code-quality.md) limit
 file growth, and [merging](merging.md) says when a pull request lands.
 
+GOAT gives every agent it runs, in any repository, a repository-agnostic copy: a short completion
+contract in every prompt
+([developmentInstructions.ts](../../packages/provider-core/src/server/developmentInstructions.ts))
+and the rest as the `goat-discipline` built-in skill
+([goatDiscipline.ts](../../packages/provider-core/src/server/builtinSkills/goatDiscipline.ts)).
+Keep them in step with this page.
+
 ## Classify the work
 
 Classify a change before deciding how deep to go, and reclassify it when it grows. When two

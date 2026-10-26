@@ -406,7 +406,7 @@ describe("release payload filesystem verification", () => {
           const problems = yield* scanReleasePayload(root, runner);
           expect(problems.join("\n")).toContain("server.asar!/bad.js: inline source map");
           expect(problems.join("\n")).toContain("main.map: source map");
-          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: private repository URL");
+          expect(problems.join("\n")).toContain("runtime.tar.gz!/main.js: source repository URL");
           expect(commands).toEqual(["tar -tf", "tar -xf"]);
           yield* Effect.sync(uncacheAll);
         }),
@@ -428,7 +428,7 @@ describe("release payload filesystem verification", () => {
         yield* fs.writeFileString(path.join(root, "index.js"), `"${releases}"`);
         const problems = yield* scanBuildLinks([root]);
         expect(problems).toEqual([
-          `${path.join(root, "client/assets/legal.js")}: private repository URL`,
+          `${path.join(root, "client/assets/legal.js")}: source repository URL`,
         ]);
       }),
     ),

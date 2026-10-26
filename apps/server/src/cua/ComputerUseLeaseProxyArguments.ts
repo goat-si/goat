@@ -9,7 +9,7 @@ export const parseLeaseProxyArguments = (args: ReadonlyArray<string>) => {
     const value = args[index + 1];
     if (
       key === undefined ||
-      !["--thread", "--control", "--expires"].includes(key) ||
+      !["--thread", "--control", "--expires", "--driver-fingerprint"].includes(key) ||
       values.has(key) ||
       value === undefined ||
       value.trim().length === 0 ||
@@ -19,8 +19,11 @@ export const parseLeaseProxyArguments = (args: ReadonlyArray<string>) => {
     values.set(key, value);
   }
   const threadId = values.get("--thread");
-  if (threadId !== undefined)
-    return values.size === 1 ? { mode: "thread" as const, threadId } : undefined;
+  if (threadId !== undefined) {
+    // Identity for provider reloads only; control admission comes from the authenticated stream.
+    const expectedSize = values.has("--driver-fingerprint") ? 2 : 1;
+    return values.size === expectedSize ? { mode: "thread" as const, threadId } : undefined;
+  }
   const controlId = values.get("--control");
   const expiresAt = DateTime.make(values.get("--expires") ?? "");
   return values.size === 2 && controlId !== undefined && Option.isSome(expiresAt)

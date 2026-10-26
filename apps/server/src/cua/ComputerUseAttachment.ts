@@ -1,10 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off -- synchronous hash for the pure launch descriptor.
+import * as NodeCrypto from "node:crypto";
+
 import {
   BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
   type CuaAgentBlock,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
+  type ProjectId,
   type ProviderInteractionMode,
+  resolveProjectBuiltInSkillEnabled,
   type RunId,
   type RuntimeMode,
   type ThreadId,
@@ -14,10 +19,8 @@ import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/r
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -86,6 +89,8 @@ export interface ComputerUseAttachmentInput {
   readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
   /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
   readonly requested?: ReadonlyArray<TurnCapability> | undefined;
+  /** The thread's project, whose own built-in skill switches win over the environment's. */
+  readonly projectId?: ProjectId | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
@@ -171,8 +176,11 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
-  // Names this build does not know are ignored.
-  const disabled = current?.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName)) ?? [];
+  const disabled = BuiltInSkillName.literals.filter(
+    (name) =>
+      current !== undefined &&
+      !resolveProjectBuiltInSkillEnabled(current, input.projectId ?? null, name),
+  );
   // Claimed only now, so a turn that cannot get the driver holds nothing; the claim itself
   // refuses unattended work that lost a race for the screen.
   const control = everyApp
@@ -232,23 +240,49 @@ export const LEASE_PROXY_ENV = {
 
 /**
  * The stdio server a thread's provider spawns. It carries the thread's own GOAT MCP credential
- * to read its control, and the driver descriptor it forwards to. The control id is in the
- * arguments, so a new control changes the attachment key and adapters respawn it.
+ * to follow its controls, and the driver descriptor it forwards to. Only the underlying driver's
+ * identity belongs in the arguments: Stop and re-approval must not reload the provider (#1629).
  */
 function leaseProxyDescriptor(
   config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader">,
   attachment: Extract<ComputerUseAttachment, { readonly _tag: "proxied" }>,
   leaseRoute: string,
 ): CuaDriverMcpConfiguration {
+  const driver = attachment.mcp;
+  const environment = Object.fromEntries(
+    driver.environment.map(({ name, value }) => [name, value]),
+  );
+  // Never hash arbitrary environment values: credentials must stay out of the public launch key.
+  const driverFingerprint = NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify([
+        driver.command,
+        driver.args,
+        driver.socketPath ?? null,
+        [
+          "DISPLAY",
+          "WAYLAND_DISPLAY",
+          "XAUTHORITY",
+          "XDG_RUNTIME_DIR",
+          "DBUS_SESSION_BUS_ADDRESS",
+          "CUA_DRIVER_RS_TELEMETRY_ENABLED",
+          "CUA_TELEMETRY_ENABLED",
+          "CUA_DRIVER_RS_UPDATE_CHECK",
+        ].map((name) => [name, environment[name] ?? null]),
+        attachment.x11Display?.DISPLAY ?? null,
+        attachment.x11Display?.XAUTHORITY ?? null,
+      ]),
+    )
+    .digest("hex");
   return {
     command: attachment.proxy.command,
     args: [
       ...selfInvocationArgs(attachment.proxy, [
         LEASE_PROXY_COMMAND,
-        "--control",
-        attachment.control.controlId,
-        "--expires",
-        DateTime.formatIso(attachment.control.expiresAt),
+        "--thread",
+        attachment.control.threadId,
+        "--driver-fingerprint",
+        driverFingerprint,
       ]),
     ],
     environment: [

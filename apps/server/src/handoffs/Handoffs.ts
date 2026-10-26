@@ -20,6 +20,7 @@ import {
   isHubDeviceHandoffPath,
   endsWithItsRun,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  STORAGE_CLEAN_HANDOFF_PATH,
   TurnItemId,
   type HandoffReadInput,
   type HandoffRespondInput,
@@ -439,14 +440,17 @@ const make = Effect.gen(function* () {
           ? ("environment:maintain" as const)
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
-            : // Admitting an unattended thread to the screen, or changing the hub's members, is as
-              // strong as changing this environment's settings. Ending a screen grant only narrows
-              // what agents may do, so whoever may stop agents can end it (Stop all).
-              (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-                  input.action !== "cancelled") ||
-                isHubDeviceHandoffPath(record.target.path)
-              ? ("settings:write" as const)
-              : ("orchestration:operate" as const);
+            : // Approving a storage deletion is the deletion itself, which takes maintenance.
+              record.target.path === STORAGE_CLEAN_HANDOFF_PATH && input.action === "completed"
+              ? ("environment:maintain" as const)
+              : // Admitting an unattended thread to the screen, or changing the hub's members, is as
+                // strong as changing this environment's settings. Ending a screen grant only narrows
+                // what agents may do, so whoever may stop agents can end it (Stop all).
+                (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                    input.action !== "cancelled") ||
+                  isHubDeviceHandoffPath(record.target.path)
+                ? ("settings:write" as const)
+                : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
     if (session && !canResolveHumanStep(sessionResolver(session), "person_only"))

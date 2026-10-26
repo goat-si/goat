@@ -1,4 +1,6 @@
-const DEFAULT_MARKETING_SITE_URL = "https://t3.codes";
+// GOAT's marketing site on GitHub Pages, as on web (apps/web/src/legalLinks.ts). trygoat.ai does
+// not serve it yet.
+const DEFAULT_MARKETING_SITE_URL = "https://goat-si.github.io/goat";
 
 function resolveMarketingSiteUrl(override: string | undefined): URL {
   try {

@@ -29,7 +29,7 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 
 // Kept here rather than in apps/server/package.json: the desktop bundle inlines that
-// file, and shipped artifacts must not carry the private repository's URL.
+// file, and shipped artifacts must not carry the source repository's URL.
 const NPM_REPOSITORY = {
   type: "git",
   url: "https://github.com/goat-si/goat",

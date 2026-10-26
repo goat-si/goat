@@ -4,7 +4,7 @@ import { Platform } from "react-native";
 
 const nativeControls = requireOptionalNativeModule<{
   releaseVideoAudioSession(): Promise<void>;
-}>("T3NativeControls");
+}>("GoatNativeControls");
 
 // Keep the session through seeks, buffering, and brief gaps between players.
 const RELEASE_DELAY_MS = 1_000;

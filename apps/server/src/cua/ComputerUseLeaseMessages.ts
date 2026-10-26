@@ -26,6 +26,9 @@ export const FOREGROUND_NOT_APPROVED = `This call can take foreground control an
 export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
 
+export const WRONG_DISPLAY =
+  "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
+
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 
@@ -36,14 +39,20 @@ export const SCREEN_SHARED =
 const POINTER_LOCKED =
   "This computer keeps the person's pointer still, so a call that moves it (foreground pointer delivery or a desktop move_cursor) did not run. Use the element_token, the keyboard, or a background click (the virtual cursor). If the app ignores background clicks, tell the person instead of retrying.";
 
-export const reservationRefusal = (detail: string, holder: string | undefined) =>
+export const reservationRefusal = (
+  detail: string,
+  holder: string | undefined,
+  app?: string | undefined,
+) =>
   detail === "pointer_locked"
     ? POINTER_LOCKED
     : detail === "screen_shared"
       ? SCREEN_SHARED
-      : holder === undefined
-        ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-        : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+      : detail === "app_busy"
+        ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
+        : holder === undefined
+          ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+          : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,

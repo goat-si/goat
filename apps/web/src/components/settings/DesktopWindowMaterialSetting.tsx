@@ -10,7 +10,9 @@ function materialStatus(state: DesktopWindowMaterialState | null): string {
   if (!state.capability.supported) {
     const platform = window.desktopBridge?.getClientPlatform?.() ?? navigator.platform;
     if (/darwin|mac/i.test(platform)) {
-      return "Native glass is not available on macOS in this build.";
+      return state.capability.reason === "os-version"
+        ? "Requires macOS 26 or later."
+        : "System glass is not available on this Mac.";
     }
     if (state.capability.reason === "os-version") return "Requires Windows 11 22H2 or later.";
     return "System glass is not available on this device.";
@@ -24,10 +26,10 @@ function materialStatus(state: DesktopWindowMaterialState | null): string {
       return "Paused in full screen.";
     case "native-failed":
       return "The system material could not be applied.";
+    case "restart":
+      return "Restart GOAT to use Liquid Glass.";
     case "active":
-      return state.applied === "windows-mica"
-        ? "Using Mica."
-        : "Using system glass (development candidate).";
+      return state.applied === "windows-mica" ? "Using Mica." : "Using Liquid Glass.";
     default:
       return "Use the system material in the sidebar and title bar.";
   }

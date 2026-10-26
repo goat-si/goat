@@ -84,7 +84,7 @@ const makeChildFixture = Effect.gen(function* () {
         return spawn(command);
       if (args.includes("-G"))
         return Effect.succeed(
-          makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n"),
+          makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n"),
         );
       if (isRemoteLaunch(args))
         return Effect.succeed(

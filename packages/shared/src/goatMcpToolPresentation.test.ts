@@ -97,7 +97,7 @@ describe("resolveGoatMcpToolPresentation", () => {
     }
   });
 
-  it("recognizes every T3 tool across provider prefixes and completion suffixes", () => {
+  it("recognizes every GOAT tool across provider prefixes and completion suffixes", () => {
     for (const tool of GOAT_MCP_TOOL_NAMES) {
       const presentation = resolveGoatMcpToolPresentation(tool);
       for (const prefix of [

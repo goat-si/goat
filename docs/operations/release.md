@@ -13,36 +13,12 @@ or with `goat update <version>`.
 
 ## Upstream reference (disabled)
 
-See [the disabled upstream release workflow](../../.github/workflows/release.yml) for upstream npm, relay, and Vercel publishing.
+See [the disabled upstream release workflow](../../.github/workflows/release.yml) for upstream npm and relay publishing.
 
 ## Pull request macOS previews
 
-Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect public configuration
-(the feature itself stays off until GOAT Connect ships) to the rolling `desktop-preview` prerelease, and works for fork PRs. The label is a one-shot request
-for the commit it is applied to: the trusted workflow removes it once the build is in hand, and later
-pushes do not build until a maintainer applies it again. Every signed preview is therefore a
-per-commit maintainer decision, which matters because the result carries the Developer ID signature.
-Vouching a contributor lets their labeled commits be signed; it is not a standing grant. The build is
-split so the Developer ID certificate never shares a job with PR code:
-
-- `.github/workflows/desktop-macos-preview.yml` runs on `pull_request` with no secrets and builds
-  only the JS bundle from the PR (the same `js-bundle` artifact `release.yml` produces).
-- `.github/workflows/desktop-macos-preview-publish.yml` runs on `workflow_run` from `main`. It
-  refuses unless the PR is open, still labeled, its head is the built commit, and the author is a
-  bot, a collaborator, or listed in `.github/VOUCHED.td` (read from the default branch, so a PR cannot vouch
-  for itself). It then packages and signs the bundle through `release-desktop.yml` checked out at
-  `main`, so packaging, native helpers, and the Electron/desktop dependencies come from `main`, not
-  the PR. Only the version and the public T3 Connect identifiers in `.env.example` are read from the
-  PR commit, as data, so the signed app's passkey entitlement matches the bundle. A PR that changes
-  packaging must use the `channel=preview` release train above instead.
-
-Before handing the bundle to the signing runner, the trusted workflow validates its ZIP entries
-and accepts only regular files under `server/dist` and `desktop/dist-electron`, plus the directory
-entries that lead to those roots. The artifact cannot
-overwrite packaging code or installed dependencies. The bundle is copied into the app, never executed,
-on the signing runner. The
-`pull_request_target` cleanup job in the publish workflow removes the download when the PR closes, or
-when the label is removed by hand before a build consumed it, and never checks out PR code.
+GOAT has no labeled PR preview workflow; upstream's `preview:mac` DMG workflows were removed. Build a
+signed preview from a branch with the `channel=preview` release train instead.
 
 ## Required release credentials
 
@@ -56,13 +32,13 @@ The finalize job uses them to commit and push aligned package versions to `main`
 GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
 independent from the shared Release App installation.
 
-## T3 Connect relay deployment
+## GOAT Connect relay deployment
 
 The relay is a shared control plane versioned separately from client releases. Stable and nightly
 client builds must point at the same relay so users see the same linked environments when switching
 release channels.
 
-`.github/workflows/deploy-relay.yml` deploys Alchemy stage `prod` on every push to `main`. The
+GOAT has no relay deploy workflow yet; deploy the Alchemy stage `prod` from `infra/relay` (see its README).
 release workflow reads the relay URL and Clerk client configuration from the existing `production`
 GitHub Actions environment before building desktop, CLI, or hosted web artifacts.
 
@@ -105,7 +81,7 @@ Required `production` environment secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-After changing a variable or secret, run the **Deploy T3 Connect relay** workflow manually from
+After changing a variable or secret, run the **Deploy GOAT Connect relay** workflow manually from
 `main` with **force** unchecked. Alchemy compares the values the Worker reads and redeploys it when
 one changed. Check **force** only to redeploy resources with no detected change: a forced run also
 replaces the Postgres runtime role and its password
@@ -121,7 +97,7 @@ Personal stages reference the production-owned zones.
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter goat-relay deploy -- --stage "$USER" --env-file .env.local
 ```
 
 ### Managed tunnel cleanup rollout
@@ -169,7 +145,7 @@ Ship the web and mobile builds that show the offline reason before enabling lega
 user whose host is affected sees what to do. The relay adds the `tunnel_released_at` allocation
 column in its first deploy with this change; the legacy switch stays `off` until you set it.
 
-1. Run `vp run --filter t3code-relay tunnels:census` with a read-only Cloudflare token. It counts
+1. Run `vp run --filter goat-relay tunnels:census` with a read-only Cloudflare token. It counts
    tunnels in every relay stage. The reaper only sees its own stage's tunnels, so clean up the rest
    by hand.
 2. Set the legacy mode to `dry-run`, deploy, and read `wouldDeleteLegacy`, `legacyOver30Days`,
@@ -243,16 +219,9 @@ Legacy cleanup, on the same disposable stage:
 
 ## Marketing site deployment
 
-On nightly releases, the release workflow builds the same commit as a staged
-production deployment of the marketing site's Vercel project while the desktop
-jobs run, and promotes it with `vercel promote` after the release is published.
-Stable releases do not deploy the marketing site because they can promote an
-older nightly commit.
-
-The job looks up the `t3code-marketing` project using the existing `VERCEL_TOKEN`
-and `VERCEL_ORG_ID` secrets. It also respects the optional `VERCEL_TEAM_SLUG`
-variable. The Vercel project's root directory must be `apps/marketing`.
-Git deployments remain disabled in `apps/marketing/vercel.ts`.
+`.github/workflows/marketing-pages.yml` builds `apps/marketing` and publishes it to GitHub Pages at
+https://goat-si.github.io/goat when `GOAT_MARKETING_PAGES` is `true`. The same site serves the
+`goat.json` schema at `/goat/schema/goat.json`.
 
 ## Mobile TestFlight and store releases
 
@@ -295,60 +264,6 @@ uploaded bundle, so no signing key lives in GitHub. The job skips itself until
 production, exclude devices, and use Play App Signing" permission, which downloading generated
 APKs requires. The job reads tracks without opening a Play edit, so it can share the service
 account EAS Submit uses.
-
-## Hosted web app release deployment
-
-The hosted app is intentionally not deployed by Vercel's Git integration. The
-web project disables automatic Git deployments in `apps/web/vercel.ts` via
-`git.deploymentEnabled: false`. `.github/workflows/release.yml` builds the web
-app with Vercel CLI as a staged production deployment (`--skip-domain`) while
-the desktop jobs run, and aliases the channel domains to it after the GitHub
-Release succeeds.
-
-Required GitHub Actions secrets:
-
-- `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
-
-Optional GitHub Actions variables:
-
-- `VERCEL_TEAM_SLUG`: overrides the Vercel CLI scope when the team slug is preferred over the `VERCEL_ORG_ID` secret.
-- `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
-- `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
-- `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
-
-Required Vercel domains:
-
-- `app.t3.codes`: the router domain users open, updated by stable releases.
-- `latest.app.t3.codes`: channel alias updated by stable releases.
-- `nightly.app.t3.codes`: channel alias updated by nightly releases.
-
-The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
-visiting `/__t3code/channel?channel=latest` or
-`/__t3code/channel?channel=nightly`; the router stores the
-`t3code_web_channel` cookie and rewrites future requests on `app.t3.codes` to
-the matching channel alias.
-
-The release deploy job rewrites release package versions before upload so the
-hosted app's About panel renders the release version. Stable deploys alias the
-same deployment to both the `latest` channel and the router domain so the router
-rules stay current. Nightly deploys only alias the `nightly` channel. The job
-also passes `VITE_HOSTED_APP_CHANNEL=latest|nightly`, which renders the hosted
-update track selector in the About panel. Changing the selector navigates
-through `/__t3code/channel` on the router domain so the user's channel cookie is
-updated before redirecting to the hosted app root.
-
-One-time Vercel dashboard setup:
-
-1. Confirm the web project root directory remains `apps/web`.
-2. Add the three domains above to the web project.
-3. Disable automatic Git deployments in the dashboard if desired; the committed
-   `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
-   dashboard is also safe.
-4. Run one stable release deployment, or manually alias the current stable
-   deployment, so `app.t3.codes` points at a deployment containing the router
-   rules in `apps/web/vercel.ts`. Future stable releases keep this alias current.
 
 ## Nightly builds
 
@@ -417,7 +332,7 @@ the archive in place through Electron. Packaged Windows builds also ship
 by the Linux desktop job and handed to the Windows desktop build as
 `--wsl-runtime`, copied in verbatim so WSL runs the exact bytes a Linux user
 downloads. WSL verifies and extracts that archive
-into `~/.t3/wsl-runtime/sha256-<archive-digest>` inside the selected distro,
+into `~/.goat/wsl-runtime/sha256-<archive-digest>` inside the selected distro,
 then reuses it for later launches of the same update.
 
 Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only

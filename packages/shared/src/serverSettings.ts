@@ -287,26 +287,38 @@ function mergeCompletionWebhook(
   return { ...current, ...fields, targets };
 }
 
-// Older clients omit providerInstances during whole-entry replacement; preserve it to avoid wiping overrides.
+// Older clients replace whole project entries without newer provider/skill maps.
+// Preserve omitted maps and keep builtInSkills when null clears visible overrides;
+// project cleanup uses PROJECT_SETTINGS_OVERRIDES_REMOVAL instead.
 function mergeProjectSettingsOverridesPatch(
   current: Readonly<Record<string, ProjectSettingsOverrides>>,
   patch: Readonly<Record<string, ProjectSettingsOverrides | null>>,
 ): Record<string, ProjectSettingsOverrides> {
   const next = new Map(Object.entries(current));
   for (const [projectId, entry] of Object.entries(patch)) {
-    if (entry === null) {
-      next.delete(projectId);
-      continue;
-    }
-    const storedProviderInstances = current[projectId]?.providerInstances;
-    next.set(projectId, {
-      ...entry,
-      ...(Object.hasOwn(entry, "providerInstances") || storedProviderInstances === undefined
+    const stored = current[projectId];
+    const kept = <K extends "providerInstances" | "builtInSkills">(key: K) =>
+      (entry !== null && Object.hasOwn(entry, key)) || stored?.[key] === undefined
         ? {}
-        : { providerInstances: storedProviderInstances }),
-    });
+        : { [key]: stored[key] };
+    const merged: ProjectSettingsOverrides =
+      entry === null
+        ? kept("builtInSkills")
+        : { ...entry, ...kept("providerInstances"), ...kept("builtInSkills") };
+    if (holdsNoOverride(merged)) next.delete(projectId);
+    else next.set(projectId, merged);
   }
   return Object.fromEntries(next);
+}
+
+/** Nothing set, or only empty per-instance or per-skill maps. */
+function holdsNoOverride(entry: ProjectSettingsOverrides): boolean {
+  return Object.entries(entry).every(
+    ([key, value]) =>
+      value === undefined ||
+      ((key === "providerInstances" || key === "builtInSkills") &&
+        Object.keys(value as object).length === 0),
+  );
 }
 
 export function deriveLegacyProjectOverrides(

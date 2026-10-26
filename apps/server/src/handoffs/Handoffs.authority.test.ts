@@ -6,6 +6,7 @@ import {
   EnvironmentId,
   Handoff,
   ProviderInstanceId,
+  STORAGE_CLEAN_HANDOFF_PATH,
   ThreadId,
   TurnItemId,
   type AuthClientSession,
@@ -64,6 +65,7 @@ const run = <A, E>(
     readonly scopes?: AuthClientSession["scopes"];
     readonly destination?: EnvironmentId;
     readonly afterHolder?: Effect.Effect<void>;
+    readonly path?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -78,7 +80,9 @@ const run = <A, E>(
         requestedBy: { threadId, providerInstanceId: ProviderInstanceId.make("codex"), path: "x" },
         target: {
           environmentId: options.destination ?? EnvironmentId.make("test"),
-          path: options.foreground ? COMPUTER_USE_GRANT_HANDOFF_PATH : "example.approve",
+          path:
+            options.path ??
+            (options.foreground ? COMPUTER_USE_GRANT_HANDOFF_PATH : "example.approve"),
         },
         ...(options.foreground
           ? { computerUseForeground: { purpose: "Check build", target: "desktop" as const } }
@@ -269,4 +273,32 @@ it.effect(
         failure: { _tag: "HandoffError", reason: "invalid_request" },
       });
     }),
+);
+
+it.effect("approving a storage deletion takes the same maintenance permission as deleting", () =>
+  Effect.gen(function* () {
+    const approve = (scopes: AuthClientSession["scopes"]) =>
+      run(
+        "desktop-bootstrap",
+        (service) => service.respond({ ...address, action: "completed" }, sessionId),
+        { path: STORAGE_CLEAN_HANDOFF_PATH, scopes },
+      );
+    expect((yield* approve(["orchestration:operate"])).result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "EnvironmentAuthorizationError" },
+    });
+    expect(
+      (yield* approve(["orchestration:operate", "environment:maintain"])).result,
+    ).toMatchObject({
+      _tag: "Success",
+      success: { state: "completed" },
+    });
+    // Declining deletes nothing, so whoever may operate the thread can still say no.
+    const declined = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "declined" }, sessionId),
+      { path: STORAGE_CLEAN_HANDOFF_PATH },
+    );
+    expect(declined.result).toMatchObject({ _tag: "Success", success: { state: "declined" } });
+  }),
 );

@@ -385,3 +385,62 @@ export const watchRemote = (service: LaunchWatchService.LaunchWatchServiceShape,
 
 export const pendingRuns = (service: LaunchWatchService.LaunchWatchServiceShape) =>
   service.list(launcher).pipe(Effect.map(([watch]) => watch?.pendingRuns ?? null));
+
+export const remoteItem = (position: number, runId: RunId, text: string) => ({
+  position,
+  visibility: "local",
+  sourceThreadId: target,
+  itemId: "item-" + position,
+  runId,
+  messageId: null,
+  createdBy: null,
+  creationSource: null,
+  type: "assistant_message",
+  status: "completed",
+  title: null,
+  text,
+  textTruncated: false,
+  updatedAt: "2026-10-12T00:00:00.000Z",
+});
+
+export const remoteRead = (input: {
+  readonly itemCount: number;
+  readonly items?: ReadonlyArray<unknown>;
+  readonly nextPosition?: number;
+  readonly recentRuns?: ReadonlyArray<unknown>;
+}) => ({
+  thread: {
+    threadId: target,
+    projectId: "remote-project",
+    title: "Remote fix",
+    createdBy: "agent",
+    creationSource: "mcp",
+    status: "completed",
+    latestRunId: run1,
+    activeRunId: null,
+    providerInstanceId: "codex",
+    model: "gpt-5",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    linkedPullRequest: null,
+    titleRegeneration: null,
+    branch: "goat/remote",
+    worktreePath: null,
+    parentThreadId: null,
+    relationshipToParent: null,
+    runCount: 1,
+    itemCount: input.itemCount,
+    pendingRequestCount: 0,
+    archived: false,
+    settled: false,
+    settledAt: null,
+    snoozed: false,
+    snoozedUntil: null,
+    createdAt: "2026-10-12T00:00:00.000Z",
+    updatedAt: "2026-10-12T00:00:00.000Z",
+  },
+  recentRuns: input.recentRuns ?? [],
+  items: input.items ?? [],
+  nextPosition: input.nextPosition ?? null,
+  hasMore: input.nextPosition !== undefined,
+});

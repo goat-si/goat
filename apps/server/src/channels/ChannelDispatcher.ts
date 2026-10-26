@@ -58,7 +58,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
-import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -70,14 +70,7 @@ import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts"
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import {
-  channelWorkerRules,
-  GOAT_BOT_DISPATCH_RULE,
-  GOAT_BOT_READ_ONLY_RULE,
-  GOAT_BOT_ROUTING_RULE,
-  GOAT_BOT_SUPERVISOR_RULE,
-  workerHeader,
-} from "./channelWorkerBrief.ts";
+import { turnInstruction, workerInstruction } from "./channelWorkerBrief.ts";
 import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -98,23 +91,6 @@ export class ChannelDispatcher extends Context.Service<
   }
 >()("goat/channels/ChannelDispatcher") {}
 
-/** What the worker thread is told besides the instruction itself. */
-const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
-  [
-    ...workerHeader(task),
-    "Standing notes from the person are in " +
-      files.notes +
-      "; follow them. Reusable procedures (skills) are in " +
-      files.skills +
-      "; read the one the instruction names.",
-    task.notesChangeRequested === undefined
-      ? "Leave the notes file unchanged; this task did not ask to change a note."
-      : "The person asked to change or forget a note (" +
-        JSON.stringify(task.notesChangeRequested) +
-        "). Edit the notes file only to make that change.",
-    ...channelWorkerRules("local"),
-  ].join("\n");
-
 const MEMORY_CEILING_RANK = { none: 0, read: 1, read_write: 2 } as const;
 
 /** How many pieces of one person's work run at once before more wait in the queue. */
@@ -131,26 +107,6 @@ const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {
 
 /** How long a stop keeps looking for a worker whose launch was in flight when it was asked. */
 const STOP_LAUNCH_GRACE_MS = 120_000;
-
-/** What a GOAT Bot turn is told besides the person's request. */
-const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: boolean) =>
-  [
-    ...workerHeader(task),
-    "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
-    "Look things up directly: read and search files, read GOAT Bot's notes (" +
-      files.notes +
-      "), use GOAT memory, and call the channel.task_* and thread.* paths through goat_call to check the work GOAT Bot started and its threads.",
-    GOAT_BOT_ROUTING_RULE,
-    GOAT_BOT_READ_ONLY_RULE,
-    GOAT_BOT_DISPATCH_RULE,
-    ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
-    task.notesChangeRequested === undefined
-      ? "Leave the notes file unchanged; this message did not ask to change a note."
-      : "The person asked to change or forget a note (" +
-        JSON.stringify(task.notesChangeRequested) +
-        "). This is the one change you may make yourself: edit the notes file only to make that change.",
-    ...channelWorkerRules("local"),
-  ].join("\n");
 
 /** The narrower of two memory ceilings. */
 const lowerMemoryCeiling = (

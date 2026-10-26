@@ -512,7 +512,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         subject: "one-time-token",
         scopes: ["orchestration:read"],
         client: {
-          label: "Julius iPhone",
+          label: "Alex iPhone",
           deviceType: "mobile",
           os: "iOS",
           browser: "Safari",
@@ -535,7 +535,7 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         true,
       );
       expect(beforeRevoke.find((entry) => entry.sessionId === client.sessionId)?.client.label).toBe(
-        "Julius iPhone",
+        "Alex iPhone",
       );
       expect(
         beforeRevoke.find((entry) => entry.sessionId === administrative.sessionId)?.client

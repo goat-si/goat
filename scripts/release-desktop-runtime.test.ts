@@ -137,7 +137,7 @@ describe("desktop release runtime supply", () => {
               ? {
                   GOAT_APPLE_TEAM_ID: "ABC1234567",
                   GOAT_MACOS_PROVISIONING_PROFILE: `${runner}/goat.provisionprofile`,
-                  T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+                  GOAT_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
                 }
               : {},
           );
@@ -372,9 +372,8 @@ describe("desktop release runtime supply", () => {
             if (bundled) assert.include(built.stdout, "/fixture/workspace/ssh-runtime-archives");
           }
         }
-        assert.equal(callers.length, 7);
-        assert.equal(callers.filter((caller) => caller.startsWith("release.yml:")).length, 6);
-        assert.include(callers, "desktop-macos-preview-publish.yml:build");
+        assert.equal(callers.length, 6);
+        assert.isTrue(callers.every((caller) => caller.startsWith("release.yml:")));
       }),
   );
 

@@ -250,7 +250,7 @@ describe("Windows SSH host", () => {
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.succeed(
         command._tag === "StandardCommand" && command.args.includes("-G")
-          ? makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n")
+          ? makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n")
           : ChildProcessSpawner.makeHandle({
               pid: ChildProcessSpawner.ProcessId(123),
               stdout: Stream.empty,
@@ -291,7 +291,7 @@ describe("Windows SSH host", () => {
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.succeed(
         command._tag === "StandardCommand" && command.args.includes("-G")
-          ? makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n")
+          ? makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n")
           : ChildProcessSpawner.makeHandle({
               pid: ChildProcessSpawner.ProcessId(123),
               stdout: Stream.empty,

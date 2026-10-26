@@ -37,6 +37,20 @@ describe("reception results", () => {
     expect(
       decodeAction({ ...action, notesChangeRequested: "forget the Korean note" }),
     ).toMatchObject({ notesChangeRequested: "forget the Korean note" });
+    expect(
+      decodeAction({
+        ...action,
+        additionalTasks: [
+          { title: "Fix CI", instruction: "Fix the failing check.", projectId: "project-1" },
+          { title: "Check host", instruction: "Inspect mini.", host: "mini" },
+        ],
+      }),
+    ).toMatchObject({
+      additionalTasks: [
+        { title: "Fix CI", instruction: "Fix the failing check.", projectId: "project-1" },
+        { title: "Check host", instruction: "Inspect mini.", host: "mini" },
+      ],
+    });
   });
 
   it("rejects actions outside the contract and empty replies", () => {

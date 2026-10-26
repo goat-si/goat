@@ -101,13 +101,13 @@ export const ARCHIVE = { archiveVersion: "1.2.3-preview.20260911.4" } as const;
 // Protocol-only cases explicitly select the mirror compatibility path.
 export const PROTOCOL_ARCHIVE = { ...ARCHIVE, releaseBaseUrl: "https://example.invalid/mirror" };
 export const NODE_SCRIPT = {
-  nodeScriptPath: "/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs",
+  nodeScriptPath: "/Users/alex/Development/Work/codething-mvp/apps/server/dist/bin.mjs",
 } as const;
 
 export const uploadTarget = {
   alias: "devbox",
   hostname: "devbox.example.com",
-  username: "julius",
+  username: "alex",
   port: 2222,
 } as const;
 export const platform = HostProcess.Platform.defaultValue() === "darwin" ? "darwin" : "linux";

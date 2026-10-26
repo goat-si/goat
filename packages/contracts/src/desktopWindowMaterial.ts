@@ -35,6 +35,7 @@ export const DesktopWindowMaterialReason = Schema.Literals([
   "fullscreen",
   "unsupported",
   "native-failed",
+  "restart",
 ]);
 export type DesktopWindowMaterialReason = typeof DesktopWindowMaterialReason.Type;
 

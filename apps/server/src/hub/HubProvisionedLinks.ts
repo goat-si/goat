@@ -95,6 +95,11 @@ export const makeProvisionedLinks = Effect.gen(function* () {
       SET link_id = ${linkId}, tunnel_port = ${port}, adding_since = NULL WHERE alias = ${alias}`;
   }, Effect.mapError(storageFailure));
 
+  /** After beginAdd, when the join was called off before `ocx link add` ran: nothing is unsettled. */
+  const abandonAdd = Effect.fn("HubProvisionedLinks.abandonAdd")(function* (alias: string) {
+    yield* sql`UPDATE hub_provisioned_links SET adding_since = NULL WHERE alias = ${alias}`;
+  }, Effect.mapError(storageFailure));
+
   const releases = (home: {
     readonly permit: Semaphore.Semaphore;
     readonly audit: (
@@ -275,5 +280,5 @@ export const makeProvisionedLinks = Effect.gen(function* () {
     };
   };
 
-  return { beginAdd, finishAdd, releases };
+  return { beginAdd, finishAdd, abandonAdd, releases };
 });

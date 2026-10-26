@@ -15,20 +15,20 @@ function environment(
   const connectionId = `bearer:${ENVIRONMENT_ID}`;
   return {
     environmentId: ENVIRONMENT_ID,
-    label: "Julius's MacBook Pro",
+    label: "Alex's MacBook Pro",
     displayUrl: "https://environment.example.test",
     relayManaged: false,
     entry: {
       target: new BearerConnectionTarget({
         environmentId: ENVIRONMENT_ID,
-        label: "Julius's MacBook Pro",
+        label: "Alex's MacBook Pro",
         connectionId,
       }),
       profile: Option.some(
         new BearerConnectionProfile({
           connectionId,
           environmentId: ENVIRONMENT_ID,
-          label: "Julius's MacBook Pro",
+          label: "Alex's MacBook Pro",
           httpBaseUrl: "https://environment.example.test",
           wsBaseUrl: "wss://environment.example.test",
         }),

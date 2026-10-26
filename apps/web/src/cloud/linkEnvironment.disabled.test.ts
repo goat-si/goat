@@ -24,7 +24,7 @@ describe("linking with GOAT Connect disabled", () => {
     "refuses %s before token access, relay calls, HTTP, or installation",
     (mode) =>
       Effect.gen(function* () {
-        vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
+        vi.stubEnv("VITE_GOAT_RELAY_URL", "https://relay.example.test");
         const fetch = vi.fn();
         const token = vi.fn(() => "saved-clerk-token");
         const run = vi.fn(() => Effect.die("Unexpected RPC"));
@@ -59,7 +59,7 @@ describe("linking with GOAT Connect disabled", () => {
           ),
         );
         expect(error._tag).toBe("CloudEnvironmentLinkError");
-        expect(error.message).toBe("T3CODE_RELAY_URL is not configured.");
+        expect(error.message).toBe("GOAT_RELAY_URL is not configured.");
         expect(token).not.toHaveBeenCalled();
         expect(run).not.toHaveBeenCalled();
         expect(challenge).not.toHaveBeenCalled();

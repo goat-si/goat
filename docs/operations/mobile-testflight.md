@@ -57,7 +57,7 @@ The mobile app leaves services that need accounts it does not have switched off:
 
 - **OTA updates** need `GOAT_MOBILE_EAS_PROJECT_ID` (and `GOAT_MOBILE_EAS_OWNER` for EAS builds).
   Without them updates are disabled. `GOAT_MOBILE_UPDATES_ENABLED=0` turns them off for a project too.
-- **T3 Connect sign-in** is off in every build until GOAT Connect ships; when enabled it needs the Clerk and relay settings described in the
+- **Connect sign-in** is off in every build until GOAT Connect ships; when enabled it needs the Clerk and relay settings described in the
   [mobile README](../../apps/mobile/README.md). Sign in with Apple is requested only when a Clerk key
   is set, and passkey/universal-link domains only when `GOAT_MOBILE_CLERK_DOMAIN` names a domain the
   team serves an apple-app-site-association file for.

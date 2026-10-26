@@ -7931,10 +7931,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }
                   return updated;
                 });
+                const stillActive = yield* Ref.get(activeTurns);
                 yield* Ref.update(runningCommandItemsByTurn, (current) => {
                   const updated = new Map(current);
                   for (const target of interruptTargets) {
                     if (settledTurnContexts.includes(target.context)) continue;
+                    if (stillActive.get(target.context.nativeTurnId) === target.context) continue;
                     updated.delete(target.context.nativeTurnId);
                   }
                   return updated;
@@ -8211,7 +8213,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 );
               }).pipe(
-                Effect.onError(() => finalizeRemainingInterruptLineage),
                 Effect.onError(() =>
                   CodexSubagents.failedStop(interruptTargets, forcedNativeTurns).pipe(
                     Effect.flatMap((failed) =>

@@ -57,9 +57,9 @@ Web, the Electron shell around it, and the React Native app.
 
 Which directory each process writes, and the files under it.
 
-| Doc                                                  | Scope                                                                                |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [`settings-and-storage.md`](settings-and-storage.md) | The ~/.t3 default, the packaged desktop home, the SSH host home, and statev2.sqlite. |
+| Doc                                                  | Scope                                                                                                          |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [`settings-and-storage.md`](settings-and-storage.md) | The ~/.goat default (legacy ~/.t3 fallback), the packaged desktop home, the SSH host home, and statev2.sqlite. |
 
 ## Which doc describes which source
 

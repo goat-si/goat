@@ -57,7 +57,7 @@ describe("decodeMergeRequestListJson", () => {
             state: "opened",
             merge_status: "can_be_merged",
             draft: false,
-            reviewers: [{ username: "julius" }],
+            reviewers: [{ username: "alex" }],
             labels: ["backend", "  "],
           },
         ]),
@@ -73,7 +73,7 @@ describe("decodeMergeRequestListJson", () => {
       state: "open",
       isDraft: false,
       mergeability: "mergeable",
-      reviewRequestLogins: ["julius"],
+      reviewRequestLogins: ["alex"],
       labels: [{ name: "backend", color: null }],
     });
   });
@@ -122,7 +122,7 @@ describe("decodeMergeRequestDetailJson", () => {
         detailJson({
           description: "Ships the page.",
           changes_count: "3",
-          reviewers: [{ username: "julius", name: "Julius" }],
+          reviewers: [{ username: "alex", name: "Alex" }],
           head_pipeline: {
             status: "success",
             web_url: "https://gitlab.com/acme/web/-/pipelines/9",
@@ -134,7 +134,7 @@ describe("decodeMergeRequestDetailJson", () => {
 
     expect(detail.body).toBe("Ships the page.");
     expect(detail.changedFiles).toBe(3);
-    expect(detail.reviewers).toEqual([{ login: "julius", name: "Julius", avatarUrl: null }]);
+    expect(detail.reviewers).toEqual([{ login: "alex", name: "Alex", avatarUrl: null }]);
     expect(detail.checks).toEqual([
       {
         name: "Pipeline",
@@ -231,7 +231,7 @@ describe("decodeNotesJson", () => {
           {
             id: 2,
             body: "Looks good.",
-            author: { username: "julius" },
+            author: { username: "alex" },
             created_at: "2026-07-02T00:00:00Z",
           },
           { id: 3, body: "   ", created_at: "2026-07-03T00:00:00Z" },
@@ -465,7 +465,7 @@ describe("decodeAwardEmojiJson", () => {
                 awardEmoji: {
                   nodes: [
                     { name: "thumbsup", user: { username: "bilal" } },
-                    { name: "thumbsup", user: { username: "julius" } },
+                    { name: "thumbsup", user: { username: "alex" } },
                   ],
                 },
                 notes: {
@@ -473,7 +473,7 @@ describe("decodeAwardEmojiJson", () => {
                   nodes: [
                     {
                       id: "gid://gitlab/DiffNote/42",
-                      awardEmoji: { nodes: [{ name: "heart", user: { username: "julius" } }] },
+                      awardEmoji: { nodes: [{ name: "heart", user: { username: "alex" } }] },
                     },
                     {
                       id: "gid://gitlab/Note/7",
@@ -491,10 +491,10 @@ describe("decodeAwardEmojiJson", () => {
     );
 
     expect(result.reactions).toEqual([
-      { content: "thumbs-up", count: 2, actors: ["julius"], viewerHasReacted: true },
+      { content: "thumbs-up", count: 2, actors: ["alex"], viewerHasReacted: true },
     ]);
     expect([...result.reactionsByNoteId]).toEqual([
-      ["42", [{ content: "heart", count: 1, actors: ["julius"], viewerHasReacted: false }]],
+      ["42", [{ content: "heart", count: 1, actors: ["alex"], viewerHasReacted: false }]],
     ]);
     expect(result.nextCursor).toBeNull();
   });
@@ -510,7 +510,7 @@ describe("decodeAwardEmojiJson", () => {
                 awardEmoji: {
                   nodes: [
                     { name: "heart", user: { username: "bilal" } },
-                    { name: "heart", user: { username: "julius" } },
+                    { name: "heart", user: { username: "alex" } },
                   ],
                 },
                 notes: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
@@ -522,14 +522,14 @@ describe("decodeAwardEmojiJson", () => {
     );
 
     expect(result.reactions).toEqual([
-      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
+      { content: "heart", count: 2, actors: ["alex"], viewerHasReacted: true },
     ]);
   });
 });
 
 describe("decodeOwnAwardIdJson", () => {
   const awards = JSON.stringify([
-    { id: 101, name: "thumbsup", user: { username: "julius" } },
+    { id: 101, name: "thumbsup", user: { username: "alex" } },
     { id: 102, name: "thumbsup", user: { username: "bilal" } },
   ]);
 

@@ -14,6 +14,7 @@ import {
   LAST_ERROR_CHARS,
   LAST_MESSAGE_EXCERPT_CHARS,
   statusFromShell,
+  statusFromRead,
   threadPhase,
 } from "./threadStatus.ts";
 
@@ -242,4 +243,46 @@ describe("statusFromShell", () => {
       expect(bounded.failure?.log?.length).toBeLessThanOrEqual(6_000);
     });
   });
+});
+
+it("exposes cause from shell and recent-run fallback, preserving legacy omission", () => {
+  const caused = {
+    ...run("run-1", "cancelled"),
+    terminationCause: { kind: "agent_stop" as const },
+  };
+  const current = statusFromShell(
+    shell({ status: "cancelled", latestRunId: caused.id }),
+    [caused],
+    [],
+  );
+  expect(current.run?.terminationCause).toEqual({ kind: "agent_stop" });
+  const older = statusFromShell(
+    shell({ status: "cancelled", latestRunId: caused.id }),
+    [run("run-1", "cancelled")],
+    [],
+  );
+  expect(older.run).not.toHaveProperty("terminationCause");
+  const read = {
+    host: "local",
+    thread: {
+      threadId: "thread-1",
+      title: "Test",
+      status: "cancelled",
+      activeRunId: null,
+      latestRunId: caused.id,
+      pendingRequestCount: 0,
+      updatedAt: "2026-10-13T01:10:00.000Z",
+    },
+    recentRuns: [
+      {
+        runId: caused.id,
+        status: "cancelled",
+        requestedAt: "2026-10-13T01:00:00.000Z",
+        startedAt: null,
+        completedAt: "2026-10-13T01:09:00.000Z",
+        terminationCause: { kind: "agent_stop" as const },
+      },
+    ],
+  } as unknown as Parameters<typeof statusFromRead>[0];
+  expect(statusFromRead(read).run?.terminationCause).toEqual({ kind: "agent_stop" });
 });

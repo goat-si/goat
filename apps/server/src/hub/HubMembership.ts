@@ -15,8 +15,6 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -25,6 +23,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { makeHubConsent } from "./HubConsent.ts";
+import { Added, Connection, decodeJson, Health, LinkStatus, Probe } from "./hubOcxJson.ts";
 import * as HubParity from "./HubParity.ts";
 import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
@@ -39,33 +38,6 @@ const DEVICE_TIMEOUT_MS = 120_000;
 const WINDOWS_REFUSAL =
   "Remote Link refuses Windows (remote_platform_unsupported); join it as a Hub-mode client with transport hub-client.";
 const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform unknown" };
-
-const LinkStatus = Schema.Struct({
-  role: Schema.Literals(["standalone", "home", "child"]),
-  links: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      alias: Schema.String,
-      tunnelPort: Schema.optional(Schema.Number),
-    }),
-  ),
-});
-const Health = Schema.Struct({ service: Schema.String, role: Schema.optional(Schema.String) });
-const Probe = Schema.Struct({
-  alias: Schema.String,
-  fingerprint: Schema.String,
-  keyType: Schema.String,
-});
-const Added = Schema.Struct({ linkId: Schema.String });
-/** `ocx connect status --json`; `transport: "link"` is a Remote Link Child's saved connection. */
-const Connection = Schema.Struct({
-  state: Schema.String,
-  transport: Schema.optional(Schema.String),
-  serverUrl: Schema.optional(Schema.String),
-  apiKeyId: Schema.optional(Schema.String),
-});
-const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text.trim()));
 
 type Action = HubDeviceOperationResult["action"];
 type Rung = "sync" | "restart" | "reconnect";
@@ -103,8 +75,12 @@ interface Caller {
   readonly profile: string;
   readonly owner: boolean;
   readonly inbox: DecisionInbox.DecisionCaller;
-  /** GOAT itself, for a machine it created: only its own pinned key may stand in for consent. */
+  /** GOAT itself, for a machine it created; its link is recorded so a removal releases it. */
   readonly provisioning?: true;
+  /** Nobody is asked: only GOAT's pinned key links, and a mismatch fails. */
+  readonly pinnedOnly?: true;
+  /** Standing permission for such a join, read under the permit and right before `ocx link add`. */
+  readonly gate?: Effect.Effect<boolean, OrchestratorMcpFailure>;
 }
 /** What the Home holds for a member: a Remote Link record, or a Hub client's data key id. */
 type Member =
@@ -149,6 +125,17 @@ export class HubMembership extends Context.Service<
     readonly joinProvisioned: (
       scope: McpInvocationScope,
       alias: string,
+      gate: Effect.Effect<boolean, OrchestratorMcpFailure>,
+    ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
+    /**
+     * Joins an SSH host on a person's standing consent, with nobody asked now. `consent` yields
+     * that person while the consent holds and undefined once it is withdrawn; like a provisioning
+     * join, only GOAT's pinned key links. Cloud machines join only through joinProvisioned.
+     */
+    readonly joinWithConsent: (
+      scope: McpInvocationScope,
+      alias: string,
+      consent: Effect.Effect<HubPerson | undefined, OrchestratorMcpFailure>,
     ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
   } & ProvisionedLinkReleases
 >()("goat/hub/HubMembership") {}
@@ -175,25 +162,25 @@ const make = Effect.gen(function* () {
       VALUES (${time}, ${caller.actor}, ${caller.profile}, ${action}, ${target}, ${outcome}, ${decisionId ?? null})`;
   }, Effect.mapError(storageFailure));
 
+  // A person acts with their own authority; profiles narrow agents, not people.
+  const personCaller = (scope: McpInvocationScope, person: HubPerson): Caller => ({
+    actor: `client:${person.sessionId}`,
+    profile: "person",
+    owner: true,
+    inbox: {
+      kind: "client",
+      environmentId: scope.environmentId,
+      sessionId: person.sessionId,
+      scopes: person.scopes,
+    },
+  });
   const authorize = Effect.fn("HubMembership.authorize")(function* (
     scope: McpInvocationScope,
     alias: string,
     person: HubPerson | undefined,
   ) {
     if (!SAFE_ALIAS.test(alias)) return yield* invalid("deviceAlias must be a plain SSH alias.");
-    // A person acts with their own authority; profiles narrow agents, not people.
-    if (person !== undefined)
-      return {
-        actor: `client:${person.sessionId}`,
-        profile: "person",
-        owner: true,
-        inbox: {
-          kind: "client",
-          environmentId: scope.environmentId,
-          sessionId: person.sessionId,
-          scopes: person.scopes,
-        } satisfies DecisionInbox.DecisionCaller,
-      };
+    if (person !== undefined) return personCaller(scope, person);
     const view = yield* profiles.require(scope, "hub.manage", { host: alias });
     return {
       actor: actorOf(scope),
@@ -323,7 +310,7 @@ const make = Effect.gen(function* () {
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
   const link = Effect.fn("HubMembership.link")(function* (
     scope: McpInvocationScope,
-    caller: Pick<Caller, "actor" | "profile" | "provisioning">,
+    caller: Pick<Caller, "actor" | "profile" | "provisioning" | "gate">,
     action: Action,
     alias: string,
     fingerprint: string,
@@ -335,10 +322,16 @@ const make = Effect.gen(function* () {
       steps.push({ step: "link_add", outcome: "failed", detail });
       return result(action, alias, "failed", detail, steps, { transport: "remote-link" });
     }
-    const added = yield* ocx.home(
-      ["link", "add", alias, "--expect-fingerprint", fingerprint, "--json"],
-      LINK_ADD_TIMEOUT_MS,
-    );
+    const add = ["link", "add", alias, "--expect-fingerprint", fingerprint, "--json"];
+    // A join nobody is asked about reads its permission last, inside, right before ocx starts.
+    const added =
+      caller.gate === undefined
+        ? yield* ocx.home(add, LINK_ADD_TIMEOUT_MS)
+        : yield* ocx.homeAdmitted(add, LINK_ADD_TIMEOUT_MS, permitted(caller));
+    if (added === undefined) {
+      if (caller.provisioning) yield* provisioned.abandonAdd(alias);
+      return yield* withdrawn(caller, alias, steps);
+    }
     const linkId = added.code === 0 ? decodeJson(Added, added.stdout)?.linkId : undefined;
     if (caller.provisioning) yield* provisioned.finishAdd(alias, linkId, homeLinks());
     if (linkId === undefined) {
@@ -443,6 +436,22 @@ const make = Effect.gen(function* () {
 
   const homeUnavailable = (action: Action, alias: string, steps: ReadonlyArray<HubDeviceStep>) =>
     result(action, alias, "failed", "This machine's OpenCodex link status is unavailable.", steps);
+
+  /** False when the caller's standing permission no longer holds; an unreadable one does not. */
+  const permitted = (caller: Pick<Caller, "gate">) =>
+    caller.gate === undefined
+      ? Effect.succeed(true)
+      : Effect.orElseSucceed(caller.gate, () => false);
+  const withdrawn = Effect.fn("HubMembership.withdrawn")(function* (
+    caller: Pick<Caller, "actor" | "profile">,
+    alias: string,
+    steps: HubDeviceStep[],
+  ) {
+    const detail = `Permission to join ${alias} without asking was withdrawn, so GOAT did not link it.`;
+    steps.push({ step: "link_add", outcome: "failed", detail });
+    yield* audit(caller, "hub.join", alias, "withdrawn", undefined);
+    return result("join", alias, "failed", detail, steps, { transport: "remote-link" });
+  });
 
   const deviceConnection = Effect.fn("HubMembership.deviceConnection")(function* (alias: string) {
     const output = yield* ocx.device(alias, ["connect", "status", "--json"], DEVICE_TIMEOUT_MS);
@@ -588,6 +597,7 @@ const make = Effect.gen(function* () {
     const alias = input.deviceAlias;
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
+      if (!(yield* permitted(caller))) return yield* withdrawn(caller, alias, steps);
       const status = yield* homeLinks();
       if (status === undefined) return homeUnavailable("join", alias, steps);
       if (status.role === "child")
@@ -646,7 +656,7 @@ const make = Effect.gen(function* () {
       });
       const pin = yield* ocx.pinnedFingerprint(alias);
       const binding = decisionBinding("join", alias, offered.fingerprint);
-      if (caller.provisioning && pin !== offered.fingerprint) {
+      if (caller.pinnedOnly && pin !== offered.fingerprint) {
         const detail =
           pin === undefined
             ? "GOAT has no pinned host key for this machine."
@@ -932,7 +942,7 @@ const make = Effect.gen(function* () {
     join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
-    joinProvisioned: (scope, alias) =>
+    joinProvisioned: (scope, alias, gate) =>
       SAFE_ALIAS.test(alias) && hasCloudMachineAliasPrefix(alias)
         ? permit.withPermits(1)(
             joinAs(
@@ -944,10 +954,33 @@ const make = Effect.gen(function* () {
                 owner: true,
                 inbox: { kind: "agent", scope },
                 provisioning: true,
+                pinnedOnly: true,
+                gate,
               },
             ),
           )
         : Effect.fail(invalid("Only a cloud machine GOAT created joins without a person.")),
+    joinWithConsent: (scope, alias, consent) =>
+      SAFE_ALIAS.test(alias) && !hasCloudMachineAliasPrefix(alias)
+        ? permit.withPermits(1)(
+            Effect.gen(function* () {
+              const person = yield* consent;
+              if (person === undefined)
+                return yield* withdrawn({ actor: "goat:ssh-host", profile: "person" }, alias, []);
+              const gate = Effect.map(
+                consent,
+                (current) => current?.sessionId === person.sessionId,
+              );
+              return yield* joinAs(
+                scope,
+                { deviceAlias: alias, transport: "remote-link" },
+                { ...personCaller(scope, person), pinnedOnly: true, gate },
+              );
+            }),
+          )
+        : Effect.fail(
+            invalid("Only an SSH host GOAT set up joins on a person's standing consent."),
+          ),
     ...provisioned.releases({
       permit,
       audit,

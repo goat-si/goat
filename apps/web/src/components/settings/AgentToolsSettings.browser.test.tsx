@@ -1,5 +1,5 @@
 import { render } from "../../../test/render";
-import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProjectId } from "@goat/contracts";
 import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
 import type { ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -8,6 +8,7 @@ import { userEvent } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_SERVER_SETTINGS,
   mixed: false,
+  projectScope: false,
   updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: undefined })),
 }));
 
@@ -37,13 +38,26 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
       environmentId: "env",
       label: "Build workstation",
       connection: { phase: "connected" },
-      serverConfig: { settings: state.settings, environment: { capabilities: {} } },
+      serverConfig: {
+        settings: state.settings,
+        environment: { capabilities: { devDisciplineSkill: true } },
+      },
     };
     return {
-      scope: { kind: "environment", environmentIds: ["env"] },
+      scope: {
+        kind: state.projectScope ? "project" : "environment",
+        environmentIds: ["env"],
+        members: [{ environmentId: "env", id: "project" }],
+      },
       environments: [environment],
       connectedEnvironments: [environment],
-      targets: [],
+      targets: [
+        {
+          environmentId: "env",
+          projectId: state.projectScope ? "project" : null,
+          settings: state.settings,
+        },
+      ],
       target: null,
     };
   }) as never,
@@ -52,6 +66,7 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
   useScopedSettings: (() => state.settings) as never,
   useScopedSettingsMixed: () => state.mixed,
+  useScopedSettingsWriteAllowed: () => true,
 }));
 // The real row reads write permission and project overrides from live environment
 // state; this suite is about what the control writes.
@@ -67,7 +82,7 @@ vi.mock(import("./settingsLayout"), async (original) => ({
   ),
 }));
 
-import { AgentToolListingSetting } from "./AgentToolsSettings";
+import { AgentToolListingSetting, DevelopmentDisciplineSetting } from "./AgentToolsSettings";
 
 const shippedDefault = DEFAULT_SERVER_SETTINGS.agentToolListing;
 const otherListing: AgentToolListing = shippedDefault === "core" ? "full" : "core";
@@ -76,6 +91,7 @@ const optionName = (listing: AgentToolListing) => (listing === "core" ? /^Core/ 
 function setup(agentToolListing: AgentToolListing, mixed = false) {
   state.settings = { ...DEFAULT_SERVER_SETTINGS, agentToolListing };
   state.mixed = mixed;
+  state.projectScope = false;
   state.updateSettings.mockClear();
 }
 
@@ -98,6 +114,60 @@ it("writes the chosen listing to the environment and resets to the shipped defau
     environmentId: "env",
     input: { patch: { agentToolListing: shippedDefault } },
   });
+});
+
+it("writes Off to the selected project and removes that skill override with Inherit", async () => {
+  setup(shippedDefault);
+  state.projectScope = true;
+  const projectId = "project" as ProjectId;
+  state.settings = {
+    ...state.settings,
+    projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } },
+  };
+  await using screen = await render(<DevelopmentDisciplineSetting />);
+  await userEvent.click(screen.getByRole("combobox", { name: "Development discipline" }));
+  await userEvent.click(screen.getByRole("option", { name: "Off", exact: true }));
+  await vi.waitFor(() =>
+    expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env",
+      input: {
+        patch: {
+          projectSettingsOverrides: {
+            [projectId]: {
+              defaultAutoPull: true,
+              builtInSkills: { "goat-discipline": { enabled: false } },
+            },
+          },
+        },
+      },
+    }),
+  );
+  state.settings = {
+    ...state.settings,
+    projectSettingsOverrides: {
+      [projectId]: {
+        defaultAutoPull: true,
+        builtInSkills: { "goat-discipline": { enabled: false } },
+      },
+    },
+  };
+  await screen.rerender(<DevelopmentDisciplineSetting />);
+  await expect
+    .element(screen.getByRole("combobox", { name: "Development discipline" }))
+    .not.toBeDisabled();
+  state.updateSettings.mockClear();
+  await userEvent.click(screen.getByRole("combobox", { name: "Development discipline" }));
+  await userEvent.click(screen.getByRole("option", { name: "Inherit", exact: true }));
+  await vi.waitFor(() =>
+    expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env",
+      input: {
+        patch: {
+          projectSettingsOverrides: { [projectId]: { defaultAutoPull: true, builtInSkills: {} } },
+        },
+      },
+    }),
+  );
 });
 
 it("offers reset when selected environments disagree even if the shown one uses the default", async () => {

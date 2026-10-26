@@ -69,7 +69,7 @@ const settings = RelayConfiguration.RelayConfiguration.of({
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "goat-relay",
   cloudMintPrivateKey: Redacted.make(cloudKeyPair.privateKey),
   cloudMintPublicKey: cloudKeyPair.publicKey,
   managedEndpointBaseDomain: "example.test",
@@ -96,7 +96,7 @@ function signMintResponse(
 ): RelayEnvironmentMintResponse {
   const requestProof = decodeRequestProof<RelayCloudMintCredentialProofPayload>(request.proof);
   const payload = {
-    iss: `t3-env:${requestProof.environmentId}`,
+    iss: `goat-env:${requestProof.environmentId}`,
     aud: "https://relay.example.test",
     sub: requestProof.environmentId,
     jti: "mint-response-jti",
@@ -123,7 +123,7 @@ function signHealthResponse(
 ): RelayEnvironmentHealthResponse {
   const requestProof = decodeRequestProof<RelayCloudEnvironmentHealthProofPayload>(request.proof);
   const payload = {
-    iss: `t3-env:${requestProof.environmentId}`,
+    iss: `goat-env:${requestProof.environmentId}`,
     aud: "https://relay.example.test",
     sub: requestProof.environmentId,
     jti: "health-response-jti",
@@ -255,10 +255,10 @@ describe("EnvironmentConnector", () => {
         environmentId: "env-connector-test",
       });
 
-      expect(seenUrls).toEqual(["https://env.example.test/api/t3-connect/health"]);
+      expect(seenUrls).toEqual(["https://env.example.test/api/goat-connect/health"]);
       expect(seenProofs[0]).toMatchObject({
         iss: "https://relay.example.test",
-        aud: "t3-env:env-connector-test",
+        aud: "goat-env:env-connector-test",
         sub: "user_123",
         environmentId: "env-connector-test",
         scope: ["environment:status"],
@@ -622,10 +622,10 @@ describe("EnvironmentConnector", () => {
         deviceId: "device-123",
       });
 
-      expect(seenUrls).toEqual(["https://env.example.test/api/t3-connect/mint-credential"]);
+      expect(seenUrls).toEqual(["https://env.example.test/api/goat-connect/mint-credential"]);
       expect(seenProofs[0]).toMatchObject({
         iss: "https://relay.example.test",
-        aud: "t3-env:env-connector-test",
+        aud: "goat-env:env-connector-test",
         sub: "user_123",
         environmentId: "env-connector-test",
         clientProofKeyThumbprint: "client-proof-key-thumbprint",

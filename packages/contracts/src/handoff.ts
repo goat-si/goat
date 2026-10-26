@@ -113,12 +113,19 @@ export const isHubDeviceHandoffPath = (path: string) => HUB_PATHS.has(path);
  */
 export const CLOUD_AGENT_LAUNCH_HANDOFF_PATH = "cloud_agent.launch";
 
+/**
+ * A person approving one storage cleanup: the exact items, by identity token, on one machine. The
+ * agent calls goat_storage_clean again with the same items and this handoff's id.
+ */
+export const STORAGE_CLEAN_HANDOFF_PATH = "storage.clean";
+
 /** Handoffs that expire on their clock instead of when the requesting run ends. */
 export const isClockedHandoffPath = (path: string) =>
   isProviderHandoffPath(path) ||
   path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
   isHubDeviceHandoffPath(path) ||
-  path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH;
+  path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH ||
+  path === STORAGE_CLEAN_HANDOFF_PATH;
 
 /**
  * Steps that end with the run that asked: a secret card, whose caller collects it in that run,

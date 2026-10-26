@@ -430,16 +430,32 @@ describe("planRun", () => {
     assert.equal((await plan(pr(), labels([FULL_LABEL]))).full, true);
   });
 
-  it("runs a quick run by default: check, typecheck and the tests beside the changes", async () => {
+  it("runs a quick run by default: check, typecheck and selected tests", async () => {
     const result = await plan(pr(), labels([]));
     assert.equal(result.full, false);
     assert.equal(result.quick, true);
     assert.deepEqual(result.tasks, ["check", "typecheck", "test-changed"]);
-    assert.deepEqual(result.changedTests, {
-      vitest: ["apps/server/src/channels/ChannelDispatcher.test.ts"],
-      node: [],
-    });
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelDispatcher.test.ts"),
+    );
+    assert.ok(
+      result.changedTests.vitest.includes("apps/server/src/channels/ChannelBotTurns.test.ts"),
+    );
+    assert.equal(new Set(result.changedTests.vitest).size, result.changedTests.vitest.length);
+    assert.deepEqual(result.changedTests.node, []);
     assert.equal(result.server.mode, "none");
+  });
+
+  it("quick PR includes cross-package importing tests (#1705)", async () => {
+    const result = await plan(pr(), labels([]), [
+      "packages/provider-opencode/src/server/v2/textGeneration.ts",
+    ]);
+    assert.ok(
+      result.changedTests.vitest.includes(
+        "apps/server/src/textGeneration/OpenCode2TextGeneration.test.ts",
+      ),
+    );
+    assert.ok(result.tasks.includes("test-changed"));
   });
 
   it("runs the same quick scope for a draft and for a ready pull request", async () => {

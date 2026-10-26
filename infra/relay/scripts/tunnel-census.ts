@@ -10,7 +10,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
-const PREFIX = "t3coderelay-managedendpoint-";
+const PREFIX = "goatrelay-managedendpoint-";
 const PAGE_SIZE = 1_000;
 const DAY_MS = 86_400_000;
 

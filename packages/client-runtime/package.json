@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./built-in-skill-settings": {
+      "types": "./src/builtInSkillSettings.ts",
+      "default": "./src/builtInSkillSettings.ts"
+    },
     "./hub-nodes": {
       "types": "./src/hubNodes.ts",
       "default": "./src/hubNodes.ts"

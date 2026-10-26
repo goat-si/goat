@@ -646,7 +646,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     if (at < 0) {
       if (command.args.includes("-G"))
         return Effect.succeed(
-          makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n"),
+          makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n"),
         );
       if (command.args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
       return Effect.die("Unexpected test transport command; real SSH is prohibited");

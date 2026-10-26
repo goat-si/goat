@@ -124,7 +124,12 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         sessionId: person,
         subject: "browser",
         method: "browser-session-cookie",
-        scopes: ["orchestration:operate", "settings:write", "providers:manage"],
+        scopes: [
+          "orchestration:operate",
+          "settings:write",
+          "providers:manage",
+          "environment:maintain",
+        ],
         client: { label: "Laptop", deviceType: "unknown" },
         issuedAt: now,
         expiresAt: DateTime.add(now, { days: 7 }),

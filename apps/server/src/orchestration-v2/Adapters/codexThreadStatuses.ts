@@ -4,7 +4,7 @@ import type * as CodexErrors from "effect-codex-app-server/errors";
 
 /** Added to a turn whose computer use change waits for a quiet conversation (#1564). */
 export const CUA_DEFERRED_NOTE =
-  "This conversation's computer use connection changed (for example after Stop), and the change applies only once this conversation and its subagents are idle and none of their goals is active. When their subagent limit changed too, it also waits until none of them keeps a background terminal running, such as a dev server. Until then computer use keeps its previous connection, which may refuse calls. If it does, tell the person why: ending this turn and pausing an active goal let their next message apply the change, but a running background terminal keeps blocking it however many turns finish, so they need to finish or stop that work first. Otherwise they can start a new thread.";
+  "This conversation's computer use driver configuration changed, and the change applies only once this conversation and its subagents are idle and none of their goals is active. Until then computer use keeps its previous connection, which may refuse calls. If it does, tell the person why: ending this turn and pausing an active goal let their next message apply the change. When their subagent limit changed too, it also waits until none of them keeps a background terminal running, such as a dev server; they need to finish or stop that work first, or start a new thread.";
 
 /**
  * What Codex last reported for each native thread, from thread/status/changed and thread/start.

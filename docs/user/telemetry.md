@@ -2,7 +2,7 @@
 
 The GOAT server sends product usage events to GOAT's own endpoint at `ingest.trygoat.ai`,
 associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and
+uses, the server also sends hashed account identifiers: your GOAT Connect account, your OpenAI and
 Claude accounts when you are signed in, and a random identifier for each device that connects.
 Events include the provider, model, reasoning effort, permission mode, turn result, duration,
 release channel, and main-agent token totals when available.
@@ -19,7 +19,7 @@ GOAT builds released before this endpoint existed send these events to the endpo
 Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
 
-GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.
+GOAT also sends relay connection traces to Axiom to diagnose GOAT Connect connectivity.
 
 To disable product events and relay tracing, set `GOAT_TELEMETRY_ENABLED=false` in the server's
 environment before starting it. Relay tracing also stops when `GOAT_OTEL_SDK_DISABLED` or

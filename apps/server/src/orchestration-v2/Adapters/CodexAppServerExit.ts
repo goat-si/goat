@@ -41,6 +41,7 @@ const failEventsOnAppServerExit = (
         new ProviderAdapter.ProviderAdapterEventStreamError({
           driver: ProviderDriverKind.make("codex"),
           providerSessionId,
+          source: "provider_process_exit",
           cause,
         }),
       ),

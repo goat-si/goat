@@ -79,6 +79,33 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
     /https:\/\/t3\.codes\/download/g,
     "https://github.com/goat-si/goat-releases/releases",
   ),
+  // The pink chat theme (id goat-chat) is GOAT's; its label and notes no longer name T3 Chat.
+  rule(
+    "chat-theme-label",
+    (path) =>
+      [
+        "packages/shared/src/themePalettes.ts",
+        "apps/web/index.html",
+        "apps/web/src/index.css",
+        "apps/web/src/themeBoot.test.ts",
+      ].includes(path),
+    /\bT3 Chat\b/g,
+    "GOAT Chat",
+  ),
+  // Example public host in browser-address help and tests.
+  rule(
+    "example-chat-host",
+    (path) =>
+      [
+        "packages/contracts/src/previewAutomation.ts",
+        "packages/shared/src/hostClassification.test.ts",
+        "apps/web/src/components/preview/openPreviewSession.test.ts",
+      ].includes(path),
+    /\bt3\.chat\b/g,
+    "example.com",
+  ),
+  // Keys in the packaged desktop package.json; the same build writes and reads them.
+  rule("build-keys", () => true, /\bt3code(CommitHash|WebAuthn)\b/g, "goat$1"),
   // Local console tags; the relay never reads them.
   rule(
     "connect-console-tags",
@@ -264,7 +291,11 @@ const BRAND_ASSETS =
   /^assets\/prod\/t3-black-(?:windows\.ico|web-favicon\.ico|web-favicon-(?:16x16|32x32)\.png|web-apple-touch-180\.png)$/;
 
 /** Binary files the driver may move although their contents are exempt from rewriting. */
-export const isMovableAsset = (path: string): boolean => BRAND_ASSETS.test(path);
+export const isMovableAsset = (path: string): boolean =>
+  BRAND_ASSETS.test(path) ||
+  path === "apps/mobile/assets/widget/T3Mark.svg" ||
+  // Licenses, notices, icons and fonts move with their renamed mobile module directory, unchanged.
+  /^apps\/mobile\/modules\/t3-[a-z-]+\//.test(path);
 
 export const LEFTOVER_PATH_RULES: readonly PathRule[] = [
   {

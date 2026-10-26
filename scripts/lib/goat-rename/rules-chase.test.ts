@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { applyTextRules, findResidue } from "./engine.ts";
-import { isExempt, KEEP_RULES, TEXT_RULES } from "./rules.ts";
+import { applyPathRules, applyTextRules, findResidue } from "./engine.ts";
+import { isExempt, KEEP_RULES, PATH_RULES, TEXT_RULES } from "./rules.ts";
 
 const rename = (path: string, source: string) =>
   applyTextRules(path, source, TEXT_RULES, KEEP_RULES).text;
@@ -118,6 +118,46 @@ describe("upstream chase identities", () => {
       "`t3-e2e-${runId}-${pose.id}`",
       "`goat-e2e-${runId}-${pose.id}`",
     ],
+    [
+      "apps/mobile/modules/t3-highlights/expo-module.config.json",
+      '"T3HighlightsModule"',
+      '"GoatHighlightsModule"',
+    ],
+    [
+      "apps/mobile/modules/t3-highlights/android/build.gradle",
+      "namespace 'expo.modules.t3highlights'",
+      "namespace 'expo.modules.goathighlights'",
+    ],
+    [
+      "apps/mobile/modules/t3-highlights/cpp/t3_highlights.c",
+      "t3_highlights_tokenize(source, length)",
+      "goat_highlights_tokenize(source, length)",
+    ],
+    [
+      "apps/mobile/src/lib/highlights.ts",
+      'requireNativeModule("T3Highlights")',
+      'requireNativeModule("GoatHighlights")',
+    ],
+    [
+      "apps/mobile/src/native/NativeScrollViewMarker.tsx",
+      "T3NativeControls_ScrollEdgeBleed",
+      "GoatNativeControls_ScrollEdgeBleed",
+    ],
+    [
+      "apps/mobile/modules/t3-native-controls/ios/T3ScrollEdgeBleedView.swift",
+      "final class T3ScrollEdgeBleedView: ExpoView",
+      "final class GoatScrollEdgeBleedView: ExpoView",
+    ],
+    [
+      "apps/mobile/modules/t3-review-diff/tests/android/settings.gradle",
+      "rootProject.name = 't3-review-diff-viewport-tests'",
+      "rootProject.name = 'goat-review-diff-viewport-tests'",
+    ],
+    [
+      "apps/mobile/modules/t3-terminal/ios/TerminalOutputBuffer.swift",
+      "apps/mobile/modules/t3-terminal/ios/TerminalOutputBuffer.swift",
+      "apps/mobile/modules/goat-terminal/ios/TerminalOutputBuffer.swift",
+    ],
   ])("renames GOAT-owned text in %s idempotently", (path, source, expected) => {
     expect(rename(path, source)).toBe(expected);
     expect(rename(path, expected)).toBe(expected);
@@ -143,29 +183,6 @@ describe("upstream chase identities", () => {
   });
 
   it.each([
-    ["apps/mobile/modules/t3-highlights/expo-module.config.json", '"T3HighlightsModule"'],
-    [
-      "apps/mobile/modules/t3-highlights/android/build.gradle",
-      "namespace 'expo.modules.t3highlights'",
-    ],
-    [
-      "apps/mobile/modules/t3-highlights/cpp/t3_highlights.c",
-      "t3_highlights_tokenize(source, length)",
-    ],
-    ["apps/mobile/src/lib/highlights.ts", 'requireNativeModule("T3Highlights")'],
-    ["apps/mobile/src/native/NativeScrollViewMarker.tsx", "T3NativeControls_ScrollEdgeBleed"],
-    [
-      "apps/mobile/modules/t3-native-controls/ios/T3ScrollEdgeBleedView.swift",
-      "final class T3ScrollEdgeBleedView: ExpoView",
-    ],
-    [
-      "apps/mobile/modules/t3-review-diff/tests/android/settings.gradle",
-      "rootProject.name = 't3-review-diff-viewport-tests'",
-    ],
-    [
-      "apps/mobile/modules/t3-terminal/ios/TerminalOutputBuffer.swift",
-      "apps/mobile/modules/t3-terminal/ios/TerminalOutputBuffer.swift",
-    ],
     [
       "apps/mobile/deps/react-native-screens-5.0.0-t3.45.tgz",
       "apps/mobile/deps/react-native-screens-5.0.0-t3.45.tgz",
@@ -198,9 +215,35 @@ describe("upstream chase identities", () => {
     expect(findResidue(path, source, KEEP_RULES)).toEqual([]);
   });
 
+  it.each([
+    [
+      "apps/mobile/modules/t3-highlights/android/src/main/java/expo/modules/t3highlights/T3HighlightsModule.kt",
+      "apps/mobile/modules/goat-highlights/android/src/main/java/expo/modules/goathighlights/GoatHighlightsModule.kt",
+    ],
+    [
+      "apps/mobile/modules/t3-highlights/android/src/main/cpp/t3_highlights_jni.c",
+      "apps/mobile/modules/goat-highlights/android/src/main/cpp/goat_highlights_jni.c",
+    ],
+    [
+      "apps/mobile/modules/t3-highlights/cpp/t3_highlights.h",
+      "apps/mobile/modules/goat-highlights/cpp/goat_highlights.h",
+    ],
+    [
+      "apps/mobile/modules/t3-review-diff/tests/android/src/test/kotlin/expo/modules/t3reviewdiff/ReviewDiffViewportTest.kt",
+      "apps/mobile/modules/goat-review-diff/tests/android/src/test/kotlin/expo/modules/goatreviewdiff/ReviewDiffViewportTest.kt",
+    ],
+  ])("moves new upstream native files with their GOAT module: %s", (source, expected) => {
+    expect(applyPathRules(source, PATH_RULES)).toBe(expected);
+    expect(applyPathRules(expected, PATH_RULES)).toBe(expected);
+  });
+
   it("leaves generated and vendored highlights bytes exempt", () => {
     expect(isExempt("apps/mobile/modules/t3-highlights/Vendor/highlights/highlights.c")).toBe(true);
-    expect(isExempt("apps/mobile/modules/t3-highlights/cpp/t3_highlights.c")).toBe(false);
+    expect(isExempt("apps/mobile/modules/goat-highlights/Vendor/highlights/highlights.c")).toBe(
+      true,
+    );
+    expect(isExempt("apps/mobile/modules/goat-highlights/cpp/generated/id_ranges.inc")).toBe(true);
+    expect(isExempt("apps/mobile/modules/goat-highlights/cpp/goat_highlights.c")).toBe(false);
   });
 
   it("preserves both current and legacy ACP env aliases in the split subagent test", () => {

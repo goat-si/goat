@@ -1,5 +1,3 @@
-import { DEFAULT_HOSTED_APP_URL } from "@goat/shared/connectAuth";
-
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "./pairingUrl";
 
 export interface HostedPairingRequest {
@@ -8,19 +6,13 @@ export interface HostedPairingRequest {
   readonly label: string;
 }
 
-export type HostedAppChannel = "latest" | "nightly";
-
-export function configuredHostedAppUrl(): string {
-  return import.meta.env.VITE_HOSTED_APP_URL?.trim() || DEFAULT_HOSTED_APP_URL;
+/** GOAT has no hosted web app; a build sets one only through VITE_HOSTED_APP_URL. */
+export function configuredHostedAppUrl(): string | null {
+  return import.meta.env.VITE_HOSTED_APP_URL?.trim() || null;
 }
 
 function configuredBackendUrl(): string {
   return import.meta.env.VITE_HTTP_URL?.trim() || import.meta.env.VITE_WS_URL?.trim() || "";
-}
-
-function configuredHostedAppChannel(): HostedAppChannel | null {
-  const channel = import.meta.env.VITE_HOSTED_APP_CHANNEL?.trim().toLowerCase();
-  return channel === "latest" || channel === "nightly" ? channel : null;
 }
 
 function originFromUrl(value: string): string | null {
@@ -36,15 +28,12 @@ export function isHostedStaticApp(url?: URL): boolean {
     return false;
   }
 
-  if (configuredHostedAppChannel()) {
-    return true;
-  }
-
   if (url === undefined && (typeof window === "undefined" || window.location === undefined)) {
     return false;
   }
 
-  const hostedOrigin = originFromUrl(configuredHostedAppUrl());
+  const hostedAppUrl = configuredHostedAppUrl();
+  const hostedOrigin = hostedAppUrl === null ? null : originFromUrl(hostedAppUrl);
   return hostedOrigin !== null && (url ?? new URL(window.location.href)).origin === hostedOrigin;
 }
 
@@ -72,8 +61,10 @@ export function buildHostedPairingUrl(input: {
   readonly host: string;
   readonly token: string;
   readonly label?: string | null;
-}): string {
-  const url = new URL("/pair", configuredHostedAppUrl());
+}): string | null {
+  const hostedAppUrl = configuredHostedAppUrl();
+  if (hostedAppUrl === null) return null;
+  const url = new URL("/pair", hostedAppUrl);
   url.searchParams.set("host", input.host);
 
   const label = input.label?.trim();
@@ -82,12 +73,4 @@ export function buildHostedPairingUrl(input: {
   }
 
   return setPairingTokenOnUrl(url, input.token).toString();
-}
-
-export function buildHostedChannelSelectionUrl(input: {
-  readonly channel: HostedAppChannel;
-}): string {
-  const url = new URL("/__t3code/channel", configuredHostedAppUrl());
-  url.searchParams.set("channel", input.channel);
-  return url.toString();
 }

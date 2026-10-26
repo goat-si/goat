@@ -282,7 +282,7 @@ describe("Codex subagent limit reload (#1572)", () => {
 });
 
 describe("Codex subagent limit and driver changed together (#1572)", () => {
-  // A new driver alone reloads past a background terminal (the Stop must not keep refusing), but
+  // A real driver change alone reloads past a background terminal, but
   // a reload that also carries a new subagent limit is other authority and waits for it.
   it.effect("waits for a background terminal when the limit changes with the driver", () =>
     Effect.scoped(
@@ -302,7 +302,7 @@ describe("Codex subagent limit and driver changed together (#1572)", () => {
         );
         yield* f.turnStart(3, 1, true);
         f.turnCompleted(1);
-        // Turn 2: Stop minted control B and the profile dropped to no lanes, while a dev server
+        // Turn 2: the driver changed and the profile dropped to no lanes, while a dev server
         // runs. The turn runs on the held thread and carries the computer use note.
         f.goalGet(4, "lanes-and-driver", { result: { goal: null } });
         f.entries.push(

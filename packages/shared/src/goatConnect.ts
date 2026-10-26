@@ -1,5 +1,5 @@
 /**
- * GOAT Connect will replace T3 Connect (Clerk sign-in plus the hosted relay). Until it ships,
+ * GOAT Connect will replace upstream's Connect stack (Clerk sign-in plus the hosted relay). Until it ships,
  * the server and every client keep that stack off, even in builds that still carry Clerk or
  * relay public configuration, so a fresh install makes no Clerk or relay requests.
  */

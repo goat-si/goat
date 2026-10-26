@@ -20,7 +20,7 @@ import {
   firstWorkspaceDetailOpen,
   workspaceHasColumns,
 } from "../workspace/workspace-selection-store";
-import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
+import { GoatKeyboardCommands } from "../../native/GoatKeyboardCommands";
 import { useThreadShell } from "../../state/entities";
 import { useThreadProjection } from "../../state/use-thread-detail";
 import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-registry";
@@ -211,9 +211,9 @@ export function HardwareKeyboardCommandProvider({
 
   return (
     <CommandPaletteContext value={palette}>
-      <T3KeyboardCommands enabledCommands={enabledCommands} onCommand={onCommand}>
+      <GoatKeyboardCommands enabledCommands={enabledCommands} onCommand={onCommand}>
         {children}
-      </T3KeyboardCommands>
+      </GoatKeyboardCommands>
       <GitActionProgressOverlay progress={copyFeedback} onDismiss={dismissCopyFeedback} />
     </CommandPaletteContext>
   );

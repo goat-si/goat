@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
@@ -77,6 +78,10 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
     readonly body?: Stream.Stream<Uint8Array>;
     readonly wait?: Duration.Input;
     readonly unsupported?: boolean;
+    readonly release?: PreviewBrowser.PreviewBrowserRelease | null;
+    readonly variant?: PreviewBrowser.PreviewBrowserVariant;
+    readonly executablePath?: string;
+    readonly env?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -87,21 +92,28 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
   const sha256 =
     options.sha256 ?? Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie));
   const requests: Array<string> = [];
+  const release =
+    options.release !== undefined
+      ? options.release
+      : options.unsupported
+        ? null
+        : {
+            version: "1.2.3",
+            platform: "fixture",
+            url: "https://storage.googleapis.com/chrome-headless-shell-fixture.zip",
+            bytes: archive.byteLength,
+            sha256,
+          };
   const browser = yield* PreviewBrowser.makePreviewBrowser({
     baseDir,
-    release: options.unsupported
-      ? null
-      : {
-          version: "1.2.3",
-          platform: "fixture",
-          url: "https://storage.googleapis.com/chrome-headless-shell-fixture.zip",
-          bytes: archive.byteLength,
-          sha256,
-        },
+    release,
+    ...(options.variant === undefined ? {} : { variant: options.variant }),
+    ...(options.executablePath === undefined ? {} : { executablePath: options.executablePath }),
     ...(options.wait === undefined ? {} : { wait: options.wait }),
   }).pipe(
     Effect.provideService(HostProcess.Platform, hostPlatform),
     Effect.provideService(HostProcess.Architecture, "x64"),
+    Effect.provideService(HostProcess.Environment, options.env ?? {}),
     Effect.provideService(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
@@ -115,7 +127,11 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
       ),
     ),
   );
-  const installRoot = path.join(baseDir, "tools", "chrome-headless-shell", "fixture");
+  const toolDirectory =
+    options.variant === "chrome" || options.env?.GOAT_SERVER_BROWSER_VARIANT?.trim() === "chrome"
+      ? "chrome"
+      : "chrome-headless-shell";
+  const installRoot = path.join(baseDir, "tools", toolDirectory, "fixture");
   return { browser, fs, path, baseDir, installRoot, requests };
 });
 
@@ -197,6 +213,123 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
       expect(yield* fs.exists(path.join(baseDir, "tools", "chrome-headless-shell", "escape"))).toBe(
         false,
       );
+    }),
+  );
+
+  it.effect(
+    "uses a runnable custom executable override without downloading, even on unsupported platforms",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const customDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-custom-browser-" });
+        const customBin = path.join(customDir, executableName);
+        yield* fs.writeFileString(customBin, "#!/bin/sh\n");
+        if (hostPlatform !== "win32") yield* fs.chmod(customBin, 0o755);
+
+        const { browser, requests } = yield* makeHarness({
+          unsupported: true,
+          env: { GOAT_SERVER_BROWSER_EXECUTABLE_PATH: `  ${customBin}  ` },
+        });
+
+        expect(yield* browser.installed).toEqual(Option.some(customBin));
+        expect(yield* browser.executable).toBe(customBin);
+        expect(requests).toEqual([]);
+      }),
+  );
+
+  it.effect("fails when a custom executable override is missing or not executable", () =>
+    Effect.gen(function* () {
+      const { browser, requests } = yield* makeHarness({
+        executablePath: "/nonexistent/custom-chrome",
+      });
+
+      expect(yield* browser.installed).toEqual(Option.none());
+      const error = yield* browser.executable.pipe(Effect.flip);
+      expect(error._tag).toBe("PreviewBrowserInstallError");
+      expect(error.message).toContain("/nonexistent/custom-chrome");
+      expect(requests).toEqual([]);
+    }),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "unpacks full Chrome app bundle archives with relative symlinks into tools/chrome",
+    () =>
+      Effect.gen(function* () {
+        const appExe = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+        const fwRoot =
+          "Google Chrome for Testing.app/Contents/Frameworks/Google Chrome for Testing Framework.framework/";
+        const chromeZip = makeZip([
+          { name: "chrome-fixture/", mode: 0o40755 },
+          { name: `chrome-fixture/${appExe}`, data: "#!/bin/sh\n", mode: 0o100755 },
+          {
+            name: `chrome-fixture/${fwRoot}Versions/1.2.3/Resources/Info.plist`,
+            data: "<plist/>",
+            mode: 0o100644,
+          },
+          {
+            name: `chrome-fixture/${fwRoot}Versions/Current`,
+            data: "1.2.3",
+            mode: 0o120755,
+          },
+          {
+            name: `chrome-fixture/${fwRoot}Resources`,
+            data: "Versions/Current/Resources",
+            mode: 0o120755,
+          },
+        ]);
+        const crypto = yield* Crypto.Crypto;
+        const sha256 = Hex.encode(yield* crypto.digest("SHA-256", chromeZip).pipe(Effect.orDie));
+        const { browser, fs, path, baseDir, installRoot } = yield* makeHarness({
+          variant: "chrome",
+          archive: chromeZip,
+          release: {
+            version: "1.2.3",
+            platform: "fixture",
+            url: "https://storage.googleapis.com/chrome-fixture.zip",
+            bytes: chromeZip.byteLength,
+            sha256,
+            rootDir: "chrome-fixture/",
+            executablePath: appExe,
+          },
+        });
+
+        const executable = yield* browser.executable;
+        expect(installRoot).toBe(path.join(baseDir, "tools", "chrome", "fixture"));
+        expect(executable).toBe(path.join(installRoot, "1.2.3", ...appExe.split("/")));
+        expect(
+          yield* fs.readFileString(
+            path.join(installRoot, "1.2.3", ...`${fwRoot}Resources/Info.plist`.split("/")),
+          ),
+        ).toBe("<plist/>");
+      }),
+  );
+
+  it.effect.each([
+    {
+      name: "a relative symlink escaping the destination",
+      entries: [
+        { name: `${ROOT}${executableName}`, data: "#!/bin/sh\n", mode: 0o100755 },
+        { name: `${ROOT}escape-link`, data: "../../escape", mode: 0o120755 },
+      ],
+    },
+    {
+      name: "a chained ancestor symlink escape",
+      entries: [
+        { name: `${ROOT}${executableName}`, data: "#!/bin/sh\n", mode: 0o100755 },
+        { name: `${ROOT}a/b/c/dir_link`, data: "../..", mode: 0o120755 },
+        { name: `${ROOT}a/b/c/dir_link/escape`, data: "../../..", mode: 0o120755 },
+      ],
+    },
+  ])("rejects an archive with $name", (testCase) =>
+    Effect.gen(function* () {
+      const { browser, fs, installRoot } = yield* makeHarness({
+        archive: makeZip(testCase.entries),
+      });
+
+      const error = yield* browser.executable.pipe(Effect.flip);
+      expect(error._tag).toBe("PreviewBrowserInstallError");
+      expect(yield* fs.readDirectory(installRoot)).toEqual([]);
     }),
   );
 });

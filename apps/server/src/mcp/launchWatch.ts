@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EnvironmentId,
   MessageId,
   type OrchestrationV2Notification,
   type OrchestrationV2RunStatus,
@@ -96,6 +97,7 @@ export const LaunchWatch = Schema.Struct({
   ceiling: Schema.NullOr(RuntimeMode).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** SSH alias of the target's environment; null for this environment. */
   host: Schema.NullOr(Schema.String),
+  sourceEnvironmentId: Schema.optionalKey(Schema.NullOr(EnvironmentId)),
   threadId: ThreadId,
   /** The target's project, for targets in this environment. */
   projectId: Schema.NullOr(ProjectId),
@@ -233,6 +235,7 @@ export function launchWatchId(input: {
   readonly launcherThreadId: string | null;
   readonly owner?: string | null;
   readonly host: string | null;
+  readonly sourceEnvironmentId?: EnvironmentId | null;
   readonly threadId: string;
 }): string {
   const owner = input.launcherThreadId === null ? (input.owner ?? null) : null;
@@ -251,6 +254,7 @@ export function newLaunchWatch(input: {
   readonly owner?: string | null;
   readonly ceiling?: RuntimeMode | null;
   readonly host: string | null;
+  readonly sourceEnvironmentId?: EnvironmentId | null;
   readonly threadId: ThreadId;
   readonly projectId: ProjectId | null;
   readonly title: string | null;
@@ -266,6 +270,7 @@ export function newLaunchWatch(input: {
     owner: input.launcherThreadId === null ? (input.owner ?? null) : null,
     ceiling: input.ceiling ?? null,
     host: input.host,
+    sourceEnvironmentId: input.sourceEnvironmentId ?? null,
     threadId: input.threadId,
     projectId: input.projectId,
     title: input.title,

@@ -4,7 +4,8 @@ import {
   type MemoryCapacityDimension,
   type MemoryImportIssue,
   type MemoryImportOutcome,
-  type MemoryImportFormat,
+  type MemoryImportSourceFormat,
+  type ExecutionEnvironmentCapabilities,
   type MemoryImportProviderInput,
   type MemoryImportProviderResult,
   type MemoryImportReceipt,
@@ -16,8 +17,11 @@ import type { MemoryImportDestination, MemoryImportRecoveryStore } from "./memor
 
 const isMemoryImportRpcError = Schema.is(MemoryImportRpcError);
 
-/** A short reason for a whole-request import refusal, for the settings UI. */
-export function memoryImportIssueReason(issue: MemoryImportIssue): string {
+/** A short reason for an import refusal, for the settings UI. */
+export function memoryImportIssueReason(
+  issue: MemoryImportIssue,
+  scope: "request" | "item" = "request",
+): string {
   switch (issue) {
     case "unsupported_format":
       return "This provider's memory format is not supported.";
@@ -30,7 +34,9 @@ export function memoryImportIssueReason(issue: MemoryImportIssue): string {
     case "path_rejected":
       return "A memory file is outside the allowed location.";
     case "limit_exceeded":
-      return `This folder has more than ${MEMORY_IMPORT_PREVIEW_MAX_ITEMS} items.`;
+      return scope === "item"
+        ? "This memory exceeds the import size limit."
+        : `This folder has more than ${MEMORY_IMPORT_PREVIEW_MAX_ITEMS} items.`;
     case "source_changed":
       return "The source changed. Preview again before importing.";
     case "scope_unmapped":
@@ -40,7 +46,9 @@ export function memoryImportIssueReason(issue: MemoryImportIssue): string {
     case "bootstrap_required":
       return "Set up memory on this device before importing.";
     case "secret_detected":
-      return "Import stopped because sensitive content was found.";
+      return scope === "item"
+        ? "This file contains sensitive content."
+        : "Import stopped because sensitive content was found.";
     case "storage_failed":
       return "The import could not be saved.";
     case "operation_id_reused":
@@ -54,6 +62,20 @@ export function memoryImportIssueReason(issue: MemoryImportIssue): string {
 export function memoryImportRequestFailureMessage(error: unknown): string | null {
   return isMemoryImportRpcError(error) ? memoryImportIssueReason(error.issue) : null;
 }
+
+export const memoryImportFormatLabels: Record<MemoryImportSourceFormat, string> = {
+  codex: "Codex",
+  claude: "Claude",
+  omo: "OMO",
+  aside: "Aside",
+};
+/** Older servers reject `aside` at decode, so it is offered only when advertised. */
+export const memoryImportFormats = (
+  capabilities: ExecutionEnvironmentCapabilities | undefined,
+): readonly MemoryImportSourceFormat[] =>
+  capabilities?.memory?.asideImport === true
+    ? ["codex", "claude", "omo", "aside"]
+    : ["codex", "claude", "omo"];
 
 type Apply = Extract<MemoryImportProviderInput, { action: "apply" }>;
 type Preview = Extract<MemoryImportProviderResult, { action: "preview" }>;
@@ -427,7 +449,7 @@ export function createMemoryImportWorkflow(options: {
     stop: () => {
       progress({ type: "stop", inFlight: isBusy() });
     },
-    discover: (format: MemoryImportFormat) =>
+    discover: (format: MemoryImportSourceFormat) =>
       exclusive(async (token) => {
         preview = null;
         chunks = [];

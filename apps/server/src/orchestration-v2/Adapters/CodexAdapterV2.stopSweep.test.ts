@@ -5,6 +5,8 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import { TestClock } from "effect/testing";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import {
@@ -202,9 +204,7 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  // Codex refused the interrupt and reported nothing ended. GOAT still finalizes the turn
-  // itself, but that proves nothing about the child, which may start its work any moment.
-  it.effect("leaves a never-started subagent running when Codex refused the Stop", () =>
+  it.effect("keeps a rejected root active until a later native terminal", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const root = "stop-refused";
@@ -215,27 +215,15 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
         f.start();
         yield* f.turnStart(3, 1, false);
         spawnChild(f, root, child);
-        f.entries.push(
-          {
-            type: "expect_outbound",
-            frame: {
-              id: 4,
-              method: "turn/interrupt",
-              params: { threadId: root, turnId: "turn-1" },
-            },
-          },
-          { type: "emit_inbound", frame: { id: 4, error: { code: -32603, message: "busy" } } },
-        );
-        // The next turn's events come after whatever the failed Stop emitted.
-        yield* f.turnStart(5, 2, false);
+        interrupt(f, 4, root, "turn-1", { error: { code: -32603, message: "busy" } });
+        interrupt(f, 5, root, "turn-1");
+        f.entries.push(turn(root, "turn-1", "interrupted"));
+        yield* f.turnStart(6, 2, false);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         const stopped = yield* stop(replay, "turn-1", true);
         assert.propertyVal(stopCause(stopped), "errorMessage", "busy");
-        yield* replay.terminal;
-        yield* replay.startTurn(2);
-        yield* replay.terminal;
         const allocator = yield* IdAllocator.IdAllocatorV2;
         assert.deepStrictEqual(
           { task: replay.subagentStatuses.at(-1), nodes: lastNodes(replay, allocator, child) },
@@ -244,12 +232,54 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
         assert.isTrue(
           yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
         );
+        const retried = yield* stop(replay, "turn-1", false);
+        assert.isTrue(Exit.isSuccess(retried));
+        yield* replay.terminal;
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepStrictEqual(
+          { task: replay.subagentStatuses.at(-1), nodes: lastNodes(replay, allocator, child) },
+          { task: "interrupted", nodes: ["interrupted", "interrupted"] },
+        );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  // Codex confirmed the root ended, then refused to interrupt a child's turn. GOAT ends that turn
-  // itself, which proves nothing about the grandchild it spawned.
+  it.effect("retains a running command when Codex rejects Stop without a terminal", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "stop-refused-command";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        f.entries.push({
+          type: "emit_inbound",
+          frame: {
+            method: "item/started",
+            params: {
+              threadId: root,
+              turnId: "turn-1",
+              item: devServer("inProgress"),
+              startedAtMs: 1782622441500,
+            },
+          },
+        });
+        interrupt(f, 4, root, "turn-1", { error: { code: -32603, message: "busy" } });
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        const stopped = yield* stop(replay, "turn-1", true);
+        assert.propertyVal(stopCause(stopped), "errorMessage", "busy");
+        assert.isTrue(
+          yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  // Codex confirmed the root ended, then refused to interrupt a child's turn. The
+  // grandchild may still start work because Codex has not ended its parent turn.
   it.effect("ends the root's untouched subagents when a descendant refused the Stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -275,9 +305,7 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
         yield* replay.startTurn(1);
         const stopped = yield* stop(replay, "turn-1", true);
         assert.propertyVal(stopCause(stopped), "errorMessage", "busy");
-        yield* replay.terminal;
         yield* replay.startTurn(2);
-        yield* replay.terminal;
         const allocator = yield* IdAllocator.IdAllocatorV2;
         assert.deepStrictEqual(
           {
@@ -348,9 +376,9 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  // Codex finished the root after refusing to interrupt it, while Stop was interrupting a child
-  // turn it found late: the root counts as ended by Codex, the late child as ended by GOAT.
-  it.effect("counts a root Codex ended during the rest of a failed Stop as stopped", () =>
+  // Codex finished the root while Stop's interrupt was pending; the active child
+  // remains unconfirmed when that request is rejected.
+  it.effect("counts a root Codex ended during a rejected Stop as stopped", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const root = "stop-root-ends-late";
@@ -370,29 +398,18 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
         });
         f.entries.push(turn(child, "child-late", "inProgress"));
         spawnUnder(f, child, "child-late", grandchild);
+        f.entries.push(turn(root, "turn-1", "interrupted"));
         f.entries.push({
           type: "emit_inbound",
           frame: { id: 4, error: { code: -32603, message: "busy" } },
         });
-        f.entries.push({
-          type: "expect_outbound",
-          frame: {
-            id: 5,
-            method: "turn/interrupt",
-            params: { threadId: child, turnId: "child-late" },
-          },
-        });
-        f.entries.push(turn(root, "turn-1", "interrupted"));
-        f.entries.push({ type: "emit_inbound", frame: { id: 5, result: {} } });
-        yield* f.turnStart(6, 2, false);
+        yield* f.turnStart(5, 2, false);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         const stopped = yield* stop(replay, "turn-1", true);
         assert.propertyVal(stopCause(stopped), "errorMessage", "busy");
-        yield* replay.terminal;
         yield* replay.startTurn(2);
-        yield* replay.terminal;
         const allocator = yield* IdAllocator.IdAllocatorV2;
         assert.deepStrictEqual(
           {
@@ -405,9 +422,9 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  // An earlier Stop of the child's turn was refused and GOAT ended that turn itself. A later Stop
-  // of the root that fails still has no word from Codex that the child stopped.
-  it.effect("keeps a subagent running under a turn an earlier failed Stop ended itself", () =>
+  // Codex accepted the child's interrupt but sent no terminal notification. A later
+  // Stop of the root still has no native confirmation that the child stopped.
+  it.effect("keeps a subagent running under a turn an earlier successful Stop forced", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const root = "stop-earlier-forced";
@@ -454,7 +471,7 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
             },
           },
         });
-        interrupt(f, 4, child, "child-turn", { error: { code: -32603, message: "busy" } });
+        interrupt(f, 4, child, "child-turn");
         interrupt(f, 5, root, "turn-1");
         f.entries.push(turn(root, "turn-1", "interrupted"));
         terminalSurvives(f, root, 6);
@@ -475,8 +492,11 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
           }),
           nativeThreadRef: { ...rootRef, nativeId: child },
         };
-        const childStopped = yield* stop(replay, "child-turn", false, childThread);
-        assert.propertyVal(stopCause(childStopped), "errorMessage", "busy");
+        const childStop = yield* stop(replay, "child-turn", false, childThread).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust("10 seconds");
+        assert.isTrue(Exit.isSuccess(yield* Fiber.join(childStop)));
         const stopped = yield* stop(replay, "turn-1", true);
         assert.propertyVal(
           stopCause(stopped),

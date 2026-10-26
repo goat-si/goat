@@ -1,5 +1,5 @@
 {
-  "$schema": "https://t3.codes/schema/t3.json",
+  "$schema": "https://goat-si.github.io/goat/schema/goat.json",
   "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
   "worktreeSparseExclude": [".repos/"],
   "scripts": [

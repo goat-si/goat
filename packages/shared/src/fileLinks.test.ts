@@ -15,13 +15,13 @@ describe("parseFileUrlHref", () => {
   });
 
   it("keeps percent-encoding so the caller decodes once", () => {
-    expect(parseFileUrlHref("file:///Users/julius/project/file%2520name.md")?.path).toBe(
-      "/Users/julius/project/file%2520name.md",
+    expect(parseFileUrlHref("file:///Users/alex/project/file%2520name.md")?.path).toBe(
+      "/Users/alex/project/file%2520name.md",
     );
     expect(parseFileUrlHref("file:///c%3A/Users/x/shot.png")?.path).toBe("/c%3A/Users/x/shot.png");
   });
 
-  it.each(["https://example.com/a.ts", "file://%", "/Users/julius/a.ts"])("rejects %s", (href) => {
+  it.each(["https://example.com/a.ts", "file://%", "/Users/alex/a.ts"])("rejects %s", (href) => {
     expect(parseFileUrlHref(href)).toBeNull();
   });
 });
@@ -57,8 +57,8 @@ describe("resolvePathLinkTarget", () => {
 
   it("keeps Windows absolute paths with forward slashes unchanged", () => {
     expect(
-      resolvePathLinkTarget("C:/Users/julius/project/src/main.ts:12", "C:\\Users\\julius\\project"),
-    ).toBe("C:/Users/julius/project/src/main.ts:12");
+      resolvePathLinkTarget("C:/Users/alex/project/src/main.ts:12", "C:\\Users\\alex\\project"),
+    ).toBe("C:/Users/alex/project/src/main.ts:12");
   });
 
   // regression: #19627 Windows home paths match case-insensitively

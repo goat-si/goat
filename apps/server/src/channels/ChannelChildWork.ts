@@ -47,8 +47,16 @@ import {
   childWorkStopCommandIdFor,
 } from "./channelIds.ts";
 
-/** At most this many active descendants per channel task, delegates and threads together. */
-export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 2;
+/** At most this many active delegated subagents per channel task. */
+export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
+
+/** At most this many active coding threads per channel task. */
+export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
+
+const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
+  surface === "delegate_local" || surface === "delegate_remote"
+    ? CHANNEL_CHILD_WORK_MAX_ACTIVE
+    : CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS;
 
 export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkError>()(
   "ChannelChildWorkError",
@@ -270,15 +278,16 @@ const make = Effect.gen(function* () {
       createdAt: now,
       updatedAt: now,
     };
+    const capacity = channelChildWorkCapacityFor(input.surface);
     const result = yield* store
-      .admitReserved(record, CHANNEL_CHILD_WORK_MAX_ACTIVE)
+      .admitReserved(record, capacity)
       .pipe(Effect.mapError((error) => toError("Unable to record child work.", error)));
     if (result._tag === "at_capacity") {
       return yield* new ChannelChildWorkError({
         reason: "at_capacity",
         detail:
           "This work already has " +
-          String(CHANNEL_CHILD_WORK_MAX_ACTIVE) +
+          String(capacity) +
           " active subagents or threads. Let one finish, or stop it, before launching more.",
       });
     }
@@ -493,7 +502,11 @@ const make = Effect.gen(function* () {
     // The marker is read before the thread: a launch that ends after this check has already
     // committed or abandoned its thread, and its bind wins the compare-and-set below.
     const launchEnded = record.state === "launched" && !isLaunching(record);
-    const read = yield* threads.getThreadRecords(threadId, ["runs"]).pipe(Effect.result);
+    const read = yield* threads
+      .getThreadRecords(threadId, ["runs", "providerThreads", "turnItems"], {
+        turnItemStatuses: ["pending", "running", "waiting"],
+      })
+      .pipe(Effect.result);
     if (read._tag === "Failure") {
       // A launch that ended without creating its thread (it failed, or the server restarted
       // mid-launch) ran nothing. Any other unreadable thread keeps capacity rather than guess.
@@ -501,7 +514,8 @@ const make = Effect.gen(function* () {
         return yield* transition(record, ["launched"], "released");
       return false;
     }
-    const runs = read.success.runs ?? [];
+    const records = read.success;
+    const runs = records.runs ?? [];
     if (runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status))) return false;
     const latest = runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
     if (latest === undefined) {
@@ -510,6 +524,21 @@ const make = Effect.gen(function* () {
       return false;
     }
     if (!isTerminalRunStatus(latest.status)) return false;
+    const providerThreads = records.providerThreads ?? [];
+    const cloud = providerThreads.some(
+      (thread) =>
+        thread.cloudTask?.status === "running" || thread.cloudTask?.status === "submitting",
+    );
+    const background =
+      derivePendingBackgroundWork({
+        latestRun: latest,
+        providerThreads,
+        turnItems: records.turnItems ?? [],
+        activeProviderThreadId: records.thread?.activeProviderThreadId,
+        runs,
+        pullRequests: records.thread?.pullRequests,
+      }).length > 0;
+    if (cloud || background) return false;
     return yield* transition(
       record,
       ["launched", "bound", "unknown"],
