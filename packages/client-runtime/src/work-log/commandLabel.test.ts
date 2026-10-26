@@ -158,6 +158,31 @@ describe("commandDisplayText with redacted Codex commands", () => {
   });
 });
 
+describe("commandDisplayText with PowerShell wrappers", () => {
+  it.each([
+    [
+      String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'Get-ChildItem'`,
+      "Get-ChildItem",
+    ],
+    [
+      String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'Get-ChildItem'`,
+      "Get-ChildItem",
+    ],
+    ['pwsh -NoProfile -ExecutionPolicy Bypass -c "npm test"', "npm test"],
+    ["powershell.exe -NonInteractive -command 'git status --short'", "git status --short"],
+  ])("unwraps %j to the script it runs", (input, expected) => {
+    expect(commandDisplayText(input)).toBe(expected);
+  });
+
+  it.each([
+    "powershell.exe -File build.ps1",
+    "pwsh -Command 'Get-Item a' extra",
+    "pwsh script.ps1 -Command x",
+  ])("keeps %j, which is not a lone -Command script", (input) => {
+    expect(commandDisplayText(input)).toBe(input);
+  });
+});
+
 describe("commandDisplayText control characters", () => {
   it.each([
     ["printf '\u001b[31mred\u001b[0m'", "printf '␛[31mred␛[0m'"],

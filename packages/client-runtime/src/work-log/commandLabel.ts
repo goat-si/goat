@@ -1386,14 +1386,30 @@ function withoutShellWrapper(command: string): string {
     ?.split(/[\\/]/u)
     .at(-1)
     ?.replace(/\.exe$/iu, "");
-  if (!tokens || !program || !SHELL_PROGRAMS.has(program)) return trimmed;
-  const scriptIndex = shellCommandArgumentIndex(tokens, 1);
+  if (!tokens || !program) return trimmed;
+  const scriptIndex = POWERSHELL_PROGRAMS.has(program.toLowerCase())
+    ? powerShellCommandArgumentIndex(tokens)
+    : SHELL_PROGRAMS.has(program)
+      ? shellCommandArgumentIndex(tokens, 1)
+      : null;
   // Positional arguments can affect the script; keep those invocations intact.
   if (scriptIndex === null || scriptIndex !== tokens.length - 1) return trimmed;
   return tokens[scriptIndex]?.trim() || trimmed;
 }
 
 const POWERSHELL_PROGRAMS = new Set(["powershell", "pwsh"]);
+
+/** Index of the script after `-Command`/`-c`, or null when the call runs a file or anything else. */
+function powerShellCommandArgumentIndex(tokens: ReadonlyArray<string>): number | null {
+  for (let index = 1; index < tokens.length; index += 1) {
+    const option = tokens[index]!.toLowerCase();
+    if (!option.startsWith("-")) return null;
+    if (option === "-c" || option === "-command") return index + 1;
+    if (POWERSHELL_OPTIONS_WITH_VALUE.has(option)) index += 1;
+    else if (!POWERSHELL_FLAGS.has(option)) return null;
+  }
+  return null;
+}
 
 const POWERSHELL_VERBS = new Set(
   `Add Approve Assert Backup Block Build Checkpoint Clear Close Compare Complete Compress Confirm Connect Convert ConvertFrom ConvertTo Copy Debug Deny Deploy Disable Disconnect Dismount Edit Enable Enter Exit Expand Export Find ForEach Format Get Grant Group Hide Import Initialize Install Invoke Join Limit Lock Measure Merge Mount Move New Open Optimize Out Ping Pop Protect Publish Push Read Receive Redo Register Remove Rename Repair Request Reset Resize Resolve Restart Restore Resume Revoke Save Search Select Send Set Show Skip Sort Split Start Step Stop Submit Suspend Switch Sync Tee Test Trace Unblock Undo Uninstall Unlock Unprotect Unpublish Unregister Update Use Wait Watch Where Write`.split(

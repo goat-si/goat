@@ -595,8 +595,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           >
             <ChevronRightIcon
               className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-90",
+                "size-3 shrink-0 text-icon-muted transition-transform duration-200",
+                // Like Codex: the chevron appears on hover or focus and stays while open.
+                expanded
+                  ? "rotate-90 opacity-70"
+                  : "opacity-0 group-hover/timeline-row:opacity-70 group-focus-within/timeline-row:opacity-70 pointer-coarse:opacity-70",
               )}
             />
           </span>

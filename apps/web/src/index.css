@@ -671,12 +671,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @keyframes live-tool-shine {
-  from {
+  0% {
     background-position:
       -4.5rem 0,
       0 0;
   }
-  to {
+  /* One sweep, then the highlight rests off the edge: a 4s cadence like Codex. */
+  55%,
+  100% {
     background-position:
       calc(100% + 4.5rem) 0,
       0 0;
@@ -694,7 +696,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
       100% 100%;
     background-repeat: no-repeat;
     background-clip: text;
-    animation: live-tool-shine 2.2s steps(30) infinite;
+    animation: live-tool-shine 4s steps(30) infinite;
     animation-play-state: var(--visible-animation-state, paused);
   }
 }
@@ -895,19 +897,21 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 @keyframes live-activity-focus {
-  from {
+  0% {
     transform: translateX(0);
   }
-  to {
+  55%,
+  100% {
     transform: translateX(100%);
   }
 }
 
 @keyframes live-activity-focus-counter {
-  from {
+  0% {
     transform: translateX(0);
   }
-  to {
+  55%,
+  100% {
     transform: translateX(-100%);
   }
 }
@@ -942,7 +946,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     transparent 100%
   );
   mask-repeat: no-repeat;
-  animation: live-activity-focus 2.2s steps(30) infinite;
+  animation: live-activity-focus 4s steps(30) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -955,7 +959,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 @utility live-activity-focus-counter {
   width: 100%;
-  animation: live-activity-focus-counter 2.2s steps(30) infinite;
+  animation: live-activity-focus-counter 4s steps(30) infinite;
   animation-play-state: var(--visible-animation-state, paused);
   will-change: var(--visible-animation-will-change, auto);
 
@@ -2020,6 +2024,11 @@ code {
   margin: 0.65rem 0;
 }
 
+/* Prose paragraphs breathe more than lists and code; answers are read all day. */
+.chat-markdown p {
+  margin: 1rem 0;
+}
+
 .chat-markdown-math-display .katex-display {
   margin: 0;
 }
@@ -2256,14 +2265,15 @@ code {
 }
 
 .chat-markdown :not(pre) > code {
-  border: 1px solid var(--contrast-border);
+  border: none;
   border-radius: 0.375rem;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
-  background: var(--muted);
-  padding: 0.1rem 0.35rem;
-  color: var(--contrast-foreground);
-  font-size: 0.75rem;
+  /* Tinted from the text color so it stays quiet on every theme surface. */
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.0625rem 0.3rem;
+  color: inherit;
+  font-size: 0.92em;
 }
 
 .chat-markdown pre {
