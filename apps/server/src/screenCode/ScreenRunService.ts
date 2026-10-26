@@ -424,6 +424,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           environmentId: input.environmentId,
         });
       if (input.bindingHints) options.tabHost?.setBindingHints(input, input.bindingHints);
+      // Stop fences the tracked cell, so a second cell must never replace the one still running.
+      if (activeCells.has(id)) return yield* Effect.fail(fail("pending_limit"));
       activeCells.set(id, cellId);
       // A cutoff or new message killed the child, so values the agent stored are gone; say so.
       const contextReset = input.resetValues !== true && resetNext.delete(id);

@@ -237,52 +237,58 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       if (call.method === "open_tab") {
-        const opened = yield* broker
-          .invoke<PreviewAutomationStatus>({
-            scope: context.invocation,
-            operation: "open",
-            serverHostOnly: true,
-            input: {
-              ...(stringField(arg, "url") ? { url: arg.url } : {}),
-              reuseExistingTab: false,
-            },
-          })
-          .pipe(
-            Effect.mapError(() => ({
-              ...fail("unknown_outcome", "Check live tabs before opening again."),
-              effectStarted: true,
-            })),
-          );
-        const tabs = yield* list(context).pipe(
-          Effect.mapError(() => ({
-            ...fail("unknown_outcome", "Reconcile the opened tab in preview status."),
-            effectStarted: true,
-          })),
+        // Once the browser may have opened the tab, a cutoff must not stop us claiming it, and a
+        // tab that cannot be claimed is closed, so no agent tab escapes turn cleanup.
+        return yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const opened = yield* broker
+              .invoke<PreviewAutomationStatus>({
+                scope: context.invocation,
+                operation: "open",
+                serverHostOnly: true,
+                input: {
+                  ...(stringField(arg, "url") ? { url: arg.url } : {}),
+                  reuseExistingTab: false,
+                },
+              })
+              .pipe(
+                Effect.mapError(() => ({
+                  ...fail("unknown_outcome", "Check live tabs before opening again."),
+                  effectStarted: true,
+                })),
+              );
+            const abandon = (nextStep: string) =>
+              broker
+                .invoke({
+                  scope: context.invocation,
+                  operation: "close",
+                  input: {},
+                  ...(opened.tabId ? { tabId: opened.tabId } : {}),
+                })
+                .pipe(
+                  Effect.ignore,
+                  Effect.andThen(
+                    Effect.fail({ ...fail("unknown_outcome", nextStep), effectStarted: true }),
+                  ),
+                );
+            const tabs = yield* list(context).pipe(
+              Effect.catchCause(() => abandon("Reconcile the opened tab in preview status.")),
+            );
+            const tab = tabs.find((entry) => entry.tabId === opened.tabId);
+            if (!tab) return yield* abandon("Reconcile the opened tab in preview status.");
+            const ref = bind(tab, context);
+            const openedBound = targets.get(ref.id);
+            if (!openedBound) return yield* abandon("Reconcile the new tab.");
+            yield* claims
+              .recordOpened(identity(openedBound, context))
+              .pipe(Effect.catchCause(() => abandon("The new tab could not be claimed.")));
+            return {
+              value: { targetRef: ref, tab },
+              category: "confirmed" as const,
+              evidence: ["New preview tab opened"],
+            };
+          }),
         );
-        const tab = tabs.find((entry) => entry.tabId === opened.tabId);
-        if (!tab)
-          return yield* Effect.fail({
-            ...fail("unknown_outcome", "Reconcile the opened tab in preview status."),
-            effectStarted: true,
-          });
-        const ref = bind(tab, context);
-        const openedBound = targets.get(ref.id);
-        if (!openedBound)
-          return yield* Effect.fail({
-            ...fail("unknown_outcome", "Reconcile the new tab."),
-            effectStarted: true,
-          });
-        yield* claims.recordOpened(identity(openedBound, context)).pipe(
-          Effect.mapError(() => ({
-            ...fail("unknown_outcome", "The new tab could not be claimed."),
-            effectStarted: true,
-          })),
-        );
-        return {
-          value: { targetRef: ref, tab },
-          category: "confirmed",
-          evidence: ["New preview tab opened"],
-        };
       }
       const bound = lookup(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));

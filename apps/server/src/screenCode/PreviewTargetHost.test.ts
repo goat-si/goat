@@ -9,6 +9,8 @@ import {
   type ScreenTargetRef,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 
@@ -296,5 +298,47 @@ it.effect("Stop still closes the agent's own temporary tab after its generation 
     const outcomes = yield* host.releaseControl({ runId: "run", turnId: "turn" });
     expect(outcomes).toEqual([{ tabId: "temporary", status: "closed" }]);
     expect(closes).toEqual([expect.objectContaining({ controlGeneration: 2 })]);
+  }),
+);
+
+it.effect("a tab that opens after its turn was fenced is closed instead of escaping cleanup", () =>
+  Effect.gen(function* () {
+    const opening = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const operations: string[] = [];
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("late"),
+      title: "New tab",
+      url: "https://example.test/",
+      owner: "agent" as const,
+      ownedByCaller: true,
+      controlGeneration: 1,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: { operation: string }) =>
+        Effect.gen(function* () {
+          operations.push(request.operation);
+          if (request.operation === "open") {
+            yield* Deferred.succeed(opening, undefined);
+            yield* Deferred.await(release);
+          }
+          return { tabId: tab.tabId } as A;
+        }),
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const running = yield* host
+      .dispatch(call("open_tab", 1, { url: tab.url }), context)
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(opening);
+    yield* host.finishTurn({ runId: "run", turnId: "turn" });
+    yield* Deferred.succeed(release, undefined);
+    const result = yield* Fiber.join(running);
+    expect(result._tag).toBe("Failure");
+    expect(operations).toEqual(["open", "close"]);
   }),
 );

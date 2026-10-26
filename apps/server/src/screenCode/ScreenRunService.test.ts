@@ -489,3 +489,49 @@ it.live("one cell reads a tab and an app through one Target API", () => {
     );
   });
 });
+
+it.live("a second cell in a busy turn is refused and Stop still cuts the running one", () =>
+  Effect.gen(function* () {
+    const offered = yield* Deferred.make<void>();
+    const held = yield* Deferred.make<void>();
+    const serviceLayer = ScreenRunService.layerWithRuntime({
+      invocation: {
+        command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+      },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      dispatcher: {
+        availability: () => Effect.succeed([{ kind: "app", available: true }]),
+        dispatch: () =>
+          Deferred.succeed(offered, undefined).pipe(
+            Effect.flatMap(() => Deferred.await(held)),
+            Effect.as({ value: true, category: "confirmed" as const }),
+          ),
+      },
+    }).pipe(Layer.provide(NodeServices.layer));
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const request = {
+        runId: "run",
+        turnId: "turn",
+        threadId: "thread",
+        environmentId: "env",
+        invocation,
+      };
+      const first = yield* service
+        .runCell({ ...request, source: "return await screen.list_apps();" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(offered);
+      const second = yield* service
+        .runCell({ ...request, source: "return 1;" })
+        .pipe(Effect.result);
+      expect(second._tag === "Failure" ? second.failure.code : undefined).toBe("pending_limit");
+      yield* service.fence({ threadId: "thread" });
+      const cut = yield* Fiber.join(first);
+      // Joined before the held dispatch is released: the fence ended the cell that was running.
+      expect(cut._tag === "Failure" || cut.success.status !== "completed").toBe(true);
+      yield* Deferred.succeed(held, undefined);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(Effect.provide(serviceLayer));
+  }),
+);
