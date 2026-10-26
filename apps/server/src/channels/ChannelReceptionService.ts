@@ -120,10 +120,14 @@ import {
   answerForwardIdsFor,
   deliveryIdFor,
   taskEventIdFor,
-  taskIdFor,
   turnSteerIdsFor,
 } from "./channelIds.ts";
-import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
+import {
+  botAddress,
+  chipDelivery,
+  makeCreatedTasks,
+  prepareTransition,
+} from "./channelTaskWrites.ts";
 
 const movedNarration = (payload: { fromHost: string; host: string; replicaCapturedAt: string }) =>
   `${payload.fromHost} stopped answering, so this continues on ${payload.host} from the copy of its work taken at ${payload.replicaCapturedAt}. Whatever it does on ${payload.fromHost} after that stays there.`;
@@ -1371,9 +1375,7 @@ const make = Effect.gen(function* () {
 
       let replyText = decision.replyText;
       let finalDecision = decision;
-      let createdTask:
-        | { readonly task: ChannelTask; readonly event: ReturnType<typeof makeTaskEvent> }
-        | undefined;
+      let createdTasks: ReturnType<typeof makeCreatedTasks> = [];
       const taskEvents: Array<ChannelLedger.ChannelTaskEventWrite> = [];
       const deliveries: Array<ChannelLedger.ChannelOutboxInsert> = [];
       const action = decision.action;
@@ -1417,56 +1419,25 @@ const make = Effect.gen(function* () {
           replyText = CHANNEL_COPY.agentCannotCreateWork;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else if (joining === undefined) {
-          const taskId = taskIdFor(inputId, 0);
           // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
             action.notesChangeRequested !== undefined &&
             quotedFromInput(action.notesChangeRequested, message.text)
               ? action.notesChangeRequested
               : undefined;
-          const task: ChannelTask = {
-            taskId,
-            ...(action.type === "run_turn" ? { kind: "turn" as const } : {}),
+          createdTasks = makeCreatedTasks({
+            action,
+            inputId,
             conversationId,
             originBindingId: stored.snapshot.bindingId,
             originAddress: origin,
-            originInputId: inputId,
             requester,
-            title: action.title,
-            instruction: action.instruction,
-            status: "received",
-            version: 1,
-            generation: 1,
-            ...(action.type !== "create_task" || action.projectId === undefined
-              ? {}
-              : { projectId: action.projectId }),
-            // The dispatcher checks the host again before anything runs there.
-            ...(action.type !== "create_task" || action.host === undefined
-              ? {}
-              : { host: action.host }),
             ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
-            openQuestions: [],
-            createdAt: now,
-            updatedAt: now,
-          };
-          createdTask = {
-            task,
-            event: makeTaskEvent(
-              { ...task, version: 0 },
-              {
-                type: "task.created",
-                payload: {
-                  title: task.title,
-                  instruction: task.instruction,
-                  originInputId: inputId,
-                  ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
-                },
-              },
-              now,
-              { eventId: taskEventIdFor(taskId, 1) },
-            ),
-          };
-          if (bot !== undefined) deliveries.push(chipDelivery(task, bot));
+            now,
+          });
+          if (bot !== undefined) {
+            for (const { task } of createdTasks) deliveries.push(chipDelivery(task, bot));
+          }
           const running = yield* ledger.countBusyTasks({
             ownerId: requester.ownerId,
             principalId: requester.principalId,
@@ -1703,7 +1674,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const relatedTask = createdTask?.task;
+      const relatedTask = createdTasks[0]?.task;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,
@@ -1724,7 +1695,7 @@ const make = Effect.gen(function* () {
         receptionId,
         replyText,
         decision: finalDecision,
-        ...(createdTask === undefined ? {} : { createdTask }),
+        ...(createdTasks[0] === undefined ? {} : { createdTask: createdTasks[0], createdTasks }),
         taskEvents,
         deliveries,
         now,
