@@ -22,9 +22,9 @@ import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.
 import * as SourceControlRepositoryService from "./SourceControlRepositoryService.ts";
 
 const CLONE_URLS = {
-  nameWithOwner: "octocat/t3code",
-  url: "https://github.com/octocat/t3code",
-  sshUrl: "git@github.com:octocat/t3code.git",
+  nameWithOwner: "octocat/goat",
+  url: "https://github.com/octocat/goat",
+  sshUrl: "git@github.com:octocat/goat.git",
 };
 
 function makeProvider(
@@ -163,7 +163,7 @@ it.effect("clones a looked-up repository after creating missing parent directori
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const result = yield* service.cloneRepository({
         provider: SourceControlProviderKind.make("github"),
-        repository: "octocat/t3code",
+        repository: "octocat/goat",
         destinationPath,
         protocol: "https",
       });
@@ -249,7 +249,7 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
       "Receiving objects:  40% (4/10), 1.00 MiB | 2.00 MiB/s",
       "Receiving objects: 100% (10/10), 2.50 MiB | 2.00 MiB/s, done.",
       "fatal: early EOF",
-      "fatal: unable to access 'https://user:s3c@ret@github.com/octocat/t3code.git/': could not resolve host",
+      "fatal: unable to access 'https://user:s3c@ret@github.com/octocat/goat.git/': could not resolve host",
     ];
     const error = yield* Effect.gen(function* () {
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
@@ -288,7 +288,7 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
     ]);
     assert.strictEqual(
       error.detail,
-      "fatal: early EOF fatal: unable to access 'https://github.com/octocat/t3code.git/': could not resolve host",
+      "fatal: early EOF fatal: unable to access 'https://github.com/octocat/goat.git/': could not resolve host",
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -348,8 +348,8 @@ it.effect("retries a clone over HTTPS when the SSH login is refused", () =>
       remoteUrl: CLONE_URLS.sshUrl,
     });
 
-    assert.deepStrictEqual(urls, [CLONE_URLS.sshUrl, "https://github.com/octocat/t3code.git"]);
-    assert.strictEqual(result.remoteUrl, "https://github.com/octocat/t3code.git");
+    assert.deepStrictEqual(urls, [CLONE_URLS.sshUrl, "https://github.com/octocat/goat.git"]);
+    assert.strictEqual(result.remoteUrl, "https://github.com/octocat/goat.git");
   }),
 );
 
@@ -395,7 +395,7 @@ it.effect("strips embedded credentials from the remote URL it reports", () =>
     const result = yield* Effect.gen(function* () {
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
       return yield* service.prepareClone({
-        remoteUrl: "https://user:s3cret@github.com/octocat/t3code.git",
+        remoteUrl: "https://user:s3cret@github.com/octocat/goat.git",
         destinationPath,
       });
     }).pipe(
@@ -411,8 +411,8 @@ it.effect("strips embedded credentials from the remote URL it reports", () =>
         }),
       ),
     );
-    assert.equal(result.remoteUrl, "https://github.com/octocat/t3code.git");
-    assert.equal(result.cloneUrl, "https://user:s3cret@github.com/octocat/t3code.git");
+    assert.equal(result.remoteUrl, "https://github.com/octocat/goat.git");
+    assert.equal(result.cloneUrl, "https://user:s3cret@github.com/octocat/goat.git");
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -455,15 +455,15 @@ it.effect("redacts query tokens and userinfo containing '@' from reported URLs",
     yield* Effect.gen(function* () {
       const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const query = yield* service.prepareClone({
-        remoteUrl: "https://github.com/octocat/t3code.git?access_token=s3cret",
+        remoteUrl: "https://github.com/octocat/goat.git?access_token=s3cret",
         destinationPath: path.join(parent, "a"),
       });
-      assert.equal(query.remoteUrl, "https://github.com/octocat/t3code.git");
+      assert.equal(query.remoteUrl, "https://github.com/octocat/goat.git");
       const nested = yield* service.prepareClone({
-        remoteUrl: "https://user:pa@rt@github.com/octocat/t3code.git",
+        remoteUrl: "https://user:pa@rt@github.com/octocat/goat.git",
         destinationPath: path.join(parent, "b"),
       });
-      assert.equal(nested.remoteUrl, "https://github.com/octocat/t3code.git");
+      assert.equal(nested.remoteUrl, "https://github.com/octocat/goat.git");
     }).pipe(Effect.provide(layer({})));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -508,7 +508,7 @@ it.effect("publishes to the remote name returned by ensureRemote", () => {
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: SourceControlProviderKind.make("github"),
-      repository: "octocat/t3code",
+      repository: "octocat/goat",
       visibility: "private",
       remoteName: "origin",
       protocol: "ssh",
@@ -559,7 +559,7 @@ it.effect("explains a rejected SSH push after creating the repository", () =>
       service.publishRepository({
         cwd: "/workspace",
         provider: SourceControlProviderKind.make("github"),
-        repository: "octocat/t3code",
+        repository: "octocat/goat",
         visibility: "private",
         protocol: "ssh",
       }),
@@ -568,7 +568,7 @@ it.effect("explains a rejected SSH push after creating the repository", () =>
     assert.strictEqual(error.operation, "publishRepository");
     assert.strictEqual(
       error.detail,
-      'Created octocat/t3code and added it as remote "origin", but the push failed because SSH authentication was rejected. Add an SSH key to your account, or switch the remote to HTTPS with "git remote set-url origin https://github.com/octocat/t3code", then push again.',
+      'Created octocat/goat and added it as remote "origin", but the push failed because SSH authentication was rejected. Add an SSH key to your account, or switch the remote to HTTPS with "git remote set-url origin https://github.com/octocat/goat", then push again.',
     );
     assert.instanceOf(error.cause, GitCommandError);
   }).pipe(Effect.provide(layer({ git: failingPush("authentication_failed") }))),
@@ -582,7 +582,7 @@ it.effect("says the repository exists when an unclassified publish push fails", 
       service.publishRepository({
         cwd: "/workspace",
         provider: SourceControlProviderKind.make("github"),
-        repository: "octocat/t3code",
+        repository: "octocat/goat",
         visibility: "private",
         protocol: "https",
       }),
@@ -590,7 +590,7 @@ it.effect("says the repository exists when an unclassified publish push fails", 
 
     assert.strictEqual(
       error.detail,
-      'Created octocat/t3code and added it as remote "origin", but the push failed. Fix the problem, then push again.',
+      'Created octocat/goat and added it as remote "origin", but the push failed. Fix the problem, then push again.',
     );
   }).pipe(Effect.provide(layer({ git: failingPush() }))),
 );
@@ -602,7 +602,7 @@ it.effect("publish succeeds with status remote_added when the local repo has no 
     const result = yield* service.publishRepository({
       cwd: "/workspace",
       provider: SourceControlProviderKind.make("github"),
-      repository: "octocat/t3code",
+      repository: "octocat/goat",
       visibility: "private",
       remoteName: "origin",
       protocol: "ssh",

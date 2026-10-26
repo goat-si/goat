@@ -65,7 +65,7 @@ export const encodeEffectRequest = Schema.encodeSync(
 
 export const pullRequest = (number: number) => ({
   host: "github.com",
-  repository: "pingdotgg/t3code",
+  repository: "goat-si/goat",
   number,
 });
 
@@ -98,7 +98,7 @@ export const watch = (threadId: ThreadId, number: number) =>
       threadId,
       ...pullRequest(number),
       watching: true,
-      link: { url: `https://github.com/pingdotgg/t3code/pull/${number}`, source: "agent" },
+      link: { url: `https://github.com/goat-si/goat/pull/${number}`, source: "agent" },
     });
   });
 

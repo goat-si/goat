@@ -68,7 +68,7 @@ const workerHeader = (task: Pick<BriefTask, "taskId" | "generation" | "instructi
 export const channelWorkerRules = (reporting: "local" | "remote") =>
   reporting === "local"
     ? [
-        `For progress on long work, call ${goatCallText("channel.task_report")} with status "running" at meaningful milestones.`,
+        `For progress on long work, call ${goatCallText("channel.task_report")} with status "running" and milestone true at meaningful milestones.`,
         ASK_FIRST + "a waiting_input question.",
         `If you need a decision from the person who asked, call ${goatCallText("channel.task_report")} with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.`,
         REPORT_RESULT,

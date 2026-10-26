@@ -116,6 +116,7 @@ import Migration0105 from "./Migrations/105_PendingAttachmentUploads.ts";
 import Migration0106 from "./Migrations/106_ScheduledTaskWebhookSecretRef.ts";
 import Migration0107 from "./Migrations/107_RemoteReportFences.ts";
 import Migration0108 from "./Migrations/108_HubProvisionedLinks.ts";
+import Migration0109 from "./Migrations/109_ScheduledTaskRuns.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -229,6 +230,7 @@ export const migrationEntries = [
   [106, "ScheduledTaskWebhookSecretRef", Migration0106],
   [107, "RemoteReportFences", Migration0107],
   [108, "HubProvisionedLinks", Migration0108],
+  [109, "ScheduledTaskRuns", Migration0109],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

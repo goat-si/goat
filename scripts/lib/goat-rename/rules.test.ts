@@ -430,6 +430,18 @@ describe("repository hygiene on an upstream checkout", () => {
     }
   });
 
+  it("drops upstream contribution triage", () => {
+    for (const path of [
+      ".agents/skills/contribution-triage/SKILL.md",
+      ".github/TRIAGE_EXEMPTIONS.td",
+      ".github/VOUCHED.td",
+      ".github/triage/PLAYBOOK.md",
+    ]) {
+      expect(isDropped(path, DROP_RULES)).toBe(true);
+    }
+    expect(isDropped(".github/ISSUE_TEMPLATE/via-triage.yml", DROP_RULES)).toBe(false);
+  });
+
   it("drops root Cursor rules only", () => {
     expect(isDropped(".cursor/rules/cursor-cloud.mdc", DROP_RULES)).toBe(true);
     expect(isDropped("apps/web/src/.cursor/x", DROP_RULES)).toBe(false);
@@ -443,14 +455,6 @@ describe("repository hygiene on an upstream checkout", () => {
 });
 
 const keptVisibleCopy = [
-  [
-    ".agents/skills/contribution-triage/SKILL.md",
-    "description: Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review.",
-  ],
-  [
-    ".github/triage/PLAYBOOK.md",
-    "- How is T3 Code running on this machine: `npx t3 serve` in a terminal, the",
-  ],
   [
     "apps/desktop/src/app/DesktopLegacyLocalStorage.ts",
     'const V1_PROFILE_NAMES = ["T3 Code (Alpha)", "t3code"];',

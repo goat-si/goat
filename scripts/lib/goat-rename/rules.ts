@@ -45,7 +45,6 @@ export const isExempt = (path: string): boolean =>
   // The relay is GOAT Connect's; its migrations are snapshots upstream also edits.
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
-  path === ".github/TRIAGE_EXEMPTIONS.td" ||
   path.startsWith(".repos/") ||
   path.startsWith("devlog/") ||
   path.startsWith("scripts/lib/goat-rename/") ||
@@ -581,6 +580,13 @@ export const DROP_RULES: readonly DropRule[] = [
     category: "hygiene",
     find: /^apps\/(?:web|marketing)\/vercel\.ts$/,
     reason: "GOAT deploys no hosted web app and publishes marketing to GitHub Pages.",
+  },
+  {
+    id: "upstream-contribution-triage",
+    category: "hygiene",
+    find: /^(?:\.agents\/skills\/contribution-triage\/|\.github\/(?:TRIAGE_EXEMPTIONS|VOUCHED)\.td$|\.github\/triage\/PLAYBOOK\.md$)/,
+    reason:
+      "Upstream's contribution triage and the support playbook its CLI fetches; GOAT closes outside PRs with close-outside-prs.yml and embeds its own goat triage playbook.",
   },
   {
     id: "cursor-rules",

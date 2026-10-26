@@ -237,6 +237,7 @@ const ScheduledTaskRunTool = Tool.make(agentSurfaceRegistry["schedule.run"].name
     taskId: ScheduledTaskId,
     threadId: ScheduledTask.fields.threadId,
     lastRunStatus: ScheduledTask.fields.lastRunStatus,
+    lastRun: ScheduledTask.fields.lastRun,
     runCount: NonNegativeInt,
     nextRunAt: ScheduledTask.fields.nextRunAt,
   }),

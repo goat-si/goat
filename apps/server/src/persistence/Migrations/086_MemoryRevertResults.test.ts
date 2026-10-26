@@ -105,6 +105,7 @@ it.effect(
         [106, "ScheduledTaskWebhookSecretRef"],
         [107, "RemoteReportFences"],
         [108, "HubProvisionedLinks"],
+        [109, "ScheduledTaskRuns"],
       ]);
       assert.deepStrictEqual(
         yield* sql`SELECT resolution_id,revert_operation_id,json_extract(revert_result_json,'$.status') AS status FROM memory_resolutions ORDER BY resolution_id`,

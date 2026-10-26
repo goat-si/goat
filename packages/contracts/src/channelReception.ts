@@ -217,6 +217,15 @@ export const ChannelReceptionAction = Schema.Union([
     instruction: TrimmedNonEmptyString,
     /** As on create_task: only a turn the person asked to change a note may edit the notes. */
     notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
+    /**
+     * Additional independent coding tasks requested in the same message alongside the bot's own
+     * turn, each started as its own coding task.
+     */
+    additionalTasks: Schema.optional(
+      Schema.Array(ChannelReceptionTaskSpec).check(
+        Schema.isMaxLength(CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS),
+      ),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("move_task"),

@@ -424,6 +424,7 @@
               "apps/server/src/orchestration-v2/runtimeLayer.receiptStore.test.ts",
               "apps/server/src/provider/ProviderOrchestrationAdapterInfrastructure.ts",
               "apps/server/src/provider/approvedSyncs.ts",
+              "apps/server/src/scheduledTasks/ScheduledTaskService.ts",
               "apps/server/src/server.memoryImportGraph.test.ts",
               "apps/server/src/server.memorySourceReadGraph.test.ts",
               "apps/server/src/settingsSecretMaterialization.ts",
@@ -564,6 +565,8 @@
               "packages/client-runtime/src/notes/outbox.test.ts",
               "packages/client-runtime/src/state/commandPermissions.test.ts",
               "packages/client-runtime/src/state/memory.test.ts",
+              "packages/contracts/src/orchestratorMcp.test.ts",
+              "packages/contracts/src/scheduledTask.test.ts",
               "packages/provider-core/src/server/memoryContext.test.ts",
               "packages/provider-core/src/server/memoryGenerationRunner.test.ts",
               "packages/provider-core/src/server/textGenerationOperations.test.ts",
@@ -599,6 +602,7 @@
             "include": [
               "apps/desktop/src/window/material/DesktopWindowMaterial.ts",
               "apps/server/src/orchestration-v2/EventSink.ts",
+              "apps/server/src/scheduledTasks/ScheduledTaskRuns.ts",
               "apps/server/src/workspace/WorkspaceFileSystem.ts",
               "packages/provider-claude-cloud/src/server/cli.ts"
             ],
@@ -613,8 +617,10 @@
               "apps/server/src/memory/MemorySyncService.ts",
               "apps/server/src/memory/imports/MemoryImportReader.ts",
               "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts",
+              "apps/server/src/orchestration-v2/ScheduledTaskOutcomes.integration.test.ts",
               "apps/server/src/provider/Drivers/ClaudeCloudDriver.ts",
               "apps/server/src/runtimeDrain.test.ts",
+              "apps/server/src/scheduledTasks/ScheduledRunFixture.testkit.ts",
               "apps/server/src/server.memoryComposition.test.ts",
               "apps/server/src/sshRemote/SshHostPrepareAuthorization.ts",
               "packages/provider-grok/src/server/xaiAcpExtension.ts"

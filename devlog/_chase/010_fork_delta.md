@@ -105,9 +105,9 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 ### `goat-identity` GOAT 이름·도메인·인프라 (261026)
 
-- PR: #1758 #1759 #1763 #1764 #1769 #1771 (추적 #1757)
+- PR: #1758 #1759 #1763 #1764 #1769 #1771 #1775 #1776, 이 PR (추적 #1757)
 - 경로: `scripts/lib/goat-rename/rules-{samples,relay,mobile}.ts`, `infra/relay/`(마이그레이션 제외), `apps/mobile/modules/goat-*`, `packages/contracts/src/legacyT3Names.ts`
-- 정책: upstream 이름을 GOAT 이름으로 바꾸는 일은 모두 rename 규칙이다. 테스트 샘플의 사람 이름(julius, Theo), GOAT Connect 스택과 relay wire 이름(헤더, JWT typ, client id, env, telemetry, worker·tunnel 이름), `t3.codes` 기본값(hosted app, Codex 반환 origin, `goat.json` schema), 모바일 네이티브 모듈, upstream 전용 workflow·AUR·Vercel 설정 drop. 저장된 값은 legacy 이름을 그대로 읽는다: `t3-connect` 경로 종류, 모바일 relay 토큰 캐시의 client id, Android 알림 저장소·태그·`t3_kind`, 위젯 만료 저장소, 옛 `app.t3.codes` 공유 링크. troubleshooting 안내서 사본과 도움말 anchor는 GOAT가 사용자 문서를 호스팅할 때까지 유지한다.
+- 정책: upstream 이름을 GOAT 이름으로 바꾸는 일은 모두 rename 규칙이다. 테스트 샘플의 사람 이름(julius, Theo)과 저장소 이름(`pingdotgg/t3code` → `goat-si/goat`, 둘을 구분하는 테스트의 `t3tools/t3code` → `sample-tools/goat`), GOAT Connect 스택과 relay wire 이름(헤더, JWT typ, client id, env, telemetry, worker·tunnel 이름), `t3.codes` 기본값(hosted app, Codex 반환 origin, `goat.json` schema), 모바일 네이티브 모듈, Linux deb 패키지 `goat`(`t3code`를 Replaces), upstream 전용 workflow·AUR·Vercel 설정과 upstream contribution triage(스킬, 예외·vouch 목록, 지원 playbook) drop. replay transcript는 rename 대상이 아니라서 `/home/replay-user/t3code` 경로는 transcript와 기대값 모두 그대로 둔다. 저장된 값은 legacy 이름을 그대로 읽는다: `t3-connect` 경로 종류, 모바일 relay 토큰 캐시의 client id, Android 알림 저장소·태그·`t3_kind`, 위젯 만료 저장소, 옛 `app.t3.codes` 공유 링크. troubleshooting 안내서 사본과 도움말 anchor는 GOAT가 사용자 문서를 호스팅할 때까지 유지한다.
 
 ### `goat-copy` 보이는 문구 GOAT
 

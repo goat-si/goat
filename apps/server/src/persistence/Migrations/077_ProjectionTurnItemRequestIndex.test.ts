@@ -63,6 +63,7 @@ it.effect(
         [106, "ScheduledTaskWebhookSecretRef"],
         [107, "RemoteReportFences"],
         [108, "HubProvisionedLinks"],
+        [109, "ScheduledTaskRuns"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

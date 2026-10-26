@@ -1,7 +1,7 @@
 <!--
 Read CONTRIBUTING.md before opening a PR. Review capacity is limited, and meeting
 the requirements does not guarantee review or merging. Solve one underlying problem.
-The same requirements apply to drafts. Draft status does not defer triage or closure.
+The same requirements apply to drafts. Draft status does not defer review or closure.
 Use a conventional commit title in plain language, such as "fix(web): new threads no longer spike CPU".
 -->
 

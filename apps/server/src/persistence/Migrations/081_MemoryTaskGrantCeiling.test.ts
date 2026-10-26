@@ -70,6 +70,7 @@ it.effect(
         [106, "ScheduledTaskWebhookSecretRef"],
         [107, "RemoteReportFences"],
         [108, "HubProvisionedLinks"],
+        [109, "ScheduledTaskRuns"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },
