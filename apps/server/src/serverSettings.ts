@@ -79,6 +79,7 @@ import {
 } from "./sourceControl/sourceControlHostSecrets.ts";
 
 import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
+import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -122,7 +123,6 @@ const decodeMemoryHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 /**
  * Old settings files can hold both flags with conflicting values; an explicit false on either
@@ -1897,41 +1897,7 @@ const make = Effect.gen(function* () {
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
   );
 
-  const materializeSettingsSecrets = Effect.fn("serverSettings.materializeSettingsSecrets")(
-    function* (settings: ServerSettings): Effect.fn.Return<ServerSettings, ServerSettingsError> {
-      const storedSecrets = new Map<string, string>();
-      const pending = new Map<string, SettingsSecret>();
-      mapSettingsSecrets(settings, (secret) => {
-        if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
-        return secret;
-      });
-      for (const secret of pending.values()) {
-        const value = yield* secretStore.get(secret.secretName).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "read-secret",
-                providerInstanceId: secret.providerInstanceId,
-                environmentVariable: secret.environmentVariable,
-                cause,
-              }),
-          ),
-        );
-        storedSecrets.set(
-          secret.secretName,
-          Option.isSome(value) ? textDecoder.decode(value.value) : "",
-        );
-      }
-      return mapSettingsSecrets(settings, (secret) => ({
-        value:
-          secret.sensitive && secret.redacted
-            ? (storedSecrets.get(secret.secretName) ?? "")
-            : secret.value,
-        redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
-      }));
-    },
-  );
+  const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(

@@ -145,6 +145,8 @@ describe("DesktopTelemetryPublisher", () => {
           requestId: id,
           status: "listed",
           apps: [id === "initial" ? "Initial app" : "Fresh app"],
+          // The test helper lists names only; its catalog of names and icons is empty.
+          catalog: [],
         });
       }
       assert.equal(test.helperAppListings.length, 2);
@@ -233,6 +235,7 @@ describe("DesktopTelemetryPublisher", () => {
           requestId: "reused-id",
           status: "listed",
           apps: ["New app"],
+          catalog: [],
         });
         assert.equal(test.helperAppListings.length, 2);
         assert.isEmpty(primary.received.filter((message) => message.type === "cuaApps"));

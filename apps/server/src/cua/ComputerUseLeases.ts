@@ -66,6 +66,9 @@ import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
+/** Private mode is off for now (#1695): secret-field reports never pause computer use. */
+const PRIVATE_MODE_DISABLED = true;
+
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
   { cause: Schema.Defect() },
@@ -315,10 +318,13 @@ const make = Effect.gen(function* () {
     threadId?: ThreadId,
     withReleased = false,
   ) {
+    // SQLite uses a partial index only when the query repeats its predicate. Without the IN
+    // clause this read scans every turn item on the writer, and it runs on every lease check.
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items
-      WHERE type = 'human_handoff' AND status = 'completed'
+      WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff'
+        AND status = 'completed'
         AND json_extract(payload_json, '$.handoff.target.path') = ${COMPUTER_USE_GRANT_HANDOFF_PATH}
         ${threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`}
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
@@ -647,6 +653,7 @@ const make = Effect.gen(function* () {
         if (report.type === "cuaHumanInput") return Effect.void;
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
+          if (PRIVATE_MODE_DISABLED) return;
           if (report.active && !privateHost) {
             foreground.clear();
             interrupted("private");

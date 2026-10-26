@@ -1,6 +1,10 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffectEvent, useLayoutEffect, useRef } from "react";
 
-import { acquireBrowserSurface } from "./browserSurfaceStore";
+import {
+  acquireBrowserSurface,
+  type BrowserSurfaceLease,
+  useBrowserSurfaceStore,
+} from "./browserSurfaceStore";
 import { observeResize } from "../lib/observeResize";
 
 export function BrowserSurfaceSlot(props: {
@@ -11,6 +15,13 @@ export function BrowserSurfaceSlot(props: {
   readonly layoutVersion?: string | number;
   readonly className?: string;
   readonly fitSourceContent?: boolean;
+  /**
+   * Shows the tab only while no other slot holds it, and gives it up to any slot that claims it.
+   * An agent card uses this so it never takes a tab from the right panel or the floating player.
+   */
+  readonly passive?: boolean;
+  /** Whether this slot is the one presenting the tab right now. */
+  readonly onPresentedChange?: (presented: boolean) => void;
 }) {
   const {
     tabId,
@@ -20,43 +31,91 @@ export function BrowserSurfaceSlot(props: {
     layoutVersion,
     className,
     fitSourceContent = false,
+    passive = false,
   } = props;
   const elementRef = useRef<HTMLDivElement | null>(null);
   const presentationRef = useRef({ visible, cornerRadius, zIndex });
   const updateRef = useRef<(() => void) | null>(null);
+  const presentedChange = useEffectEvent((presented: boolean) =>
+    props.onPresentedChange?.(presented),
+  );
 
   useLayoutEffect(() => {
     const element = elementRef.current;
     if (!element) return;
-    let lease = acquireBrowserSurface(tabId, fitSourceContent);
-    const update = () => {
+    const measure = () => {
       const rect = element.getBoundingClientRect();
-      const presentation = presentationRef.current;
-      const presented = lease.present(
-        {
+      return {
+        rect: {
           x: Math.round(rect.x),
           y: Math.round(rect.y),
           width: Math.max(1, Math.round(rect.width)),
           height: Math.max(1, Math.round(rect.height)),
         },
-        presentation.visible && rect.width > 0 && rect.height > 0,
+        sized: rect.width > 0 && rect.height > 0,
+      };
+    };
+    let presented = false;
+    const setPresented = (next: boolean) => {
+      if (presented === next) return;
+      presented = next;
+      presentedChange(next);
+    };
+    if (passive) {
+      let lease: BrowserSurfaceLease | null = null;
+      const update = () => {
+        const { rect, sized } = measure();
+        const shown = presentationRef.current.visible && sized;
+        if (lease === null) {
+          // Only a free tab is taken; a held one stays where it is shown.
+          if (!shown || useBrowserSurfaceStore.getState().byTabId[tabId]?.owner) {
+            setPresented(false);
+            return;
+          }
+          lease = acquireBrowserSurface(tabId, fitSourceContent);
+        }
+        const { cornerRadius: radius, zIndex: layer } = presentationRef.current;
+        if (!shown || !lease.present(rect, true, radius, layer)) {
+          lease.release();
+          lease = null;
+          setPresented(false);
+          return;
+        }
+        setPresented(true);
+      };
+      updateRef.current = update;
+      update();
+      // Another slot releasing the tab is when a passive slot may show it again.
+      const unsubscribe = useBrowserSurfaceStore.subscribe((state, previous) => {
+        if (state.byTabId[tabId]?.owner !== previous.byTabId[tabId]?.owner) update();
+      });
+      const stopObserving = observeResize(element, update);
+      window.addEventListener("resize", update);
+      window.addEventListener("scroll", update, true);
+      return () => {
+        unsubscribe();
+        stopObserving();
+        window.removeEventListener("resize", update);
+        window.removeEventListener("scroll", update, true);
+        if (updateRef.current === update) updateRef.current = null;
+        lease?.release();
+        setPresented(false);
+      };
+    }
+    let lease = acquireBrowserSurface(tabId, fitSourceContent);
+    const update = () => {
+      const { rect, sized } = measure();
+      const presentation = presentationRef.current;
+      const shown = lease.present(
+        rect,
+        presentation.visible && sized,
         presentation.cornerRadius,
         presentation.zIndex,
       );
-      if (presentation.visible && !presented) {
+      if (presentation.visible && !shown) {
         lease.release();
         lease = acquireBrowserSurface(tabId, fitSourceContent);
-        lease.present(
-          {
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.max(1, Math.round(rect.width)),
-            height: Math.max(1, Math.round(rect.height)),
-          },
-          rect.width > 0 && rect.height > 0,
-          presentation.cornerRadius,
-          presentation.zIndex,
-        );
+        lease.present(rect, sized, presentation.cornerRadius, presentation.zIndex);
       }
     };
     updateRef.current = update;
@@ -80,7 +139,7 @@ export function BrowserSurfaceSlot(props: {
       if (updateRef.current === update) updateRef.current = null;
       lease.release();
     };
-  }, [fitSourceContent, tabId]);
+  }, [fitSourceContent, passive, tabId]);
 
   useLayoutEffect(() => {
     presentationRef.current = { visible, cornerRadius, zIndex };

@@ -20,7 +20,9 @@ import {
   setConnectionCatalog,
 } from "./methods/connectionCatalog.ts";
 import {
+  getHeadlessServerAttachEnabled,
   getLocalEnvironmentEnabled,
+  setHeadlessServerAttachEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
 import {
@@ -115,6 +117,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handleSync(getLocalEnvironmentEnabled);
   yield* ipc.handle(setLocalEnvironmentEnabled);
+  yield* ipc.handleSync(getHeadlessServerAttachEnabled);
+  yield* ipc.handle(setHeadlessServerAttachEnabled);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
 
   yield* ipc.handle(getWindowMaterialState);

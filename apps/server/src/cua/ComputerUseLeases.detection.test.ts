@@ -57,7 +57,8 @@ it.effect(
     ),
 );
 
-it.effect(
+// quarantine: #1695 private mode is switched off; re-enable with it
+it.effect.skip(
   "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
   () =>
     Effect.gen(function* () {

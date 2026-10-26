@@ -81,6 +81,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     localCheck: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
+    movePointer: "never" as "never" | "allowed",
     save: vi.fn(
       async (patch: { enableCua?: boolean; disabledBuiltInSkills?: ReadonlyArray<string> }) => {
         f.calls.push(`save:${JSON.stringify(patch)}`);
@@ -127,6 +128,7 @@ function Harness({ f }: { f: Fixture }) {
       localMac={f.localMac}
       localCheck={f.localCheck}
       disabledSkills={f.disabledSkills}
+      movePointer={f.movePointer}
       save={f.save}
       bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
     />
@@ -397,6 +399,15 @@ it("a settings search for the Computer Use skill opens Advanced without remember
   await clickSwitch(name);
   expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });
 });
+it("the pointer switch is off by default and saves the host's pointer choice", async () => {
+  const name = "Let agents move my pointer";
+  const f = setup({ enabled: true });
+  state.searchTargetId = "computer-use-move-pointer";
+  await using screen = await render(panel(f));
+  await expect.element(screen.getByRole("switch", { name })).not.toBeChecked();
+  await clickSwitch(name);
+  expect(f.save).toHaveBeenLastCalledWith({ cuaMovePointer: "allowed" });
+});
 it("On again while an earlier check still runs waits for it, then checks for the new run", async () => {
   const f = setup();
   const first = deferred<DesktopCuaVerification>();
@@ -529,4 +540,66 @@ it("an Off chosen after the panel reopened is saved after the earlier queued On"
     { enableCua: true },
     { enableCua: false },
   ]);
+});
+
+// What a Mac's host reports once an agent started the helper after GOAT restarted (each update
+// restarts it): nothing has proved capture or the tree since.
+const uncheckedMac = {
+  grants: { accessibility: "granted", screenCapture: "granted" },
+  helper: "authenticated",
+  capture: "pending",
+  tree: "unavailable",
+  input: "background",
+  blockers: [],
+  reasons: [],
+} as const;
+const afterClick = (f: Fixture) => f.calls.slice(f.calls.indexOf('save:{"enableCua":true}'));
+
+it("an enabled Mac that no check has proved since GOAT started offers Run check, which runs the check", async () => {
+  const f = setup({ enabled: true });
+  await using screen = await render(panel(f));
+  await screen.getByRole("button", { name: "Run check" }).click();
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  expect(afterClick(f).slice(0, 3)).toEqual(['save:{"enableCua":true}', "checkGrants", "verify"]);
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
+});
+
+it("a check that failed before Settings reopened still offers Run check", async () => {
+  const f = setup({
+    enabled: true,
+    status: { ...idleMac, readiness: { ...uncheckedMac, capture: "ready", tree: "empty" } },
+  });
+  await using screen = await render(panel(f));
+  await expect.element(screen.getByRole("button", { name: "Run check" })).toBeVisible();
+});
+
+it("offers no Run check while the driver serves an agent, since the check restarts it", async () => {
+  const f = setup({
+    enabled: true,
+    status: { ...idleMac, running: true, tools: "available", readiness: uncheckedMac },
+  });
+  await using _screen = await render(panel(f));
+  await vi.waitFor(() => expect(statusText()).toBe("Running"));
+  expect(buttonLabels()).not.toContain("Run check");
+});
+
+it("a client on another computer cannot run the check, so it offers none", async () => {
+  const f = setup({ enabled: true });
+  f.localMac = false;
+  f.localCheck = false;
+  await using _screen = await render(panel(f));
+  await vi.waitFor(() => expect(statusText()).toBe("Starts with the next agent turn"));
+  expect(buttonLabels()).not.toContain("Run check");
+});
+
+it("on the Windows desktop that runs the host, Run check proves capture with no macOS grant read", async () => {
+  const f = setup({
+    enabled: true,
+    status: { platform: "win32", running: false, tools: "unavailable" },
+  });
+  f.localMac = false;
+  await using screen = await render(panel(f));
+  await screen.getByRole("button", { name: "Run check" }).click();
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  expect(f.calls).toEqual(['save:{"enableCua":true}', "verify"]);
 });

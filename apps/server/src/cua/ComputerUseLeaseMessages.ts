@@ -36,12 +36,17 @@ export const SCREEN_SHARED =
  * Why the server would not reserve a call (#1462): another thread's window reservation, a screen
  * another thread shares, or no reservation at all.
  */
+const POINTER_LOCKED =
+  "This computer keeps the person's pointer still, so a call that moves it (foreground pointer delivery or a desktop move_cursor) did not run. Use the element_token, the keyboard, or a background click (the virtual cursor). If the app ignores background clicks, tell the person instead of retrying.";
+
 export const reservationRefusal = (detail: string, holder: string | undefined) =>
-  detail === "screen_shared"
-    ? SCREEN_SHARED
-    : holder === undefined
-      ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-      : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+  detail === "pointer_locked"
+    ? POINTER_LOCKED
+    : detail === "screen_shared"
+      ? SCREEN_SHARED
+      : holder === undefined
+        ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+        : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,

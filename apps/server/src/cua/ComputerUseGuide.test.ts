@@ -19,6 +19,30 @@ const texts = (line: string) =>
   );
 
 describe("computer use guide on the agent's answers", () => {
+  it("continues a launched app with no window into one fresh scoped discovery", () => {
+    const guide = makeAppGuide("darwin", undefined);
+    const result = answer(9, {
+      pid: 42,
+      launch_state: { requested: true, process_running: true, window_ready: false },
+      windows: [],
+    });
+    const launch = texts(guide(result, { tool: "launch_app" }));
+    assert.isTrue(launch.some((text) => text.includes("list_windows({ pid: 42 })")));
+    assert.isTrue(launch.some((text) => text.includes("get_window_state")));
+    assert.isFalse(launch.some((text) => text.includes("verify_state")));
+    assert.deepEqual(texts(guide(result, { tool: "launch_app" })), launch);
+  });
+
+  it("does not repeat the driver's handoff when launch already has a window", () => {
+    const guide = makeAppGuide("darwin", undefined);
+    const result = answer(9, {
+      pid: 42,
+      launch_state: { requested: true, process_running: true, window_ready: true },
+      windows: [{ pid: 42, window_id: 7 }],
+    });
+    assert.deepEqual(texts(guide(result, { tool: "launch_app" })), ["ok"]);
+  });
+
   it("tells the agent where the skill is in the MCP initialize answer", () => {
     const guide = makeAppGuide("darwin", "/state/skills/computer-use/SKILL.md");
     const line = JSON.stringify({

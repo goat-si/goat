@@ -1883,5 +1883,5 @@ it("shows commands that only inspect files as reads and listings", () => {
   ]);
   expect(activities.map((activity) => activity.icon)).toEqual(["eye", "folder"]);
   // Expanded, the row shows the command it ran.
-  expect(workEntryRowLabel(activities[0]!.workEntry, true)).toBe("nl -ba src/env.ts");
+  expect(workEntryRowLabel(activities[0]!.workEntry, true)).toBe("Ran nl -ba src/env.ts");
 });

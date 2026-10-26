@@ -324,6 +324,18 @@ export function liveActivityToolStatus(status: string | undefined, presentTense:
   return "completed";
 }
 
+const COMMAND_VERBS: Partial<Record<ReturnType<typeof liveActivityToolStatus>, string>> = {
+  inProgress: "Running",
+  failed: "Failed",
+  declined: "Declined",
+  stopped: "Stopped",
+};
+
+/** The verb a command row leads with, like Codex's "Ran …" and "Running …". */
+export function commandVerb(status: ReturnType<typeof liveActivityToolStatus>): string {
+  return COMMAND_VERBS[status] ?? "Ran";
+}
+
 export function resolveWorkEntryToolPresentation(
   entry: Pick<
     WorkLogPresentationEntry,
@@ -718,7 +730,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
     }
   }
   // Two or more exploration kinds share one "Explored …" phrase so they never
-  // crowd a real command or edit out of the two-category summary.
+  // crowd a real command or edit out of the three-category summary.
   const exploreGroups = [...groups.values()].filter(
     (group) => group.goatAction === null && EXPLORE_ACTIONS.has(group.action),
   );
@@ -758,7 +770,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   });
   const selected = [...summaries]
     .sort((a, b) => a.priority - b.priority || a.index - b.index)
-    .slice(0, 2)
+    .slice(0, 3)
     .sort((a, b) => a.index - b.index);
   const labels = selected.map(({ label }) => label);
   if (sources.size > 0) {

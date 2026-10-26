@@ -320,6 +320,11 @@ final class DriverService {
           throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
         }
         result = try frames.frames(params)
+      case "captureCheck":
+        guard frameCaptureAvailable else {
+          throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
+        }
+        result = try frames.captureCheck(params)
       default: throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
       }
       emit(["id": id, "result": result])
@@ -523,6 +528,7 @@ final class PrivateModeWatch {
 
   /// The window a focus answer holds private, or nil when nothing does.
   private func privateTarget(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
+    if HelperSafety.privateModeDisabled { return nil }
     switch focus {
     case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
     case .unknown: return (pid: 0, windowId: 0)
@@ -660,7 +666,7 @@ func runService() -> Never {
     // Agent connections already report a person's input (InputActivity), but "humanInput" is
     // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
     // advertising it lets unattended turns run.
-    "features": frameCaptureAvailable ? ["watch", "frames"] : ["watch"],
+    "features": frameCaptureAvailable ? ["watch", "frames", "captureCheck"] : ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])

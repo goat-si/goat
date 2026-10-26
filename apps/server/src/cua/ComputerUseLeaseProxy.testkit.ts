@@ -116,6 +116,8 @@ export const harness = Effect.fn(function* (
     readonly agentInputGate?: Deferred.Deferred<void>;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
     readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
+    /** Decorates each line for the provider, as the CLI's app guide does. */
+    readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -165,7 +167,8 @@ export const harness = Effect.fn(function* (
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
-    output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
+    output: (line, reply) =>
+      Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     ...(options.cursors
       ? {
           onCursor: (cursor: ComputerUseAgentCursor | null) =>

@@ -179,11 +179,13 @@ export const makeHubLedger = (
     );
     // A joining member also needs body-free revision identity for the reverse
     // forget closure, even after the dependency is no longer a head.
+    // CROSS JOIN pins the order payload, dependency, revision so each dependency is one primary
+    // key lookup; the planner otherwise walks every revision of the space for every payload.
     const lineageRows = yield* stored(
       "hub-snapshot-lineage",
       sql<{
         revision_id: string;
-      }>`SELECT DISTINCT r.revision_id FROM memory_payloads p, json_each(p.dependencies_json) d JOIN memory_revisions r ON r.space=p.space AND r.revision_id=d.value WHERE p.space=${space}`,
+      }>`SELECT DISTINCT r.revision_id FROM memory_payloads p CROSS JOIN json_each(p.dependencies_json) d CROSS JOIN memory_revisions r ON r.space=p.space AND r.revision_id=d.value WHERE p.space=${space}`,
     );
     const lineage = new Set(lineageRows.map((row) => M.MemoryRevisionId.make(row.revision_id)));
     const identities = yield* stored(

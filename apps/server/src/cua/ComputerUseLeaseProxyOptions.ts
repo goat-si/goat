@@ -57,7 +57,11 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly bundleIds: boolean;
   /** Lines the provider writes. The proxy stops when this ends. */
   readonly input: Stream.Stream<string>;
-  readonly output: (line: string) => Effect.Effect<void>;
+  /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
+  readonly output: (
+    line: string,
+    context?: { readonly tool?: string | undefined },
+  ) => Effect.Effect<void>;
   /** The server's view of this thread's control, newest last. Ending or failing ends it. */
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */

@@ -10,7 +10,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import { linuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import { CROPPED_CAPTURE } from "./linuxHelper/windowCapture.ts";
-import { call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { makeAppGuide } from "./ComputerUseGuide.ts";
+import { call, foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
   initialize,
   initialized,
@@ -24,6 +25,38 @@ import {
 const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text: "fixture work" });
 
 describe("thread lease proxy", () => {
+  it.effect("a thread's windowless launch tells the agent to list that app's windows", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness({ guide: makeAppGuide("darwin", undefined) });
+      yield* h.push({ ...snapshot("A"), foreground: foregroundActive().foreground });
+      const a = yield* h.started;
+      yield* h.applied;
+      yield* h.send(initialize);
+      yield* h.next;
+      yield* h.send(initialized);
+      yield* h.send(call(1, "launch_app", { bundle_id: "com.apple.calculator" }));
+      assert.equal((JSON.parse(yield* Queue.take(a.sent)) as { id: number }).id, 1);
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            content: [],
+            structuredContent: {
+              pid: 41,
+              launch_state: { process_running: true, window_ready: false },
+              windows: [],
+            },
+          },
+        }),
+      );
+      const answer = yield* h.next;
+      assert.equal(answer.id, 1);
+      assert.include(JSON.stringify(answer.result), "list_windows({ pid: 41 })");
+    }),
+  );
+
   it.effect(
     "a handshake answer replayed while waiting follows the Linux screenshot rule (#1677)",
     () =>

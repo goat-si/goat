@@ -55,6 +55,11 @@ export interface RemoteGoatRunnerOptions {
    * and the server's SSH dispatch set it.
    */
   readonly publishedFallback?: boolean;
+  /**
+   * Attach to the host's GOAT app server when it can serve this client, before preparing the
+   * managed runtime (see appServer.ts). The desktop app and the server's SSH dispatch set it.
+   */
+  readonly attachAppServer?: boolean;
   /** Local gh executable used for authenticated acquisition; defaults to PATH lookup. */
   readonly ghCommand?: string | undefined;
   /** Deadline for the best-effort post-install cleanup and fact warming round trip; 10 s by default. */
@@ -94,7 +99,7 @@ export interface PreparedRemoteRuntime {
   readonly runner: RemoteGoatRunnerOptions;
   readonly version: string | null;
   readonly requestedVersion: string | null;
-  readonly source: "requested" | "retained" | "live" | "installed";
+  readonly source: "requested" | "retained" | "live" | "installed" | "app";
   readonly installedExecutableSha256?: string;
   readonly requireInstalled: boolean;
   /** This preparation uploaded the archive, so an older runtime may have just become garbage. */
@@ -116,6 +121,10 @@ export interface PreparedRemoteRuntime {
    * start it if data appeared meanwhile, since that data may come from a newer build.
    */
   readonly requireFreshHost?: boolean;
+  /** The attachment is the host's GOAT app server on this port; credentials come from it. */
+  readonly appServerPort?: number;
+  /** The app server ran at launch but could not serve this client, so it took the managed one. */
+  readonly appServerDeclined?: boolean;
 }
 
 export const requestedRuntime = (

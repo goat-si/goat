@@ -1,7 +1,9 @@
 /**
  * Electron allows one debugger client per webContents, so the relay shares the
- * attach the preview manager already holds.
+ * attach the preview manager already holds, and its sessions share one screencast.
  */
+
+import { createSharedScreencast } from "./SharedScreencast.ts";
 
 export interface CdpRelayTarget {
   readonly send: (
@@ -24,6 +26,8 @@ export interface CdpRelayTarget {
 export interface CdpRelayConnection {
   readonly receive: (raw: string) => void;
   readonly event: (method: string, params: unknown, sessionId: string | undefined) => void;
+  /** Ends what this connection left running on the page, such as its screencast. */
+  readonly close: () => void;
 }
 
 interface CdpCommand {
@@ -63,6 +67,9 @@ export function createCdpRelayConnection(
    */
   const sessions = new Map<string, "browser" | "page">([[PAGE_SESSION_ID, "page"]]);
   let sessionSequence = 0;
+  const screencast = createSharedScreencast((method, params) =>
+    target.send(method, params, undefined),
+  );
   const newSession = (kind: "browser" | "page") => {
     const sessionId = `goat-preview-${kind}-${++sessionSequence}`;
     sessions.set(sessionId, kind);
@@ -121,8 +128,10 @@ export function createCdpRelayConnection(
       }
       case "Target.detachFromTarget": {
         const sessionId = command.params?.["sessionId"];
-        if (typeof sessionId === "string" && sessionId !== PAGE_SESSION_ID)
+        if (typeof sessionId === "string" && sessionId !== PAGE_SESSION_ID) {
           sessions.delete(sessionId);
+          screencast.leave(sessionId);
+        }
         return {};
       }
       case "Target.setAutoAttach": {
@@ -142,13 +151,25 @@ export function createCdpRelayConnection(
   };
 
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
-    const child = sessions.get(command.sessionId!) === "page" ? undefined : command.sessionId;
+    const viewer = command.sessionId ?? PAGE_SESSION_ID;
+    const child = sessions.get(viewer) === "page" ? undefined : viewer;
     // The page itself is already running, but its child frames are not:
     // Playwright auto-attaches with waitForDebuggerOnStart, so Chromium pauses
     // every new cross-site iframe and worker until this reaches it. Swallowing
     // it left sign-in checks and captchas, which run in such frames, frozen.
     if (command.method === "Runtime.runIfWaitingForDebugger" && child === undefined) {
       return Promise.resolve({});
+    }
+    if (child === undefined) {
+      switch (command.method) {
+        case "Page.startScreencast":
+          return screencast.start(viewer, command.params ?? {}).then(() => ({}));
+        case "Page.stopScreencast":
+          return screencast.stop(viewer).then(() => ({}));
+        case "Page.screencastFrameAck":
+          screencast.ack(viewer, command.params?.["sessionId"]);
+          return Promise.resolve({});
+      }
     }
     return target.send(command.method, command.params ?? {}, child);
   };
@@ -201,8 +222,15 @@ export function createCdpRelayConnection(
         send({ method, params, sessionId });
         return;
       }
+      // Playwright acks any frame its page session receives, which Chromium would count.
+      if (method === "Page.screencastFrame") {
+        for (const id of screencast.frame(params as { sessionId?: unknown }))
+          send({ method, params, sessionId: id });
+        return;
+      }
       for (const [id, kind] of sessions)
         if (kind === "page") send({ method, params, sessionId: id });
     },
+    close: screencast.close,
   };
 }
