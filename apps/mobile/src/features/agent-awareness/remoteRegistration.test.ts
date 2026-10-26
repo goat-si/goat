@@ -273,7 +273,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     expect(
       makeRelayDeviceRegistrationRequest({
         deviceId: "device-1",
-        label: "Julius's iPhone",
+        label: "Alex's iPhone",
         iosMajorVersion: 18,
         appVersion: "1.0.0",
         pushToken: "apns-token",

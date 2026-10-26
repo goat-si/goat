@@ -91,22 +91,10 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D12/D18: dependency repository branches, pack commands and provenance metadata belong to the vendor.",
   ),
   keep(
-    "relay-telemetry-input",
-    [".env.example"],
-    /t3-code-mobile-traces-dev/g,
-    "D7/D14: dataset selected by the upstream telemetry service.",
-  ),
-  keep(
     "relay-wrapped-troubleshooting",
     ["docs/user/t3-connect-troubleshooting.md"],
     /block T3$/g,
     "D14: wrapped sentence names the upstream relay, not the host product.",
-  ),
-  keep(
-    "relay-native-services",
-    ["docs/operations/android-notifications.md"],
-    /T3's existing production publishable key|existing T3 services/g,
-    "D7/D14: Clerk configuration and hosted delivery belong to upstream.",
   ),
   keep(
     "relay-help-anchors",
@@ -322,12 +310,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ["docs/operations/observability.md"],
     /t3code-(?:server|desktop|web|\*)|`t3code`|t3-(?:server|web)|t3\.runtime\.\*|sent to the T3$/g,
     "D12/D17: dashboard migration examples distinguish historical services and the upstream relay dataset.",
-  ),
-  keep(
-    "relay-dataset-identities",
-    ["docs/operations/relay-observability.md", "docs/operations/connect-setup.md"],
-    /t3-code-(?:relay(?:-traces-prod|-traces-dev-julius|-otel-ingest-prod|-recent-spans-prod|-health)?|mobile-otel-ingest-prod|relay-client-otel-ingest-prod)\b/g,
-    "D7/D14: configured JWT audience, dataset, token and dashboard names belong to the upstream relay.",
   ),
   keep(
     "legacy-connect-callbacks",

@@ -191,9 +191,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               }
               if (!command.command.endsWith("ssh")) return yield* real.spawn(command);
               if (command.args.includes("-G"))
-                return makeSuccessfulProcess(
-                  "hostname devbox.example.com\nuser julius\nport 2222\n",
-                );
+                return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
               const stdin = command.options.stdin;
               if (
                 stdin === undefined ||

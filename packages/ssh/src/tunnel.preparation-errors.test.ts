@@ -75,7 +75,7 @@ describe("SSH runtime preparation errors", () => {
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.succeed(
             command._tag === "StandardCommand" && command.args.includes("-G")
-              ? makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n")
+              ? makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n")
               : makeExitedProcess(255, stderr),
           ),
         );

@@ -137,7 +137,7 @@ describe("desktop release runtime supply", () => {
               ? {
                   GOAT_APPLE_TEAM_ID: "ABC1234567",
                   GOAT_MACOS_PROVISIONING_PROFILE: `${runner}/goat.provisionprofile`,
-                  T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+                  GOAT_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
                 }
               : {},
           );

@@ -60,10 +60,7 @@ describe("pull request project filter choices", () => {
   });
 
   it("distinguishes same-named repositories on one server by checkout path", () => {
-    const projects = [
-      project("upstream"),
-      project("fork", nucbox, "github.com/juliusmarminge/t3code"),
-    ];
+    const projects = [project("upstream"), project("fork", nucbox, "github.com/alexmorgan/t3code")];
 
     const choices = pullRequestFilterProjects(projects, labels);
 

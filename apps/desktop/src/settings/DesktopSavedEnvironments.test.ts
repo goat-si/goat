@@ -27,7 +27,7 @@ const savedRegistryRecord: PersistedSavedEnvironmentRecord = {
   desktopSsh: {
     alias: "devbox",
     hostname: "devbox.example.com",
-    username: "julius",
+    username: "alex",
     port: 22,
   },
 };
@@ -263,7 +263,7 @@ describe("DesktopSavedEnvironments", () => {
                 "desktopSsh": {
                   "alias": "devbox",
                   "hostname": "devbox.example.com",
-                  "username": "julius",
+                  "username": "alex",
                   "port": 22,
                 },
               },

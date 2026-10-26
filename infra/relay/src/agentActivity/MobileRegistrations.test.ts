@@ -36,7 +36,7 @@ import * as MobileRegistrations from "./MobileRegistrations.ts";
 
 const device: RelayDeviceRegistrationRequest = {
   deviceId: "device-1" as RelayDeviceRegistrationRequest["deviceId"],
-  label: "Julius's iPhone",
+  label: "Alex's iPhone",
   platform: "ios",
   iosMajorVersion: 18,
   appVersion: "1.0.0" as RelayDeviceRegistrationRequest["appVersion"],
@@ -110,7 +110,7 @@ function makeEnvironmentLinks(
     listDeliveryUsersForEnvironment: () =>
       Effect.succeed([
         {
-          userId: "dev:julius",
+          userId: "dev:alex",
           notificationsEnabled: true,
           liveActivitiesEnabled: true,
         },
@@ -146,7 +146,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
   },
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "goat-relay",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-job-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
@@ -208,7 +208,7 @@ describe("MobileRegistrations", () => {
     return Effect.gen(function* () {
       const result = yield* Effect.gen(function* () {
         const registrations = yield* MobileRegistrations.MobileRegistrations;
-        return yield* registrations.registerDevice({ userId: "dev:julius", payload: device });
+        return yield* registrations.registerDevice({ userId: "dev:alex", payload: device });
       }).pipe(
         Effect.provide(
           MobileRegistrations.layer.pipe(
@@ -223,7 +223,7 @@ describe("MobileRegistrations", () => {
                     replayForLiveActivityRegistration: () =>
                       Effect.fail(
                         new AgentActivityRows.AgentActivityRowListPersistenceError({
-                          userId: "dev:julius",
+                          userId: "dev:alex",
                           cause: "sensitive device replay detail",
                         }),
                       ),
@@ -261,7 +261,7 @@ describe("MobileRegistrations", () => {
         listTargets: () =>
           Effect.succeed([
             {
-              user_id: "dev:julius",
+              user_id: "dev:alex",
               device_id: "device-1",
               platform: "ios",
               ios_major_version: 18,
@@ -288,7 +288,7 @@ describe("MobileRegistrations", () => {
       return Effect.gen(function* () {
         const registrations = yield* MobileRegistrations.MobileRegistrations;
         const result = yield* registrations.registerDevice({
-          userId: "dev:julius",
+          userId: "dev:alex",
           payload: {
             ...device,
             pushToken: "apns-device-token",
