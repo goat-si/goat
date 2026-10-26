@@ -484,10 +484,6 @@ const keptVisibleCopy = [
   ],
   ["apps/server/src/provider/CodexChatGptAuth.ts", '        : { agent_name_hint: "T3 Code" }),'],
   ["apps/server/src/provider/CodexProvider.ts", 'const CODEX_CLIENT_NAME = "T3 Code";'],
-  [
-    "apps/server/src/telemetry/AnalyticsService.ts",
-    " * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards",
-  ],
   ["docs/internals/overview.md", "## Upstream T3 Code"],
   [
     "docs/internals/remote-updates.md",
@@ -591,10 +587,6 @@ const keptVisibleCopy = [
   [
     "structure/decisions/ADR-0014-desktop-runtime-identity.md",
     "    copy the key of the initial package name (or `T3 Code <stage>`) to the new name. All ciphertext",
-  ],
-  [
-    "structure/decisions/ADR-0022-cua-driver-computer-use.md",
-    "  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697, by",
   ],
   [
     "structure/desktop.md",

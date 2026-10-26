@@ -687,12 +687,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Retained Pi extension event filtering, replay commit provenance and provider preflight URL are provider protocol/fixture inputs (D12/D17).",
   },
-  {
-    id: "upstream-test-release-urls",
-    pattern: /t3-code-v2-beta/g,
-    scope: (path) => path.endsWith("NightlyMobileBeta.tsx"),
-    reason: "Upstream Play beta group URL is an external service identity (D12).",
-  },
 
   {
     id: "encoded-payloads",
@@ -814,13 +808,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
       /\.t3(?:code)?\b|t3-(?:composer-attachments|composer-paste|favicon-thumbnail|acp-registry-icons-v1)|t3\.pullRequests\.[a-z]+|refs\/t3\/review-guide|t3code\/pr-|t3-runtime-archive|t3-theme/g,
     reason:
       "Existing homes, attachment/cache files, review refs, pull-request preferences and saved HTML artifacts must survive upgrades (D8/D10/D17).",
-  },
-  {
-    id: "operator-span-names",
-    pattern: /t3\.runtime\.[A-Za-z.]+/g,
-    scope: (path) => path.startsWith("packages/ssh/"),
-    reason:
-      "SSH acquisition observability names feed operator dashboards; coordinate with service-name follow-up.",
   },
   {
     id: "legacy-cli-package",
