@@ -231,14 +231,17 @@ export const screenTree = (
     readonly generation: string;
     readonly refs: Map<string, string>;
   },
-) => ({
-  accessibilityTree: text
-    .slice(0, input.limit)
-    .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
-      const ref = `t3-${input.generation}-${nativeRef}`;
-      input.refs.set(ref, nativeRef);
-      return `[ref=${ref}]`;
-    }),
-  treeComplete: text.length <= input.limit && input.unread.length === 0,
-  refGeneration: String(input.generation),
-});
+) => {
+  const { generation } = input;
+  return {
+    accessibilityTree: text
+      .slice(0, input.limit)
+      .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
+        const ref = `t3-${generation}-${nativeRef}`;
+        input.refs.set(ref, nativeRef);
+        return `[ref=${ref}]`;
+      }),
+    treeComplete: text.length <= input.limit && input.unread.length === 0,
+    refGeneration: String(generation),
+  };
+};

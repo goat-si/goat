@@ -512,6 +512,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : undefined;
       if (arg.point && (!point || point.targetId !== bound.ref.id))
         return yield* Effect.fail(fail("stale_reference", "Observe the current screenshot again."));
+      if (point?.kind === "document")
+        return yield* Effect.fail(
+          fail(
+            "unsupported",
+            "Full-page image points cannot be clicked safely. Observe a viewport screenshot near the target and use its point or an element ref.",
+          ),
+        );
       if ((arg.x !== undefined || arg.y !== undefined) && !point)
         return yield* Effect.fail(
           fail("invalid_argument", "Use a point from the current screenshot."),
