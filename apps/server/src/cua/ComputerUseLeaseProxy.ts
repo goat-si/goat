@@ -256,6 +256,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         Effect.gen(function* () {
           if (finished !== undefined || lifecycle.current !== current) return;
           const message = parse(line);
+          let tool: string | undefined;
           if (message?.id !== undefined && message.id !== null && message.method === undefined) {
             const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
             // Only the answer to a list_apps request still waiting for it says which app a pid is.
@@ -274,6 +275,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            tool = request.method === "tools/call" ? request.tool : undefined;
             if (request.method === "tools/call") line = tokenFirst.reply(request, message, line);
             yield* agentInput.ended(key);
             if (request.cancelled) {
@@ -350,7 +352,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
             }
           }
-          yield* options.output(admitDriverReplyScreenshots(line));
+          yield* options.output(admitDriverReplyScreenshots(line), { tool });
         }),
       ),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper

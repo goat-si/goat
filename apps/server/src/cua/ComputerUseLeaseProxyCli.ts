@@ -259,7 +259,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
       () => undefined,
     ).pipe(Stream.catchCause(() => Stream.empty)),
-    output: (line: string) => Effect.sync(() => void process.stdout.write(guide(line) + "\n")),
+    output: (line: string, context?: { readonly tool?: string | undefined }) =>
+      Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
     startDriver: startDriver(drawsOverlay),
     // A handshake child never draws or watches input (#1604): on macOS the helper starts its
     // overlay and input feed only when the proxy opens their channel.
