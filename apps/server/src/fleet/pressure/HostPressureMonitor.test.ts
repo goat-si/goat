@@ -72,7 +72,6 @@ describe("HostPressureMonitor", () => {
   );
 
   it.effect("streams the disk's own level once per change, not once per sample", () => {
-    const GIB = 1024 ** 3;
     // 40 GiB free of 2 TiB stays elevated however calm the CPU is; a 0.3 GiB dip is not news.
     const low = (freeGiB: number): PressureSample => ({
       ...reading(0.1),
@@ -108,49 +107,13 @@ describe("HostPressureMonitor", () => {
     "takes the disk level from a worktrees folder on a fuller volume than the GOAT home",
     () =>
       Effect.gen(function* () {
-        const GIB = 1024 ** 3;
-        const fs = yield* FileSystem.FileSystem;
-        // Settings > Storage > Worktree location on another drive, such as a Dev Drive.
-        const worktrees = yield* fs.realPath(
-          yield* fs.makeTempDirectoryScoped({ prefix: "pressure-worktrees-" }),
-        );
-        const home: HostDiskUsage = {
-          path: "/goat-home",
-          availableBytes: 900 * GIB,
-          totalBytes: 1000 * GIB,
-        };
-        const fuller: HostDiskUsage = {
-          path: worktrees,
-          availableBytes: 20 * GIB,
-          totalBytes: 1000 * GIB,
-        };
-        const snapshot: HostCapacitySnapshot = {
-          sampledAt: 0,
-          cpuUtilization: 0.1,
-          cpuCount: 8,
-          availableMemoryBytes: 8 * GIB,
-          totalMemoryBytes: 16 * GIB,
-          loadAvg: null,
-          disk: home,
-        };
-        const live = HostPressureMonitor.layer.pipe(
-          Layer.provide(
-            Layer.mock(HostResources.HostResources)({
-              read: Effect.succeed(snapshot),
-              diskAt: (path) => Effect.succeed(path === worktrees ? fuller : home),
-            }),
-          ),
-          Layer.provide(
-            ServerSettings.ServerSettingsService.layerTest({ worktreesDirectory: worktrees }),
-          ),
-          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "pressure-monitor-" })),
-          Layer.provide(NodeServices.layer),
-        );
+        const worktrees = yield* worktreesFolder;
+        const free = { gib: 20 };
         const disk = yield* Effect.gen(function* () {
           const monitor = yield* HostPressureMonitor.HostPressureMonitor;
           yield* every30s(7);
           return yield* monitor.disk.pipe(Stream.runHead);
-        }).pipe(Effect.provide(live));
+        }).pipe(Effect.provide(onWorktreesDrive(worktrees, free)));
         expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
           level: "elevated",
           path: worktrees,
@@ -158,4 +121,68 @@ describe("HostPressureMonitor", () => {
         });
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
+
+  it.effect("keeps a worktrees volume's warning until it clears its recovery band", () =>
+    Effect.gen(function* () {
+      const worktrees = yield* worktreesFolder;
+      const free = { gib: 48 };
+      const disk = yield* Effect.gen(function* () {
+        const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+        yield* every30s(7);
+        // A cleanup frees a little: under the 50 GiB entry limit no longer, but not past the
+        // 62.5 GiB the level is left at. The roomy home volume must not take over and clear it.
+        free.gib = 52;
+        yield* every30s(12);
+        return yield* monitor.disk.pipe(Stream.runHead);
+      }).pipe(Effect.provide(onWorktreesDrive(worktrees, free)));
+      expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
+        level: "elevated",
+        path: worktrees,
+      });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });
+
+const GIB = 1024 ** 3;
+
+/** Settings > Storage > Worktree location on another drive, such as a Dev Drive. */
+const worktreesFolder = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "pressure-worktrees-" }));
+});
+
+/** The live monitor with a 1000 GiB GOAT home volume 400 GiB free, and worktrees on another drive. */
+const onWorktreesDrive = (worktrees: string, free: { gib: number }) => {
+  const home: HostDiskUsage = {
+    path: "/goat-home",
+    availableBytes: 400 * GIB,
+    totalBytes: 1000 * GIB,
+  };
+  const snapshot: HostCapacitySnapshot = {
+    sampledAt: 0,
+    cpuUtilization: 0.1,
+    cpuCount: 8,
+    availableMemoryBytes: 8 * GIB,
+    totalMemoryBytes: 16 * GIB,
+    loadAvg: null,
+    disk: home,
+  };
+  return HostPressureMonitor.layer.pipe(
+    Layer.provide(
+      Layer.mock(HostResources.HostResources)({
+        read: Effect.succeed(snapshot),
+        diskAt: (path) =>
+          Effect.sync(() =>
+            path === worktrees
+              ? { path, availableBytes: free.gib * GIB, totalBytes: 1024 * GIB }
+              : home,
+          ),
+      }),
+    ),
+    Layer.provide(
+      ServerSettings.ServerSettingsService.layerTest({ worktreesDirectory: worktrees }),
+    ),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "pressure-monitor-" })),
+    Layer.provide(NodeServices.layer),
+  );
+};

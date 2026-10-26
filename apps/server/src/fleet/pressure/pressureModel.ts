@@ -114,7 +114,9 @@ export const diskOnlySample = (sample: PressureSample): PressureSample => ({
 
 /**
  * Of the volumes GOAT fills (its home, and worktree folders a person moved to another drive), the
- * one the disk level comes from: the highest level on these thresholds, the first one on a tie.
+ * one the disk level comes from: the highest level on these thresholds, then the highest on the
+ * loosened ones a level is left at, so a volume still inside its recovery band keeps its level
+ * held rather than handing over to a roomier one; the first one on a tie.
  */
 export function mostPressedDisk(
   disks: ReadonlyArray<HostDiskUsage>,
@@ -123,21 +125,21 @@ export function mostPressedDisk(
   let chosen: HostDiskUsage | null = null;
   let rank = -1;
   for (const disk of disks) {
-    const { level } = classify(
-      {
-        loadPerCore: null,
-        cpuUtilization: null,
-        memoryFreeRatio: null,
-        diskAvailableBytes: disk.availableBytes,
-        diskTotalBytes: disk.totalBytes,
-        diskPath: disk.path,
-        eventLoopDelayMs: null,
-      },
-      settings,
-    );
-    if (RANK[level] > rank) {
+    const sample: PressureSample = {
+      loadPerCore: null,
+      cpuUtilization: null,
+      memoryFreeRatio: null,
+      diskAvailableBytes: disk.availableBytes,
+      diskTotalBytes: disk.totalBytes,
+      diskPath: disk.path,
+      eventLoopDelayMs: null,
+    };
+    const score =
+      RANK[classify(sample, settings).level] * 3 +
+      RANK[classify(sample, settings, EXIT_RATIO).level];
+    if (score > rank) {
       chosen = disk;
-      rank = RANK[level];
+      rank = score;
     }
   }
   return chosen;
