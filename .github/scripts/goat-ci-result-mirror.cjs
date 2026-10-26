@@ -8,12 +8,18 @@
 // success passes, anything else fails, and a head without a real run fails. It reads the job of
 // that run, so no check another job creates under the same name can stand in for it. Both
 // endpoints are public for a public repository, so the job needs no extra permission.
+//
+// The run listing can lag behind events: a ci:* label or retarget a moment before the edit starts a
+// real run the first listing may not show yet. So it decides only once its own run is a minute old,
+// and only when a second listing, taken after reading the jobs, names the same run and attempt.
 
 const WORKFLOW = "goat-ci.yml";
 const RESULT = "goat-ci-result";
 const POLL_MS = 30_000;
 // Covers the moment between an opened or synchronize event and its run appearing in the API.
 const NO_RUN_GRACE_MS = 3 * 60_000;
+// How long a real run whose event came before this run's gets to appear in the listing.
+const SETTLE_MS = 60_000;
 
 /** The end of the run-name goat-ci.yml gives a real pull_request run of this pull request. */
 const realRunSuffix = (number) => " (#" + number + ")";
@@ -90,17 +96,35 @@ async function main(env = process.env, io = {}) {
   const repo = (env.GITHUB_API_URL || "https://api.github.com") + "/repos/" + env.GITHUB_REPOSITORY;
   const runsUrl =
     repo + "/actions/workflows/" + WORKFLOW + "/runs?event=pull_request&head_sha=" + sha;
+  const listRuns = () => list(runsUrl, "workflow_runs", env.GITHUB_TOKEN, fetchImpl, wait);
+  const governing = (runs) => governingRun(runs, { number, sha, ownRunId: env.GITHUB_RUN_ID });
   const started = now();
   let waitingFor = null;
   for (;;) {
-    const runs = await list(runsUrl, "workflow_runs", env.GITHUB_TOKEN, fetchImpl, wait);
-    const run = governingRun(runs, { number, sha, ownRunId: env.GITHUB_RUN_ID });
-    if (run?.status === "completed") {
+    const runs = await listRuns();
+    const own = runs.find((run) => String(run.id) === String(env.GITHUB_RUN_ID));
+    const run = governing(runs);
+    // A re-run keeps its run's created_at, so it is settled at once.
+    const settleLeft = own ? Date.parse(own.created_at) + SETTLE_MS - now() : SETTLE_MS;
+    if (own && settleLeft <= 0 && run?.status === "completed") {
       const jobsUrl = repo + "/actions/runs/" + run.id + "/jobs?filter=latest";
       const jobs = await list(jobsUrl, "jobs", env.GITHUB_TOKEN, fetchImpl, wait);
-      const { code, message } = verdict(run, jobs);
-      log((code === 0 ? "::notice" : "::error") + " title=goat-ci-result::" + message);
-      return code;
+      const again = governing(await listRuns());
+      if (
+        again?.id === run.id &&
+        again.status === "completed" &&
+        again.run_attempt === run.run_attempt
+      ) {
+        const { code, message } = verdict(run, jobs);
+        log((code === 0 ? "::notice" : "::error") + " title=goat-ci-result::" + message);
+        return code;
+      }
+      // A newer run or attempt appeared while the jobs were read; it decides instead.
+      continue;
+    }
+    if (!own && now() - started >= NO_RUN_GRACE_MS) {
+      log("::error title=goat-ci-result::this run never appeared in " + runsUrl);
+      return 1;
     }
     if (run === null && now() - started >= NO_RUN_GRACE_MS) {
       log(
@@ -116,7 +140,8 @@ async function main(env = process.env, io = {}) {
       waitingFor = run.id;
       log("waiting for " + run.html_url);
     }
-    await wait(POLL_MS);
+    const settling = own && settleLeft > 0 && run?.status === "completed";
+    await wait(settling ? Math.max(1000, Math.min(POLL_MS, settleLeft)) : POLL_MS);
   }
 }
 

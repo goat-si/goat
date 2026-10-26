@@ -468,16 +468,18 @@ jobs:
   # GitHub reads a required check from the newest goat-ci suite on the head commit, and an ignored
   # event creates one (#1672). So that run reports goat-ci-result too: it waits for the newest real
   # run of the pull request on the same head and repeats its goat-ci-result, failing unless it
-  # succeeded. Waiting can take as long as that run, so it holds a hosted runner, never an EPYC one.
+  # succeeded. Waiting can take as long as that run, queue time included, so it holds a hosted
+  # runner, never an EPYC one, for up to the hosted job limit.
   republish:
     name: ${{ !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')) && 'goat-ci-result' || 'goat-ci-result (real run)' }}
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /.github/scripts/
           sparse-checkout-cone-mode: false

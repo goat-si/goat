@@ -72,8 +72,12 @@ creates a goat-ci suite for it and reads the required `goat-ci-result` from the 
 head commit (#1672). So its `republish` job reports `goat-ci-result`: on a hosted runner, it waits
 for the newest real goat-ci run of the same pull request on the same head and repeats that run's
 `goat-ci-result`. Success passes and anything else fails, so a newer real run decides even when it
-was cancelled. Ignored runs take a concurrency group of their own per pull request, because a group
-holds one pending run and an ignored newcomer would cancel a real run waiting there. Skipped jobs
+was cancelled. The run listing can lag behind events, so it decides only once its own run is a
+minute old and a second listing names the same run and attempt; a real run listed more than a
+minute after a later edit's run, or created out of event order, can still be missed. A wait that
+outlives the six-hour hosted job limit fails. Ignored runs take a concurrency group of their own
+per pull request, because a group holds one pending run and an ignored newcomer would cancel a real
+run waiting there. Skipped jobs
 keep their raw name expressions, so no skipped check carries a real name. A re-run keeps its run's
 original suite, and a republished result is never refreshed: after re-running a real run that an
 edit or label followed, re-run that later run too. Until then a red re-run stays hidden behind a
