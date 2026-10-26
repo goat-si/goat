@@ -32,7 +32,7 @@ export function HeadlessServerSetting() {
       description={
         error ??
         (enabled
-          ? "Show the background GOAT server that SSH work started on this Mac as its own environment. Changing this restarts GOAT."
+          ? "Show the background GOAT server that SSH work started on this computer as its own environment. Changing this restarts GOAT."
           : "Hidden. GOAT uses only this app's own server here; SSH clients can still use the background server.")
       }
       control={
@@ -42,7 +42,7 @@ export function HeadlessServerSetting() {
           <Switch
             checked={enabled}
             onCheckedChange={() => void toggle()}
-            aria-label="Headless server on this Mac"
+            aria-label="Headless server on this computer"
           />
         )
       }
