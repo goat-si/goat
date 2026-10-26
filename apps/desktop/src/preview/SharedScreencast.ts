@@ -9,6 +9,7 @@
  */
 
 type ScreencastParams = Record<string, unknown>;
+type ViewerRequest = { readonly params: ScreencastParams; readonly token: object };
 
 interface PendingFrame {
   readonly sessionId: unknown;
@@ -55,12 +56,15 @@ export interface SharedScreencast {
 export function createSharedScreencast(
   send: (method: string, params: ScreencastParams) => Promise<unknown>,
 ): SharedScreencast {
-  const viewers = new Map<string, ScreencastParams>();
+  const viewers = new Map<string, ViewerRequest>();
   let pending: Array<PendingFrame> = [];
   /** What Chromium runs now; null while stopped. */
   let running: ScreencastParams | null = null;
+  let stopping = false;
+  let stopFailed = false;
   // Starts and stops reach Chromium one at a time, each computed from the viewers then.
   let queue: Promise<void> = Promise.resolve();
+  let syncsInFlight = 0;
 
   const ackPage = (frame: PendingFrame) =>
     void send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => undefined);
@@ -74,15 +78,28 @@ export function createSharedScreencast(
   };
 
   const apply = async () => {
-    const wanted = viewers.size > 0 ? merge([...viewers.values()]) : null;
-    if (wanted === null ? running === null : running !== null && sameParams(running, wanted))
+    const wanted =
+      viewers.size > 0 ? merge([...viewers.values()].map(({ params }) => params)) : null;
+    if (
+      !stopFailed &&
+      (wanted === null ? running === null : running !== null && sameParams(running, wanted))
+    )
       return;
     // Chromium answers a second start with "Screencast is already active". A new
     // screencast starts its own ack count, so frames still owed need none.
     if (running !== null) {
-      running = null;
+      stopping = true;
       pending = [];
-      await send("Page.stopScreencast", {});
+      try {
+        await send("Page.stopScreencast", {});
+        running = null;
+        stopFailed = false;
+      } catch (cause) {
+        stopFailed = true;
+        throw cause;
+      } finally {
+        stopping = false;
+      }
     }
     if (wanted === null) return;
     pending = [];
@@ -91,8 +108,12 @@ export function createSharedScreencast(
   };
 
   const sync = () => {
+    syncsInFlight++;
     const applied = queue.then(apply);
     queue = applied.catch(() => undefined);
+    void queue.then(() => {
+      syncsInFlight--;
+    });
     return applied;
   };
 
@@ -104,13 +125,17 @@ export function createSharedScreencast(
 
   return {
     start: async (viewer, params) => {
-      viewers.set(viewer, params);
+      const previous = viewers.get(viewer);
+      const token = {};
+      viewers.set(viewer, { params, token });
       try {
         await sync();
       } catch (cause) {
-        // The failed start left Chromium stopped; the viewers already watching keep theirs.
-        viewers.delete(viewer);
-        await sync().catch(() => undefined);
+        if (viewers.get(viewer)?.token === token) {
+          if (previous) viewers.set(viewer, previous);
+          else viewers.delete(viewer);
+          await sync().catch(() => undefined);
+        }
         throw cause;
       }
     },
@@ -121,7 +146,12 @@ export function createSharedScreencast(
     },
     leave,
     frame: (params) => {
-      if (viewers.size === 0) return [];
+      if (stopping) return [];
+      if (viewers.size === 0) {
+        // A failed last stop leaves Chromium streaming. A frame is its retry signal.
+        if (running !== null && syncsInFlight === 0) void sync().catch(() => undefined);
+        return [];
+      }
       pending.push({ sessionId: params.sessionId, owers: new Set(viewers.keys()) });
       return [...viewers.keys()];
     },

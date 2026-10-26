@@ -186,7 +186,15 @@ const openPageSessions = async (
 const makeScreencastRelay = async (count: number) => {
   const send = vi.fn(async (_method: string, _params: Record<string, unknown>) => ({}));
   const written: Array<Record<string, unknown>> = [];
-  const relay = createCdpRelayConnection(makeTarget(send), (raw) => written.push(JSON.parse(raw)));
+  const replies = new Map<number, (message: Record<string, unknown>) => void>();
+  const relay = createCdpRelayConnection(makeTarget(send), (raw) => {
+    const message = JSON.parse(raw) as Record<string, unknown>;
+    written.push(message);
+    if (typeof message["id"] === "number") {
+      replies.get(message["id"])?.(message);
+      replies.delete(message["id"]);
+    }
+  });
   const { browser, pages } = await openPageSessions(relay, written, count);
   let nextId = 1000;
   const command = async (
@@ -196,6 +204,12 @@ const makeScreencastRelay = async (count: number) => {
   ) => {
     relay.receive(JSON.stringify({ id: ++nextId, method, params, sessionId }));
     await settle();
+  };
+  const request = (method: string, sessionId: string, params: Record<string, unknown> = {}) => {
+    const id = ++nextId;
+    const reply = new Promise<Record<string, unknown>>((resolve) => replies.set(id, resolve));
+    relay.receive(JSON.stringify({ id, method, params, sessionId }));
+    return reply;
   };
   /** The screencast commands the page received, in order. */
   const screencast = () =>
@@ -208,7 +222,7 @@ const makeScreencastRelay = async (count: number) => {
     relay.event("Page.screencastFrame", frame, "");
     return written.map((message) => message["sessionId"]);
   };
-  return { relay, send, written, browser, pages, command, screencast, frameTo };
+  return { relay, send, written, browser, pages, command, request, screencast, frameTo };
 };
 
 const small = { format: "jpeg", quality: 60, maxWidth: 800, maxHeight: 600 };
@@ -362,6 +376,106 @@ describe("CDP relay screencasts", () => {
     relay.close();
     await settle();
     expect(screencast().at(-1)).toEqual(["Page.stopScreencast", {}]);
+  });
+
+  it("retries a failed last stop before starting the next viewer", async () => {
+    const { pages, request, send, screencast } = await makeScreencastRelay(1);
+    const viewer = pages[0]!;
+    await request("Page.startScreencast", viewer, small);
+    let failStop = true;
+    send.mockImplementation(async (method) => {
+      if (method === "Page.stopScreencast" && failStop) {
+        failStop = false;
+        throw new Error("Stop refused");
+      }
+      return {};
+    });
+    expect(await request("Page.stopScreencast", viewer)).toHaveProperty("error");
+    await request("Page.startScreencast", viewer, small);
+    expect(screencast().map(([method]) => method)).toEqual([
+      "Page.startScreencast",
+      "Page.stopScreencast",
+      "Page.stopScreencast",
+      "Page.startScreencast",
+    ]);
+  });
+
+  it("drops frames and acks while a restart is stopping the old screencast", async () => {
+    const { pages, request, send, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await request("Page.startScreencast", first, small);
+    let enterStop!: () => void;
+    const stopping = new Promise<void>((resolve) => (enterStop = resolve));
+    let finishStop!: (result: {}) => void;
+    send.mockImplementation((method) => {
+      if (method === "Page.stopScreencast") {
+        enterStop();
+        return new Promise<{}>((resolve) => (finishStop = resolve));
+      }
+      return Promise.resolve({});
+    });
+    const restarted = request("Page.startScreencast", second, large);
+    await stopping;
+    expect(frameTo({ sessionId: 41, data: "old" })).toEqual([]);
+    await request("Page.screencastFrameAck", first, { sessionId: 41 });
+    expect(send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck")).toEqual([]);
+    finishStop({});
+    await restarted;
+  });
+
+  it("keeps an existing viewer's old size and frames when its larger restart fails", async () => {
+    const { pages, request, send, screencast, frameTo } = await makeScreencastRelay(1);
+    const viewer = pages[0]!;
+    await request("Page.startScreencast", viewer, small);
+    send.mockImplementation(async (method, params) => {
+      if (method === "Page.startScreencast" && params["maxWidth"] === large.maxWidth)
+        throw new Error("Larger start refused");
+      return {};
+    });
+    expect(await request("Page.startScreencast", viewer, large)).toHaveProperty("error");
+    expect(screencast().at(-1)).toEqual(["Page.startScreencast", small]);
+    expect(frameTo({ sessionId: 42, data: "x" })).toEqual([viewer]);
+  });
+
+  it("retries a failed last stop when the page streams another frame", async () => {
+    const { pages, request, send, screencast, frameTo } = await makeScreencastRelay(1);
+    const viewer = pages[0]!;
+    await request("Page.startScreencast", viewer, small);
+    let failStop = true;
+    send.mockImplementation(async (method) => {
+      if (method === "Page.stopScreencast" && failStop) {
+        failStop = false;
+        throw new Error("Stop refused");
+      }
+      return {};
+    });
+    expect(await request("Page.stopScreencast", viewer)).toHaveProperty("error");
+    expect(frameTo({ sessionId: 43, data: "still streaming" })).toEqual([]);
+    await request("DOM.enable", viewer);
+    expect(screencast().filter(([method]) => method === "Page.stopScreencast")).toHaveLength(2);
+  });
+
+  it("does not restore a detached viewer after its pending restart fails", async () => {
+    const { pages, browser, request, send, frameTo, screencast } = await makeScreencastRelay(1);
+    const viewer = pages[0]!;
+    await request("Page.startScreencast", viewer, small);
+    let enterStart!: () => void;
+    const starting = new Promise<void>((resolve) => (enterStart = resolve));
+    let failStart!: (reason: Error) => void;
+    send.mockImplementation((method, params) => {
+      if (method === "Page.startScreencast" && params["maxWidth"] === large.maxWidth) {
+        enterStart();
+        return new Promise<{}>((_resolve, reject) => (failStart = reject));
+      }
+      return Promise.resolve({});
+    });
+    const restarted = request("Page.startScreencast", viewer, large);
+    await starting;
+    await request("Target.detachFromTarget", browser, { sessionId: viewer });
+    failStart(new Error("Restart refused"));
+    expect(await restarted).toHaveProperty("error");
+    expect(frameTo({ sessionId: 44, data: "x" })).toEqual([]);
+    expect(screencast().filter(([method]) => method === "Page.stopScreencast")).toHaveLength(1);
   });
 });
 
