@@ -156,7 +156,7 @@ export type RelayAgentActivityAggregateState = typeof RelayAgentActivityAggregat
 export const RelayManagedEndpointProviderKind = Schema.Literals([
   "manual",
   "cloudflare_tunnel",
-  "t3_relay",
+  "goat_relay",
 ]);
 export type RelayManagedEndpointProviderKind = typeof RelayManagedEndpointProviderKind.Type;
 
@@ -760,10 +760,10 @@ export const RelayDpopTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
 export const RelayJwtSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt" as const;
 export const RelayAccessTokenType = "urn:ietf:params:oauth:token-type:access_token" as const;
-export const RelayPublicClientId = Schema.Literals(["t3-mobile", "t3-web"]);
+export const RelayPublicClientId = Schema.Literals(["goat-mobile", "goat-web"]);
 export type RelayPublicClientId = typeof RelayPublicClientId.Type;
-export const RelayMobileClientId = "t3-mobile" as const;
-export const RelayWebClientId = "t3-web" as const;
+export const RelayMobileClientId = "goat-mobile" as const;
+export const RelayWebClientId = "goat-web" as const;
 
 export const RelayDpopAccessTokenRequest = Schema.Struct({
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
@@ -888,7 +888,7 @@ export type RelayCloudEnvironmentHealthProofPayload =
 
 /**
  * Sent with every webhook the relay forwards, signed with the relay's mint key
- * (`x-t3-relay-delivery`). The environment trusts the relay's delivery id,
+ * (`x-goat-relay-delivery`). The environment trusts the relay's delivery id,
  * receive time and trace context only when this verifies, since its webhook
  * URL can also be called directly.
  */

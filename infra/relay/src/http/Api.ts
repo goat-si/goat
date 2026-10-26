@@ -102,7 +102,7 @@ const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler
     ),
 );
 
-// T3 Code hosts never retry sooner than Retry-After, so during a Cloudflare
+// GOAT hosts never retry sooner than Retry-After, so during a Cloudflare
 // rate limit they wait out the pause instead of retrying into it.
 const appendCloudflareRetryAfter = (error: unknown) => {
   const retryAfterMillis = ManagedEndpointProvider.cloudflareRetryAfterMillis(error);
@@ -602,7 +602,7 @@ export const verifyEnvironmentTunnelRecoveryProof = Effect.fn(
     publicKey: input.environmentPublicKey,
     token: input.proof,
     typ: RELAY_MANAGED_TUNNEL_RECOVERY_TYP,
-    issuer: `t3-env:${input.environmentId}`,
+    issuer: `goat-env:${input.environmentId}`,
     audience: normalizeRelayIssuer(config.relayIssuer),
     nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
   }).pipe(

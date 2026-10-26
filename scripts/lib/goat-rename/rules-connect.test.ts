@@ -45,44 +45,31 @@ describe("GOAT Connect copy", () => {
     [
       "docs/operations/release.md",
       "After changing a variable or secret, run the **Deploy T3 Connect relay** workflow manually from",
+      "After changing a variable or secret, run the **Deploy GOAT Connect relay** workflow manually from",
     ],
     [
       "packages/shared/src/goatConnect.ts",
       " * GOAT Connect will replace T3 Connect (Clerk sign-in plus the hosted relay). Until it ships,",
+      " * GOAT Connect will replace upstream's Connect stack (Clerk sign-in plus the hosted relay). Until it ships,",
     ],
-    [
-      "docs/user/telemetry.md",
-      "GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
-    ],
-  ])("holds the line naming the upstream service in %s", (path, line) => {
-    expect(apply(path, line)).toBe(line);
-    expect(findResidue(path, line, KEEP_RULES)).toEqual([]);
-    expect(apply(path, `${line} T3 Connect`)).not.toBe(`${line} T3 Connect`);
-  });
-
-  it.each([
     [
       "docs/user/telemetry.md",
       "T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
-      "GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
-    ],
-    [
-      "docs/operations/release.md",
-      "Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect enabled",
-      "Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect enabled",
+      "GOAT also sends relay connection traces to Axiom to diagnose GOAT Connect connectivity.",
     ],
   ])(
-    "holds the upstream service on upstream's wording of the line in %s",
+    "renames the relay sentences, upstream wording included, in %s",
     (path, upstream, expected) => {
       expect(apply(path, upstream)).toBe(expected);
       expect(apply(path, expected)).toBe(expected);
+      expect(findResidue(path, expected, KEEP_RULES)).toEqual([]);
     },
   );
 
   it("relabels the retitled guides in the docs index and keeps the troubleshooting mirror", () => {
     const path = "docs/README.md";
     expect(apply(path, "- [T3 Connect](./internals/t3-connect.md)")).toBe(
-      "- [GOAT Connect](./internals/t3-connect.md)",
+      "- [GOAT Connect](./internals/goat-connect.md)",
     );
     expect(apply(path, "- [T3 Connect setup](./operations/connect-setup.md)")).toBe(
       "- [GOAT Connect setup](./operations/connect-setup.md)",
@@ -106,16 +93,19 @@ describe("GOAT Connect copy", () => {
     );
   });
 
-  it("keeps relay wire values and identifiers that the copy rule does not own", () => {
+  it("renames relay wire values and keeps the saved route kind and help URL", () => {
     const path = "apps/web/src/components/settings/SavedEnvironmentRows.tsx";
-    for (const source of [
-      'kind: "t3-connect"',
-      'fetch("/api/t3-connect/mint-credential")',
-      'headers["x-t3-relay-delivery-id"]',
-      "https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#the-host-runs-an-older-t3-code",
-    ]) {
-      expect(apply(path, source)).toBe(source);
-    }
+    const kind = 'kind: "t3-connect"';
+    expect(apply(path, kind)).toBe(kind);
+    expect(apply(path, 'fetch("/api/t3-connect/mint-credential")')).toBe(
+      'fetch("/api/goat-connect/mint-credential")',
+    );
+    expect(apply(path, 'headers["x-t3-relay-delivery-id"]')).toBe(
+      'headers["x-goat-relay-delivery-id"]',
+    );
+    const help =
+      "https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#the-host-runs-an-older-t3-code";
+    expect(apply("packages/contracts/src/environmentHttp.ts", help)).toBe(help);
   });
 });
 

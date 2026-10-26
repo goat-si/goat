@@ -37,7 +37,7 @@ describe("retryManagedTunnelRegistration", () => {
 });
 
 const recoveryConfig: RelayManagedEndpointRuntimeConfig = {
-  providerKind: "t3_relay",
+  providerKind: "goat_relay",
   connectorToken: "test-token",
 };
 

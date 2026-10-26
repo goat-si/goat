@@ -5,7 +5,7 @@ machine. That machine must stay running and reachable while you work.
 
 ## GOAT Connect (coming soon)
 
-GOAT Connect is coming soon. T3 Connect sign-in and managed tunnels are
+GOAT Connect is coming soon. Upstream's Connect sign-in and managed tunnels are
 unavailable. Connect your devices with direct pairing, [Tailscale HTTPS](#tailscale-https),
 or [SSH](#desktop-managed-ssh).
 
@@ -14,7 +14,7 @@ or [SSH](#desktop-managed-ssh).
 and exit successfully without changing your connection settings.
 
 Previously linked servers start normally and keep their stored link dormant.
-Saved environments with only a T3 Connect route show as unavailable; add a
+Saved environments with only a GOAT Connect route show as unavailable; add a
 direct or Tailscale route, or forget the environment in connection settings.
 
 ## Connect your phone to a hub

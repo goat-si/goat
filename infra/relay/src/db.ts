@@ -16,14 +16,14 @@ export class RelayDb extends Context.Service<
   EffectPgDatabase & {
     readonly $client: PgClient;
   }
->()("t3code-relay/db/RelayDb") {}
+>()("goat-relay/db/RelayDb") {}
 
 export class RelayTransactions extends Context.Service<
   RelayTransactions,
   {
     readonly withTransaction: RelayDb["Service"]["$client"]["withTransaction"];
   }
->()("t3code-relay/db/RelayTransactions") {
+>()("goat-relay/db/RelayTransactions") {
   static readonly layer = Layer.effect(
     RelayTransactions,
     Effect.gen(function* () {
@@ -47,7 +47,7 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
   const database =
     mode === "shared-database"
       ? yield* Planetscale.PostgresDatabase("RelayPostgresDatabase", {
-          name: "t3coderelay",
+          name: "goatrelay",
           region: { slug: "us-west" },
           clusterSize: "PS_80",
           migrations: { dir: schema.out, table: "relay_migrations" },
