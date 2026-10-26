@@ -20,6 +20,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
+  type OrchestrationV2RunTerminationCause,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
@@ -61,6 +62,12 @@ import {
   makeProviderFailureTurnItem,
 } from "@goat/provider-core/server/failure";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import {
+  makeInterruptResultTurnItem,
+  providerProcessExitCause,
+  terminalTerminationCause,
+} from "./runTerminationCause.ts";
+export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
@@ -676,6 +683,7 @@ export const layer: Layer.Layer<
         readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
         readonly interruptedProviderTurn?: OrchestrationV2ProviderTurn;
         readonly terminal: ProviderTerminalEvent;
+        readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
         readonly completedAt?: DateTime.Utc;
         readonly failureItemPersisted: boolean;
         /** A reported terminal preserves the adapter's acknowledged task state. */
@@ -739,9 +747,17 @@ export const layer: Layer.Layer<
         }
         const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
         const reason =
-          input.terminal.status === "interrupted" && input.loadRunInterruptReason !== undefined
+          (input.terminal.status === "interrupted" || input.terminal.status === "cancelled") &&
+          input.loadRunInterruptReason !== undefined
             ? yield* input.loadRunInterruptReason()
             : undefined;
+        const terminationCause: OrchestrationV2RunTerminationCause | undefined =
+          terminalTerminationCause(
+            input.terminal,
+            reason,
+            input.terminationCause,
+            USER_STOP_REASON,
+          );
         const open = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
         const hasOpenSubagentProjection =
           open.subagents.size > 0 ||
@@ -773,6 +789,9 @@ export const layer: Layer.Layer<
           ...runWithoutDelegatedCompletion,
           checkpointId: input.checkpointScope === null ? null : input.run.checkpointId,
           status: persistedStatus,
+          ...(persistedStatus === "waiting" || terminationCause === undefined
+            ? {}
+            : { terminationCause }),
           completedAt: persistedStatus === "waiting" ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
@@ -1711,6 +1730,9 @@ export const layer: Layer.Layer<
                   openRunOwnedSubagents: openSubagents,
                   ...(interruptedProviderTurn === null ? {} : { interruptedProviderTurn }),
                   completedAt,
+                  terminationCause: providerProcessExitCause(Cause.squash(cause))
+                    ? "provider_process_exit"
+                    : "provider_error",
                   terminal: makeFailedTerminalEvent(
                     makeProviderFailure({ cause: Cause.squash(cause), class: "unknown" }),
                     latestItemOrdinal + 1,
@@ -2064,6 +2086,9 @@ export const layer: Layer.Layer<
                                 expectedStatus: "running",
                               },
                               openRunOwnedSubagents: openSubagents,
+                              terminationCause: providerProcessExitCause(Cause.squash(cause))
+                                ? "provider_process_exit"
+                                : "provider_error",
                               terminal: makeFailedTerminalEvent(
                                 makeProviderFailure({
                                   cause: Cause.squash(cause),
@@ -2102,38 +2127,3 @@ export const layer: Layer.Layer<
  * always set one, so a missing reason means a person stopped the run.
  */
 export const USER_STOP_REASON = "Stopped by user";
-
-export function makeInterruptResultTurnItem(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly run: OrchestrationV2Run;
-  readonly rootNode: OrchestrationV2ExecutionNode;
-  readonly providerThread: OrchestrationV2ProviderThread;
-  /** The Stop's own reason, from its run_interrupt_request item. */
-  readonly reason: string | undefined;
-  readonly completedAt: DateTime.Utc;
-}): OrchestrationV2TurnItem {
-  return {
-    id: input.idAllocator.derive.runSignalTurnItem({
-      runId: input.run.id,
-      signal: "interrupt-result",
-    }),
-    threadId: input.run.threadId,
-    runId: input.run.id,
-    nodeId: input.rootNode.id,
-    providerThreadId: input.providerThread.id,
-    providerTurnId: input.rootNode.providerTurnId,
-    nativeItemRef: null,
-    parentItemId: input.idAllocator.derive.runSignalTurnItem({
-      runId: input.run.id,
-      signal: "interrupt-request",
-    }),
-    ordinal: input.run.ordinal * 100 + 98,
-    status: "interrupted",
-    title: "Interrupted",
-    startedAt: input.completedAt,
-    completedAt: input.completedAt,
-    updatedAt: input.completedAt,
-    type: "run_interrupt_result",
-    message: input.reason ?? "Stopped by the provider",
-  };
-}
