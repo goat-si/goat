@@ -4,11 +4,30 @@
  *
  * @module pageSecrets
  */
+import type { Page } from "playwright-core";
+
 import { redactCookieValues } from "./cookieValues.ts";
 
 const MASKED_VALUE = "••••••••";
 
 type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
+
+type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
+
+/** The page's URL and every frame's, cross-origin iframes included. */
+export const frameUrls = (page: CookiePage) => [
+  page.url(),
+  ...(typeof page.frames === "function" ? page.frames().map((frame) => frame.url()) : []),
+];
+
+/** Cookies sent to any of the tab's frames, plus URLs it showed earlier. */
+export const tabCookies = (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
+  const urls = [...new Set([...earlier, ...frameUrls(page)])].filter((url) =>
+    /^https?:/i.test(url),
+  );
+  // An empty list would return every cookie in the context.
+  return urls.length === 0 ? Promise.resolve([]) : page.context().cookies(urls);
+};
 
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(dotted ? text.replace(dotted, MASKED_VALUE) : text, cookies);

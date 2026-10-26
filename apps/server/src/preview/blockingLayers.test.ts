@@ -214,6 +214,40 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     expect(report.blocking).toMatchObject({ name: "Newsletter signup", selectorHint: "#signup" });
   });
 
+  it("reports a small modal a wrapper or button fills, not the child", async () => {
+    const report = await layers(
+      "<p>Short page.</p>" +
+        '<div id="confirm" role="alertdialog" aria-label="Delete file?" style="position:fixed;top:30%;left:30%;width:40%;height:30%;z-index:5">' +
+        '<div class="content" style="width:100%;height:100%"><button style="width:100%;height:100%">Delete</button></div></div>',
+    );
+    expect(report.blocking).toMatchObject({ name: "Delete file?", selectorHint: "#confirm" });
+  });
+
+  it("reports a modal inside a same-origin or cross-origin iframe", async () => {
+    const modal =
+      '<div id="sso" role="dialog" aria-modal="true" aria-label="Sign in" style="position:fixed;inset:20%"><div style="width:100%;height:100%"><button style="width:100%;height:100%">Continue</button></div></div>';
+    await context.route("http://frame.test/**", (route) =>
+      route.fulfill({ contentType: "text/html", body: modal }),
+    );
+    for (const frame of [`srcdoc='${modal}'`, 'src="http://frame.test/"']) {
+      await page.setContent(
+        `${article}<iframe ${frame} style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>`,
+      );
+      await page.frames()[1]?.waitForSelector("#sso");
+      const report = await describeLayers(page, control);
+      expect(report.blocking).toMatchObject({ name: "Sign in", selectorHint: "iframe #sso" });
+    }
+  });
+
+  it("does not flag body content, a chat widget or an iframe without a modal", async () => {
+    await page.setContent(
+      `${article}<iframe srcdoc="<main><p>Embedded article.</p><button>Play</button></main>"></iframe>` +
+        '<div role="dialog" aria-label="Chat" style="position:fixed;right:20px;bottom:20px;width:20%;height:15%"><div style="width:100%;height:100%"><button style="width:100%;height:100%">Chat</button></div></div>',
+    );
+    await page.frames()[1]?.waitForSelector("button");
+    expect(layersHeader(await describeLayers(page, control))).toBe("@layers none");
+  });
+
   it("reports a cookie banner docked to the bottom or the side", async () => {
     const bottom = await layers(
       article +

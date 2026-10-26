@@ -20,7 +20,7 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
-import { maskSecrets, maskTree, redactValue } from "./pageSecrets.ts";
+import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -687,7 +687,7 @@ const capture = async (
     >,
     readLayersHeader(input.page),
     capture,
-    input.page.context().cookies(input.page.url()),
+    tabCookies(input.page),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -733,14 +733,17 @@ const capture = async (
         state.refs.set(ref, nativeRef);
         return `[ref=${ref}]`;
       });
+  const masked = <A>(value: A) => redactValue(value, mask) as A;
   return {
     ...page,
+    url: mask(page.url),
+    title: mask(page.title),
     // Mask text before truncating so a value crossing the cut cannot leak its prefix.
     visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
     accessibilityTree,
-    consoleEntries: [...input.consoleEntries],
-    networkEntries: [...input.networkEntries],
-    actionTimeline: [...input.actionTimeline],
+    consoleEntries: masked([...input.consoleEntries]),
+    networkEntries: masked([...input.networkEntries]),
+    actionTimeline: masked([...input.actionTimeline]),
     ...(screenshot === undefined ? {} : { screenshot }),
   };
 };
@@ -1040,10 +1043,15 @@ export const scroll = async (
   }
 };
 
-/** Masks what an evaluation reads back as a snapshot would: cookie values and secret field values. */
-const redactEvaluation = async (page: Page, cdp: CDPSession, value: unknown) => {
+/** Masks what an evaluation reads back as a snapshot would, for URLs before and after it ran. */
+const redactEvaluation = async (
+  page: Page,
+  cdp: CDPSession,
+  value: unknown,
+  before: ReadonlyArray<string>,
+) => {
   const [cookies, fields] = await Promise.all([
-    page.context().cookies(page.url()),
+    tabCookies(page, before),
     openReaders(page, cdp).then(({ read }) => read()),
   ]);
   const values = fields.flat().filter((each) => typeof each === "string");
@@ -1056,6 +1064,7 @@ export const evaluate = async (
   input: PreviewAutomationEvaluateInput,
   timeoutMs: number,
 ) => {
+  const before = frameUrls(page);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -1092,7 +1101,7 @@ export const evaluate = async (
       { maximumBytes: MAX_EVALUATION_BYTES },
     );
   }
-  return redactEvaluation(page, cdp, value);
+  return redactEvaluation(page, cdp, value, before);
 };
 
 /** Native Playwright waits share one deadline; recheck the conjunction on the current document. */

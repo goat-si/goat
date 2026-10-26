@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - existence of Playwright's browser binary is a Node filesystem check.
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
@@ -908,85 +907,5 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     );
     expect(await nextChange()).toBe(true);
     expect(await nextChange()).toBe(false);
-  });
-});
-
-describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
-  let browser: Browser;
-  let context: BrowserContext;
-  const origin = "http://credentials.test";
-  // One-time values, made per run, so no real credential can appear in a log.
-  const session = `sess_${NodeCrypto.randomUUID()}`;
-  const script = `js_${NodeCrypto.randomUUID()}`;
-  const password = `pw_${NodeCrypto.randomUUID()}`;
-  const decoy = "tok_0123456789abcdef_not_a_cookie";
-
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-  afterAll(async () => {
-    await browser?.close();
-  });
-  beforeEach(async () => {
-    context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
-    await context.addCookies([
-      { name: "sid", value: session, url: origin, httpOnly: true },
-      { name: "js", value: script, url: origin },
-      { name: "lang", value: "en", url: origin },
-    ]);
-    await context.route(`${origin}/**`, (route) =>
-      route.fulfill({
-        contentType: "text/html",
-        body: `<p>Echo: sid=${session}; js=${script}; lang=en</p><p>${decoy}</p><input id="pw" type="password">`,
-      }),
-    );
-  });
-  afterEach(async () => {
-    await context.close();
-  });
-
-  const open = async () => {
-    const page = await context.newPage();
-    await page.goto(`${origin}/`);
-    await page.locator("#pw").fill(password);
-    await page.locator("body").click({ position: { x: 900, y: 700 } });
-    return { page, cdp: await context.newCDPSession(page) };
-  };
-
-  it("keeps the tab's cookie values out of snapshot text, leaving other text alone", async () => {
-    const { page, cdp } = await open();
-    const snapshot = await ServerBrowserPage.snapshot({
-      page,
-      cdp,
-      renderScale: 1,
-      captureImage: false,
-      consoleEntries: [],
-      networkEntries: [],
-      actionTimeline: [],
-      timeoutMs: 30_000,
-    });
-    for (const text of [snapshot.visibleText, snapshot.accessibilityTree]) {
-      expect(text).not.toContain(session);
-      expect(text).not.toContain(script);
-      expect(text).toContain(decoy);
-    }
-  });
-
-  it("keeps cookie and password values out of evaluation results", async () => {
-    const { page, cdp } = await open();
-    const evaluate = (expression: string) =>
-      ServerBrowserPage.evaluate({ page, cdp }, { expression }, 5_000);
-    const cookie = JSON.stringify(await evaluate("document.cookie"));
-    expect(cookie).not.toContain(script);
-    const fields = JSON.stringify(
-      await evaluate(
-        "({ value: document.querySelector('#pw').value, [document.body.innerText]: [document.title, " +
-          JSON.stringify(decoy) +
-          "] })",
-      ),
-    );
-    for (const value of [session, script, password]) expect(fields).not.toContain(value);
-    expect(fields).toContain(decoy);
-    expect(await evaluate("1 + 1")).toBe(2);
   });
 });

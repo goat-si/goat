@@ -101,15 +101,21 @@ const LAYERS_SCRIPT = `(gridSize) => {
     );
   // A hit anywhere inside an overlay counts for the outermost large layer over page content, so
   // an overlay split into panels is one layer, and an app shell or root around it is not chosen.
+  // A small modal filled by a wrapper or button still counts as the modal, not the child hit.
+  const isModal = (element) =>
+    (element.getAttribute("role") || "").toLowerCase() === "alertdialog" ||
+    element.getAttribute("aria-modal") === "true";
   const promote = (hit, stack) => {
     let overlay = null;
     let dialog = null;
+    let modal = null;
     for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
+      if (!modal && isModal(node)) modal = node;
       if (!qualifies(node)) continue;
       if (coversContent(node, stack)) overlay = node;
       if (isDialog(node)) dialog = node;
     }
-    return overlay || dialog || hit;
+    return overlay || dialog || modal || hit;
   };
   const collapse = (text) => (text || "").replace(/\\s+/g, " ").trim();
   const nameOf = (element) => {
@@ -279,8 +285,56 @@ export const layersHeader = (report: LayersReport) => {
   return `@layers blocking=${kind} "${name}" coverage=${coverage}%${edge} hint=${oneLine(blocking.selectorHint)}`;
 };
 
+type LayersPage = Pick<Page, "evaluate"> & Partial<Pick<Page, "frames" | "mainFrame">>;
+type Sampled = Omit<LayersReport, "blocking">;
+
+// Page-side code is passed as source: the server compiles without DOM types.
+const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
+  target.evaluate(`(${LAYERS_SCRIPT})(${grid})`) as Promise<Sampled>;
+
+/**
+ * A modal inside an iframe blocks that frame's part of the page. Only modals count there, so a
+ * frame's own header or full-frame app root never reads as blocking the page.
+ */
+const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["viewport"]) => {
+  if (typeof page.frames !== "function" || typeof page.mainFrame !== "function") return [];
+  const main = page.mainFrame();
+  const area = viewport.width * viewport.height;
+  const found = await Promise.all(
+    page
+      .frames()
+      .filter((frame) => frame !== main)
+      .map(async (frame) => {
+        const [sampled, box] = await Promise.all([
+          sampleIn(frame, grid).catch(() => null),
+          frame
+            .frameElement()
+            .then((element) => element.boundingBox())
+            .catch(() => null),
+        ]);
+        if (!sampled || !Array.isArray(sampled.candidates) || !box || area <= 0) return [];
+        const share = (box.width * box.height) / area;
+        return sampled.candidates.filter(isModal).map((candidate) => ({
+          ...candidate,
+          coverage: Math.min(1, candidate.coverage * share),
+          selectorHint: `iframe ${candidate.selectorHint}`,
+        }));
+      }),
+  );
+  return found.flat();
+};
+
+const sampleLayers = async (page: LayersPage, grid: number): Promise<Sampled> => {
+  const sampled = await sampleIn(page, grid);
+  if (!sampled || !Array.isArray(sampled.candidates)) return sampled;
+  const framed = await frameModals(page, grid, sampled.viewport);
+  return framed.length === 0
+    ? sampled
+    : { ...sampled, candidates: [...sampled.candidates, ...framed] };
+};
+
 export const describeLayers = async (
-  page: Pick<Page, "evaluate">,
+  page: LayersPage,
   control: Pick<SessionControl, "observe">,
   options: { readonly grid?: number } = {},
 ): Promise<LayersReport> => {
@@ -290,11 +344,7 @@ export const describeLayers = async (
       : DEFAULT_GRID;
   // Names are page text, so a private tab withholds them like any other observation.
   return control.observe(async () => {
-    // Page-side code is passed as source: the server compiles without DOM types.
-    const sampled = (await page.evaluate(`(${LAYERS_SCRIPT})(${grid})`)) as Omit<
-      LayersReport,
-      "blocking"
-    >;
+    const sampled = await sampleLayers(page, grid);
     return { ...sampled, blocking: pickBlocking(sampled.candidates) };
   });
 };
@@ -303,15 +353,8 @@ export const describeLayers = async (
  * Samples the page's layers and formats the @layers header line for a snapshot. Falls back to
  * @layers none when the page stub has no layer candidates.
  */
-export const readLayersHeader = async (
-  page: Pick<Page, "evaluate">,
-  grid = DEFAULT_GRID,
-): Promise<string> => {
-  // Page-side code is passed as source: the server compiles without DOM types.
-  const sampled = (await page.evaluate(`(${LAYERS_SCRIPT})(${grid})`).catch(() => null)) as Omit<
-    LayersReport,
-    "blocking"
-  > | null;
+export const readLayersHeader = async (page: LayersPage, grid = DEFAULT_GRID): Promise<string> => {
+  const sampled = await sampleLayers(page, grid).catch(() => null);
   if (!sampled || !Array.isArray(sampled.candidates)) return "@layers none";
   return layersHeader({ ...sampled, blocking: pickBlocking(sampled.candidates) });
 };
