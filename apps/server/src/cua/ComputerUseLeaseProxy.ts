@@ -237,8 +237,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  const release = (request: { readonly reservationId?: string; readonly connectionId?: string }) =>
-    releaseProxyCall(options, request);
+  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
+  const release = (
+    request: { readonly reservationId?: string; readonly connectionId?: string },
+    completed?: true,
+  ) => releaseProxyCall(options, request, completed);
 
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
@@ -282,7 +285,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
-              yield* release(request);
+              yield* release(request, true);
               if (gone() || paused !== undefined || idle) return;
               outstanding.delete(key);
               options.onCancelledRequestSettled?.(key);
@@ -321,7 +324,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 ...(failed ? { failed: true } : {}),
               });
               if (gone() || paused !== undefined) return;
-              yield* release(request);
+              yield* release(request, true);
               const latest = outstanding.get(key);
               if (gone() || paused !== undefined || idle || latest === undefined) return;
               outstanding.delete(key);

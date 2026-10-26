@@ -53,6 +53,9 @@ export const leaseUpdates = (input: {
     Effect.gen(function* () {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
+      // The proxy reading this exited, crashed or lost its connection: its app leases end (D17).
+      yield* leases.streamOpened(input.controlId);
+      yield* Effect.addFinalizer(() => leases.releaseApps(input.threadId, input.controlId));
       const wake = yield* Queue.sliding<void>(1);
       const subscription = yield* leases.subscribe;
       yield* PubSub.take(subscription).pipe(

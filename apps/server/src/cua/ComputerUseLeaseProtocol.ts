@@ -8,17 +8,31 @@ import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { callResource } from "./ComputerUseCallReservations.ts";
+import type { ListedApp } from "./ComputerUseScope.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
 const MAX_NAMED_NODES = 4_096;
+
+/** The pid a window call acts on; desktop calls and reads act on no single app. */
+const windowPid = (name: unknown, args: unknown) => {
+  const resource = callResource({ name: typeof name === "string" ? name : "", args });
+  return typeof resource === "object" ? resource.pid : undefined;
+};
+
+/** The app a window call acts on, by the id its scope check uses, for its app lease (D17). */
+export const callApp = (name: unknown, args: unknown, listed: ReadonlyMap<number, ListedApp>) => {
+  const pid = windowPid(name, args);
+  return pid === undefined ? undefined : listed.get(pid)?.id;
+};
+
+/** Ids of the lease proxy's own requests to the driver; their answers never reach the provider. */
+export const OWN_ID = "goat-proxy:";
 
 /**
  * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
  * other tool waits for that proof (#1358).
  */
-/** Ids of the lease proxy's own requests to the driver; their answers never reach the provider. */
-export const OWN_ID = "goat-proxy:";
-
 export const DISPLAY_PROOF_FREE: ReadonlySet<string> = new Set([
   "check_permissions",
   "get_guide",
