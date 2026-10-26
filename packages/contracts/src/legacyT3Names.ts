@@ -284,6 +284,12 @@ export const LEGACY_RESOURCE_MONITOR_BINARY_NAME = "t3-resource-monitor";
 export const LEGACY_BROWSER_SECRET_BINARY_NAME = "t3-browser-secret";
 
 /**
+ * Electron's initial `app.name` in packaged desktop builds before the staged package became
+ * `goat`. Those builds created a safeStorage key under it before setting the GOAT runtime name.
+ */
+export const LEGACY_PACKAGED_RUNTIME_NAME = "t3code";
+
+/**
  * Electron runtime identity before D13. The runtime name keys the safeStorage key (macOS Keychain
  * item and Linux keyring entry `<name> <stage> Safe Storage`); the renderer scheme keys every
  * origin-scoped store. The desktop copies both forward on first launch and leaves the originals

@@ -38,6 +38,18 @@
   - A desktop from this change needs servers that accept the `goat://app` origin, and a Clerk
     instance that allows the `goat://app/` redirect.
 
+## Legacy readers and their support cutoff
+
+GOAT keeps reading the names that builds before this decision wrote: the safeStorage key copy from the
+old runtime name, the renderer-origin copy from the old scheme, the old scheme registration (also used
+by prompt links and the Codex auth handoff reader), the old desktop origins in the server's CORS list
+and provider auth return URLs, and the old hosted app origin in shared links. Removing any of them
+strands installs that update directly from such a build. They go only together, at a support cutoff: a
+published minimum version below which a direct update is no longer supported, chosen when the version
+telemetry shows almost no installs below it. Until then each stays. New code reads old spellings through
+`packages/contracts/src/legacyT3Names.ts`, or on a line marked `goat-rename: legacy` when the name
+belongs to one reader.
+
 ## Frozen legacy identities
 
 Decided 2026-10-20 in #110, #111 and #112. The names below keep their T3 spelling through the
@@ -45,10 +57,14 @@ first stable release. Renaming one is a migration of installed state. It is revi
 with a migration that has been verified on real installs, and the rename tooling keeps each one
 (`scripts/lib/goat-rename/rules.ts`).
 
-- **Linux desktop entry `t3code.desktop`, `StartupWMClass` `t3code`, and the deb package
-  `t3code`.** Docks match windows to pinned launchers, URL handlers and file associations through
-  the entry name and WM class, so a rename orphans what users set up. A renamed deb package installs
-  next to the old one instead of upgrading it. Nothing users see gets better.
+- **Linux desktop entry `t3code.desktop` and `StartupWMClass` `t3code`.** Docks match windows to
+  pinned launchers, URL handlers and file associations through the entry name and WM class, so a
+  rename orphans what users set up. The staged `desktopName` with `syncDesktopName` keeps both
+  while the executable changes. The deb package and executable are renamed (plan 261026 wp9a,
+  verification on the next nightly pending): the `goat` package Replaces, Conflicts with and
+  Provides `t3code`, so it upgrades an installed `t3code` package in place, and the executable is
+  `goat-desktop` because `goat` is the CLI. `t3code` stays in `/opt/GOAT` as a symlink for good: the
+  deb updater relaunches the old execPath, and older CLI shims and per-user desktop entries call it.
 - **Preview browser partitions (`persist:t3code-preview-*`).** Each partition holds the cookies
   and logins of a preview tab. Electron has no supported way to copy a partition, so a rename signs
   every user out of every previewed site.

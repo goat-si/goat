@@ -94,10 +94,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
   ["apps/server/src/provider/CodexChatGptAuth.ts", /(?:agent_name_hint: "T3 Code")/g],
   ["apps/server/src/provider/CodexProvider.ts", /(?:CODEX_CLIENT_NAME = "T3 Code")/g],
   [
-    "apps/server/src/telemetry/AnalyticsService.ts",
-    exactLines(" * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards"),
-  ],
-  [
     "docs/operations/mobile-app-store-screenshots.md",
     exactLines(
       "2. Creates T3 Code, React, and Linux Git repositories with recognizable favicons, feature branches,",
@@ -148,12 +144,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
       "  `T3 Code <stage>` on `t3code://app`, without losing saved secrets or renderer storage and with a",
       '  from `app.name` as it stands before the event loop starts. `app.setName("T3 Code <stage>")` ran',
       "    copy the key of the initial package name (or `T3 Code <stage>`) to the new name. All ciphertext",
-    ),
-  ],
-  [
-    "structure/decisions/ADR-0022-cua-driver-computer-use.md",
-    exactLines(
-      "  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697, by",
     ),
   ],
 ];

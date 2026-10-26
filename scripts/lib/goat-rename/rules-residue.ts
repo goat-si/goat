@@ -87,12 +87,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D3/D5: explains the compatibility input, not the running product.",
   ),
   keep(
-    "legacy-desktop-key-owner",
-    ["apps/desktop/src/app/DesktopSafeStorageSiblingKeys.ts"],
-    /\bt3code\b/g,
-    "ADR-0014: initial package name owns the existing encryption key.",
-  ),
-  keep(
     "upstream-native-dependency-provenance",
     ["apps/mobile/deps/README.md", "docs/operations/mobile-screens-fork.md"],
     /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.(?:43|45)|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
@@ -226,12 +220,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ["packages/shared/src/testing/testTempSandbox.ts"],
     /t3code-/g,
     "ADR-0014/D13: temp guard accounts for installed desktop control socket identities.",
-  ),
-  keep(
-    "legacy-home-explanation",
-    ["scripts/dev-runner.ts"],
-    /legacy T3 home/g,
-    "D8: seed source can still be the pre-rename home.",
   ),
   keep(
     "legacy-root-explanation",

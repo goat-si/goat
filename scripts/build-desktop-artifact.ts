@@ -35,6 +35,10 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import {
+  LEGACY_LINUX_EXECUTABLE_NAME,
+  LINUX_EXECUTABLE_NAME,
+} from "./link-legacy-linux-executable.ts";
 import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper.ts";
 
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
@@ -1020,6 +1024,7 @@ interface ResolvedBuildOptions {
 
 interface StagePackageJson {
   readonly name: string;
+  readonly desktopName: string;
   readonly version: string;
   readonly buildVersion: string;
   readonly goatCommitHash: string;
@@ -3087,6 +3092,19 @@ export function resolveDesktopAppId(version: string): string {
     : DESKTOP_APP_ID;
 }
 
+/** Desktop entry of packaged Linux builds; also their WM class (ADR-0014). */
+const LINUX_DESKTOP_NAME = "t3code.desktop"; // goat-rename: legacy: installed desktop entry.
+/** The deb package was t3code before it became goat. */
+const LEGACY_DEB_PACKAGE = LEGACY_LINUX_EXECUTABLE_NAME;
+export const LEGACY_DEB_PACKAGE_RELATIONS = [
+  "--replaces",
+  LEGACY_DEB_PACKAGE,
+  "--conflicts",
+  LEGACY_DEB_PACKAGE,
+  "--provides",
+  LEGACY_DEB_PACKAGE,
+] as const;
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -3240,9 +3258,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.toolsets = { appimage: "1.0.3" };
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    // withComputerUseHelper sets its own afterPack for signed mac builds; a Linux helper would
+    // have to run both hooks.
+    buildConfig.afterPack = NodeURL.fileURLToPath(
+      new URL("./link-legacy-linux-executable.ts", import.meta.url),
+    );
     buildConfig.linux = {
       target: target === "AppImage" ? [target, "deb"] : [target],
-      executableName: "t3code",
+      executableName: LINUX_EXECUTABLE_NAME,
+      // The desktop entry and WM class keep the name docks and URL handlers already know
+      // (ADR-0014), so they follow the staged desktopName instead of the executable.
+      syncDesktopName: true,
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
@@ -3262,9 +3288,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     };
     buildConfig.deb = {
       // FPM runs outside the staged app directory, so source paths must be absolute.
+      // electron-builder inserts these just before its positional file mappings, so the options
+      // come first. They let the goat package upgrade an installed t3code package in place.
       fpm: [
+        ...LEGACY_DEB_PACKAGE_RELATIONS,
         `${path.join(repoRoot, "apps/desktop/resources/linux/si.goat.desktop.metainfo.xml")}=/usr/share/metainfo/si.goat.desktop.metainfo.xml`,
-        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/t3code/copyright`,
+        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/goat/copyright`,
       ],
       // Debian 13 and Ubuntu 24.04 use 64-bit-time names; retain old-name fallbacks.
       depends: [
@@ -4421,7 +4450,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: "goat",
+    desktopName: LINUX_DESKTOP_NAME,
     version: appVersion,
     buildVersion: appVersion,
     goatCommitHash: commitHash,
