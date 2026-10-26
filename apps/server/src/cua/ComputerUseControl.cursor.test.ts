@@ -24,16 +24,35 @@ describe("scoped computer-use cursor", () => {
     const shown = targeted(control, {
       report: { identity: { ...owner, sequence: 1 }, cursor: point, phase: "moving" },
     })!;
+    expect(shown.cursor?.phase).toBe("acting");
+    expect(shown.cursorReport?.phase).toBe("moving");
     const hidden = targeted(shown, {
       report: { identity: { ...owner, sequence: 2 }, cursor: null, phase: "hidden" },
     })!;
     expect(hidden.cursor).toBeUndefined();
     expect(hidden.cursorReport?.identity.sequence).toBe(2);
-    expect(targeted(hidden, {
-      report: { identity: { ...owner, sequence: 1 }, cursor: point, phase: "moving" },
-    })).toBeUndefined();
-    expect(targeted(hidden, {
-      report: { identity: { ...owner, generation: 2, sequence: 1 }, cursor: point, phase: "moving" },
-    })?.cursor).toEqual(point);
+    expect(
+      targeted(hidden, {
+        report: { identity: { ...owner, sequence: 1 }, cursor: point, phase: "moving" },
+      }),
+    ).toBeUndefined();
+    expect(
+      targeted(hidden, {
+        report: {
+          identity: { ...owner, generation: 2, sequence: 1 },
+          cursor: point,
+          phase: "moving",
+        },
+      })?.cursor,
+    ).toEqual({ ...point, phase: "acting" });
+    expect(
+      targeted(control, {
+        report: {
+          identity: { ...owner, sequence: 1 },
+          cursor: { ...point, phase: "thinking" },
+          phase: "thinking",
+        },
+      })?.cursor?.phase,
+    ).toBe("resting");
   });
 });

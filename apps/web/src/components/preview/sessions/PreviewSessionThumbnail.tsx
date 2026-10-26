@@ -166,7 +166,8 @@ function DesktopThumbnail(props: {
           src={shown}
         />
         {props.stopped || size === null ? null : <AgentCursor session={session} frame={size} />}
-        {session.target.kind === "desktop" && session.target.motionSupport === "unsupported" ? (
+        {session.target.kind === "desktop" &&
+        (session.target.motionSupport ?? "unsupported") === "unsupported" ? (
           <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
             Native cursor motion unavailable
           </span>
