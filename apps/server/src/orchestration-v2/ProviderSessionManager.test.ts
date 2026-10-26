@@ -5941,7 +5941,6 @@ it.effect(
       const state = yield* Ref.make(emptyState);
       const enabled = yield* Ref.make(false);
       const acquires = yield* Ref.make(0);
-      const controls = yield* Ref.make<ReadonlyArray<string>>([]);
       const cuaDriver = {
         command: "/resources/cua-driver",
         args: ["mcp"],
@@ -5968,13 +5967,12 @@ it.effect(
 
         // Opened while computer use is off.
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);
-        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy. The
-        // thread is in full access, so that turn's control covers every app without a grant (D16).
+        // Enabled later: the same session's next turn carries the driver, behind GOAT's proxy, which
+        // launches with the thread alone and reads its control at call time (#1629).
         yield* Ref.set(enabled, true);
         const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
         assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
         assert.isTrue(enabledDriver?.args.includes(threadId));
-        assert.include(yield* Ref.get(controls), "control:every-app");
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.
         assert.isUndefined((yield* turn({ ...runtimePolicy, interactionMode: "plan" }))?.cuaDriver);
@@ -6000,7 +5998,6 @@ it.effect(
             cuaDriverLayer: ComputerUseTestkit.layerInteractive({
               enabled: Ref.get(enabled),
               acquire: Ref.updateAndGet(acquires, (count) => count + 1).pipe(Effect.as(cuaDriver)),
-              controlTaken: (controlId) => Ref.update(controls, (taken) => [...taken, controlId]),
             }),
           }),
         ),
