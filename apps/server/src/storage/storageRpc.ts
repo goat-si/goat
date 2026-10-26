@@ -6,13 +6,17 @@ import {
 import * as Effect from "effect/Effect";
 
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
+import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as StorageReclaim from "./StorageReclaim.ts";
 
 /** The storage RPCs for one client session, kept here so ws.ts only spreads them in. */
 export const storageRpcHandlers = Effect.fn("storageRpcHandlers")(function* (sessionId: string) {
   const reclaim = yield* StorageReclaim.StorageReclaim;
   const pressure = yield* HostPressureMonitor.HostPressureMonitor;
+  const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
   return {
+    [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
+    [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
     [WS_METHODS.serverGetStorageUsage]: (input: ServerGetStorageUsageInput) =>
       reclaim.usage({ rescan: input.rescan === true }),
     [WS_METHODS.serverCleanUpStorageItems]: (input: StorageCleanInput) =>
