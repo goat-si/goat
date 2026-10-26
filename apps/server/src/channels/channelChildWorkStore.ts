@@ -49,6 +49,8 @@ const keyFor = (taskId: ChannelTaskId, childWorkId: ChannelChildWorkId) =>
 const prefixFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ":";
 // The exclusive scan bound swaps the trailing ":" for its successor, matching listWorkerRuns.
 const afterFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ";";
+const isDelegateSurface = (surface: ChannelChildWork["surface"]) =>
+  surface === "delegate_local" || surface === "delegate_remote";
 
 export type ChannelChildWorkAdmitResult =
   | { readonly _tag: "admitted" }
@@ -163,8 +165,11 @@ const make = Effect.gen(function* () {
             SELECT value_json FROM channel_runtime_state
             WHERE key >= ${prefixFor(record.taskId)} AND key < ${afterFor(record.taskId)}
           `;
-          const active = readRows(siblings).filter((sibling) =>
-            isChannelChildWorkActive(sibling.state),
+          const delegate = isDelegateSurface(record.surface);
+          const active = readRows(siblings).filter(
+            (sibling) =>
+              isChannelChildWorkActive(sibling.state) &&
+              isDelegateSurface(sibling.surface) === delegate,
           ).length;
           if (active >= capacity) {
             return { _tag: "at_capacity" } as const satisfies ChannelChildWorkAdmitResult;

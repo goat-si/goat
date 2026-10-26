@@ -537,20 +537,29 @@ describe("OrchestratorMcpService delegate child work", () => {
           const committedOne = yield* f.delegate("bravo commits");
           const rejectedOne = yield* f.delegate("charlie rejected");
           const unreadableOne = yield* f.delegate("delta commits unreadable");
+          for (let i = 1; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE - 2; i += 1) {
+            assert.equal((yield* f.delegate("extra commits " + i)).code, "orchestration_error");
+          }
           assert.equal(preCommit.code, "orchestration_error");
           assert.equal(committedOne.code, "orchestration_error");
           assert.equal(rejectedOne.code, "orchestration_error");
           assert.equal(unreadableOne.code, "orchestration_error");
           // Only the never-committed and the rejected commands freed their slots, so the
-          // accepted one and the unreadable one fill the budget.
+          // accepted ones and the unreadable one fill the budget.
           const overflow = yield* f.delegate("epsilon never runs");
           assert.equal(overflow.code, "capacity_exceeded");
-          assert.equal((yield* Ref.get(f.dispatched)).length, 4);
+          assert.equal(
+            (yield* Ref.get(f.dispatched)).length,
+            ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE + 2,
+          );
 
           const records = yield* f.records();
-          assert.equal(records.length, 4);
+          assert.equal(records.length, ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE + 2);
           assert.equal(records.filter((record) => record.state === "released").length, 2);
-          assert.equal(records.filter((record) => record.state === "launched").length, 2);
+          assert.equal(
+            records.filter((record) => record.state === "launched").length,
+            ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE,
+          );
         }),
       ),
   );

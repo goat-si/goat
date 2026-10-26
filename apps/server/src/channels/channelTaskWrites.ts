@@ -5,8 +5,13 @@
  * @module channelTaskWrites
  */
 import {
+  type ChannelBindingId,
   type ChannelBotRef,
+  type ChannelConversationId,
+  type ChannelInputId,
+  type ChannelReceptionAction,
   type ChannelReplyAddress,
+  type ChannelRequester,
   type ChannelTask,
   type ChannelTaskChip,
   ChannelTaskEvent,
@@ -17,7 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { deliveryIdFor, taskEventIdFor } from "./channelIds.ts";
+import { deliveryIdFor, taskEventIdFor, taskIdFor } from "./channelIds.ts";
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 
 const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
@@ -198,3 +203,84 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
   });
   return prepared.next;
 });
+
+/** Builds the ledger task(s) and initial events a `create_task` or `run_turn` reception commits. */
+export const makeCreatedTasks = (input: {
+  readonly action: Extract<ChannelReceptionAction, { readonly type: "create_task" | "run_turn" }>;
+  readonly inputId: ChannelInputId;
+  readonly conversationId: ChannelConversationId;
+  readonly originBindingId: ChannelBindingId;
+  readonly originAddress: ChannelReplyAddress;
+  readonly requester: ChannelRequester;
+  readonly notesChangeRequested?: ChannelTask["notesChangeRequested"] | undefined;
+  readonly now: string;
+}): ReadonlyArray<{ readonly task: ChannelTask; readonly event: ChannelTaskEvent }> => {
+  const specs: ReadonlyArray<{
+    readonly title: ChannelTask["title"];
+    readonly instruction: string;
+    readonly kind?: ChannelTask["kind"] | undefined;
+    readonly projectId?: ChannelTask["projectId"] | undefined;
+    readonly host?: ChannelTask["host"] | undefined;
+    readonly notesChangeRequested?: ChannelTask["notesChangeRequested"] | undefined;
+  }> = [
+    {
+      title: input.action.title,
+      instruction: input.action.instruction,
+      ...(input.action.type === "run_turn" ? { kind: "turn" as const } : {}),
+      ...(input.action.type !== "create_task" || input.action.projectId === undefined
+        ? {}
+        : { projectId: input.action.projectId }),
+      ...(input.action.type !== "create_task" || input.action.host === undefined
+        ? {}
+        : { host: input.action.host }),
+      ...(input.notesChangeRequested === undefined
+        ? {}
+        : { notesChangeRequested: input.notesChangeRequested }),
+    },
+    ...(input.action.type === "create_task" ? (input.action.additionalTasks ?? []) : []),
+  ];
+  return specs.map((spec, index) => {
+    const taskId = taskIdFor(input.inputId, index);
+    const task: ChannelTask = {
+      taskId,
+      ...(spec.kind === undefined ? {} : { kind: spec.kind }),
+      conversationId: input.conversationId,
+      originBindingId: input.originBindingId,
+      originAddress: input.originAddress,
+      originInputId: input.inputId,
+      requester: input.requester,
+      title: spec.title,
+      instruction: spec.instruction,
+      status: "received",
+      version: 1,
+      generation: 1,
+      ...(spec.projectId === undefined ? {} : { projectId: spec.projectId }),
+      ...(spec.host === undefined ? {} : { host: spec.host }),
+      ...(spec.notesChangeRequested === undefined
+        ? {}
+        : { notesChangeRequested: spec.notesChangeRequested }),
+      openQuestions: [],
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+    return {
+      task,
+      event: makeTaskEvent(
+        { ...task, version: 0 },
+        {
+          type: "task.created",
+          payload: {
+            title: task.title,
+            instruction: task.instruction,
+            originInputId: input.inputId,
+            ...(task.notesChangeRequested === undefined
+              ? {}
+              : { notesChangeRequested: task.notesChangeRequested }),
+          },
+        },
+        input.now,
+        { eventId: taskEventIdFor(taskId, 1) },
+      ),
+    };
+  });
+};
