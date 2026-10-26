@@ -34,7 +34,7 @@ export const createScreenDispatchRouter = (hosts: {
       call.method === "bind_app" ||
       call.method === "launch_app"
         ? "app"
-        : call.method === "list_tabs" || call.method === "bind_tab" || call.method === "open_tab"
+        : call.method === "list_tabs" || call.method === "select_tab" || call.method === "open_tab"
           ? "tab"
           : undefined);
     if (kind === undefined) return Effect.fail({ ...unavailable("app"), code: "target_missing" });

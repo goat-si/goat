@@ -50,7 +50,7 @@ export const ScreenMethod = Schema.Literals([
   "launch_app",
   "end_foreground",
   "list_tabs",
-  "bind_tab",
+  "select_tab",
   "open_tab",
   "claim_tab",
   "keep_tab",

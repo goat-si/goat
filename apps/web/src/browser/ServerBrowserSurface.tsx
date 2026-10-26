@@ -16,7 +16,7 @@ import {
 } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   type EnvironmentId,
-  type ComputerUseCursorIdentity,
+  type AgentCursorOwner,
   type AgentCursorState,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
@@ -971,7 +971,7 @@ interface AgentCursorPlacement {
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
-  readonly owner?: ComputerUseCursorIdentity;
+  readonly owner?: AgentCursorOwner;
   readonly cursorPhase?: AgentCursorState;
 }
 function placeAgentCursor(

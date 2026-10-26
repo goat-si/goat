@@ -1,12 +1,8 @@
-import type {
-  ComputerUseCursorEvent,
-  ComputerUseCursorIdentity,
-  ScreenTargetRef,
-} from "@goat/contracts";
+import type { ComputerUseCursorEvent, AgentCursorOwner, ScreenTargetRef } from "@goat/contracts";
 import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-type Owner = Omit<ComputerUseCursorIdentity, "sequence">;
+type Owner = Omit<AgentCursorOwner, "sequence">;
 type Sink = (event: ComputerUseCursorEvent) => void;
 type State = { owner: Owner; sequence: number; pending: Set<number>; ended: boolean };
 
@@ -15,7 +11,9 @@ export class ScreenCursorPhases {
   private readonly targets = new Map<string, State>();
   private readonly publish: Sink;
 
-  constructor(publish: Sink) { this.publish = publish; }
+  constructor(publish: Sink) {
+    this.publish = publish;
+  }
 
   private key(ref: ScreenTargetRef) {
     return `${ref.environmentId}\u0000${ref.runId}\u0000${ref.turnId}\u0000${ref.id}`;
@@ -45,7 +43,8 @@ export class ScreenCursorPhases {
 
   hostCallStarted(ref: ScreenTargetRef, callId: number) {
     const state = this.state(ref);
-    if (state.ended || state.owner.generation !== ref.generation || state.pending.has(callId)) return;
+    if (state.ended || state.owner.generation !== ref.generation || state.pending.has(callId))
+      return;
     state.pending.add(callId);
     this.publish({
       op: "show",

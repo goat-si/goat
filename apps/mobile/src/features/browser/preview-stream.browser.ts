@@ -8,7 +8,7 @@ import {
   type PreviewStreamPointer,
   type PreviewStreamViewport,
 } from "@goat/client-runtime/preview/server-browser-stream";
-import type { ComputerUseCursorIdentity } from "@goat/contracts";
+import type { AgentCursorOwner } from "@goat/contracts";
 
 import type { PreviewStreamConfiguration, PreviewStreamMessage } from "./preview-stream-document";
 
@@ -186,7 +186,8 @@ export function start(configuration: PreviewStreamConfiguration) {
             agentCursorOwner.turnId !== state.identity.turnId ||
             agentCursorOwner.targetId !== state.identity.targetId ||
             agentCursorOwner.generation !== state.identity.generation
-          ) agentCursor.style.opacity = "0";
+          )
+            agentCursor.style.opacity = "0";
         },
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),
@@ -280,7 +281,7 @@ export function start(configuration: PreviewStreamConfiguration) {
   }
 
   let agentCursorTimer: ReturnType<typeof setTimeout> | null = null;
-  let agentCursorOwner: ComputerUseCursorIdentity | null = null;
+  let agentCursorOwner: AgentCursorOwner | null = null;
   const showAgentCursor = (pointer: PreviewStreamPointer) => {
     if (!viewport || canvas.width === 0 || canvas.height === 0 || control?.controller === "you")
       return;

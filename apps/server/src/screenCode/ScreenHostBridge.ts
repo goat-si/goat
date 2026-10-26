@@ -218,7 +218,7 @@ export class ScreenHostBridge {
         "bind_app",
         "launch_app",
         "list_tabs",
-        "bind_tab",
+        "select_tab",
         "open_tab",
       ].includes(call.method)
     )

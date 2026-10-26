@@ -83,7 +83,7 @@ it.live(
             availability: () => Effect.succeed([{ kind: "tab", available: true }]),
             dispatch: (call) =>
               Effect.succeed(
-                call.method === "bind_tab"
+                call.method === "select_tab"
                   ? {
                       value: {
                         targetRef,
@@ -462,7 +462,7 @@ it.live("one cell reads a tab and an app through one Target API", () => {
         "get_accessibility_tree",
       ]);
       expect(result.journal.map((entry) => entry.receipt.method)).toEqual([
-        "bind_tab",
+        "select_tab",
         "bind_app",
         "observe",
         "get_accessibility_tree",

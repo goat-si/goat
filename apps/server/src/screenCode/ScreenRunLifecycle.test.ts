@@ -276,7 +276,7 @@ it.live(
             availability: () => Effect.succeed([{ kind: "tab", available: true }]),
             dispatch: (call) =>
               Effect.sync(() =>
-                call.method === "bind_tab"
+                call.method === "select_tab"
                   ? {
                       value: {
                         targetRef: {
@@ -420,7 +420,7 @@ it.live.each([
         dispatcher: {
           availability: () => Effect.succeed([{ kind: "tab", available: true }]),
           dispatch: (call) =>
-            call.method === "bind_tab"
+            call.method === "select_tab"
               ? Effect.succeed({
                   value: {
                     targetRef: {
@@ -589,7 +589,7 @@ it.live("terminal run cleanup is exact and a queued user message invalidates old
       availability: () => Effect.succeed([{ kind: "tab", available: true }]),
       dispatch: (call) =>
         Effect.succeed(
-          call.method === "bind_tab"
+          call.method === "select_tab"
             ? {
                 value: {
                   targetRef: {
@@ -697,7 +697,7 @@ it.live.each(["new message", "turn end"] as const)(
         dispatcher: {
           availability: () => Effect.succeed([{ kind: "tab", available: true }]),
           dispatch: (call) =>
-            call.method === "bind_tab"
+            call.method === "select_tab"
               ? Effect.succeed({
                   value: {
                     targetRef: {

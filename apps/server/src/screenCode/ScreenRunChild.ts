@@ -35,7 +35,7 @@ const methods = [
   "launch_app",
   "end_foreground",
   "list_tabs",
-  "bind_tab",
+  "select_tab",
   "open_tab",
   "claim_tab",
   "keep_tab",
@@ -217,7 +217,7 @@ export async function runScreenChild(
           return result;
         },
         app: async (query = {}) => __target(await __call('bind_app', query)),
-        tab: async (query = {}) => __target(await __call('bind_tab', query)),
+        tab: async (query = {}) => __target(await __call('select_tab', query)),
         openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
         ${methods
           .map(
