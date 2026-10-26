@@ -1,0 +1,272 @@
+// @effect-diagnostics globalDate:off preferSchemaOverJson:off - This isolated child uses a hard wall deadline and JSON pipe frames.
+import * as NodeReadline from "node:readline";
+import { newQuickJSWASMModuleFromVariant, newVariant } from "quickjs-emscripten-core";
+import BellardSync from "@jitl/quickjs-wasmfile-release-sync";
+import * as Schema from "effect/Schema";
+import {
+  ScreenRunBoot,
+  ScreenRunCell,
+  ScreenHostReply,
+  type ScreenHostCall,
+  type ScreenRunLimits,
+  type ScreenRunResult,
+} from "@goat/contracts";
+import { checkedScreenWasm } from "./ScreenRuntimeAsset.ts";
+import { screenBytes, screenRunLimits } from "./ScreenRunLimits.ts";
+
+const BOOT_MAX = 16 * 1024;
+const FRAME_MAX = 96 * 1024;
+const methods = [
+  "list_apps",
+  "list_windows",
+  "bind_app",
+  "get_window_state",
+  "get_accessibility_tree",
+  "verify_state",
+  "screenshot",
+  "click",
+  "right_click",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "set_value",
+  "bring_to_front",
+  "launch_app",
+  "release_foreground",
+] as const;
+
+type ChildResult = Pick<
+  ScreenRunResult,
+  "cellId" | "status" | "value" | "console" | "truncated"
+> & {
+  t: "result";
+  unawaitedCallIds?: number[];
+};
+
+/** This entry accepts only parent-authenticated pipe frames and holds no GOAT credentials. */
+export async function runScreenChild(
+  input: NodeJS.ReadableStream,
+  output: NodeJS.WritableStream,
+): Promise<void> {
+  const lines = NodeReadline.createInterface({ input, crlfDelay: Infinity });
+  const iterator = lines[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (first.done || screenBytes(first.value) > BOOT_MAX)
+    throw new Error("Invalid screen child boot");
+  const boot = Schema.decodeUnknownSync(ScreenRunBoot)(JSON.parse(first.value));
+  const limits = screenRunLimits(boot.limits);
+  const { bytes } = await checkedScreenWasm(boot.wasmPath, boot.wasmSha256);
+  const Wasm = Reflect.get(globalThis, "WebAssembly") as {
+    Memory: new (input: { initial: number; maximum: number }) => { readonly buffer: ArrayBuffer };
+  };
+  const wasmMemory = new Wasm.Memory({ initial: 256, maximum: 1024 });
+  const module = await newQuickJSWASMModuleFromVariant(
+    newVariant(BellardSync as unknown as Parameters<typeof newVariant>[0], {
+      wasmMemory: wasmMemory as Parameters<typeof newVariant>[1]["wasmMemory"],
+      wasmBinary: bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    }) as Parameters<typeof newQuickJSWASMModuleFromVariant>[0],
+  );
+  if (module.getWasmMemory() !== wasmMemory) throw new Error("QuickJS ignored fixed WASM memory");
+  let runtime = module.newRuntime();
+  let vm = runtime.newContext();
+  runtime.setMemoryLimit(limits.heapBytes);
+  runtime.setMaxStackSize(limits.stackBytes);
+  let cellId = "";
+  let deadline = 0;
+  let nextCallId = 0;
+  let admitted = false;
+  let callCount = 0;
+  let consoleBytes = 0;
+  let linesOut: string[] = [];
+  let truncated: string[] = [];
+  const pending = new Map<number, ReturnType<typeof vm.newPromise>>();
+  const emit = (frame: unknown) => output.write(`${JSON.stringify(frame)}\n`);
+  const initialize = () => {
+    const host = vm.newFunction("__host", (methodHandle, argsHandle) => {
+      const promise = vm.newPromise();
+      const method = vm.getString(methodHandle);
+      const argsJson = vm.getString(argsHandle);
+      if (
+        !admitted ||
+        !methods.includes(method as (typeof methods)[number]) ||
+        ++callCount > limits.callsPerCell ||
+        pending.size >= limits.pendingCalls ||
+        screenBytes(argsJson) > limits.argBytes
+      ) {
+        const error = vm.newString("screen call refused");
+        promise.reject(error);
+        error.dispose();
+        return promise.handle;
+      }
+      const callId = ++nextCallId;
+      let args: unknown;
+      try {
+        args = JSON.parse(argsJson);
+      } catch {
+        args = null;
+      }
+      const firstArg = Array.isArray(args) ? (args[0] as unknown) : undefined;
+      const targetRef =
+        typeof firstArg === "object" && firstArg !== null && "targetRef" in firstArg
+          ? (firstArg.targetRef as ScreenHostCall["targetRef"])
+          : undefined;
+      const call: ScreenHostCall = {
+        t: "call",
+        runId: boot.runId,
+        turnId: boot.turnId,
+        cellId,
+        callId,
+        ...(targetRef === undefined ? {} : { targetRef }),
+        method: method as ScreenHostCall["method"],
+        args: args as ScreenHostCall["args"],
+        deadlineMillis: deadline,
+      };
+      pending.set(callId, promise);
+      emit(call);
+      return promise.handle;
+    });
+    vm.setProp(vm.global, "__host", host);
+    host.dispose();
+    const log = vm.newFunction("__log", (valueHandle) => {
+      const line = vm.getString(valueHandle);
+      const size = screenBytes(line);
+      if (consoleBytes + size <= limits.consoleBytes && linesOut.length < 64) {
+        linesOut.push(line);
+        consoleBytes += size;
+      } else if (!truncated.includes("console")) truncated.push("console");
+    });
+    vm.setProp(vm.global, "__log", log);
+    log.dispose();
+    const setup = `var __screenValues = Object.create(null);
+      const __values = new Proxy(__screenValues, {
+        set(target, key, value) {
+          const json = JSON.stringify(value);
+          if (typeof key !== 'string' || json === undefined || json.length > 65536)
+            throw new TypeError('screen.values accepts bounded JSON only');
+          target[key] = JSON.parse(json);
+          return true;
+        }
+      });
+      globalThis.screen = Object.freeze({ values: __values, ${methods
+        .map(
+          (method) =>
+            `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,
+        )
+        .join(
+          ",",
+        )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});`;
+    const evaluated = vm.evalCode(setup);
+    vm.unwrapResult(evaluated).dispose();
+  };
+  initialize();
+  const reset = () => {
+    for (const promise of pending.values()) promise.dispose();
+    pending.clear();
+    vm.dispose();
+    runtime.dispose();
+    runtime = module.newRuntime();
+    vm = runtime.newContext();
+    runtime.setMemoryLimit(limits.heapBytes);
+    runtime.setMaxStackSize(limits.stackBytes);
+    initialize();
+  };
+  const finish = (result: ChildResult) => {
+    admitted = false;
+    for (const promise of pending.values()) promise.dispose();
+    pending.clear();
+    emit(result);
+    cellId = "";
+  };
+  try {
+    for await (const raw of { [Symbol.asyncIterator]: () => iterator }) {
+      if (screenBytes(raw) > FRAME_MAX) throw new Error("Screen child frame exceeds cap");
+      const frame: unknown = JSON.parse(raw);
+      if (typeof frame !== "object" || frame === null || !("t" in frame))
+        throw new Error("Invalid frame");
+      if (frame.t === "reply") {
+        const reply = Schema.decodeUnknownSync(ScreenHostReply)(frame);
+        if (reply.runId !== boot.runId || reply.cellId !== cellId) continue;
+        const promise = pending.get(reply.callId);
+        if (!promise) continue;
+        pending.delete(reply.callId);
+        const value = vm.newString(
+          JSON.stringify(reply.outcome === "ok" ? reply.value : reply.error),
+        );
+        if (reply.outcome === "ok") promise.resolve(value);
+        else promise.reject(value);
+        value.dispose();
+        promise.dispose();
+        runtime.executePendingJobs();
+        continue;
+      }
+      if (frame.t === "cancel") {
+        admitted = false;
+        continue;
+      }
+      if (frame.t !== "cell" || cellId) throw new Error("Unexpected child frame");
+      const cell = Schema.decodeUnknownSync(ScreenRunCell)(frame);
+      if (screenBytes(cell.source) > limits.sourceBytes) throw new Error("Source cap exceeded");
+      if (cell.resetValues) reset();
+      cellId = cell.cellId;
+      nextCallId = 0;
+      callCount = 0;
+      consoleBytes = 0;
+      linesOut = [];
+      truncated = [];
+      deadline = Date.now() + limits.cellWallMs;
+      admitted = true;
+      runtime.setInterruptHandler(() => Date.now() >= deadline);
+      try {
+        const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
+        const handle = vm.unwrapResult(evaluation);
+        const settled = vm.resolvePromise(handle);
+        handle.dispose();
+        runtime.executePendingJobs();
+        void settled.then(
+          (outcome) => {
+            if (cellId !== cell.cellId) {
+              (outcome.error ?? outcome.value)?.dispose();
+              return;
+            }
+            const resultHandle = vm.unwrapResult(outcome);
+            const value = vm.dump(resultHandle) as unknown;
+            resultHandle.dispose();
+            const json = JSON.stringify(value);
+            const bounded =
+              json === undefined || screenBytes(json) > limits.returnBytes ? undefined : value;
+            if (json !== undefined && bounded === undefined) truncated.push("value");
+            finish({
+              t: "result",
+              cellId,
+              status: pending.size ? "failed" : "completed",
+              ...(pending.size ? { unawaitedCallIds: [...pending.keys()] } : {}),
+              ...(bounded === undefined
+                ? {}
+                : { value: bounded as NonNullable<ScreenRunResult["value"]> }),
+              console: linesOut,
+              truncated,
+            });
+          },
+          () => finish({ t: "result", cellId, status: "failed", console: linesOut, truncated }),
+        );
+      } catch {
+        finish({
+          t: "result",
+          cellId,
+          status: Date.now() >= deadline ? "deadline" : "failed",
+          console: linesOut,
+          truncated,
+        });
+      }
+    }
+  } finally {
+    lines.close();
+    for (const promise of pending.values()) promise.dispose();
+    vm.dispose();
+    runtime.dispose();
+  }
+}

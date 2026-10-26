@@ -64,6 +64,7 @@ import {
 } from "./desktop-artifact-computer-use.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { stageScreenWasmAsset, verifyScreenWasmFile } from "./lib/screen-wasm-asset.ts";
 import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
@@ -1054,6 +1055,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // app; a second copy inside app.asar would stay ad hoc signed.
   "!apps/desktop/prod-resources/resource-monitor",
   "!apps/desktop/prod-resources/resource-monitor/**/*",
+  "!apps/desktop/prod-resources/screen-code/quickjs.wasm",
   // GOAT always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
@@ -1180,6 +1182,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/screen-code/quickjs.wasm", to: "screen-code/quickjs.wasm" },
   { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
@@ -3498,6 +3501,7 @@ export const validateSshRuntimeArchives = Effect.fn("validateSshRuntimeArchives"
         `${stem}/goat`,
         `${stem}/client/index.html`,
         `${stem}/resource-monitor/${key}/goat-resource-monitor`,
+        `${stem}/screen-code/quickjs.wasm`,
       ];
       const pty = [
         `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -3994,6 +3998,16 @@ export const validateWindowsPackagedPayload = Effect.fn(
       missingFiles: ["resource-monitor/goat-resource-monitor.exe"],
     });
   }
+  const screenWasmPath = path.join(resourcesDir, "screen-code", "quickjs.wasm");
+  const screenWasmValid = yield* Effect.promise(() => verifyScreenWasmFile(screenWasmPath)).pipe(
+    Effect.map(() => true), Effect.orElseSucceed(() => false),
+  );
+  if (!screenWasmValid) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "sidecar-invalid", packagedAppDir,
+      missingFiles: ["screen-code/quickjs.wasm"],
+    });
+  }
 
   const wslArchivePath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_NAME);
   const wslArchiveHashPath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_HASH_NAME);
@@ -4074,7 +4088,8 @@ export const validateWindowsPackagedPayload = Effect.fn(
         ),
       );
     }
-    const requiredMembers = [`${stem}/goat`, `${stem}/client`, `${stem}/node_modules`];
+    const requiredMembers = [`${stem}/goat`, `${stem}/client`, `${stem}/node_modules`,
+      `${stem}/screen-code/quickjs.wasm`];
     const missingMembers = requiredMembers.filter((member) => !members.includes(member));
     const ptyCandidates = [
       `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -4386,6 +4401,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  yield* stageScreenWasmAsset({ repoRoot, destination: path.join(stageProdResourcesDir, "screen-code/quickjs.wasm") });
   yield* fs.copyFile(
     path.join(repoRoot, "LICENSE"),
     path.join(stageProdResourcesDir, "LICENSE-T3CODE.txt"),

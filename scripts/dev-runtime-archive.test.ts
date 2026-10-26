@@ -20,6 +20,19 @@ import {
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import { vi } from "vite-plus/test";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { sourceScreenWasmAsset } from "./lib/screen-wasm-asset.ts";
+
+const stageFakeScreenPackage = async (fakeRepo: string) => {
+  const source = await sourceScreenWasmAsset(NodePath.resolve("."));
+  const packageDir = NodePath.join(fakeRepo, "apps/server/node_modules/@jitl/quickjs-wasmfile-release-sync");
+  await NodeFSP.mkdir(NodePath.join(packageDir, "dist"), { recursive: true });
+  await NodeFSP.writeFile(NodePath.join(packageDir, "package.json"), JSON.stringify({
+    name: "@jitl/quickjs-wasmfile-release-sync", version: "0.32.0",
+    exports: { "./wasm": "./dist/emscripten-module.wasm", "./package.json": "./package.json" },
+  }));
+  await NodeFSP.copyFile(source.source, NodePath.join(packageDir, "dist/emscripten-module.wasm"));
+  return NodePath.join(packageDir, "dist/emscripten-module.wasm");
+};
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
@@ -58,6 +71,9 @@ if (args.includes('scripts/build-cli-archive.ts')) {
   if (monitorContents!==expectedMonitor) throw new Error('wrong monitor selected: '+monitorContents);
   const entries=['client/index.html','node_modules/node-pty/build/Release/pty.node'];
   for (const entry of entries) { const file=path.join(content,entry); fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,'fixture'); }
+  const wasmDest=path.join(content,'screen-code/quickjs.wasm');
+  fs.mkdirSync(path.dirname(wasmDest),{recursive:true});
+  fs.copyFileSync(process.env.SCREEN_WASM_SOURCE,wasmDest);
   const monitorDest=path.join(content,'resource-monitor',platform+'-'+value('--arch'),'goat-resource-monitor');
   fs.mkdirSync(path.dirname(monitorDest),{recursive:true});
   fs.writeFileSync(monitorDest,monitorContents,{mode:0o755});
@@ -136,6 +152,7 @@ describe("development runtime archive publication", () => {
         const tools = NodePath.join(root, "tools");
         const home = NodePath.join(root, "home with spaces");
         await NodeFSP.mkdir(fakeRepo, { recursive: true });
+        const screenWasmSourcePath = await stageFakeScreenPackage(fakeRepo);
         await NodeFSP.mkdir(tools, { recursive: true });
         for (const name of ["vp", "cargo"])
           await NodeFSP.writeFile(NodePath.join(tools, name), standIn, { mode: 0o755 });
@@ -186,6 +203,7 @@ describe("development runtime archive publication", () => {
               HOME: home,
               PATH: tools + NodePath.delimiter + (process.env.PATH ?? ""),
               TOOL_LOG: NodePath.join(root, "tools.jsonl"),
+              SCREEN_WASM_SOURCE: screenWasmSourcePath,
               VP_NODE_VERSION: mode === "current-node" ? "" : selected,
               FAIL_STEP: mode,
               LEGACY_MONITOR_NAME: LEGACY_RESOURCE_MONITOR_BINARY_NAME,
@@ -402,6 +420,7 @@ describe("development runtime archive publication", () => {
         const tools = NodePath.join(root, "tools");
         const home = NodePath.join(root, "home");
         await NodeFSP.mkdir(fakeRepo, { recursive: true });
+        const screenWasmSourcePath = await stageFakeScreenPackage(fakeRepo);
         await NodeFSP.mkdir(tools, { recursive: true });
         for (const name of ["vp", "cargo"])
           await NodeFSP.writeFile(NodePath.join(tools, name), standIn, { mode: 0o755 });
@@ -482,6 +501,7 @@ describe("development runtime archive publication", () => {
               HOME: home,
               PATH: tools + NodePath.delimiter + (process.env.PATH ?? ""),
               TOOL_LOG: NodePath.join(root, "tools.jsonl"),
+              SCREEN_WASM_SOURCE: screenWasmSourcePath,
               VP_NODE_VERSION: selected,
               PROBE_VERSION: "v" + selected,
               LEGACY_MONITOR_NAME: LEGACY_RESOURCE_MONITOR_BINARY_NAME,

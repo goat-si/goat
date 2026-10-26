@@ -70,6 +70,24 @@ export const ScreenRunLimits = Schema.Struct({
 });
 export type ScreenRunLimits = typeof ScreenRunLimits.Type;
 
+/** GOAT's ceilings for one screen cell; a request may lower them, never raise them. */
+export const DEFAULT_SCREEN_RUN_LIMITS: ScreenRunLimits = {
+  sourceBytes: 64 * 1024,
+  cellWallMs: 30_000,
+  turnWasmBytes: 64 * 1024 * 1024,
+  heapBytes: 16 * 1024 * 1024,
+  stackBytes: 1024 * 1024,
+  callsPerCell: 64,
+  pendingCalls: 4,
+  argBytes: 64 * 1024,
+  returnBytes: 64 * 1024,
+  consoleBytes: 16 * 1024,
+  treeBytes: 128 * 1024,
+  imageBytes: 2 * 1024 * 1024,
+  journalEntries: 64,
+  activeChildren: 4,
+};
+
 export const ScreenRunBoot = Schema.Struct({
   t: Schema.Literal("boot"),
   runId: id,

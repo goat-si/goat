@@ -37,6 +37,9 @@ if (
   } else if (command === "__managed-chatgpt-token") {
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));
+  } else if (command === "__screen-run-child") {
+    const { runScreenChild } = await import("./screenCode/ScreenRunChild.ts");
+    await runScreenChild(process.stdin, process.stdout);
   } else if (command === "acp-mcp-bridge") {
     const { runAcpMcpBridgeFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpBridgeFastPath();

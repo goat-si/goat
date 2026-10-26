@@ -32,6 +32,7 @@ import {
   STAGE_INSTALL_ARGS,
 } from "./build-desktop-artifact.ts";
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
+import { stageScreenWasmAsset } from "./lib/screen-wasm-asset.ts";
 import { signWithJsign } from "./lib/windows-jsign.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
@@ -626,6 +627,10 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.copyFile(path.join(repoRoot, "LICENSE"), path.join(contentDir, "LICENSE-T3CODE.txt"));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
   yield* stageCliResourceMonitor(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
+  yield* stageScreenWasmAsset({
+    repoRoot,
+    destination: path.join(contentDir, "screen-code/quickjs.wasm"),
+  });
   yield* stageRuntimeExternals({
     repoRoot,
     stageDir: contentDir,

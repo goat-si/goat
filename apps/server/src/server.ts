@@ -57,6 +57,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
+import * as ScreenRunService from "./screenCode/ScreenRunService.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
 
@@ -173,6 +174,7 @@ import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
+import * as ComputerUsePrimitiveChannel from "./cua/ComputerUsePrimitiveChannel.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
@@ -1022,6 +1024,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
     ComputerUseLeaseRoute.layer,
+    ScreenRunService.ScreenRunService.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit.pipe(Layer.provide(PermissionProfiles.layer)),
     HandoffExpiry.layer,
@@ -1120,7 +1123,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(PreviewBrowser.layer),
-  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(Layer.mergeAll(PreviewAutomationBroker.layer, ComputerUsePrimitiveChannel.layer)),
   Layer.provide(ConnectionCatalogBroker.layer),
   Layer.provide(
     ServerSelfUpdate.layer.pipe(

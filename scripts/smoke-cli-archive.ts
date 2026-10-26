@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off - Archive smoke invokes the exact extracted executable with a bounded pipe fixture.
+import * as NodeChild from "node:child_process";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Duration from "effect/Duration";
@@ -22,6 +24,8 @@ import {
 } from "@goat/shared/runtimeManifest";
 import { runtimeManifestMismatch } from "./lib/runtime-manifest.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { verifyScreenWasmFile } from "./lib/screen-wasm-asset.ts";
+import { DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 export class CliArchiveSmokeError extends Schema.TaggedError<CliArchiveSmokeError>()(
@@ -122,6 +126,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     executable,
     path.join(contentDir, "client/index.html"),
     path.join(contentDir, RUNTIME_MANIFEST_ARCHIVE_ENTRY),
+    path.join(contentDir, "screen-code/quickjs.wasm"),
   ]) {
     if (!(yield* fs.exists(required))) {
       return yield* new CliArchiveSmokeError({
@@ -129,6 +134,50 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
         detail: `missing ${path.relative(contentDir, required)}`,
       });
     }
+  }
+  const wasmPath = path.join(contentDir, "screen-code/quickjs.wasm");
+  const wasmResult = yield* Effect.promise(() => verifyScreenWasmFile(wasmPath)).pipe(
+    Effect.result,
+  );
+  if (wasmResult._tag === "Failure") {
+    return yield* new CliArchiveSmokeError({
+      step: "checking the screen runtime",
+      detail: "screen-code/quickjs.wasm is invalid",
+    });
+  }
+  const childInput =
+    [
+      {
+        t: "boot",
+        runId: "smoke",
+        turnId: "smoke",
+        limits: DEFAULT_SCREEN_RUN_LIMITS,
+        wasmPath,
+        wasmSha256: wasmResult.success,
+      },
+      { t: "cell", cellId: "smoke", source: "return 7;", resetValues: false },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n") + "\n";
+  const childSmoke = NodeChild.spawnSync(executable, ["__screen-run-child"], {
+    cwd: contentDir,
+    input: childInput,
+    encoding: "utf8",
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    env: { PATH: "", HOME: scratch, USERPROFILE: scratch, TMPDIR: scratch, TEMP: scratch },
+  });
+  const childResult = childSmoke.stdout?.trim().split(/\r?\n/).pop();
+  if (
+    childSmoke.status !== 0 ||
+    childResult === undefined ||
+    !childResult.includes('"status":"completed"') ||
+    !childResult.includes('"value":7')
+  ) {
+    return yield* new CliArchiveSmokeError({
+      step: "running the screen child",
+      detail: `exit ${String(childSmoke.status)}: ${childSmoke.stderr?.slice(0, 200) ?? ""}`,
+    });
   }
 
   const version = yield* runExecutable(executable, ["--version"], contentDir);
