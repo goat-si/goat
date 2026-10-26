@@ -2618,6 +2618,8 @@ it.each(["rtf", "epub", "ods"] as const)(
         />
       </div>,
     );
+    // The viewer parses the file again in its own worker, which a loaded CI runner can take
+    // longer than the default wait to finish; the other worker-backed previews here wait 10 s.
     await vi.waitFor(() => {
       if (kind === "ods") {
         expect(screen.container.textContent).toContain("North");
@@ -2629,7 +2631,7 @@ it.each(["rtf", "epub", "ods"] as const)(
         const frame = screen.container.querySelector("iframe");
         expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
       }
-    });
+    }, 10_000);
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
   },
 );
