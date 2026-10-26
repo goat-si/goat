@@ -60,7 +60,7 @@ import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import { withTurnAgentAccess } from "./TurnCapabilities.ts";
 import { type PrepareReuse, openPrepareInput, selectPrepareInput } from "./McpPrepareInput.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import * as ComputerUsePrimitiveChannel from "../cua/ComputerUsePrimitiveChannel.ts";
+import { proxyChannelRevoker } from "./ProxyChannelRevoker.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
@@ -394,9 +394,7 @@ export const layerWithOptions = (
       const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
       /** Absent only in test assemblies; without it every turn counts as unleased. */
       const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
-      const primitiveChannel = yield* Effect.serviceOption(
-        ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel,
-      );
+      const revokeProxyChannel = yield* proxyChannelRevoker(mcpSessions);
       /** Absent only in test assemblies, which then run without goatclaw limits. */
       const permissionProfiles = yield* Effect.serviceOption(PermissionProfiles.PermissionProfiles);
       // An enabled policy fails closed: a thread whose limit cannot be read gets no native subagents.
@@ -873,9 +871,7 @@ export const layerWithOptions = (
         };
         return mcpCredentialId === undefined
           ? mcpSessionRegistry.revokeThread(threadId).pipe(
-              Effect.tap(() =>
-                ComputerUse.revokeProxyChannelAttachment(primitiveChannel, mcpSessions, threadId),
-              ),
+              Effect.tap(() => revokeProxyChannel(threadId)),
               Effect.tap(() => mcpSessions.clear(threadId)),
               Effect.tap(() => Effect.sync(clearPreparedInput)),
             )
@@ -883,12 +879,7 @@ export const layerWithOptions = (
               Effect.tap(() =>
                 Effect.gen(function* () {
                   if ((yield* mcpSessions.read(threadId))?.providerSessionId === mcpCredentialId) {
-                    yield* ComputerUse.revokeProxyChannelAttachment(
-                      primitiveChannel,
-                      mcpSessions,
-                      threadId,
-                      mcpCredentialId,
-                    );
+                    yield* revokeProxyChannel(threadId, mcpCredentialId);
                     yield* mcpSessions.clear(threadId);
                     clearPreparedInput();
                   }
@@ -2929,12 +2920,7 @@ export const layerWithOptions = (
             if (Option.isSome(detachResult)) {
               const credentialId = currentEntry?.mcpCredentialIdByThread.get(input.threadId);
               if (credentialId !== undefined)
-                yield* ComputerUse.revokeProxyChannelAttachment(
-                  primitiveChannel,
-                  mcpSessions,
-                  input.threadId,
-                  credentialId,
-                );
+                yield* revokeProxyChannel(input.threadId, credentialId);
               yield* cancelIdleFiber(detachResult.value.idleUnloadFiber);
             }
             const detached = Option.map(detachResult, (result) => result.entry);

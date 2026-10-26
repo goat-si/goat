@@ -65,7 +65,7 @@ import {
 } from "@goat/provider-core/server/nativeProtocolLogging";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { buildSessionRuntimeInstructions } from "./screenInstructions.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -3317,10 +3317,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               }
               const systemPrompt = [
                 orchestrationSystemPrompt,
-                buildRuntimeInstructions({
+                buildSessionRuntimeInstructions(yield* mcpSessions.read(turnInput.threadId), {
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
-                  skills: yield* mcpSessions.read(turnInput.threadId),
                   computerUse:
                     (yield* syncCuaDriver(turnInput.threadId)) &&
                     McpProviderSession.carriesComputerUseSkill(

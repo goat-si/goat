@@ -109,7 +109,7 @@ import {
   goatAcpPromptWithInstructions,
   type GoatAcpInstructionState,
 } from "@goat/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { acpInstructionState, buildAcpRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
@@ -7129,11 +7129,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const prompt: Array<EffectAcpSchema.ContentBlock> = [];
           const mcpContext = yield* readMcpContext(turnInput.threadId);
-          const instructionState = {
-            interactionMode: turnInput.runtimePolicy.interactionMode,
-            hasGoatMcp: mcpContext.servers.length > 0,
-            screenCodeSkill: mcpContext.screenCodeSkill === true,
-          } satisfies GoatAcpInstructionState;
+          const instructionState = acpInstructionState(turnInput, mcpContext);
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
           const userText =
@@ -7227,12 +7223,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (!isNativeSlashCommand) {
             prompt.push({
               type: "text",
-              text: buildRuntimeInstructions({
+              text: buildAcpRuntimeInstructions(mcpContext, {
                 harness: flavor.runtimeHarness ?? driver,
                 model: turnInput.modelSelection.model,
-                screenCode: mcpContext.screenCodeSkill === true,
-                screenCodeSkillPath: mcpContext.screenCodeSkillPath,
-                screenCodeCompact: true,
                 // The server list is fixed when a session is activated, so a
                 // driver enabled later reaches the agent on its next activation.
                 computerUse:

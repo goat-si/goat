@@ -57,7 +57,7 @@ import {
 } from "./skills.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { goatOrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { buildCursorRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
@@ -2305,12 +2305,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           } else memoryToolClaims.delete(nativeId);
           const text = [
             userText,
-            buildRuntimeInstructions({
+            buildCursorRuntimeInstructions(config, {
               harness: "Cursor",
               model: turnInput.modelSelection.model,
-              screenCode: McpProviderSession.carriesScreenCodeSkill(config),
-              screenCodeSkillPath: config?.screenCodeSkillPath,
-              screenCodeCompact: true,
               computerUse:
                 agent !== null &&
                 agent.cuaDriverKey !== "" &&
