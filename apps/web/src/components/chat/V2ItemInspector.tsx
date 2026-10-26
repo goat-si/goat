@@ -12,9 +12,10 @@ import {
   turnItemOutputImages,
   turnItemOutputText,
 } from "@goat/client-runtime/work-log/item-detail";
+import { commandDisplayText } from "@goat/client-runtime/work-log/command-label";
 import { computerUseDisplayInput } from "@goat/client-runtime/work-log/computer-use";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
-import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
+import { dynamicToolTitle, isJavaScriptReplTool } from "@goat/shared/toolActivity";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "~/components/solar";
 import { memo, type ReactNode, Suspense, use } from "react";
 
@@ -33,7 +34,7 @@ import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
-import { ShellCommandBlock } from "./ShellCommandBlock";
+import { ShellCommandLine, ToolCallCard } from "./ToolCallCard";
 
 interface V2ItemInspectorProps {
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
@@ -184,6 +185,8 @@ interface ToolOutputState {
   readonly pending: boolean;
   readonly error: string | null;
   readonly empty: boolean;
+  /** Inside a tool call card, where output gets a shorter, edge-faded scroller. */
+  readonly compact?: boolean;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
@@ -199,7 +202,14 @@ function ToolOutput(props: ToolOutputState) {
     />
   ));
   const text = props.output ? (
-    <div className="max-h-80 overflow-auto text-muted-foreground">{props.output}</div>
+    <div
+      className={cn(
+        "overflow-auto text-muted-foreground",
+        props.compact ? "scroll-edge-fade max-h-48" : "max-h-80",
+      )}
+    >
+      {props.output}
+    </div>
   ) : props.pending ? (
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
@@ -233,35 +243,52 @@ function ToolCallBody(
     readonly command?: string;
     readonly args?: unknown;
     readonly toolName?: string | null;
+    readonly title?: string;
     readonly exitCode?: number | undefined;
     /** Replaces the fetched output, e.g. with a command's live output. */
     readonly outputSlot?: ReactNode;
   },
 ) {
   const call = toolCallLines({ command: props.command, args: props.args });
+  const command = call.command;
+  const copyText =
+    command !== null
+      ? commandDisplayText(command)
+      : props.args === undefined
+        ? null
+        : (JSON.stringify(props.args, null, 2) ?? null);
+  const failedExit = props.exitCode !== undefined && props.exitCode !== 0;
   return (
-    <div className={cn("space-y-1.5", monoClassName)}>
-      {call.command ? <ShellCommandBlock command={call.command} /> : null}
-      {call.args ? (
-        <div className="text-foreground/85">
-          {call.args.map(([key, value]) => (
-            <div key={key}>
-              <span className="text-muted-foreground">{key} </span>
-              {key === "code" && isJavaScriptReplTool(props.toolName) ? (
-                <StructuredValue value={value} language="typescript" />
-              ) : (
-                value
-              )}
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
-      {props.outputSlot ?? <ToolOutput {...props} />}
-      {props.exitCode !== undefined && props.exitCode !== 0 ? (
-        <div className="text-destructive">exit {props.exitCode}</div>
-      ) : null}
-    </div>
+    <ToolCallCard
+      title={command !== null ? "Shell" : (props.title ?? "Tool")}
+      copyText={copyText}
+      copyLabel={command !== null ? "Copy command" : "Copy input"}
+      status={
+        failedExit ? (
+          <span className="font-mono text-destructive">exit {props.exitCode}</span>
+        ) : null
+      }
+    >
+      <div className={cn("space-y-1.5", monoClassName)}>
+        {command !== null ? <ShellCommandLine command={command} /> : null}
+        {call.args ? (
+          <div className="text-foreground/85">
+            {call.args.map(([key, value]) => (
+              <div key={key}>
+                <span className="text-muted-foreground">{key} </span>
+                {key === "code" && isJavaScriptReplTool(props.toolName) ? (
+                  <StructuredValue value={value} language="typescript" />
+                ) : (
+                  value
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {call.argsText ? <StructuredValue value={call.argsText} highlightJson /> : null}
+        {props.outputSlot ?? <ToolOutput {...props} compact />}
+      </div>
+    </ToolCallCard>
   );
 }
 
@@ -444,6 +471,10 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "dynamic_tool" ? (
         <ToolCallBody
           toolName={item.toolName}
+          title={
+            dynamicToolTitle(item.toolName, item.input, item.title) ??
+            (item.title?.trim() || item.toolName || "Tool")
+          }
           args={computerUseDisplayInput(item.toolName, item.input)}
           {...outputState}
           onImageExpand={props.onImageExpand}
