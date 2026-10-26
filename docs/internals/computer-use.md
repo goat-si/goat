@@ -170,23 +170,34 @@ designated requirement, never a pid or path alone. The driver would remain the h
 `apps/server/src/screenCode/` service. The child QuickJS guest has GOAT's `screen` Target API,
 without Node, filesystem, process, environment, arbitrary network or page-script access. A live
 turn can run later cells with computation values intact while its child remains live. An explicit
-reset clears those values, not a tab,
-app, grant or approval. Process and WASM limits bound accidental guest work, but are not an OS
-sandbox against same-user code.
+reset clears those values, not a tab, app, grant or approval. Process and WASM limits bound
+accidental guest work, but are not an OS sandbox against same-user code.
 
 Each Target call crosses `ScreenHostBridge`. The host resolves an exact tab or app window and
 checks the current run, turn, reference generation and caller's browser or computer-use authority
 before dispatch. A preview tile gives no authority to a cell. A tab mention is a binding hint,
-not a grant. A user tab must be claimed for input; turn cleanup releases that claim without
-closing the tab. Temporary agent tabs close unless kept or handed over.
+not a grant. The web composer's mention carries the server browser's exact tab id, and the host
+binds by that id even when the tab's title is cleaned or has changed since. Desktop-native tabs
+and the mobile composer cannot make that mention yet. A user tab must be claimed for input; turn
+cleanup releases that claim without closing the tab. Temporary agent tabs close unless kept or
+handed over.
 
 Stop, takeover, private mode, lease expiry, a new user message, turn end, and a cell failure that
-closes the child discard computation values. The lifecycle contract requires those events to fence
-later effects. A dispatched call whose result is lost or times out has an unknown outcome; another
-cell must observe again before deciding what to do. The cell never replays that input. At most four
-screen-code children can run on one host; a fifth request receives `live_children_limit` until a
-slot is released. For user-facing controls, see
-[Computer use](../user/computer-use.md).
+closes the child fence later effects and discard computation values. When the agent did not ask
+for the reset
+itself, its next cell's result lists `context_reset` in `truncated`, so it rebinds instead of
+trusting values that are gone. A dispatched call whose result is lost or times out has an unknown
+outcome; another cell must observe again before deciding what to do. The cell never replays that
+input. Every effect needs a journal slot for its receipt, so once a cell's journal is full its
+next call is refused with `call_limit` before dispatch. At most four screen-code children can run
+on one host; a fifth request receives `live_children_limit` until a slot is released.
+
+A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
+stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
+in a detached, time-bounded cleanup. Stop has already moved the tab's control generation by then,
+so that cleanup still closes a tab the agent owns and no person holds. A tab it cannot close
+becomes a `cleanup_failed` receipt and a warning notice in the thread, because the tool reply has
+usually been sent already. For user-facing controls, see [Computer use](../user/computer-use.md).
 
 The guest engine is the Bellard QuickJS build vendored by `quickjs-emscripten` 0.32.0
 (engine `2025-09-13+f1139494`), staged as a sync WASM file. As of October 2026 no published
@@ -282,7 +293,7 @@ browser.
   keeps running. `resume` checks that the lease is live, that a person has not taken over or
   entered private mode, and that cleanup was reported. It then starts a new driver client
   generation, and the agent must observe again before acting; nothing interrupted is replayed.
-  Pause during a nested script, with held input, and around lease expiry are conformance cases.
+  Pause during a screen code cell, with held input, and around lease expiry are conformance cases.
 - A tile in private mode shows a "Private — paused" placeholder and never pixels.
 - The desktop app docks the stack on the right of the GOAT window by default. Pop-out moves it into
   a floating stack at the right edge of the screen: always on top, never activating, and passing
@@ -611,7 +622,7 @@ real gateway with providers, and a signed packaged app on a real OS and display.
   drag targets and counters that record what it received. Negative cases: wrong pid or window,
   stale ids, an epoch change, Stop while queued, held modifiers during a kill, helper death, lost
   listener, a Stop of one thread while a sibling acts, and lock or sleep during a held drag and
-  during typing, pause and resume during a nested script, and a crop capture while the floating
+  during typing, pause and resume during a screen code cell, and a crop capture while the floating
   stack or cursor overlay sits inside the window's bounds.
 - **Real apps.** Calculator, TextEdit, Finder, a Chromium browser and an Electron app on macOS, and
   equivalents per platform, each with clean and contaminated runs reported apart.

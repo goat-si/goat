@@ -8,7 +8,7 @@
 > `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
 > `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓴다. 화면 작업에는 `goat_screen_run`이 유한한 JavaScript 셀을 제공하며, 호출마다 권한을 다시 검사한다.
 > 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
-> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`, `goat_screen_run`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21).
+> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21). `goat_screen_run`은 턴에 내장 브라우저나 컴퓨터 사용이 붙었을 때만 나열된다.
 > 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D22)과 선행 사례 비교를 끝에 둔다.
 
 This page uses two labels. **Now** describes implemented source in this checkout;
@@ -572,8 +572,14 @@ toolkit registers, whichever name the caller used, so each tool keeps one series
 ## Screen composition: `goat_screen_run`
 
 **Now on this branch.** `surface.screen_run` exposes `goat_screen_run` for a
-bounded JavaScript cell over GOAT-owned browser and desktop Targets. `goat_describe`
-and the built-in `screen-code` guide give agents its signature on demand. The
+bounded JavaScript cell over GOAT-owned browser and desktop Targets. It is listed
+only to a thread caller whose turn has the built-in browser or computer use
+attached; otherwise `goat_describe` reports it unavailable with that reason
+([toolAvailability.ts](../../apps/server/src/mcp/toolAvailability.ts)). The same
+gate activates the built-in `screen-code` guide, which the server writes to
+`<stateDir>/skills/screen-code/SKILL.md` when it attaches. Every harness's runtime
+instructions name that path, so an agent reads the signature from disk on demand
+instead of carrying it in each prompt. The
 service, rather than the MCP handler, owns the turn session, per-effect admission,
 limits and receipts. The guest cannot call arbitrary `goat_call` paths or use Node.
 Browser-only turns can use browser Targets; desktop Targets require the computer-use

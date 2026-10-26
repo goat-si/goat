@@ -27,9 +27,12 @@
   implements it.
 - Amended 2026-10-26, D17 (owner decision, Jun, 2026-10-26; recorded in `6c428224d6`):
   agents get one screen code tool that runs a bounded
-  JavaScript cell against built-in browser tabs and desktop apps. The agent-surface D8
-  measurement gate for a general `goat_eval` does not apply to it; its measurement protocol
-  becomes a post-ship regression check. The Screen code mode bullet below states the decision.
+  JavaScript cell against built-in browser tabs and desktop apps. The owner bundles it as
+  validated by code mode already shipping in the Codex app, so it does not wait for the
+  agent-surface D8 measurement gate for a general `goat_eval`; D8's paired protocol is kept as a
+  post-ship regression check. The cursor's bounded thinking motion is an owner exception to
+  GOAT's rule against continuously repainting animation. The Screen code mode bullet below
+  states the decision.
   BEH-29's yield-on-human-input rule was considered and rejected in favor of D7.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
@@ -209,9 +212,11 @@
     input still does not pause approved control (D7); a code-mode-only refusal of desktop input to
     browser windows is not added, so the cell keeps parity with direct calls, and an origin-aware
     rule shared by both is a follow-up. The agent cursor may show a short "thinking" motion while a
-    cell is live; it restarts on each call or action, stops by itself within five seconds, stops at
-    idle hide or turn end, is off under reduced motion, and is hidden before every capture. Native
-    cursor motion on Windows and Linux is a follow-up. Owner decision (Jun, 2026-10-26).
+    cell is live, under five rules: it restarts only on a host call or action, stops by itself
+    within five seconds, stops at idle hide or turn end, is off under reduced motion, and is hidden
+    before every capture. An idle cursor stays still; no hovering or "levitation" motion is
+    adopted. Native cursor motion on Windows and Linux is a follow-up. Owner decision (Jun,
+    2026-10-26).
   - **Parity.** Every platform implements every protocol method or returns a typed `unsupported`;
     tests enforce the matrix in the design doc.
   - **Packaging and updates.** Inner executables are signed first, then the helper, then GOAT.app,
