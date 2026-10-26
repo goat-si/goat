@@ -579,6 +579,35 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live("an interrupted cleanup finishes the item it started under its hold and logs it", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, leftover, reclaim, find } = yield* setup;
+      const item = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
+      expect(item.state).toBe("removable");
+      // The request that started the cleanup is interrupted (its client went away) while the
+      // item is in its final checks, under its hold.
+      machine.onProcessListing = {
+        after: 1,
+        run: Effect.withFiber((fiber) => Effect.sync(() => fiber.interruptUnsafe())),
+      };
+      const cleaning = yield* reclaim
+        .clean({ items: [{ id: item.id, token: item.token }], actor: "test" })
+        .pipe(Effect.forkChild);
+      yield* Fiber.await(cleaning);
+      expect(yield* fs.exists(leftover)).toBe(false);
+      const events = (yield* fs.readFileString(path.join(config.logsDir, "storage-cleanup.ndjson")))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { readonly event: string; readonly path: string })
+        .filter((line) => line.path === leftover)
+        .map((line) => line.event);
+      expect(events).toEqual(["intent", "removed"]);
+      // The hold ended with the item.
+      const started = yield* tryWithWorkspaceLease(leftover, Effect.void);
+      expect(started).toEqual(Option.some(undefined));
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("keeps a leftover folder a thread here binds after the clean's own scan", () =>
     Effect.gen(function* () {
       const { fs, leftover, reclaim, find } = yield* setup;

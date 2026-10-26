@@ -663,45 +663,52 @@ const make = Effect.gen(function* () {
             const target = scan.targets.get(item.id);
             // The confirming scan measured sizes; this one does not.
             const bytes = previous?.scan.items.find((known) => known.id === item.id)?.bytes ?? null;
-            const intent = yield* log({
-              event: "intent",
-              actor: input.actor,
-              kind: item.kind,
-              path: item.path,
-              token: item.token,
-              bytes,
-            }).pipe(Effect.result);
-            if (intent._tag === "Failure" || target === undefined) {
-              results.push(
-                outcome("failed", "Could not write the cleanup log, so nothing was deleted"),
-              );
-              continue;
-            }
-            const done = yield* act(item, target, input.actor).pipe(Effect.result);
-            const result =
-              done._tag === "Failure"
-                ? outcome("failed", failureMessage(done.failure), bytes)
-                : done.success === null
-                  ? outcome("removed", item.reason, bytes)
-                  : outcome("skipped", sentenceCase(done.success));
+            // Started, an item runs to its outcome line: an interrupt (its client went away) lands
+            // between items. Interrupting a removal would release the item's hold while the
+            // filesystem or git keeps deleting, and leave its intent without an outcome.
+            const result = yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                const intent = yield* log({
+                  event: "intent",
+                  actor: input.actor,
+                  kind: item.kind,
+                  path: item.path,
+                  token: item.token,
+                  bytes,
+                }).pipe(Effect.result);
+                if (intent._tag === "Failure" || target === undefined)
+                  return outcome(
+                    "failed",
+                    "Could not write the cleanup log, so nothing was deleted",
+                  );
+                const done = yield* act(item, target, input.actor).pipe(Effect.result);
+                const finished =
+                  done._tag === "Failure"
+                    ? outcome("failed", failureMessage(done.failure), bytes)
+                    : done.success === null
+                      ? outcome("removed", item.reason, bytes)
+                      : outcome("skipped", sentenceCase(done.success));
+                // What was removed is gone from the cached scan; the next read scans again.
+                if (finished.outcome === "removed") yield* Ref.set(latest, null);
+                yield* log({
+                  event: finished.outcome,
+                  actor: input.actor,
+                  kind: item.kind,
+                  path: item.path,
+                  reason: finished.reason,
+                }).pipe(Effect.ignore);
+                yield* Effect.logInfo("storage cleanup", {
+                  outcome: finished.outcome,
+                  kind: item.kind,
+                  path: item.path,
+                  reason: finished.reason,
+                });
+                return finished;
+              }),
+            );
             if (result.outcome === "removed") freedBytes += bytes ?? 0;
-            yield* log({
-              event: result.outcome,
-              actor: input.actor,
-              kind: item.kind,
-              path: item.path,
-              reason: result.reason,
-            }).pipe(Effect.ignore);
-            yield* Effect.logInfo("storage cleanup", {
-              outcome: result.outcome,
-              kind: item.kind,
-              path: item.path,
-              reason: result.reason,
-            });
             results.push(result);
           }
-          // What was removed is gone from the cached scan; the next read scans again.
-          if (results.some((result) => result.outcome === "removed")) yield* Ref.set(latest, null);
           return { results, freedBytes, logPath } satisfies StorageCleanResult;
         }),
       );
