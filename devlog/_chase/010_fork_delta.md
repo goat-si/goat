@@ -103,11 +103,17 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/globalAgent*.ts`, `Sidebar.tsx`, `ChatView.tsx`, 헤더와 메뉴 컴포넌트
 - 정책: `globalAgent*` 파일은 GOAT 전용이다. 공유 컴포넌트는 upstream을 받고 글로벌 에이전트 분기를 다시 얹는다.
 
+### `goat-identity` GOAT 이름·도메인·인프라 (261026)
+
+- PR: #1758 #1759 #1763 #1764 #1769 #1771 (추적 #1757)
+- 경로: `scripts/lib/goat-rename/rules-{samples,relay,mobile}.ts`, `infra/relay/`(마이그레이션 제외), `apps/mobile/modules/goat-*`, `packages/contracts/src/legacyT3Names.ts`
+- 정책: upstream 이름을 GOAT 이름으로 바꾸는 일은 모두 rename 규칙이다. 테스트 샘플의 사람 이름(julius, Theo), GOAT Connect 스택과 relay wire 이름(헤더, JWT typ, client id, env, telemetry, worker·tunnel 이름), `t3.codes` 기본값(hosted app, Codex 반환 origin, `goat.json` schema), 모바일 네이티브 모듈, upstream 전용 workflow·AUR·Vercel 설정 drop. 저장된 값은 legacy 이름을 그대로 읽는다: `t3-connect` 경로 종류, 모바일 relay 토큰 캐시의 client id, Android 알림 저장소·태그·`t3_kind`, 위젯 만료 저장소, 옛 `app.t3.codes` 공유 링크. troubleshooting 안내서 사본과 도움말 anchor는 GOAT가 사용자 문서를 호스팅할 때까지 유지한다.
+
 ### `goat-copy` 보이는 문구 GOAT
 
 - 커밋: `e0596e725`
 - 경로: UI·토스트·CLI 도움말 문자열 전반, `packages/provider-*/src/server`, `provider-core` 안내문, MCP 도구 설명, `docs/user`, `README.md`
-- 정책: upstream 문구 변경을 받고 앱을 가리키는 "T3 Code"/"T3"만 GOAT로 다시 쓴다. 주석과 아래 이름 규칙의 "그대로" 항목은 바꾸지 않는다. GOAT Connect 문구는 `rules-visible.ts`의 `isConnectCopySurface` 규칙이, upstream 서비스를 가리키는 문장은 `rules-external.ts`의 `connectServicePhrases`가 맡는다. 한 곳씩 바꾸는 GOAT 이름(provider 이름, 커밋 작성자, 비공개 빌드 이름, 브랜드 자산 파일)은 `rules-leftovers.ts`, 개발 컨테이너·이슈 양식·테스트 제목은 `rules-meta.ts`에 있다 (#1619, #1628, [10.014](./10.014_t3_chase_rename_leftovers.md)).
+- 정책: upstream 문구 변경을 받고 앱을 가리키는 "T3 Code"/"T3"만 GOAT로 다시 쓴다. 주석과 아래 이름 규칙의 "그대로" 항목은 바꾸지 않는다. GOAT Connect 문구는 `rules-visible.ts`의 `isConnectCopySurface` 규칙이, GOAT Connect와 대조하는 문장은 `rules-relay.ts`의 `CONNECT_CONTRAST_RULES`가 다시 쓴다. 한 곳씩 바꾸는 GOAT 이름(provider 이름, 커밋 작성자, 비공개 빌드 이름, 브랜드 자산 파일)은 `rules-leftovers.ts`, 개발 컨테이너·이슈 양식·테스트 제목은 `rules-meta.ts`에 있다 (#1619, #1628, [10.014](./10.014_t3_chase_rename_leftovers.md)).
 
 ### `launch-watch` 띄운 스레드 완료 알림
 

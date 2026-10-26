@@ -204,12 +204,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "ADR-0014/D13: temp guard accounts for installed desktop control socket identities.",
   ),
   keep(
-    "legacy-home-explanation",
-    ["scripts/dev-runner.ts"],
-    /legacy T3 home/g,
-    "D8: seed source can still be the pre-rename home.",
-  ),
-  keep(
     "legacy-root-explanation",
     ["scripts/setup-worktree.ts"],
     /legacy T3 name/g,

@@ -38,6 +38,18 @@
   - A desktop from this change needs servers that accept the `goat://app` origin, and a Clerk
     instance that allows the `goat://app/` redirect.
 
+## Legacy readers and their support cutoff
+
+GOAT keeps reading the names that builds before this decision wrote: the safeStorage key copy from the
+old runtime name, the renderer-origin copy from the old scheme, the old scheme registration (also used
+by prompt links and the Codex auth handoff reader), the old desktop origins in the server's CORS list
+and provider auth return URLs, and the old hosted app origin in shared links. Removing any of them
+strands installs that update directly from such a build. They go only together, at a support cutoff: a
+published minimum version below which a direct update is no longer supported, chosen when the version
+telemetry shows almost no installs below it. Until then each stays. New code reads old spellings through
+`packages/contracts/src/legacyT3Names.ts`, or on a line marked `goat-rename: legacy` when the name
+belongs to one reader.
+
 ## Frozen legacy identities
 
 Decided 2026-10-20 in #110, #111 and #112. The names below keep their T3 spelling through the
