@@ -33,7 +33,7 @@ const state: RelayAgentActivityState = {
 
 function target(deviceId: string): LiveActivities.TargetRow {
   return {
-    user_id: "dev:julius",
+    user_id: "dev:alex",
     device_id: deviceId,
     platform: "ios",
     ios_major_version: 18,
@@ -88,7 +88,7 @@ function makeEnvironmentLinks(
     listDeliveryUsersForEnvironment: () =>
       Effect.succeed([
         {
-          userId: "dev:julius",
+          userId: "dev:alex",
           notificationsEnabled: true,
           liveActivitiesEnabled: true,
         },
@@ -221,7 +221,7 @@ describe("AgentActivityPublisher", () => {
       const result = yield* Effect.gen(function* () {
         const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
         return yield* publisher.replayForLiveActivityRegistration({
-          userId: "dev:julius",
+          userId: "dev:alex",
           deviceId: "device-1",
         });
       }).pipe(
@@ -311,7 +311,7 @@ describe("AgentActivityPublisher", () => {
                       listDeliveryUsersForEnvironment: () =>
                         Effect.succeed([
                           {
-                            userId: "dev:julius",
+                            userId: "dev:alex",
                             notificationsEnabled: true,
                             liveActivitiesEnabled: false,
                           },

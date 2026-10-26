@@ -23,8 +23,8 @@ import * as Schema from "effect/Schema";
 
 import * as RelayConfiguration from "../Config.ts";
 
-const LINK_CHALLENGE_TYP = "t3-link-challenge+jwt";
-const ACCESS_TOKEN_TYP = "t3-relay-dpop-access+jwt";
+const LINK_CHALLENGE_TYP = "goat-link-challenge+jwt";
+const ACCESS_TOKEN_TYP = "goat-relay-dpop-access+jwt";
 const LINK_CHALLENGE_KIND = "environment_link_challenge";
 export const RELAY_DPOP_ACCESS_TOKEN_TTL = "30 minutes";
 
@@ -113,7 +113,7 @@ export class RelayTokens extends Context.Service<
       readonly nowEpochSeconds: number;
     }) => Effect.Effect<RelayDpopAccessTokenClaims | null>;
   }
->()("t3code-relay/auth/RelayTokens") {}
+>()("goat-relay/auth/RelayTokens") {}
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;

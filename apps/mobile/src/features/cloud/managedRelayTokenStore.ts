@@ -1,4 +1,5 @@
 import { ManagedRelay } from "@goat/client-runtime/relay";
+import { LEGACY_RELAY_CLIENT_IDS } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { secureStore } from "../../persistence/namespaced-secure-store";
@@ -6,9 +7,15 @@ import { secureStore } from "../../persistence/namespaced-secure-store";
 const MANAGED_RELAY_TOKEN_CACHE_KEY = "goat.cloud.relay-access-tokens";
 const MANAGED_RELAY_TOKEN_CACHE_VERSION = 1;
 
+// Entries cached before the GOAT client ids keep their old id; reading maps it so the cache still loads.
 const ManagedRelayAccessTokenCacheEntrySchema = Schema.Struct({
   accountId: Schema.String,
-  clientId: Schema.Literals(["t3-mobile", "t3-web"]),
+  clientId: Schema.Literals([
+    "goat-mobile",
+    "goat-web",
+    LEGACY_RELAY_CLIENT_IDS.mobile,
+    LEGACY_RELAY_CLIENT_IDS.web,
+  ]),
   relayUrl: Schema.String,
   thumbprint: Schema.String,
   scopes: Schema.Array(
@@ -65,7 +72,17 @@ const loadManagedRelayAccessTokens = Effect.tryPromise({
     encoded === null
       ? Effect.succeed<ReadonlyArray<ManagedRelay.ManagedRelayAccessTokenCacheEntry>>([])
       : decodeManagedRelayAccessTokenCache(encoded).pipe(
-          Effect.map((cache) => cache.entries),
+          Effect.map((cache) =>
+            cache.entries.map((entry): ManagedRelay.ManagedRelayAccessTokenCacheEntry => ({
+              ...entry,
+              clientId:
+                entry.clientId === LEGACY_RELAY_CLIENT_IDS.mobile
+                  ? "goat-mobile"
+                  : entry.clientId === LEGACY_RELAY_CLIENT_IDS.web
+                    ? "goat-web"
+                    : entry.clientId,
+            })),
+          ),
           Effect.mapError(
             (cause) =>
               new ManagedRelayTokenStoreError({

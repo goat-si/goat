@@ -12,7 +12,7 @@ import * as ManagedEndpointReaper from "./ManagedEndpointReaper.ts";
 
 const NOW = "2026-08-25T12:00:00.000Z";
 const NOW_MILLIS = DateTime.makeUnsafe(NOW).epochMilliseconds;
-const PREFIX = "t3coderelay-managedendpoint-prod-";
+const PREFIX = "goatrelay-managedendpoint-prod-";
 
 function tunnel(input: {
   readonly id: string;
@@ -232,7 +232,7 @@ function harness(input?: {
     apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
     clerkSecretKey: Redacted.make("clerk-secret"),
     clerkPublishableKey: "pk_test_test",
-    clerkJwtAudience: "t3-code-relay",
+    clerkJwtAudience: "goat-relay",
     cloudMintPrivateKey: Redacted.make("cloud-private-key"),
     cloudMintPublicKey: "cloud-public-key",
     managedEndpointBaseDomain: "example.test",
@@ -332,7 +332,7 @@ describe("ManagedEndpointReaper", () => {
         }),
         tunnel({
           id: "other-stage",
-          prefix: `${PREFIX}julius-`,
+          prefix: `${PREFIX}alex-`,
           suffix: "bbbbbbbbbbbbbbbb",
           status: "down",
           timestamp: "2026-08-25T11:00:00.000Z",
@@ -499,7 +499,7 @@ describe("ManagedEndpointReaper", () => {
       ({ stage, expected }) => {
         const stageLegacyTunnels = legacyTunnels.map((entry) => ({
           ...entry,
-          name: entry.name!.replace(PREFIX, `t3coderelay-managedendpoint-${stage}-`),
+          name: entry.name!.replace(PREFIX, `goatrelay-managedendpoint-${stage}-`),
         }));
         const state = harness({
           namespace: stage,
