@@ -7,7 +7,9 @@ import {
   type CuaAgentBlock,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
+  type ProjectId,
   type ProviderInteractionMode,
+  resolveProjectBuiltInSkillEnabled,
   type RunId,
   type RuntimeMode,
   type ThreadId,
@@ -19,7 +21,6 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -88,6 +89,8 @@ export interface ComputerUseAttachmentInput {
   readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
   /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
   readonly requested?: ReadonlyArray<TurnCapability> | undefined;
+  /** The thread's project, whose own built-in skill switches win over the environment's. */
+  readonly projectId?: ProjectId | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
@@ -173,8 +176,11 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
-  // Names this build does not know are ignored.
-  const disabled = current?.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName)) ?? [];
+  const disabled = BuiltInSkillName.literals.filter(
+    (name) =>
+      current !== undefined &&
+      !resolveProjectBuiltInSkillEnabled(current, input.projectId ?? null, name),
+  );
   // Claimed only now, so a turn that cannot get the driver holds nothing; the claim itself
   // refuses unattended work that lost a race for the screen.
   const control = everyApp

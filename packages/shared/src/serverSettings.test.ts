@@ -56,6 +56,16 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("keeps the cloud auto-join switch off when another hub setting changes", () => {
+    const off = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      hub: { autoJoinCloudMachines: false },
+    });
+    expect(applyServerSettingsPatch(off, { hub: { cloudHolder: "auto" } }).hub).toMatchObject({
+      cloudHolder: "auto",
+      autoJoinCloudMachines: false,
+    });
+  });
+
   it("keeps the larger GOAT Bot home claim whatever order writes arrive in", () => {
     const claim = (environmentId: string, claimedAt: number, claimId: string) => ({
       environmentId: EnvironmentId.make(environmentId),

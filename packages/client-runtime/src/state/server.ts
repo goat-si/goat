@@ -1259,6 +1259,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:hub:device-repair",
       tag: WS_METHODS.hubDeviceRepair,
     }),
+    /** A person's standing consent to join an SSH host as the hub's OpenCodex Child. */
+    setHubDeviceChildOptIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-child-opt-in",
+      tag: WS_METHODS.hubDeviceChildOptIn,
+    }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",
       tag: WS_METHODS.scheduledTasksListWebhookDeliveries,

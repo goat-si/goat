@@ -46,14 +46,27 @@ device can reach, such as behind Tailscale Serve. GOAT creates a single-use
 invite on the hub and redeems it on the device; you never see or copy the code.
 Agents can request the same for a device GOAT reaches only by password.
 
-A cloud machine this hub creates joins by itself. The first time it is used,
-GOAT installs this hub's OpenCodex release there with npm, starts it, and
-links it as a Remote Link Child, using the host key it pinned when it created
-the machine. It does this once per machine; use **Repair** if the link breaks
-later. Machines you add over SSH are never joined automatically. Until the
-machine is a Child, its row in **Hub devices**, in the mobile app, and in Fleet
-shows the progress or why it stopped, for example when the machine has no npm.
-Agents read the same from its `goat_host_status` entry.
+A cloud machine this hub creates joins by itself while **Join new cloud
+machines** in **Settings → Hub** is on, as it is unless you turn it off. The
+first time it is used, GOAT installs this hub's OpenCodex release there with
+npm, starts it, and links it as a Remote Link Child, using the host key it
+pinned when it created the machine. It does this once per machine; use
+**Repair** if the link breaks later. Turning the switch off stops new joins,
+even one already being set up; machines that are linked stay linked.
+
+An SSH host you added joins only when you turn on **Join as OpenCodex Child
+after each SSH setup** on its row in **Hub devices**, on desktop, web or the
+mobile app. GOAT then sets it up right away and again after each successful
+SSH setup of that host, and links it only with the host key GOAT pinned when
+you added it. The switch is your standing permission, so only a session that
+can change settings turns it on; agents cannot. It turns itself off when you
+forget or add the host again, and when the session that turned it on signs
+out, expires, or loses settings permission; the row then says so. Turning it
+off never removes the host from the hub: use **Leave** for that.
+
+Until the machine is a Child, its row in **Hub devices**, in the mobile app, and
+in Fleet shows the progress or why it stopped, for example when the machine has
+no npm. Agents read the same from its `goat_host_status` entry.
 
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.

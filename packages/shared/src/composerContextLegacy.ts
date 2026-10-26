@@ -310,6 +310,11 @@ function replaceReviewBlocks(
   return parts.join("");
 }
 
+/** Whether the text carries context in the pre-inline serialized form. */
+export function hasLegacyContextMarkers(text: string): boolean {
+  return LEGACY_MARKERS.test(text);
+}
+
 export function upgradeLegacyContextMessage(text: string): UpgradedLegacyContext {
   if (!LEGACY_MARKERS.test(text)) return { text, records: [] };
 

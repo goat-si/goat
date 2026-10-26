@@ -279,7 +279,7 @@ import {
 } from "@goat/client-runtime/state/composer-dispatch";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
 import { resolveProviderSlashCommandsForCwd } from "@goat/client-runtime/providerSkills";
-import { providerSkillsWithBuiltIns } from "./providerSkillsWithBuiltIns";
+import { useOfferedSkills } from "./providerSkillsWithBuiltIns";
 import { useDelayedStatus } from "../../hooks/useDelayedStatus";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
@@ -1010,11 +1010,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
-  const selectedProviderSkills = providerSkillsWithBuiltIns(
-    selectedProviderStatus,
-    gitCwd,
-    settings,
-  );
+  const selectedProviderSkills = useOfferedSkills(selectedProviderStatus, gitCwd, settings, {
+    environmentId,
+    projectId: activeProjectId,
+  });
   const selectedProviderSlashCommands = selectedProviderStatus
     ? resolveProviderSlashCommandsForCwd(selectedProviderStatus, gitCwd)
     : NO_PROVIDER_SLASH_COMMANDS;

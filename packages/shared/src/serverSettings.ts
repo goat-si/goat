@@ -295,10 +295,13 @@ function mergeCompletionWebhook(
 
 /**
  * `projectSettingsOverrides` entries otherwise replace whole (see the field's
- * doc comment in contracts), but `providerInstances` was added after clients
- * already round-trip a project's entry on every edit. A client built before
- * that addition sends an entry that never mentions the key, and a whole replace
- * would silently wipe it.
+ * doc comment in contracts), but `providerInstances` and `builtInSkills` were
+ * added after clients already round-trip a project's entry on every edit. A
+ * client built before them sends an entry that never mentions the key, so an
+ * omitted map keeps the stored one. Such a client also sends `null` when it
+ * clears the last override it can see, so `null` keeps a stored
+ * `builtInSkills`; a deleted project's cleanup sends
+ * `PROJECT_SETTINGS_OVERRIDES_REMOVAL` instead.
  */
 function mergeProjectSettingsOverridesPatch(
   current: Readonly<Record<string, ProjectSettingsOverrides>>,
@@ -306,19 +309,29 @@ function mergeProjectSettingsOverridesPatch(
 ): Record<string, ProjectSettingsOverrides> {
   const next = new Map(Object.entries(current));
   for (const [projectId, entry] of Object.entries(patch)) {
-    if (entry === null) {
-      next.delete(projectId);
-      continue;
-    }
-    const storedProviderInstances = current[projectId]?.providerInstances;
-    next.set(projectId, {
-      ...entry,
-      ...(Object.hasOwn(entry, "providerInstances") || storedProviderInstances === undefined
+    const stored = current[projectId];
+    const kept = <K extends "providerInstances" | "builtInSkills">(key: K) =>
+      (entry !== null && Object.hasOwn(entry, key)) || stored?.[key] === undefined
         ? {}
-        : { providerInstances: storedProviderInstances }),
-    });
+        : { [key]: stored[key] };
+    const merged: ProjectSettingsOverrides =
+      entry === null
+        ? kept("builtInSkills")
+        : { ...entry, ...kept("providerInstances"), ...kept("builtInSkills") };
+    if (holdsNoOverride(merged)) next.delete(projectId);
+    else next.set(projectId, merged);
   }
   return Object.fromEntries(next);
+}
+
+/** Nothing set, or only empty per-instance or per-skill maps. */
+function holdsNoOverride(entry: ProjectSettingsOverrides): boolean {
+  return Object.entries(entry).every(
+    ([key, value]) =>
+      value === undefined ||
+      ((key === "providerInstances" || key === "builtInSkills") &&
+        Object.keys(value as object).length === 0),
+  );
 }
 
 export function deriveLegacyProjectOverrides(

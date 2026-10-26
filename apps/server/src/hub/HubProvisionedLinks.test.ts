@@ -105,6 +105,10 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
           HubOcx,
           HubOcx.of({
             home,
+            homeAdmitted: (args, _timeoutMs, admit) =>
+              Effect.flatMap(admit, (admitted) =>
+                admitted ? home(args) : Effect.succeed(undefined),
+              ),
             device: () => Effect.succeed({ code: 0, stdout: "opencodex 2.91.0" }),
             devicePlatform: () => Effect.succeed("posix"),
             connectHubClient: () => Effect.die("unused"),
@@ -163,7 +167,7 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
 it.effect("GOAT revokes the link it added for a cloud machine once that machine is removed", () =>
   Effect.gen(function* () {
     const hub = yield* setup();
-    yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
     hub.calls.length = 0;
     yield* hub.membership.requestRelease("boat-builder");
     expect(yield* hub.membership.pendingReleases).toEqual(["boat-builder"]);
@@ -188,14 +192,16 @@ it.effect("GOAT revokes the link it added for a cloud machine once that machine 
 it.effect("a cloud machine keeps its link until its removal asks, and is never linked after", () =>
   Effect.gen(function* () {
     const hub = yield* setup();
-    yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
     hub.calls.length = 0;
     expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("ready");
     expect(hub.calls).toEqual([]);
     expect(hub.links.get("boat-builder")).toBe(GOAT_LINK);
     // A setup that was already under way when the machine was removed links nothing.
     yield* hub.membership.requestRelease("boat-other");
-    expect((yield* hub.membership.joinProvisioned(scope, "boat-other")).state).toBe("failed");
+    expect(
+      (yield* hub.membership.joinProvisioned(scope, "boat-other", Effect.succeed(true))).state,
+    ).toBe("failed");
     expect(hub.links.has("boat-other")).toBe(false);
     const refused = yield* hub.membership.requestRelease("mac-studio").pipe(Effect.flip);
     expect(refused.code).toBe("invalid_request");
@@ -209,7 +215,7 @@ it.effect(
       for (const replaced of [false, true]) {
         // Not replaced: a person linked the alias first, so GOAT's setup reused that link.
         const hub = yield* setup({ linked: replaced ? [] : ["boat-builder"] });
-        yield* hub.membership.joinProvisioned(scope, "boat-builder");
+        yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
         if (replaced) {
           hub.tunnels.delete(portOf(GOAT_LINK));
           hub.replace("boat-builder");
@@ -231,7 +237,10 @@ it.effect(
     Effect.gen(function* () {
       for (const raced of [false, true]) {
         const hub = yield* setup({ addLost: true });
-        expect((yield* hub.membership.joinProvisioned(scope, "boat-builder")).state).toBe("failed");
+        expect(
+          (yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true)))
+            .state,
+        ).toBe("failed");
         // Raced: someone ran ocx link add for the alias while GOAT's own add was failing.
         if (raced) hub.replace("boat-builder");
         const holder = hub.links.get("boat-builder");
@@ -251,7 +260,7 @@ it.effect(
 it.effect("a revoke that fails stays pending and is retried after GOAT restarts", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ revokeExit: 1 });
-    yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
     yield* hub.membership.requestRelease("boat-builder");
     expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("failed");
     expect(hub.links.get("boat-builder")).toBe(GOAT_LINK);
@@ -275,7 +284,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const hub = yield* setup({ strayTunnel: true });
-      yield* hub.membership.joinProvisioned(scope, "boat-builder");
+      yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
       yield* hub.membership.requestRelease("boat-builder");
       expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("failed");
       expect(hub.links.size).toBe(0);
@@ -296,7 +305,7 @@ it.effect(
 it.effect("a replacement link does not hide the tunnel GOAT's revoked link left running", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ strayTunnel: true });
-    yield* hub.membership.joinProvisioned(scope, "boat-builder");
+    yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true));
     yield* hub.membership.requestRelease("boat-builder");
     expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("failed");
     hub.replace("boat-builder");
@@ -315,7 +324,9 @@ it.effect("a replacement link does not hide the tunnel GOAT's revoked link left 
 it.effect("an add GOAT never saw finish claims nothing: a link a person made later stays", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ addUnreachable: true });
-    expect((yield* hub.membership.joinProvisioned(scope, "boat-builder")).state).toBe("failed");
+    expect(
+      (yield* hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true))).state,
+    ).toBe("failed");
     // While GOAT was down, a person linked the alias.
     hub.replace("boat-builder");
     yield* hub.membership.requestRelease("boat-builder");
@@ -336,7 +347,9 @@ it.effect("a removal asked for while GOAT's add is under way releases the link o
       proceed: yield* Deferred.make<void>(),
     };
     const hub = yield* setup({ addGate });
-    const joining = yield* Effect.forkChild(hub.membership.joinProvisioned(scope, "boat-builder"));
+    const joining = yield* Effect.forkChild(
+      hub.membership.joinProvisioned(scope, "boat-builder", Effect.succeed(true)),
+    );
     yield* Deferred.await(addGate.started);
     // The request takes no hub permit, so it lands while the add holds it.
     yield* hub.membership.requestRelease("boat-builder");

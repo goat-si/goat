@@ -6,6 +6,7 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { AppText as Text } from "../../components/ui/AppText";
 import {
   DEFAULT_SERVER_SETTINGS,
+  resolveProjectBuiltInSkillEnabled,
   type ResponseStreamingMode,
   type ServerSettings,
   type ServerSettingsPatch,
@@ -40,6 +41,7 @@ import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
 import {
   planMobileBuiltInSkillToggle,
+  planMobileBuiltInSkillProjectPatch,
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
@@ -213,6 +215,30 @@ function ServerSettingsDetail(props: {
   const skillOn = (entry: { settings: ServerSettings }) =>
     !entry.settings.disabledBuiltInSkills.includes("computer-use");
   const computerUseAdvanced = useComputerUseAdvanced();
+  const supportsDiscipline =
+    targets.length > 0 &&
+    targets.every(
+      (target) =>
+        target.environment.serverConfig.environment.capabilities.devDisciplineSkill === true,
+    );
+  const disciplineValues = displayTargets.map((target) => ({
+    enabled: resolveProjectBuiltInSkillEnabled(
+      target.environment.serverConfig.settings,
+      target.projectId,
+      "goat-discipline",
+    ),
+    override:
+      target.projectId === null
+        ? undefined
+        : target.environment.serverConfig.settings.projectSettingsOverrides[target.projectId]
+            ?.builtInSkills?.["goat-discipline"]?.enabled,
+  }));
+  const disciplineReference = disciplineValues[0];
+  const disciplineMixed = disciplineValues.some(
+    (value) =>
+      value.enabled !== disciplineReference?.enabled ||
+      value.override !== disciplineReference?.override,
+  );
   const computerUseSkillOn =
     reference !== null && displayTargets.every((entry) => skillOn(entry) === skillOn(reference))
       ? skillOn(reference)
@@ -271,7 +297,13 @@ function ServerSettingsDetail(props: {
     });
   };
   const clearProjectOverrides = () =>
-    writeEach(planMobileScopedSettingsClear(targets, PAGE_PROJECT_KEYS[props.page]));
+    writeEach(
+      planMobileScopedSettingsClear(
+        targets,
+        PAGE_PROJECT_KEYS[props.page],
+        props.page === "agent-behavior" && supportsDiscipline ? ["goat-discipline"] : [],
+      ),
+    );
   const supportsProjectOverrides = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
@@ -321,8 +353,17 @@ function ServerSettingsDetail(props: {
               {projectSelected ? (
                 <SettingsProjectOverridesSection
                   projectLabel={selectedProject?.label ?? "Unavailable project"}
-                  hasOverrides={targets.some((target) =>
-                    PAGE_PROJECT_KEYS[props.page].some((key) => target.sources[key] === "project"),
+                  hasOverrides={targets.some(
+                    (target) =>
+                      PAGE_PROJECT_KEYS[props.page].some(
+                        (key) => target.sources[key] === "project",
+                      ) ||
+                      (props.page === "agent-behavior" &&
+                        supportsDiscipline &&
+                        target.projectId !== null &&
+                        target.environment.serverConfig.settings.projectSettingsOverrides[
+                          target.projectId
+                        ]?.builtInSkills?.["goat-discipline"]?.enabled !== undefined),
                   )}
                   supportsOverrides={supportsProjectOverrides}
                   pending={pendingWrites > 0}
@@ -450,6 +491,57 @@ function ServerSettingsDetail(props: {
 
               {props.page === "agent-behavior" ? (
                 <>
+                  {supportsDiscipline ? (
+                    <SettingsSection
+                      title="Development discipline skill"
+                      trailing={
+                        disciplineMixed ? (
+                          <MixedValuesLabel projectSelected={projectSelected} />
+                        ) : null
+                      }
+                    >
+                      {projectSelected ? (
+                        ([undefined, true, false] as const).map((enabled, index) => (
+                          <SettingsChoiceRow
+                            key={String(enabled)}
+                            label={enabled === undefined ? "Inherit" : enabled ? "On" : "Off"}
+                            description={
+                              enabled === undefined
+                                ? "Follow the environment."
+                                : enabled
+                                  ? "Load it in this project when a message names $goat-discipline."
+                                  : "Keep it out of this project's $ menu and turns."
+                            }
+                            selected={!disciplineMixed && disciplineReference?.override === enabled}
+                            separated={index > 0}
+                            disabled={!canWriteSettings || pendingWrites > 0}
+                            onPress={() =>
+                              writeEach(
+                                planMobileBuiltInSkillProjectPatch(
+                                  targets,
+                                  "goat-discipline",
+                                  enabled,
+                                ),
+                              )
+                            }
+                          />
+                        ))
+                      ) : (
+                        <SettingsSwitchRow
+                          icon="hammer"
+                          label="Development discipline skill"
+                          subtitle="Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns."
+                          value={disciplineMixed ? null : (disciplineReference?.enabled ?? null)}
+                          disabled={!canWriteSettings || pendingWrites > 0}
+                          onValueChange={(enabled) =>
+                            writeEach(
+                              planMobileBuiltInSkillToggle(targets, "goat-discipline", enabled),
+                            )
+                          }
+                        />
+                      )}
+                    </SettingsSection>
+                  ) : null}
                   <SettingsSection
                     title="Response streaming"
                     trailing={

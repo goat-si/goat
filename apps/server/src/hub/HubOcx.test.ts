@@ -1,3 +1,6 @@
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, OrchestratorMcpFailure, type HostThreadCounts } from "@goat/contracts";
@@ -11,6 +14,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { fleetSnapshot } from "./parity.testkit.ts";
 import {
   countLinkTunnels,
   deviceScript,
@@ -349,4 +353,114 @@ it.live("passes on OpenCodex's notice that it kept the last remote catalog", () 
 
 it.effect("refuses a link id the guard could not match literally", () =>
   Effect.sync(() => expect(() => guardedSyncScript("lnk.1'", true)).toThrow(TypeError)),
+);
+
+it.effect("reads a join's permission after OpenCodex is found, right before ocx starts", () =>
+  Effect.gen(function* () {
+    const started: Array<ReadonlyArray<string>> = [];
+    let admitted = true;
+    let revokeWhileLookingUp = true;
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(
+        hubOcxLayer.pipe(
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(
+            Layer.mock(ProcessRunner.ProcessRunner)({
+              run: (input) =>
+                Effect.sync(() => {
+                  started.push(input.args);
+                  return {
+                    stdout: "{}",
+                    stderr: "",
+                    code: null,
+                    timedOut: false,
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    stdoutInvalidUtf8: false,
+                    stderrInvalidUtf8: false,
+                  };
+                }),
+            }),
+          ),
+          // Finding the binary can wait on a refresh; a revocation can land during it.
+          Layer.provide(
+            Layer.mock(Inventory.OpenCodexInventory)({
+              read: Effect.sync(() => {
+                if (revokeWhileLookingUp) admitted = false;
+                return {
+                  ...fleetSnapshot("home"),
+                  binaries: [{ path: "/usr/local/bin/ocx", version: "2.91.0" }],
+                };
+              }),
+            }),
+          ),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+    const add = ["link", "add", "lidge-ts", "--json"];
+    const permission = Effect.sync(() => admitted);
+    expect(yield* ocx.homeAdmitted(add, 1_000, permission)).toBeUndefined();
+    expect(started).toEqual([]);
+    revokeWhileLookingUp = false;
+    admitted = true;
+    expect(yield* ocx.homeAdmitted(add, 1_000, permission)).toMatchObject({ code: 1 });
+    expect(started).toEqual([add]);
+  }),
+);
+
+it.live("starts an admitted ocx with nothing awaited after its permission is read", () =>
+  Effect.gen(function* () {
+    let checks = 0;
+    let checksAtPermission: number | undefined;
+    // The real spawner checks a working directory on the filesystem before it starts a process.
+    const files = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const real = yield* FileSystem.FileSystem;
+        return {
+          ...real,
+          access: (path, options) =>
+            Effect.suspend(() => {
+              checks++;
+              return real.access(path, options);
+            }),
+        } satisfies FileSystem.FileSystem;
+      }),
+    ).pipe(Layer.provide(NodeFileSystem.layer));
+    const platform = Layer.merge(files, NodePath.layer);
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(
+        hubOcxLayer.pipe(
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(
+            ProcessRunner.layer.pipe(
+              Layer.provide(NodeChildProcessSpawner.layer.pipe(Layer.provide(platform))),
+            ),
+          ),
+          Layer.provide(
+            Layer.mock(Inventory.OpenCodexInventory)({
+              read: Effect.succeed({
+                ...fleetSnapshot("home"),
+                binaries: [{ path: "/bin/echo", version: "2.91.0" }],
+              }),
+            }),
+          ),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(platform),
+        ),
+      ),
+    );
+    const output = yield* ocx.homeAdmitted(
+      ["link", "add", "lidge-ts", "--json"],
+      10_000,
+      Effect.sync(() => {
+        checksAtPermission = checks;
+        return true;
+      }),
+    );
+    expect(output).toMatchObject({ code: 0, stdout: "link add lidge-ts --json\n" });
+    expect(checks).toBe(checksAtPermission);
+  }),
 );

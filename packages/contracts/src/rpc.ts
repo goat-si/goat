@@ -396,7 +396,11 @@ import {
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
-import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
+import {
+  HubDeviceChildOptIn,
+  HubDeviceOperationInput,
+  HubDeviceOperationResult,
+} from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -647,6 +651,7 @@ export const WS_METHODS = {
   hubDeviceJoin: "hub.deviceJoin",
   hubDeviceLeave: "hub.deviceLeave",
   hubDeviceRepair: "hub.deviceRepair",
+  hubDeviceChildOptIn: "hub.deviceChildOptIn",
   serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
   serverPlanOpenCodexSync: "server.planOpenCodexSync",
   serverSyncOpenCodex: "server.syncOpenCodex",
@@ -1227,6 +1232,12 @@ const hubDeviceOperation = (
 const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
 const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
 const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
+/** A person turns an SSH host's OpenCodex Child setup on or off; agents have no equivalent. */
+const WsHubDeviceChildOptInRpc = Rpc.make(WS_METHODS.hubDeviceChildOptIn, {
+  payload: HubDeviceChildOptIn,
+  success: HubDeviceChildOptIn,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
@@ -2494,6 +2505,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsHubDeviceJoinRpc,
   WsHubDeviceLeaveRpc,
   WsHubDeviceRepairRpc,
+  WsHubDeviceChildOptInRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

@@ -3,7 +3,11 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-type Target = { environmentId: string; label: string };
+type Target = {
+  environmentId: string;
+  label: string;
+  serverConfig?: { settings: { hub: { enabled: boolean; autoJoinCloudMachines: boolean } } };
+};
 const state = vi.hoisted(() => ({
   environments: [] as Target[],
   selectedTargets: [] as Target[],
@@ -15,6 +19,8 @@ const state = vi.hoisted(() => ({
   check: vi.fn(),
   remove: vi.fn(),
   dismiss: vi.fn(),
+  updateSettings: vi.fn(),
+  setOptIn: vi.fn(),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -42,6 +48,23 @@ vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../components/ui/ThemedSwitch", () => ({
+  ThemedSwitch: (props: {
+    value: boolean;
+    disabled?: boolean;
+    accessibilityLabel?: string;
+    onValueChange: (value: boolean) => void;
+  }) => (
+    <button
+      type="button"
+      role="switch"
+      aria-label={props.accessibilityLabel}
+      aria-checked={props.value}
+      disabled={props.disabled}
+      onClick={() => props.onValueChange(!props.value)}
+    />
+  ),
+}));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({
   ScreenScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -69,6 +92,8 @@ vi.mock("../../state/server", async () => {
       checkHubNodes: Object.assign(state.check, { permissionAtom }),
       removeHubNode: Object.assign(state.remove, { permissionAtom }),
       dismissHubNodeNotice: Object.assign(state.dismiss, { permissionAtom }),
+      updateSettings: Object.assign(state.updateSettings, { permissionAtom }),
+      setHubDeviceChildOptIn: Object.assign(state.setOptIn, { permissionAtom }),
     },
   };
 });
@@ -124,7 +149,7 @@ beforeEach(() => {
         : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
       : { data: { nodes: [device], notices: [] }, error: null, cause: null },
   );
-  for (const command of [state.check, state.remove, state.dismiss])
+  for (const command of [state.check, state.remove, state.dismiss, state.setOptIn])
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   container = document.createElement("div");
   document.body.append(container);
@@ -303,4 +328,43 @@ it("rereads host status while a setup is running, and stops once none is", async
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("switches an SSH host's Child setup and the cloud switch, and warns when an older hub keeps joining", async () => {
+  const hub = {
+    ...second,
+    serverConfig: { settings: { hub: { enabled: true, autoJoinCloudMachines: true } } },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  state.hosts = [{ host: "lab", reachability: "ok", opencodexChildOptIn: false }];
+  // An older hub drops the field it does not know and answers on.
+  state.updateSettings
+    .mockReset()
+    .mockResolvedValue({ _tag: "Success", value: { hub: { autoJoinCloudMachines: true } } });
+  await render();
+  const optIn = button("Join Lab server as OpenCodex Child after each SSH setup");
+  expect(optIn.getAttribute("aria-checked")).toBe("false");
+  await act(async () => optIn.click());
+  expect(state.setOptIn).toHaveBeenCalledWith({
+    environmentId: second.environmentId,
+    input: { deviceAlias: "lab", enabled: true },
+  });
+  expect(state.refreshHosts).toHaveBeenCalled();
+  const cloud = button("Join new cloud machines");
+  expect(cloud.getAttribute("aria-checked")).toBe("true");
+  await act(async () => cloud.click());
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    environmentId: second.environmentId,
+    input: { patch: { hub: { autoJoinCloudMachines: false } } },
+  });
+  expect(container.textContent).toContain("older GOAT that always joins its cloud machines");
+});
+
+it("offers neither switch for a hub that does not report them", async () => {
+  state.selectedIds = new Set([second.environmentId]);
+  state.selectedTargets = [second];
+  state.hosts = [{ host: "lab", reachability: "ok" }];
+  await render();
+  expect(container.querySelector('[role="switch"]')).toBeNull();
 });

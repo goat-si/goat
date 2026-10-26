@@ -31,6 +31,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.hubDeviceJoin]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceLeave]: AuthOrchestrationOperateScope,
   [WS_METHODS.hubDeviceRepair]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceChildOptIn]: AuthSettingsWriteScope,
   [WS_METHODS.providerHostMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostSyncStart]: AuthProvidersManageScope,
   [WS_METHODS.providerHostSyncStatus]: AuthOrchestrationReadScope,
