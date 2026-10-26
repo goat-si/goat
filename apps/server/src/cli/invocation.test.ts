@@ -50,21 +50,21 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 
   it.effect("keeps a user-installed Node reachable when the command runs under sudo", () =>
     Effect.gen(function* () {
-      const npx = "/home/theo/.npm/_npx/abc/node_modules/goat/dist/bin.mjs";
+      const npx = "/home/sam/.npm/_npx/abc/node_modules/goat/dist/bin.mjs";
       // sudo's secure_path already has a system Node.
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
         `sudo npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat browser setup`,
       );
       // nvm, fnm, and tarball installs are dropped by sudo's PATH reset.
       expect(
-        yield* rootCommand({ node: "/home/theo/.nvm/versions/node/v24/bin/node", entry: npx }),
+        yield* rootCommand({ node: "/home/sam/.nvm/versions/node/v24/bin/node", entry: npx }),
       ).toBe(
         `sudo env "PATH=$PATH" npm exec --yes --package=https://github.com/goat-si/goat-releases/releases/download/v${packageJson.version}/goat-npm.tgz -- goat browser setup`,
       );
       expect(
         yield* rootCommand({
-          node: "/home/theo/.local/node/bin/node",
-          entry: "/home/theo/.local/lib/node_modules/goat/dist/bin.mjs",
+          node: "/home/sam/.local/node/bin/node",
+          entry: "/home/sam/.local/lib/node_modules/goat/dist/bin.mjs",
           path: yield* pathWithGoat,
         }),
       ).toBe('sudo env "PATH=$PATH" goat browser setup');

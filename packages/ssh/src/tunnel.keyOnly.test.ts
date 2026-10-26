@@ -37,7 +37,7 @@ describe.each([
       Effect.sync(() => {
         const args = commandArgs(command);
         if (args.includes("-G"))
-          return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+          return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
         if (phase === "key-only" && command._tag === "StandardCommand")
           keyCalls.push({
             batch: args.find((arg) => arg.startsWith("BatchMode=")),

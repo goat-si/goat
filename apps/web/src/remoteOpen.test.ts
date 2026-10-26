@@ -147,14 +147,14 @@ describe("resolveRemoteOpenState", () => {
 describe("buildRemoteOpenUrl", () => {
   it("roots Windows paths", () => {
     expect(
-      buildRemoteOpenUrl({ editor: "vscode", host: "sol", absolutePath: "C:\\Users\\theo" }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/theo");
+      buildRemoteOpenUrl({ editor: "vscode", host: "sol", absolutePath: "C:\\Users\\sam" }),
+    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/sam");
   });
 
   it("drops the Windows drive letter for Zed", () => {
-    expect(
-      buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "C:\\Users\\theo" }),
-    ).toBe("zed://ssh/sol/Users/theo");
+    expect(buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "C:\\Users\\sam" })).toBe(
+      "zed://ssh/sol/Users/sam",
+    );
     expect(buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "/C:/project" })).toBe(
       "zed://ssh/sol/C%3A/project",
     );

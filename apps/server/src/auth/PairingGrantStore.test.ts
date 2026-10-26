@@ -62,15 +62,15 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
   it.effect("issues one-time bootstrap tokens that can only be consumed once", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      const issued = yield* bootstrapCredentials.issueOneTimeToken({ label: "Julius iPhone" });
+      const issued = yield* bootstrapCredentials.issueOneTimeToken({ label: "Alex iPhone" });
       const first = yield* bootstrapCredentials.consume(issued.credential);
       const second = yield* Effect.flip(bootstrapCredentials.consume(issued.credential));
 
       expect(first.method).toBe("one-time-token");
       expect(first.scopes).toEqual(AuthStandardClientScopes);
       expect(first.subject).toBe("one-time-token");
-      expect(first.label).toBe("Julius iPhone");
-      expect(issued.label).toBe("Julius iPhone");
+      expect(first.label).toBe("Alex iPhone");
+      expect(issued.label).toBe("Alex iPhone");
       expect(second._tag).toBe("UnknownBootstrapCredentialError");
       expect(second.message).toContain("Unknown bootstrap credential");
     }).pipe(Effect.provide(layerPairingGrantStore())),

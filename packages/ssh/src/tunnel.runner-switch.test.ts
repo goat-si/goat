@@ -57,9 +57,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             Effect.gen(function* () {
               const args = commandArgs(command);
               if (args.includes("-G")) {
-                return makeSuccessfulProcess(
-                  "hostname devbox.example.com\nuser julius\nport 2222\n",
-                );
+                return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
               }
               if (args.includes("-N"))
                 return makeRunningProcess(() => {

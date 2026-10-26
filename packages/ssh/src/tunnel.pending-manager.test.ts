@@ -62,7 +62,7 @@ const fixture = Effect.gen(function* () {
       yield* fs.writeFileString(pinPath, `devbox ssh-ed25519 ${key}\n`);
       yield* fs.writeFileString(
         confPath,
-        `Host devbox\n  HostName devbox.example.com\n  User julius\n  Port 2222\n  HostKeyAlias devbox\n  UserKnownHostsFile "${pinPath}"\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  HostKeyAlgorithms ssh-ed25519\n`,
+        `Host devbox\n  HostName devbox.example.com\n  User alex\n  Port 2222\n  HostKeyAlias devbox\n  UserKnownHostsFile "${pinPath}"\n  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  HostKeyAlgorithms ssh-ed25519\n`,
       );
     });
   const forwarded = yield* Deferred.make<void>();
@@ -144,7 +144,7 @@ const fixture = Effect.gen(function* () {
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
           };
         return makeSuccessfulProcess(
-          "hostname devbox.example.com\nuser julius\nport 2222\n" +
+          "hostname devbox.example.com\nuser alex\nport 2222\n" +
             ((yield* fs.exists(confPath))
               ? `hostkeyalias devbox\nuserknownhostsfile ${pinPath}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`
               : ""),

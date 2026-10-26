@@ -43,7 +43,7 @@ describe("SSH verbose diagnostics", () => {
           if (result._tag === "Failure") {
             assert.equal(
               result.failure.message,
-              `SSH command failed for julius@devbox (exit ${exitCode}).`,
+              `SSH command failed for alex@devbox (exit ${exitCode}).`,
             );
             if (result.failure instanceof SshCommandError) assert.equal(result.failure.stderr, "");
           }

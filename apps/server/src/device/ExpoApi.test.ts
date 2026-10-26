@@ -25,7 +25,7 @@ describe("Expo credentials", () => {
       yield* fs.makeDirectory(path.join(home, ".expo"));
       yield* fs.writeFileString(
         path.join(home, ".expo", "state.json"),
-        JSON.stringify({ auth: { sessionSecret: "session-secret", username: "julius" } }),
+        JSON.stringify({ auth: { sessionSecret: "session-secret", username: "alex" } }),
       );
       const resolve = (saved: string, env: NodeJS.ProcessEnv) =>
         resolveExpoCredential(saved).pipe(

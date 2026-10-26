@@ -16,6 +16,7 @@ import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
 import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
+import { SAMPLE_TEXT_RULES } from "./rules-samples.ts";
 export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
@@ -490,6 +491,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   // Last, so they see text the env, package and identifier rules already renamed.
   ...LEFTOVER_TEXT_RULES,
   ...OWNER_TEXT_RULES,
+  ...SAMPLE_TEXT_RULES,
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
