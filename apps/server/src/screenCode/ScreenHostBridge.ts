@@ -60,6 +60,8 @@ interface CellState {
   metadata: ScreenImageMetadata[];
   truncated: string[];
   retainedBytes: number;
+  // Counted apart from the journal so a full journal cannot hide an input whose effect may have started.
+  effectsStarted: number;
 }
 
 const failure = (code: ScreenRunError["code"], callId?: number): ScreenRunError => ({
@@ -127,6 +129,7 @@ export class ScreenHostBridge {
         metadata: [],
         truncated: [],
         retainedBytes: 0,
+        effectsStarted: 0,
       };
       this.cells.set(id, state);
     }
@@ -249,6 +252,7 @@ export class ScreenHostBridge {
     )
       return deny(failure("stale_reference", call.callId));
     const admittedIndex = record("unverifiable", "admitted", false);
+    let callDispatched = false;
     const settle = (
       category: ScreenJournalEntry["receipt"]["category"],
       journalState: ScreenJournalEntry["receipt"]["journalState"] = "settled",
@@ -287,6 +291,8 @@ export class ScreenHostBridge {
       if (state.closed || state.cutoff.signal.aborted)
         return yield* Effect.fail(failure("stopped", call.callId));
       if (!bridge.dispatcher) return yield* Effect.fail(failure("unavailable", call.callId));
+      callDispatched = true;
+      state.effectsStarted++;
       settle("unknown_outcome", "dispatched", true);
       return yield* bridge.dispatcher.dispatch(call, context);
     });
@@ -316,8 +322,7 @@ export class ScreenHostBridge {
       ),
     );
     if (state.closed) {
-      const dispatched =
-        admittedIndex !== undefined && state.journal[admittedIndex]?.receipt.dispatched === true;
+      const dispatched = callDispatched;
       settle(dispatched ? "unknown_outcome" : "refused", dispatched ? "unknown" : "settled");
       return refused(call, {
         ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
@@ -325,6 +330,7 @@ export class ScreenHostBridge {
       });
     }
     if (result._tag === "Failure") {
+      if (callDispatched && !result.failure.effectStarted) state.effectsStarted--;
       settle(
         result.failure.effectStarted ? "unknown_outcome" : "refused",
         result.failure.effectStarted ? "unknown" : "settled",
@@ -425,6 +431,7 @@ export class ScreenHostBridge {
       imageMetadata: state?.metadata ?? [],
       journal: state?.journal ?? [],
       truncated: state?.truncated ?? [],
+      effectsStarted: state?.effectsStarted ?? 0,
     };
   }
 

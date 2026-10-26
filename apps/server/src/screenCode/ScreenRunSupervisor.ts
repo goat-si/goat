@@ -179,11 +179,11 @@ export function createScreenRunSupervisor(deps: {
               settled = true;
               cleanup();
               deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
-              const journal = deps.hostBridge.takeCellImagesNow(
+              const { journal, effectsStarted } = deps.hostBridge.takeCellImagesNow(
                 identity.runId,
                 identity.turnId,
                 cellId,
-              ).journal;
+              );
               const receipts = journal.slice(-16).map(({ receipt }) =>
                 receipt.journalState === "settled"
                   ? receipt
@@ -199,7 +199,8 @@ export function createScreenRunSupervisor(deps: {
                         category: "refused" as const,
                       },
               );
-              const effectStarted = receipts.some((receipt) => receipt.dispatched);
+              const effectStarted =
+                effectsStarted > 0 || receipts.some((receipt) => receipt.dispatched);
               callAbort.abort();
               close(session);
               reject(

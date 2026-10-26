@@ -843,3 +843,64 @@ it.live("a held cell deadline preserves unknown input receipts through the servi
     }).pipe(Effect.provide(serviceLayer));
   }),
 );
+
+it.live("a full journal still reports a dispatched input as an unknown outcome at cutoff", () =>
+  Effect.gen(function* () {
+    const offered = yield* Deferred.make<void>();
+    const held = yield* Deferred.make<void>();
+    let fireDeadline: (() => void) | undefined;
+    let calls = 0;
+    const serviceLayer = ScreenRunService.layerWithRuntime({
+      invocation: {
+        command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+      },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      scheduleDeadline: (run) => {
+        fireDeadline = run;
+        return () => {
+          fireDeadline = undefined;
+        };
+      },
+      dispatcher: {
+        availability: () => Effect.succeed([{ kind: "app", available: true }]),
+        dispatch: () =>
+          ++calls === 1
+            ? Effect.fail({ code: "unavailable" as const, effectStarted: false })
+            : Deferred.succeed(offered, undefined).pipe(
+                Effect.flatMap(() => Deferred.await(held)),
+                Effect.as({ value: true, category: "confirmed" as const }),
+              ),
+      },
+    }).pipe(Layer.provide(NodeServices.layer));
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const running = yield* service
+        .runCell({
+          runId: "run",
+          turnId: "turn",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          limits: { journalEntries: 1 },
+          source:
+            "try { await screen.list_apps(); } catch {} return await screen.list_apps();",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(offered);
+      fireDeadline?.();
+      const result = yield* Fiber.join(running);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+      yield* Deferred.succeed(held, undefined);
+      yield* service.finishTurn({
+        runId: "run",
+        turnId: "turn",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "test",
+      });
+    }).pipe(Effect.provide(serviceLayer));
+  }),
+);
