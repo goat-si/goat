@@ -24,6 +24,7 @@ import {
   type PreviewAutomationDialogInput,
   type PreviewAutomationDragInput,
   type PreviewAutomationEvaluateInput,
+  type PreviewAutomationFetchInput,
   type PreviewAutomationHoverInput,
   type PreviewAutomationNavigateInput,
   type PreviewAutomationNetworkEntry,
@@ -32,6 +33,7 @@ import {
   type PreviewAutomationReloadInput,
   type PreviewAutomationRequest,
   type PreviewAutomationResizeInput,
+  type PreviewAutomationScrollCollectInput,
   type PreviewAutomationScrollInput,
   type PreviewAutomationSelectInput,
   type PreviewAutomationSetColorSchemeInput,
@@ -95,6 +97,8 @@ import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
+import { inPageFetch } from "./inPageFetch.ts";
+import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -355,6 +359,7 @@ const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new 
   "status",
   "snapshot",
   "logs",
+  "fetch",
   "waitFor",
 ]);
 
@@ -385,17 +390,6 @@ const viewportSettingsEqual = (left: PreviewViewportSetting, right: PreviewViewp
 
 const fixedViewportSize = (setting: PreviewViewportSetting) =>
   setting._tag === "fill" ? null : { width: setting.width, height: setting.height };
-
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-
-const num = (value: unknown, fallback = 0) =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback;
-
-const modifiersOf = (message: Record<string, unknown>) => {
-  const value = num(message.modifiers);
-  return Number.isInteger(value) && value >= 0 && value < 16 ? value : 0;
-};
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -1983,6 +1977,22 @@ const make = Effect.gen(function* () {
       }
       case "logs":
         return tab.diagnostics.read(decodeLogsInput(input));
+      case "fetch": {
+        const fetchInput = input as PreviewAutomationFetchInput;
+        return inPageFetch(tab.page, tab.control, {
+          ...fetchInput,
+          timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
+        });
+      }
+      case "scrollCollect":
+        return recordAction(tab, "scrollCollect", () =>
+          collectWhileScrolling(
+            tab.page,
+            tab.control,
+            gateFor(tab),
+            input as PreviewAutomationScrollCollectInput,
+          ),
+        );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
         await recordAction(tab, "click", () =>
@@ -2113,35 +2123,15 @@ const make = Effect.gen(function* () {
       }
     });
 
-  const releaseViewerInput = async (viewer: ViewerState, session: CDPSession) => {
-    for (const { key, code } of viewer.pressedKeys.values()) {
-      await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code }).catch(constVoid);
-    }
-    viewer.pressedKeys.clear();
-    for (const [button, point] of viewer.pressedButtons) {
-      await session
-        .send("Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          button,
-          ...point,
-          buttons: 0,
-          clickCount: 1,
-        })
-        .catch(constVoid);
-    }
-    viewer.pressedButtons.clear();
-    viewer.requestedSize = null;
-  };
-
   const dispatchViewerInput = async (
     tab: ServerTab,
     session: CDPSession,
     viewer: ViewerState,
     raw: unknown,
   ) => {
-    const message = asRecord(raw);
+    const message = ViewerInput.asRecord(raw);
     if (!message) return;
-    const modifiers = modifiersOf(message);
+    const modifiers = ViewerInput.modifiersOf(message);
     switch (message.type) {
       case "mouse": {
         const action = message.action;
@@ -2152,16 +2142,19 @@ const make = Effect.gen(function* () {
           : "none";
         await session.send("Input.dispatchMouseEvent", {
           type,
-          x: num(message.x),
-          y: num(message.y),
+          x: ViewerInput.num(message.x),
+          y: ViewerInput.num(message.y),
           button,
-          buttons: num(message.buttons),
-          clickCount: num(message.clickCount, type === "mouseMoved" ? 0 : 1),
+          buttons: ViewerInput.num(message.buttons),
+          clickCount: ViewerInput.num(message.clickCount, type === "mouseMoved" ? 0 : 1),
           modifiers,
         });
         if (button !== "none") {
           if (action === "down")
-            viewer.pressedButtons.set(button, { x: num(message.x), y: num(message.y) });
+            viewer.pressedButtons.set(button, {
+              x: ViewerInput.num(message.x),
+              y: ViewerInput.num(message.y),
+            });
           else if (action === "up") viewer.pressedButtons.delete(button);
         }
         return;
@@ -2170,10 +2163,10 @@ const make = Effect.gen(function* () {
         viewer.scrolledAt = Date.now();
         await session.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
-          x: num(message.x),
-          y: num(message.y),
-          deltaX: num(message.deltaX),
-          deltaY: num(message.deltaY),
+          x: ViewerInput.num(message.x),
+          y: ViewerInput.num(message.y),
+          deltaX: ViewerInput.num(message.deltaX),
+          deltaY: ViewerInput.num(message.deltaY),
           modifiers,
         });
         return;
@@ -2198,7 +2191,7 @@ const make = Effect.gen(function* () {
           modifiers,
           ...(text ? { text, unmodifiedText: text } : {}),
           ...command,
-          windowsVirtualKeyCode: num(
+          windowsVirtualKeyCode: ViewerInput.num(
             message.keyCode,
             key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
           ),
@@ -2216,8 +2209,8 @@ const make = Effect.gen(function* () {
         }
         return;
       case "resize": {
-        const width = Math.min(Math.round(num(message.width)), 3840);
-        const height = Math.min(Math.round(num(message.height)), 2160);
+        const width = Math.min(Math.round(ViewerInput.num(message.width)), 3840);
+        const height = Math.min(Math.round(ViewerInput.num(message.height)), 2160);
         if (width < 100 || height < 100) return;
         viewer.requestedSize = { width, height, order: ++viewerResizeOrder };
         if (tab.setting._tag !== "fill" || tab.desktop) return;
@@ -2244,7 +2237,7 @@ const make = Effect.gen(function* () {
         return;
       case "history":
         tab.control.trackUntilHandoff(
-          num(message.delta) < 0
+          ViewerInput.num(message.delta) < 0
             ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
             : tab.page.goForward(VIEWER_NAVIGATION_OPTIONS),
         );
@@ -2257,8 +2250,8 @@ const make = Effect.gen(function* () {
         tab.control.trackUntilHandoff(tab.page.reload(VIEWER_NAVIGATION_OPTIONS));
         return;
       case "probe": {
-        const x = num(message.x);
-        const y = num(message.y);
+        const x = ViewerInput.num(message.x);
+        const y = ViewerInput.num(message.y);
         const result = await session.send("Runtime.evaluate", {
           expression: `(${ViewerInput.EDITABLE_AT_POINT_SCRIPT})(${x}, ${y})`,
           returnByValue: true,
@@ -2356,7 +2349,9 @@ const make = Effect.gen(function* () {
       }),
       () =>
         Effect.promise(async () => {
-          await tab.control.disconnect(viewer.id, () => releaseViewerInput(viewer, session));
+          await tab.control.disconnect(viewer.id, () =>
+            ViewerInput.releaseViewerInput(viewer, session),
+          );
           tab.viewers.delete(viewer);
           broadcastControl(tab);
           reportLiveTabs();
@@ -2439,7 +2434,7 @@ const make = Effect.gen(function* () {
       input: (raw: unknown) =>
         Effect.promise(async () => {
           if (!viewer.canOperate) return;
-          const message = asRecord(raw);
+          const message = ViewerInput.asRecord(raw);
           if (!message) return;
           try {
             if (message.type === "takeControl") {
@@ -2449,7 +2444,7 @@ const make = Effect.gen(function* () {
               pushFileChooser(tab);
             } else if (message.type === "releaseControl") {
               const releasing = tab.control.release(viewer.id, () =>
-                releaseViewerInput(viewer, session),
+                ViewerInput.releaseViewerInput(viewer, session),
               );
               broadcastControl(tab);
               await releasing;

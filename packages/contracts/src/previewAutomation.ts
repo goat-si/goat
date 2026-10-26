@@ -62,6 +62,8 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "forward",
   "reload",
   "logs",
+  "fetch",
+  "scrollCollect",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
@@ -1303,3 +1305,4 @@ export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
 export const PREVIEW_AGENT_INPUT_HELD_GLOBAL = "__goatAgentInputHeld";
 /** Longest a hold lasts if its release never reaches the page; agent dispatch takes far less. */
 export const PREVIEW_AGENT_INPUT_HOLD_MAX_MS = 5_000;
+export * from "./previewAutomationPrimitives.ts";

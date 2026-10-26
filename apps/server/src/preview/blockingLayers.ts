@@ -221,3 +221,20 @@ export const describeLayers = async (
     return { ...sampled, blocking: pickBlocking(sampled.candidates) };
   });
 };
+
+/**
+ * Samples the page's layers and formats the @layers header line for a snapshot. Falls back to
+ * @layers none when the page stub has no layer candidates.
+ */
+export const readLayersHeader = async (
+  page: Pick<Page, "evaluate">,
+  grid = DEFAULT_GRID,
+): Promise<string> => {
+  // Page-side code is passed as source: the server compiles without DOM types.
+  const sampled = (await page.evaluate(`(${LAYERS_SCRIPT})(${grid})`).catch(() => null)) as Omit<
+    LayersReport,
+    "blocking"
+  > | null;
+  if (!sampled || !Array.isArray(sampled.candidates)) return "@layers none";
+  return layersHeader({ ...sampled, blocking: pickBlocking(sampled.candidates) });
+};
