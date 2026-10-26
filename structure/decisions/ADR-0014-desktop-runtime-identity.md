@@ -57,10 +57,14 @@ first stable release. Renaming one is a migration of installed state. It is revi
 with a migration that has been verified on real installs, and the rename tooling keeps each one
 (`scripts/lib/goat-rename/rules.ts`).
 
-- **Linux desktop entry `t3code.desktop`, `StartupWMClass` `t3code`, and the deb package
-  `t3code`.** Docks match windows to pinned launchers, URL handlers and file associations through
-  the entry name and WM class, so a rename orphans what users set up. A renamed deb package installs
-  next to the old one instead of upgrading it. Nothing users see gets better.
+- **Linux desktop entry `t3code.desktop` and `StartupWMClass` `t3code`.** Docks match windows to
+  pinned launchers, URL handlers and file associations through the entry name and WM class, so a
+  rename orphans what users set up. The staged `desktopName` with `syncDesktopName` keeps both
+  while the executable changes. The deb package and executable are renamed (plan 261026 wp9a,
+  verification on the next nightly pending): the `goat` package Replaces, Conflicts with and
+  Provides `t3code`, so it upgrades an installed `t3code` package in place, and the executable is
+  `goat-desktop` because `goat` is the CLI. `t3code` stays in `/opt/GOAT` as a symlink for good: the
+  deb updater relaunches the old execPath, and older CLI shims and per-user desktop entries call it.
 - **Preview browser partitions (`persist:t3code-preview-*`).** Each partition holds the cookies
   and logins of a preview tab. Electron has no supported way to copy a partition, so a rename signs
   every user out of every previewed site.
