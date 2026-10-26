@@ -35,8 +35,15 @@ function api({ runs, statuses = {}, posts = {} }) {
     const path = new URL(url).pathname + new URL(url).search;
     calls.push(method + " " + path.replace("/repos/goat-si/goat", ""));
     if (method === "POST") {
-      const status = posts[path.split("/").slice(-2).join("/")] ?? 201;
-      return { ok: status < 300, status, json: async () => ({}) };
+      const action = path.split("/").slice(-2).join("/");
+      const status = posts[action] ?? (action.endsWith("cancel") ? 202 : 201);
+      return {
+        ok: status < 300,
+        status,
+        json: async () => {
+          throw new Error("no body");
+        },
+      };
     }
     if (path.includes("/workflows/")) {
       return {
@@ -86,6 +93,11 @@ describe("refreshing a republished goat-ci-result after a re-run", () => {
     assert.equal(pick([run(9, "2026-10-26T09:00:00Z")]), null);
     assert.equal(pick([run(11, "2026-10-26T10:05:00Z", { number: 8 })]), null);
     assert.equal(pick([run(11, "2026-10-26T10:05:00Z", { sha: "def" })]), null);
+  });
+
+  it("counts a run created in the same second as this one but with a larger id as later", () => {
+    assert.equal(pick([run(11, OWN.created_at)])?.id, 11);
+    assert.equal(pick([run(9, OWN.created_at)]), null);
   });
 
   it("cancels a still-running ignored run and re-runs it only once it has completed", async () => {
