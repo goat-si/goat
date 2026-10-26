@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { selfInvocationArgs, type SelfInvocation } from "@goat/shared/nodeRuntime";
 import {
@@ -165,6 +166,7 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
+            let resultReceived = false;
             const hostErrors = new Map<number, ScreenRunError>();
             const callAbort = new AbortController();
             const cleanup = () => {
@@ -209,6 +211,7 @@ export function createScreenRunSupervisor(deps: {
             };
             const onAbort = () => failRun("stopped");
             const onLine = (line: string) => {
+              if (resultReceived || settled) return;
               if (Buffer.byteLength(line) > MAX_FRAME_BYTES) return failRun("output_limit");
               let frame: unknown;
               try {
@@ -245,8 +248,8 @@ export function createScreenRunSupervisor(deps: {
                 return failRun("runtime_unavailable");
               }
               if (result.cellId !== cellId) return failRun("runtime_unavailable");
-              settled = true;
-              cleanup();
+              resultReceived = true;
+              session.lines.off("line", onLine);
               const error = Schema.is(ScreenRunError)(result.error)
                 ? result.error.callId !== undefined &&
                   hostErrors.get(result.error.callId)?.code === result.error.code
@@ -276,11 +279,20 @@ export function createScreenRunSupervisor(deps: {
                   identity.turnId,
                   cellId,
                 );
-                const availability = yield* deps.hostBridge.availability(identity.context);
+                const available = yield* deps.hostBridge
+                  .availability(identity.context)
+                  .pipe(Effect.timeoutOption("1 second"));
+                const availability = Option.getOrElse(available, () => [
+                  { kind: "app" as const, available: false, reason: "no_lease" as const },
+                  { kind: "tab" as const, available: false, reason: "no_host" as const },
+                ]);
                 return { collected, availability };
               });
               void deps.runCallback(collect).then(
-                ({ collected, availability }) =>
+                ({ collected, availability }) => {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
                   resolve({
                     runId: identity.runId,
                     turnId: identity.turnId,
@@ -297,8 +309,12 @@ export function createScreenRunSupervisor(deps: {
                     imageMetadata: collected.imageMetadata,
                     images: collected.images,
                     availability,
-                  }),
+                  });
+                },
                 (cause) => {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
                   close(session);
                   reject(
                     Schema.is(ScreenSupervisorFailure)(cause)

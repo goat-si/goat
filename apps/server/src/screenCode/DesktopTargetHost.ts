@@ -18,6 +18,7 @@ import type {
   ScreenHostDispatcher,
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
+import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
@@ -282,7 +283,7 @@ export const createDesktopTargetHost = (deps: {
               elements,
             }),
             mode: "full",
-            limits: { treeBytes: context.limits.treeBytes },
+            limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
         catch: (cause) =>
           fail(

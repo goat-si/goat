@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 
 const scope = {
@@ -134,6 +135,63 @@ it.effect("default observation does not capture an image", () =>
     ).toBe(true);
     expect(observation.image).toBeUndefined();
   }),
+);
+
+it.effect(
+  "a default-limit observation of a large tree returns truncated elements instead of output_limit",
+  () =>
+    Effect.gen(function* () {
+      const tab = {
+        environmentId: "env",
+        browserInstanceId: "goat-server-browser",
+        connectionId: "connection",
+        threadId: "thread",
+        tabId: PreviewTabId.make("tab"),
+        title: "Page",
+        url: "https://example.test/",
+        owner: "unclaimed" as const,
+        ownedByCaller: false,
+        controlGeneration: 0,
+      };
+      const tree = Array.from(
+        { length: 400 },
+        (_, index) => `- button Item ${index} [ref=e${index}]`,
+      ).join("\n");
+      const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+        listBoundTabs: () => Effect.succeed([tab]),
+        invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+          Effect.succeed(
+            (request.operation === "status"
+              ? {
+                  tabId: tab.tabId,
+                  url: tab.url,
+                  control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+                }
+              : {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: tree,
+                  treeComplete: true,
+                  refGeneration: "1",
+                }) as A,
+          ),
+      };
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher(yield* makePreviewTargetHost(broker));
+      const binding = yield* bridge.handle(call("select_tab", 1, { tabId: "tab" }), context);
+      expect(binding?.outcome).toBe("ok");
+      if (!binding || binding.outcome !== "ok") throw new Error("Expected tab binding");
+      const targetRef = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+      const reply = yield* bridge.handle(call("observe", 2, {}, targetRef), context);
+      expect(reply?.outcome).toBe("ok");
+      if (!reply || reply.outcome !== "ok") throw new Error("Expected observation");
+      expect(reply.value).toMatchObject({ truncated: true });
+      expect((reply.value as { elements: unknown[] }).elements.length).toBeLessThan(400);
+      expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
+        context.limits.returnBytes,
+      );
+    }),
 );
 
 it.effect("requested image metadata matches its observation while bytes remain host-owned", () =>

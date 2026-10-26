@@ -18,7 +18,11 @@ import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import type { BoundPreviewTab } from "../mcp/PreviewAutomationBroker.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
-import type { ScreenHostContext, ScreenHostDispatcher } from "./ScreenHostBridge.ts";
+import {
+  observationReplyBudget,
+  type ScreenHostContext,
+  type ScreenHostDispatcher,
+} from "./ScreenHostBridge.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
 
@@ -350,7 +354,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               mode,
               ...(baseObservationId ? { baseObservationId } : {}),
               ...(query ? { query } : {}),
-              limits: { treeBytes: context.limits.treeBytes },
+              limits: { treeBytes: observationReplyBudget(call, context.limits) },
             }),
           catch: (cause) =>
             fail(

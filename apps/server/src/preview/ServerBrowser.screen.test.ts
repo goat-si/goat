@@ -205,11 +205,18 @@ it.effect("an agent cannot close its own tab while a private field has focus", (
   Effect.scoped(
     Effect.gen(function* () {
       const { broker, tabId } = yield* ready;
-      privacy.setters.at(-1)?.(true);
+      const setPrivate = privacy.setters.at(-1);
+      expect(setPrivate).toBeDefined();
+      setPrivate?.(true);
       const result = yield* broker
         .invoke({ scope, operation: "close", input: {}, tabId })
         .pipe(Effect.result);
       expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({
+          _tag: "PreviewAutomationControlInterruptedError",
+          reason: "privateMode",
+        });
       expect((yield* broker.listBoundTabs(scope)).some((tab) => tab.tabId === tabId)).toBe(true);
     }),
   ).pipe(Effect.provide(layer)),

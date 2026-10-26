@@ -165,6 +165,31 @@ it.live("resetValues clears prior computation values", () =>
   }),
 );
 
+it.live("hung post-cell availability returns within its bound", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.never,
+      dispatch: () => Effect.succeed({ value: true, category: "confirmed" }),
+    });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    const result = yield* supervisor.runCell(
+      { runId: "r", turnId: "t", context: context("one", limits) },
+      "return 7;",
+      false,
+    );
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+    expect(result.availability).toEqual([
+      { kind: "app", available: false, reason: "no_lease" },
+      { kind: "tab", available: false, reason: "no_host" },
+    ]);
+    yield* supervisor.finishTurn("r", "t", "test");
+  }),
+);
+
 it.live("sequential awaited host calls settle in order", () =>
   Effect.gen(function* () {
     const asset = yield* resolveScreenRuntimeAsset("dev");

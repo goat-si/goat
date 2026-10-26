@@ -82,6 +82,18 @@ const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byt
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
 
+export const observationReplyBudget = (call: ScreenHostCall, limits: ScreenRunLimits): number => {
+  const envelope = JSON.stringify({
+    t: "reply",
+    runId: call.runId,
+    cellId: call.cellId,
+    callId: call.callId,
+    outcome: "ok",
+    value: null,
+  });
+  return Math.min(limits.treeBytes, limits.returnBytes - (Buffer.byteLength(envelope) - 4));
+};
+
 export class ScreenHostBridge {
   private readonly cells = new Map<string, CellState>();
   private readonly invalidTargets = new Map<string, Set<string>>();
