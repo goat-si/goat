@@ -37,6 +37,7 @@ apps/mobile/.generated/
 apps/mobile/.android-cache/
 /.generated/
 artifacts/app-store/screenshots/
+artifacts/mobile-e2e/
 .github/pr-assets/
 # PR screenshots live on the orphan pr-assets branch (scripts/pr-assets.ts), never on dev.
 /pr-assets/

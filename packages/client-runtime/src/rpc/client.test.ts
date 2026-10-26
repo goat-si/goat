@@ -222,18 +222,18 @@ describe("environment RPC", () => {
   it.effect("switches durable subscriptions when the supervisor replaces the session", () =>
     Effect.gen(function* () {
       const subscriptions: string[] = [];
-      const subscribed = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
+      const subscriptionChanges = yield* Queue.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
-          Deferred.doneUnsafe(subscribed[0]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
-          Deferred.doneUnsafe(subscribed[1]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -241,7 +241,12 @@ describe("environment RPC", () => {
       const awaitSubscriptions = Effect.fn("TestEnvironmentRpc.awaitSubscriptions")(function* (
         count: number,
       ) {
-        yield* Deferred.await(subscribed[count - 1]!);
+        for (;;) {
+          if (subscriptions.length >= count) {
+            return;
+          }
+          yield* Queue.take(subscriptionChanges);
+        }
       });
 
       const subscriptionFiber = yield* subscribe(WS_METHODS.subscribeTerminalEvents, {}).pipe(
@@ -329,11 +334,11 @@ describe("environment RPC", () => {
   it.effect("keeps durable subscriptions alive across a transport failure and new session", () =>
     Effect.gen(function* () {
       const subscriptions: string[] = [];
-      const subscribed = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
+      const subscriptionChanges = yield* Queue.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
-          Deferred.doneUnsafe(subscribed[0]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.fail(
             new RpcClientError.RpcClientError({
               reason: new RpcClientError.RpcClientDefect({
@@ -347,7 +352,7 @@ describe("environment RPC", () => {
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
-          Deferred.doneUnsafe(subscribed[1]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -359,11 +364,15 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
       yield* SubscriptionRef.set(activeSession, Option.some(session(firstClient)));
-      yield* Deferred.await(subscribed[0]!);
+      while (subscriptions.length < 1) {
+        yield* Queue.take(subscriptionChanges);
+      }
       yield* SubscriptionRef.set(activeSession, Option.none());
       yield* SubscriptionRef.set(activeSession, Option.some(session(secondClient)));
 
-      yield* Deferred.await(subscribed[1]!);
+      while (subscriptions.length < 2) {
+        yield* Queue.take(subscriptionChanges);
+      }
       yield* Fiber.interrupt(subscriptionFiber);
 
       expect(subscriptions).toEqual(["first", "second"]);
@@ -395,20 +404,20 @@ describe("environment RPC", () => {
     Effect.gen(function* () {
       const domainError = new Error("terminal subscription rejected");
       const subscriptions: string[] = [];
-      const subscribed = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
+      const subscriptionChanges = yield* Queue.make<void>();
       const observedFailures: Error[] = [];
       const failureObserved = yield* Deferred.make<void>();
       const firstClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("first");
-          Deferred.doneUnsafe(subscribed[0]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.fail(domainError);
         },
       } as unknown as WsRpcProtocolClient;
       const secondClient = {
         [WS_METHODS.subscribeTerminalEvents]: () => {
           subscriptions.push("second");
-          Deferred.doneUnsafe(subscribed[1]!, Effect.void);
+          Queue.offerUnsafe(subscriptionChanges, undefined);
           return Stream.never;
         },
       } as unknown as WsRpcProtocolClient;
@@ -436,7 +445,9 @@ describe("environment RPC", () => {
       expect(observedFailures).toEqual([domainError]);
 
       yield* SubscriptionRef.set(activeSession, Option.some(session(secondClient)));
-      yield* Deferred.await(subscribed[1]!);
+      while (subscriptions.length < 2) {
+        yield* Queue.take(subscriptionChanges);
+      }
       yield* Fiber.interrupt(subscriptionFiber);
 
       expect(subscriptions).toEqual(["first", "second"]);

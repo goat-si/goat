@@ -236,11 +236,9 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         assert.equal(manifest.version, VERSION);
         assert.deepStrictEqual(manifest.bin, { goat: "./bin/goat.mjs", t3: "./bin/goat.mjs" });
         assert.isTrue(output.tarball.endsWith("goat-npm.tgz"));
-        // Nothing for npm to resolve, so nothing that can lag behind the launcher.
         assert.isUndefined(manifest.dependencies);
         assert.isUndefined(manifest.optionalDependencies);
 
-        // Run what npm would install: the published tarball, unpacked.
         const installed = path.join(root, "installed");
         yield* fs.makeDirectory(installed);
         const unpack = yield* run("tar", ["-xzf", output.tarball, "-C", installed], {
@@ -276,14 +274,11 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
           [VERSION],
         );
 
-        // A second run reuses the download.
         const requestsAfterFirst = release.requests.length;
         const second = yield* run(process.execPath, [launcher, "--version"], { cwd: root, env });
         assert.equal(second.exitCode, 7);
         assert.equal(release.requests.length, requestsAfterFirst);
 
-        // Services installed before 0.0.41 fork dist/bin.mjs and talk to the
-        // server over IPC; the channel and SIGTERM must reach the executable.
         const ipcServer = path.join(home, "runtime/goat/versions", VERSION, "goat");
         yield* fs.writeFileString(
           ipcServer,
@@ -306,7 +301,6 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
           assert.deepStrictEqual(await exit, [23, null]);
         });
 
-        // Two first runs at once both start, and neither removes the other's install.
         const raceHome = path.join(root, "race-home");
         const launch = run(process.execPath, [launcher, "--version"], {
           cwd: root,
@@ -333,7 +327,6 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         );
         assert.isFalse(yield* fs.exists(path.join(userHome, ".goat")));
 
-        // A download that does not match the release checksums is never installed.
         release.corruptChecksum();
         const corrupt = yield* run(process.execPath, [launcher, "--version"], {
           cwd: root,

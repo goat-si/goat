@@ -74,8 +74,6 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: { ...actual.serverEnvironment, providersValueAtom: providers as never },
   };
 });
-// The registry search and the sign-in step talk to the environment over RPC; these
-// stand-ins expose the choices a user makes there.
 vi.mock(import("./AcpRegistrySearchStep"), async (original) => ({
   ...(await original()),
   AcpRegistrySearchStep: ((props: {
@@ -446,7 +444,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     await prepareCodexInstance();
     const save = button("Add and set up");
     actions.canManageProviders = false;
-    // The rendered button is still enabled; the click must recheck the live grant.
+    // Click before React renders the revoked grant.
     await act(async () => save.click());
 
     expect(settingsHooks.mutate).not.toHaveBeenCalled();

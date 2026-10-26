@@ -28,10 +28,7 @@ import { environmentShell } from "../../state/shell";
 import { environmentThreadShells } from "../../state/threads";
 import { Button } from "../ui/button";
 
-/**
- * Nothing renders while pending — no shell, no EventRouter (whose welcome
- * payload would otherwise navigate into a thread), no dialogs.
- */
+/** Pending blocks all rendering, including EventRouter welcome navigation. */
 
 const FIRST_RUN_DECISION_TIMEOUT_MS = 4_000;
 
@@ -58,9 +55,8 @@ const workspaceEvidenceLiveAtom = Atom.make((get) => {
   return true;
 }).pipe(Atom.withLabel("web-onboarding-workspace-evidence-live"));
 
-// The gate only needs how many threads exist and, while there is at most one,
-// that thread; a shell update of any thread in a populated workspace must not
-// re-render the app root.
+// Subscribe only to thread count and the sole thread so populated-workspace shell updates cannot rerender the
+// app root.
 const threadCountAtom = Atom.make(
   (get) => get(environmentThreadShells.threadShellsAtom).length,
 ).pipe(Atom.withLabel("web-onboarding-thread-count"));

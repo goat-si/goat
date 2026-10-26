@@ -16,10 +16,7 @@ import { rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts"
 
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>["_tag"];
 
-/**
- * Trace queries and dashboards group by these labels, so they keep their historical values
- * even where they differ from the method prefix.
- */
+// Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
   [WS_METHODS.hubNodesList]: "hubNodes",
   [WS_METHODS.hubNodesSubscribe]: "hubNodes",
@@ -49,6 +46,9 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.searchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: "orchestration",
@@ -182,6 +182,7 @@ const RPC_AGGREGATES = {
   [SLACK_CHANNEL_WS_METHODS.configure]: "channel",
   [SLACK_CHANNEL_WS_METHODS.disconnect]: "channel",
   [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: "channel",
+  [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
   [WS_METHODS.pullRequestsList]: "pull-requests",
@@ -325,10 +326,7 @@ const RPC_METHODS_WITH_TRACING_DISABLED: ReadonlySet<string> = new Set([
   WS_METHODS.serverSignalProcess,
 ]);
 
-/**
- * `ws.ts` adds it to the server's group after `RpcScopeAuthorization`, so it wraps
- * authorization and also records rejected calls.
- */
+/** Add after RpcScopeAuthorization to wrap authorization and record rejected calls. */
 export class RpcInstrumentation extends RpcMiddleware.Service<RpcInstrumentation>()(
   "goat/server/RpcInstrumentation",
 ) {}

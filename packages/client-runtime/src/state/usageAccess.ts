@@ -1,6 +1,5 @@
 import {
   AuthDiagnosticsReadScope,
-  type AuthSessionState,
   sessionGrantsScope,
   type SessionGrantInput,
 } from "@goat/contracts";

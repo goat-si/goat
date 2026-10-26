@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@goat/contracts";
-import { mediaMimeType } from "@goat/shared/filePreview";
+import { mediaMimeType } from "@goat/shared/mediaPreview";
 import {
   getProjectFaviconCacheKey,
   getProjectFaviconResourceKey,

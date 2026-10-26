@@ -48,8 +48,7 @@ class AgentNotificationsTest {
       }
     )
     AgentNotifications.clear(context)
-    AgentNotifications.configure(context, "device", "user", "goat-dev", true)
-    // The fixtures alert for this thread; a resumed app is showing it.
+    AgentNotifications.configure(context, "device", "user", "t3code-dev", true)
     AgentNotifications.setThreadOnScreen("/threads/environment/thread")
   }
 

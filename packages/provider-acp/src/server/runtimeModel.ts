@@ -568,8 +568,7 @@ function extractToolCallCommand(
       return executable;
     }
   }
-  // Titles like `Read \`src/a.ts\`` are not commands. Only execute tools
-  // fall back to a backtick or bare title.
+  // Only execute tools may treat titles as commands.
   if (kind !== "execute") {
     return undefined;
   }
@@ -638,11 +637,7 @@ function locationsFromToolCallInput(input: {
   return locations.length > 0 ? locations : undefined;
 }
 
-// Some ACP agents (observed with Grok's CLI) resend the ENTIRE accumulated tool-call
-// output on every `tool_call_update` notification instead of a delta, so a redrawing
-// terminal progress bar can balloon a single tool call to hundreds of KB per update at
-// several updates per second. Cap what we retain/emit to a bounded tail so one busy tool
-// call cannot flood runtime event ingestion.
+// Agents resend cumulative output; bound it to avoid flooding event ingestion.
 const TOOL_CALL_CONTENT_MAX_CHARS = 8_000;
 const TOOL_CALL_CONTENT_TRUNCATION_MARKER = "[Earlier output truncated]\n\n";
 
@@ -656,10 +651,7 @@ function boundToolCallOutputText(text: string): string {
 
 const RAW_OUTPUT_TEXT_FIELDS = ["content", "stdout", "stderr", "output"] as const;
 
-// `rawOutput` is provider-defined and, for terminal-shaped tools, mirrors the same
-// cumulative text-growth problem as `content` (see the comment above). Bound its known
-// text-bearing fields the same way so a chatty provider cannot smuggle unbounded output
-// through this field instead.
+// rawOutput can duplicate cumulative output and bypass content limits.
 function boundToolCallRawOutput(rawOutput: unknown): unknown {
   if (!isRecord(rawOutput)) {
     return rawOutput;
@@ -848,9 +840,7 @@ function makeToolCallState(
     data.kind = kind;
   }
   if (title) {
-    // The agent's verbatim title. Presentation summarizes `title` on the
-    // state (e.g. a command line becomes "Ran command"), so identity checks
-    // such as MCP-fallback detection need the raw value preserved here.
+    // Identity checks need the verbatim title; presentation summarizes the state title.
     data.title = title;
   }
   if (command) {
@@ -860,8 +850,7 @@ function makeToolCallState(
     data.rawInput = input.rawInput;
   }
   if (isRecord(input._meta)) {
-    // Some agents identify MCP calls only here (goose `goose.toolCall`,
-    // qwen `toolName`/`serverId`, claude-acp `claudeCode.toolName`).
+    // goose, qwen, and claude-acp may identify MCP calls only in metadata.
     data.meta = input._meta;
   }
   if (input.rawOutput !== undefined) {
@@ -950,9 +939,7 @@ export function mergeToolCallState(
   };
 }
 
-// Even with bounded content (see TOOL_CALL_CONTENT_MAX_CHARS above), a redrawing terminal
-// can still shift its bounded tail window on nearly every notification, which would emit
-// a runtime event per redraw.
+// Bounded terminal tails still shift on each redraw; coalesce those updates.
 const TOOL_CALL_UPDATE_MIN_DETAIL_GROWTH_CHARS = 256;
 const TOOL_CALL_UPDATE_COALESCE_LIMIT = 10;
 
@@ -974,9 +961,7 @@ function toolCallOutputUnchanged(previous: AcpToolCallState, next: AcpToolCallSt
   );
 }
 
-// Command tools keep `detail` equal to the command, so live stdout lives on
-// `data.content` / `data.rawOutput`. Measure that too, otherwise coalescing never
-// sees growth and in-progress output is held until completed/failed.
+// Command detail is static; measure stdout in content/rawOutput to detect progress.
 export function toolCallProgressLength(state: AcpToolCallState): number {
   let contentChars = 0;
   const content = state.data.content;
@@ -1069,8 +1054,7 @@ function acpMcpFallbackInput(value: string | undefined): Record<string, unknown>
       const unwrapped = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
       if (isRecord(unwrapped)) return unwrapped;
     } catch {
-      // ACP agents choose their own shell quoting. An unrecognized form keeps
-      // the MCP identity but leaves the input empty instead of misreporting it.
+      // Unknown shell quoting retains MCP identity but omits unparseable input.
     }
   }
   return undefined;
@@ -1195,11 +1179,7 @@ export function extractMcpToolCallIdentity(
   return undefined;
 }
 
-/**
- * Terminal ids embedded in a raw tool_call update, captured before
- * {@link resolveEmbeddedTerminalContent} rewrites them into plain text, so the
- * projection can still resolve the terminal's command line.
- */
+/** Capture IDs before resolveEmbeddedTerminalContent replaces them with text, to recover commands later. */
 export function embeddedTerminalIdsFromSessionUpdate(
   notification: EffectAcpSchema.SessionNotification,
 ): { readonly toolCallId: string; readonly terminalIds: ReadonlyArray<string> } | undefined {
@@ -1335,11 +1315,7 @@ export function syntheticLoadSessionResponseFromInitialize(
   };
 }
 
-// The parsed AcpToolCallState already carries bounded content (see makeToolCallState /
-// extractTextContentFromToolCallContent above), but the raw JSON-RPC notification is also
-// threaded through as `rawPayload` for logging/debugging and ends up persisted on the
-// runtime event. Substitute the same bounded `content`/`rawOutput` there so an oversized
-// cumulative update cannot smuggle the unbounded buffer back in through the raw payload.
+// Persisted rawPayload must not bypass cumulative output limits.
 function boundToolCallRawPayload(
   params: EffectAcpSchema.SessionNotification,
   update: AcpToolCallUpdate,

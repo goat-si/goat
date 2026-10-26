@@ -3,6 +3,7 @@ import { createEnvironmentThreadShellAtoms } from "@goat/client-runtime/state/th
 import {
   applyShellStreamEvent,
   createEnvironmentSnapshotAtom,
+  EMPTY_SHELL_STATE,
   type EnvironmentShellState,
   type EnvironmentShellStatus,
 } from "@goat/client-runtime/state/shell";
@@ -523,6 +524,42 @@ describe("composerDraftStore file attachments", () => {
     const draft = store.getComposerDraft(threadRef);
     expect(draft?.images).toHaveLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1);
     expect(draft?.files.map((file) => file.id)).toEqual(["file-accepted"]);
+  });
+
+  it("reattaches a DNG with an older generic-MIME marker at attachment capacity", () => {
+    const store = useComposerDraftStore.getState();
+    const file = new File(["raw"], "photo.DNG", { type: "image/x-adobe-dng" });
+    const marker: ComposerFileAttachment = {
+      type: "file",
+      id: "dng-marker",
+      name: file.name,
+      mimeType: "application/octet-stream",
+      sizeBytes: file.size,
+      file: null,
+    };
+    store.addFiles(threadRef, [marker]);
+    store.addImages(
+      threadRef,
+      Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 }, (_, index) =>
+        makeImage({
+          id: `image-${index}`,
+          name: `image-${index}.png`,
+          previewUrl: `blob:image-${index}`,
+        }),
+      ),
+    );
+
+    const repicked: ComposerFileAttachment = {
+      ...marker,
+      id: "dng-repicked",
+      mimeType: file.type,
+      file,
+    };
+    store.addFiles(threadRef, [repicked]);
+
+    const files = store.getComposerDraft(threadRef)?.files;
+    expect(files).toEqual([repicked]);
+    expect(files?.some(composerFileNeedsReattach)).toBe(false);
   });
 
   it("replaces a needs-reattach marker when the same file is picked again", () => {
@@ -1164,6 +1201,113 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getComposerDraft(draftId)?.prompt).toBe("keep this prompt");
   });
 });
+
+function modelReconciliationHarness(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  initialStatus: EnvironmentShellStatus = "live",
+) {
+  const tasks: Array<() => void> = [];
+  const registry = AtomRegistry.make({
+    scheduleTask: (task) => {
+      tasks.push(task);
+      return () => {};
+    },
+  });
+  onTestFinished(() => registry.dispose());
+  const flush = () => {
+    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
+  };
+  const selectedThreadId = ThreadId.make("another-selected-thread");
+  const thread: OrchestrationV2ThreadShell = {
+    ...makeThreadProjectionFixture().thread,
+    latestRunId: null,
+    activeRunId: null,
+    status: "idle",
+    pendingRuntimeRequest: null,
+    latestVisibleMessage: null,
+    latestUserMessageAt: null,
+    hasActionableProposedPlan: false,
+    itemCount: 0,
+    visibleItemCount: 0,
+  };
+  const initialSnapshot: OrchestrationV2ShellSnapshot = {
+    schemaVersion: 1,
+    snapshotSequence: 0,
+    projects: [],
+    archivedThreads: [],
+    threads: [
+      { ...thread, id: threadId },
+      { ...thread, id: selectedThreadId },
+    ],
+  };
+  const shellStateAtom = Atom.make<EnvironmentShellState>({
+    ...EMPTY_SHELL_STATE,
+    snapshot: Option.some(initialSnapshot),
+    status: initialStatus,
+  });
+  const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
+  const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
+  const catalogValueAtom = Atom.make({
+    isReady: true,
+    entries: new Map([
+      [
+        environmentId,
+        {
+          target: new PrimaryConnectionTarget({
+            environmentId,
+            label: "Environment",
+            httpBaseUrl: "https://example.test",
+            wsBaseUrl: "wss://example.test",
+          }),
+          profile: Option.none(),
+          enabled: true,
+        },
+      ],
+    ]),
+  });
+  const shells = createEnvironmentThreadShellAtoms({
+    catalogValueAtom,
+    snapshotAtom: () => snapshotAtom,
+  });
+  const selectedShell = shells.threadShellAtom({ environmentId, threadId: selectedThreadId });
+  onTestFinished(registry.mount(selectedShell));
+  onTestFinished(
+    subscribeComposerDraftModelReconciliation({
+      registry,
+      threadShellAtom: shells.threadShellAtom,
+      threadRefsAtom: shells.threadRefsAtom,
+      shellStateAtom: () => shellResultAtom,
+    }),
+  );
+  flush();
+  return {
+    flush,
+    setStatus(status: EnvironmentShellStatus) {
+      registry.set(shellStateAtom, { ...registry.get(shellStateAtom), status });
+      flush();
+    },
+    update(changes: Partial<OrchestrationV2ThreadShell>, status?: EnvironmentShellStatus) {
+      const state = registry.get(shellStateAtom);
+      const snapshot = Option.getOrThrow(state.snapshot);
+      registry.set(shellStateAtom, {
+        ...state,
+        status: status ?? state.status,
+        snapshot: Option.some(
+          applyShellStreamEvent(snapshot, {
+            kind: "thread.updated",
+            location: "active",
+            sequence: snapshot.snapshotSequence + 1,
+            thread: { ...snapshot.threads[0]!, ...changes },
+          }),
+        ),
+      });
+      flush();
+      expect(registry.get(selectedShell)?.id).toBe(selectedThreadId);
+    },
+    model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
+  };
+}
 
 describe("composerDraftStore modelSelection", () => {
   const threadId = ThreadId.make("thread-model-options");
@@ -2261,110 +2405,3 @@ describe("SSH draft destinations", () => {
     expect(store().getDraftSession(id)?.sshDestination).toEqual(destination);
   });
 });
-
-function modelReconciliationHarness(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  initialStatus: EnvironmentShellStatus = "live",
-) {
-  const tasks: Array<() => void> = [];
-  const registry = AtomRegistry.make({
-    scheduleTask: (task) => {
-      tasks.push(task);
-      return () => {};
-    },
-  });
-  onTestFinished(() => registry.dispose());
-  const flush = () => {
-    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
-  };
-  const selectedThreadId = ThreadId.make("another-selected-thread");
-  const thread: OrchestrationV2ThreadShell = {
-    ...makeThreadProjectionFixture().thread,
-    latestRunId: null,
-    activeRunId: null,
-    status: "idle",
-    pendingRuntimeRequest: null,
-    latestVisibleMessage: null,
-    latestUserMessageAt: null,
-    hasActionableProposedPlan: false,
-    itemCount: 0,
-    visibleItemCount: 0,
-  };
-  const initialSnapshot: OrchestrationV2ShellSnapshot = {
-    schemaVersion: 1,
-    snapshotSequence: 0,
-    projects: [],
-    archivedThreads: [],
-    threads: [
-      { ...thread, id: threadId },
-      { ...thread, id: selectedThreadId },
-    ],
-  };
-  const shellStateAtom = Atom.make<EnvironmentShellState>({
-    snapshot: Option.some(initialSnapshot),
-    status: initialStatus,
-    error: Option.none(),
-  });
-  const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
-  const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
-  const catalogValueAtom = Atom.make({
-    isReady: true,
-    entries: new Map([
-      [
-        environmentId,
-        {
-          target: new PrimaryConnectionTarget({
-            environmentId,
-            label: "Environment",
-            httpBaseUrl: "https://example.test",
-            wsBaseUrl: "wss://example.test",
-          }),
-          profile: Option.none(),
-          enabled: true,
-        },
-      ],
-    ]),
-  });
-  const shells = createEnvironmentThreadShellAtoms({
-    catalogValueAtom,
-    snapshotAtom: () => snapshotAtom,
-  });
-  const selectedShell = shells.threadShellAtom({ environmentId, threadId: selectedThreadId });
-  onTestFinished(registry.mount(selectedShell));
-  onTestFinished(
-    subscribeComposerDraftModelReconciliation({
-      registry,
-      threadShellAtom: shells.threadShellAtom,
-      threadRefsAtom: shells.threadRefsAtom,
-      shellStateAtom: () => shellResultAtom,
-    }),
-  );
-  flush();
-  return {
-    flush,
-    setStatus(status: EnvironmentShellStatus) {
-      registry.set(shellStateAtom, { ...registry.get(shellStateAtom), status });
-      flush();
-    },
-    update(changes: Partial<OrchestrationV2ThreadShell>, status?: EnvironmentShellStatus) {
-      const state = registry.get(shellStateAtom);
-      const snapshot = Option.getOrThrow(state.snapshot);
-      registry.set(shellStateAtom, {
-        ...state,
-        status: status ?? state.status,
-        snapshot: Option.some(
-          applyShellStreamEvent(snapshot, {
-            kind: "thread.updated",
-            location: "active",
-            sequence: snapshot.snapshotSequence + 1,
-            thread: { ...snapshot.threads[0]!, ...changes },
-          }),
-        ),
-      });
-      flush();
-      expect(registry.get(selectedShell)?.id).toBe(selectedThreadId);
-    },
-    model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
-  };
-}

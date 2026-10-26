@@ -335,8 +335,7 @@ function isClaudeSdkReplayMessage(frame: unknown): frame is SDKMessage {
     type === "system" ||
     type === "stream_event" ||
     type === "rate_limit_event" ||
-    // Undeclared in the SDK types: queued/started/completed for each prompt
-    // that carries a uuid.
+    // The SDK types omit command_lifecycle for prompt uuids.
     type === "command_lifecycle"
   );
 }
@@ -658,10 +657,7 @@ function makeReplayQueryRunner(
     },
   });
 
-  // Prompt uuids are derived from ids that differ between the recording and
-  // a replay run, so a matched prompt offer maps the recorded uuid to the
-  // replayed one, and inbound frames echoing or acknowledging it are
-  // rewritten to match.
+  // Prompt uuids differ on replay; rewrite inbound echoes and acknowledgements to match.
   const promptUuidReplacements = new Map<string, string>();
   const replayedPromptUuid = (value: string): string => promptUuidReplacements.get(value) ?? value;
   const withReplayedPromptUuids = (frame: unknown): unknown => {
@@ -927,22 +923,6 @@ function replayQueryRunnerError(
   });
 }
 
-const makeClaudeAgentSdkReplayQueryRunner = Effect.fn("ClaudeAgentSdkReplayQueryRunner.layer")(
-  function* (
-    transcript: ClaudeAgentSdkReplayTranscript,
-    options: { readonly replayGate?: ProviderReplayGate } = {},
-  ) {
-    const queryRunner = makeReplayQueryRunner(transcript, options);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        queryRunner.assertComplete();
-      }),
-    );
-
-    return replayQueryRunnerService(transcript, queryRunner);
-  },
-);
-
 function replayQueryRunnerService(
   transcript: ClaudeAgentSdkReplayTranscript,
   queryRunner: ClaudeQueryRunner,
@@ -959,16 +939,6 @@ function replayQueryRunnerService(
     subagentLaunchToolUseId: (input) => replay(() => queryRunner.subagentLaunchToolUseId(input)),
     assertComplete: replay(() => queryRunner.assertComplete()),
   });
-}
-
-function layerClaudeAgentSdkReplayQueryRunner(
-  transcript: ClaudeAgentSdkReplayTranscript,
-  options: { readonly replayGate?: ProviderReplayGate } = {},
-): Layer.Layer<ClaudeAdapterV2.ClaudeAgentSdkQueryRunner> {
-  return Layer.effect(
-    ClaudeAdapterV2.ClaudeAgentSdkQueryRunner,
-    makeClaudeAgentSdkReplayQueryRunner(transcript, options),
-  );
 }
 
 function layerClaudeAgentSdkReplay(
@@ -997,6 +967,47 @@ function layerClaudeAgentSdkReplay(
     }),
   );
 }
+
+/** Replays write recorded Bash output to task_started files under a scenario-owned CLAUDE_CODE_TMPDIR. */
+const writeReplayTaskOutputFiles = Effect.fn("ClaudeReplay.writeTaskOutputFiles")(function* (
+  transcript: ClaudeAgentSdkReplayTranscript,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const tmpRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-replay-tasks-" });
+  const frames = transcript.entries.flatMap((entry) =>
+    entry.type === "emit_inbound" && typeof entry.frame === "object" && entry.frame !== null
+      ? [entry.frame as Record<string, unknown>]
+      : [],
+  );
+  const outputByToolUseId = new Map<string, string>();
+  for (const frame of frames) {
+    const result = frame.tool_use_result as Record<string, unknown> | undefined;
+    const content = (frame.message as { readonly content?: unknown } | undefined)?.content;
+    if (typeof result?.stdout !== "string" || !Array.isArray(content)) continue;
+    const toolResult = content.find(
+      (block): block is { readonly tool_use_id: string } =>
+        block?.type === "tool_result" && typeof block.tool_use_id === "string",
+    );
+    if (toolResult === undefined) continue;
+    const stderr = typeof result.stderr === "string" ? result.stderr : "";
+    outputByToolUseId.set(toolResult.tool_use_id, `${result.stdout}${stderr}`);
+  }
+  const root = claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: tmpRoot }, path);
+  for (const frame of frames) {
+    if (frame.type !== "system" || frame.subtype !== "task_started") continue;
+    if (frame.task_type !== "local_bash" || frame.is_backgrounded !== false) continue;
+    const output =
+      typeof frame.tool_use_id === "string" ? outputByToolUseId.get(frame.tool_use_id) : undefined;
+    if (root === undefined || output === undefined || typeof frame.session_id !== "string") {
+      continue;
+    }
+    const tasks = path.join(root, "replay-project", frame.session_id, "tasks");
+    yield* fileSystem.makeDirectory(tasks, { recursive: true });
+    yield* fileSystem.writeFileString(path.join(tasks, `${String(frame.task_id)}.output`), output);
+  }
+  return tmpRoot;
+});
 
 function layerClaudeProviderAdapterRegistryReplay(
   transcript: ClaudeAgentSdkReplayTranscript,
@@ -1164,8 +1175,7 @@ function sanitizeSdkMessageForReplay(input: {
       session_id: message.session_id,
     };
   }
-  // Like init's slash_commands, the recording account's commands and skills
-  // are local configuration, not protocol.
+  // Recorded commands and skills are account configuration.
   if (message.type === "system" && message.subtype === "commands_changed") {
     return { ...message, commands: [] };
   }
@@ -1459,12 +1469,8 @@ async function recordMessagesUntilToolUse(input: {
   }
 }
 
-// The SDK package may not ship a Claude Code executable for this platform, so
-// recordings prefer the installed `claude` binary when it resolves on PATH to
-// something the SDK can spawn directly, and otherwise leave the SDK's own
-// executable discovery in place. A Windows launcher shim (`claude.cmd` and
-// friends) is not directly spawnable, so it only counts when
-// resolveClaudeSdkExecutablePath can follow it to a real package entry.
+// The SDK may lack a platform executable. Prefer installed Claude only when directly spawnable,
+// including Windows shims resolved to package entries.
 const resolveClaudeRecordingExecutablePath = Effect.fn("resolveClaudeRecordingExecutablePath")(
   function* (environment: NodeJS.ProcessEnv) {
     const resolveExecutable = yield* SpawnExecutableResolution;
@@ -1613,9 +1619,7 @@ async function recordClaudeStreamingQuery(input: {
         frame: makeClaudePromptOfferFrame(message),
       });
       promptQueue.offer(message);
-      // A task notification that lands during a turn queues a wake turn the
-      // CLI can run before this prompt's turn, so results are told apart by
-      // origin rather than by arrival order.
+      // Wake turns can precede the prompt turn; identify results by origin.
       let promptSettled = false;
       let wakes = 0;
       const expectedWakes = input.backgroundWakeCounts?.[index] ?? 0;
@@ -1627,8 +1631,7 @@ async function recordClaudeStreamingQuery(input: {
         }
       }
       if (input.backgroundWakeCounts !== undefined && input.offerNextPromptImmediately !== true) {
-        // Every turn opens with system:init; frames from still-running
-        // subagents are left for the next prompt's recording.
+        // system:init opens each turn; leave ongoing subagent frames for the next recording.
         while (isSystemInitFrame(await iterator.peekWithin(CLAUDE_RECORDING_WAKE_QUIET_MS))) {
           await recordTurn(index + 1);
         }

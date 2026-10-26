@@ -36,14 +36,16 @@ const waitForAvailable = Effect.fn("ProjectEnrichmentServiceTest.waitForAvailabl
   workspaceRoot: string,
   predicate: (value: ProjectEnrichment.ProjectEnrichment) => boolean,
 ) {
-  const completions = yield* EnrichmentCompletions;
-  let available = yield* service.peek(workspaceRoot);
-  while (!predicate(available)) {
-    // Every re-read follows completed work, including favicon work that has no public event.
-    yield* Queue.take(completions);
-    available = yield* service.peek(workspaceRoot);
-  }
-  return available;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const changes = yield* service.subscribeChanges;
+      for (;;) {
+        const available = yield* service.peek(workspaceRoot);
+        if (predicate(available)) return available;
+        yield* PubSub.take(changes);
+      }
+    }),
+  );
 });
 
 const layer = (

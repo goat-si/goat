@@ -77,10 +77,7 @@ export function resolveProjectFilePickerPath(query: string, platform: string, ho
   return { ...position, path: normalizedRoot + segments.join(separator), directoryOnly };
 }
 
-/**
- * Returns null when `value` does not contain the subsequence at all — the
- * entry still renders (the server matched it), just without highlights.
- */
+/** Return null for unmatched subsequences; server-matched entries still render without highlights. */
 function findMatchIndices(value: string, query: string): number[] | null {
   if (!query) return [];
 
@@ -98,11 +95,7 @@ function findMatchIndices(value: string, query: string): number[] | null {
   return null;
 }
 
-/**
- * Server ordering is preserved — ranking already happened there; this pass keeps
- * empty-query recents file-only and computes highlight positions with the same
- * query normalization the server applied.
- */
+/** Preserve server ranking and query normalization while filtering files and computing highlights. */
 export function getProjectFilePickerMatches(
   entries: ReadonlyArray<ProjectEntry>,
   rawQuery: string,

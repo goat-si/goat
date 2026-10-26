@@ -8,7 +8,7 @@ import {
   type ThreadId,
   WS_METHODS,
 } from "@goat/contracts";
-import { mediaMimeTypeFromExtension } from "@goat/shared/filePreview";
+import { mediaMimeTypeFromExtension } from "@goat/shared/mediaPreview";
 import { isWindowsAbsolutePath } from "@goat/shared/path";
 import {
   getProjectFaviconResourceKey,

@@ -116,6 +116,7 @@ describe("HostPowerMonitor", () => {
         };
         const updateApplied = yield* Deferred.make<void>();
         const desktopChanges = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(1);
+        const changeApplied = yield* Deferred.make<void>();
         const layerReceiver = DesktopTelemetryReceiver.layerTest({
           latest: Effect.succeedSome(initial),
           changes: Stream.empty,
@@ -126,8 +127,7 @@ describe("HostPowerMonitor", () => {
               latest: Option.some(initial),
               changes: Stream.fromSubscription(subscription).pipe(
                 Stream.take(1),
-                // The next pull runs only after the monitor has reported this frame.
-                Stream.concat(Stream.fromEffectDrain(Deferred.succeed(updateApplied, undefined))),
+                Stream.ensuring(Deferred.succeed(changeApplied, undefined)),
               ),
             };
           }),
@@ -136,7 +136,7 @@ describe("HostPowerMonitor", () => {
 
         yield* Effect.gen(function* () {
           const monitor = yield* HostPowerMonitor.HostPowerMonitor;
-          yield* Deferred.await(updateApplied);
+          yield* Deferred.await(changeApplied);
           expect((yield* monitor.snapshot).onBattery).toBe("true");
         }).pipe(Effect.provide(layer));
       }),

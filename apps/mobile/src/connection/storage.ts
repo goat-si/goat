@@ -15,8 +15,8 @@ import {
   ConnectionTransientError,
   CredentialStore,
   ProfileStore,
-  GitHubRoutingPermissions,
-  makeGitHubRoutingPermissions,
+  PullRequestRoutingPermissions,
+  makePullRequestRoutingPermissions,
 } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -60,7 +60,8 @@ export const layer = Layer.effectContext(
       setHub: (environmentId) =>
         catalog.update((document) => setCatalogHub(document, environmentId)),
     });
-    const githubRoutingPermissions = yield* makeGitHubRoutingPermissions({
+    
+    const githubRoutingPermissions = yield* makePullRequestRoutingPermissions({
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>
         catalog.update((document) => ({ ...document, githubRoutingPermissions })),
@@ -169,7 +170,7 @@ export const layer = Layer.effectContext(
     });
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(HubEnvironmentStore, hubStore),
-      Context.add(GitHubRoutingPermissions, githubRoutingPermissions),
+      Context.add(PullRequestRoutingPermissions, githubRoutingPermissions),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

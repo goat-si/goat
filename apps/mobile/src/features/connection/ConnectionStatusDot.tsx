@@ -1,14 +1,4 @@
-import { useEffect } from "react";
 import { View } from "react-native";
-import Animated, {
-  cancelAnimation,
-  Easing,
-  ReduceMotion,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from "react-native-reanimated";
 
 import { useVisibleAnimation } from "../../lib/use-visible-animation";
 import type { RemoteClientConnectionState } from "../../lib/connection";
@@ -52,47 +42,16 @@ function statusDotTone(
   }
 }
 
-function usePulseAnimation(pulse: boolean) {
-  const pulseProgress = useSharedValue(0);
-
-  useEffect(() => {
-    cancelAnimation(pulseProgress);
-    // oxlint-disable-next-line react/immutability -- Reanimated shared values intentionally mutate on the UI thread.
-    pulseProgress.value = 0;
-    if (pulse) {
-      pulseProgress.value = withRepeat(
-        withTiming(1, {
-          duration: 1100,
-          reduceMotion: ReduceMotion.System,
-          easing: Easing.out(Easing.cubic),
-        }),
-        -1,
-        false,
-      );
-      return () => cancelAnimation(pulseProgress);
-    }
-  }, [pulse, pulseProgress]);
-
-  return pulseProgress;
-}
-
 export function ConnectionStatusDot(props: {
   readonly state: ConnectionStatusDotState;
   readonly pulse: boolean;
   readonly size?: number;
 }) {
-  const animationVisible = useVisibleAnimation();
-  const pulseProgress = usePulseAnimation(props.pulse && animationVisible);
   const { themeAppearance, themeVariables } = useAppearancePreferences();
   const tone = statusDotTone(props.state, themeVariables, themeAppearance === "dark");
   const dotSize = props.size ?? 10;
   const haloSize = dotSize + 4;
   const containerSize = haloSize + 4;
-
-  const haloStyle = useAnimatedStyle(() => ({
-    opacity: props.pulse ? 0.14 + (1 - pulseProgress.value) * 0.3 : 0,
-    transform: [{ scale: 0.78 + pulseProgress.value * 1.16 }],
-  }));
 
   return (
     <View
@@ -103,18 +62,19 @@ export function ConnectionStatusDot(props: {
         justifyContent: "center",
       }}
     >
-      <Animated.View
-        style={[
-          haloStyle,
-          {
+      {/* Looping Reanimated updates can starve React commits while commit pausing is disabled. */}
+      {props.pulse ? (
+        <View
+          style={{
             position: "absolute",
             width: haloSize,
             height: haloSize,
             borderRadius: haloSize / 2,
             backgroundColor: tone.haloColor,
-          },
-        ]}
-      />
+            opacity: 0.3,
+          }}
+        />
+      ) : null}
       <View
         style={{
           width: dotSize,

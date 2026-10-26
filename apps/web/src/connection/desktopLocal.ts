@@ -31,10 +31,7 @@ export interface DesktopSecondaryBootstrapsReader {
   readonly readSnapshot: () => ReadonlyArray<DesktopEnvironmentBootstrap>;
 }
 
-/**
- * A successful empty read is authoritative; a thrown read preserves the previous snapshot so UI
- * consumers cannot temporarily disagree with the platform's retained registrations.
- */
+/** Empty reads clear the snapshot; failed reads retain platform registrations. */
 export function createDesktopSecondaryBootstrapsReader(
   resolveBridge: () => Pick<DesktopBridge, "getLocalEnvironmentBootstraps"> | undefined,
 ): DesktopSecondaryBootstrapsReader {

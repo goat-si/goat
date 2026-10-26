@@ -1594,7 +1594,13 @@ export function useComposerSend(input: ComposerSendInput) {
         environmentId,
         input: {
           threadId: threadIdForSend,
-          message: { messageId: newMessageId(), role: "user", text: "/compact", attachments: [] },
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: "/compact",
+            attachments: [],
+            idleCompaction: "onReturn",
+          },
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
           interactionMode: sendInteractionMode,

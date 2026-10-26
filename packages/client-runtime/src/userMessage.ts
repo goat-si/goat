@@ -1,12 +1,26 @@
 import {
+  type GuestMessageAttribution,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2IdleCompaction,
   ScheduledTaskId,
 } from "@goat/contracts";
 import {
   splitStandingInstructions,
   type StandingInstructionsBlock,
 } from "@goat/shared/standingInstructions";
+
+/** The working row while GOAT's own compaction runs. */
+export const IDLE_COMPACTING_LABELS = {
+  beforeCacheExpires: "Compacting before the cache expires…",
+  onReturn: "Compacting after being idle…",
+} satisfies Record<OrchestrationV2IdleCompaction, string>;
+
+/** Leads the finished compaction's token counts, in place of "Context compacted". */
+export const IDLE_COMPACTION_TITLES = {
+  beforeCacheExpires: "Context automatically compacted before cache expiry",
+  onReturn: "Context compacted after being idle",
+} satisfies Record<OrchestrationV2IdleCompaction, string>;
 
 const LEGACY_AUTOMATION_PREFIX = /^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n/;
 const LEGACY_AUTOMATION_MESSAGE_ID = /^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$/;
@@ -18,20 +32,25 @@ interface PresentedUserMessage {
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId;
+  readonly context?: { readonly guest?: GuestMessageAttribution | undefined } | undefined;
+}
+
+interface UserMessageSender {
+  readonly text: string;
+  readonly attribution: "automation" | "agent" | "t3code" | "guest" | null;
+  readonly scheduledTaskId: ScheduledTaskId | undefined;
+  /** Set when `attribution` is "guest". */
+  readonly guestName?: string;
 }
 
 /**
- * Text and sender label for a user-role message. Older scheduled messages
- * stored their attribution in the prompt itself. A thread an agent launched
- * carries the standing instructions GOAT put in front of its first message;
- * they come back separately so clients can show them collapsed.
+ * Text and sender label for a user-role message. A thread an agent launched carries the standing
+ * instructions GOAT put in front of its first message; they come back separately so clients can
+ * show them collapsed.
  */
-export function resolveUserMessagePresentation(message: PresentedUserMessage): {
-  readonly text: string;
-  readonly attribution: "automation" | "agent" | "t3code" | null;
-  readonly scheduledTaskId: ScheduledTaskId | undefined;
-  readonly standingInstructions: StandingInstructionsBlock | null;
-} {
+export function resolveUserMessagePresentation(
+  message: PresentedUserMessage,
+): UserMessageSender & { readonly standingInstructions: StandingInstructionsBlock | null } {
   const split =
     message.role === "user" && message.createdBy === "agent"
       ? splitStandingInstructions(message.text)
@@ -42,13 +61,19 @@ export function resolveUserMessagePresentation(message: PresentedUserMessage): {
   };
 }
 
-function resolveSender(message: PresentedUserMessage): {
-  readonly text: string;
-  readonly attribution: "automation" | "agent" | "t3code" | null;
-  readonly scheduledTaskId: ScheduledTaskId | undefined;
-} {
+function resolveSender(message: PresentedUserMessage): UserMessageSender {
   if (message.role !== "user") {
     return { text: message.text, attribution: null, scheduledTaskId: undefined };
+  }
+  // The stored text names the guest for the agent; people see the guest's own words.
+  const guest = message.context?.guest;
+  if (guest !== undefined) {
+    return {
+      text: guest.text,
+      attribution: "guest",
+      scheduledTaskId: undefined,
+      guestName: guest.name,
+    };
   }
   if (message.scheduledTaskId !== undefined) {
     return {

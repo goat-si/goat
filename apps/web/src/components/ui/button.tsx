@@ -106,7 +106,7 @@ const inlineButtonVariants = cva(
         muted: "text-muted-foreground hover:text-foreground",
         destructive: "text-destructive/80 hover:text-destructive",
         picker:
-          "gap-1.5 text-foreground underline decoration-foreground/30 decoration-dotted decoration-from-font underline-offset-4 hover:decoration-foreground hover:decoration-solid data-popup-open:decoration-foreground data-popup-open:decoration-solid",
+          "gap-1 text-foreground underline decoration-foreground/30 decoration-dotted decoration-from-font underline-offset-4 hover:decoration-foreground hover:decoration-solid data-popup-open:decoration-foreground data-popup-open:decoration-solid redesign:no-underline redesign:hover:underline redesign:data-popup-open:underline",
         /** A picker that recedes into its sentence until it is hovered or open. */
         pickerMuted:
           "gap-1.5 text-muted-foreground underline decoration-muted-foreground/40 decoration-dotted decoration-from-font underline-offset-4 hover:text-foreground hover:decoration-foreground hover:decoration-solid data-popup-open:text-foreground data-popup-open:decoration-foreground data-popup-open:decoration-solid",

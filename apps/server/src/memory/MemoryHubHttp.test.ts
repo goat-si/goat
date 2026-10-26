@@ -1,9 +1,9 @@
-import lineageMigration from "../persistence/Migrations/081_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/082_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../persistence/Migrations/094_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../persistence/Migrations/083_MemoryReportLifecycle.ts";
-import usageMigration from "../persistence/Migrations/084_MemoryUsageCounters.ts";
-import revertMigration from "../persistence/Migrations/085_MemoryRevertResults.ts";
+import lineageMigration from "../persistence/Migrations/082_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/083_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../persistence/Migrations/084_MemoryReportLifecycle.ts";
+import usageMigration from "../persistence/Migrations/085_MemoryUsageCounters.ts";
+import revertMigration from "../persistence/Migrations/086_MemoryRevertResults.ts";
 import { expect, it } from "vite-plus/test";
 import * as M from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,8 +19,8 @@ import * as Store from "./MemoryStore.ts";
 import * as Auth from "./MemoryHubAuth.ts";
 import * as Hub from "./MemoryHubHttp.ts";
 import * as Settings from "../serverSettings.ts";
-import migration from "../persistence/Migrations/077_Memory.ts";
-import hubMigration from "../persistence/Migrations/078_MemoryHubSync.ts";
+import migration from "../persistence/Migrations/078_Memory.ts";
+import hubMigration from "../persistence/Migrations/079_MemoryHubSync.ts";
 
 const space = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
 const member = M.EnvironmentId.make("synthetic-member");

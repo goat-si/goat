@@ -87,15 +87,22 @@ export const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(funct
       !(yield* exists(path.join(stateDir, "state.sqlite"))) &&
       source !== undefined
     ) {
-      yield* Effect.logInfo(
-        `[dev-runner] seeding ${input.worktreeHome} from ${source} (read-only). --no-seed or GOAT_DEV_SEED=0 skips this.`,
-      );
-      yield* runRepoScript(
-        input.repoRoot,
-        "apps/server/scripts/migrate-dev-db.ts",
-        ["--base-dir", input.worktreeHome, "--source", source],
-        input.env,
-      );
+      const info = yield* fs.stat(source).pipe(Effect.option);
+      if (Option.isSome(info) && Number(info.value.size) > LARGE_DEV_DATABASE_BYTES) {
+        yield* Effect.logWarning(
+          `[dev-runner] ${source} exceeds 500 MiB; skipping automatic database seeding and starting with an empty database. Run \`vp run migrate-dev-db\` manually with dev stopped if needed; it may use substantial disk space before pruning.`,
+        );
+      } else {
+        yield* Effect.logInfo(
+          `[dev-runner] seeding ${input.worktreeHome} from ${source} (read-only). --no-seed or GOAT_DEV_SEED=0 skips this.`,
+        );
+        yield* runRepoScript(
+          input.repoRoot,
+          "apps/server/scripts/migrate-dev-db.ts",
+          ["--base-dir", input.worktreeHome, "--source", source],
+          input.env,
+        );
+      }
     }
   }
 

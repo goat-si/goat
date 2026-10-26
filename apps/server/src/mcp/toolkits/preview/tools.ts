@@ -53,9 +53,7 @@ const PreviewToolFailure = Schema.Union([PreviewAutomationError, OrchestratorMcp
 
 const presentationFields = { toolIcon: Schema.optional(ToolActivityIcon) };
 
-const PreviewActionResult = Schema.Struct(presentationFields).annotate({
-  description: "The preview action completed successfully.",
-});
+const PreviewActionResult = Schema.Struct(presentationFields);
 
 const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name, {
   description: agentSurfaceRegistry["preview.status"].description,
@@ -230,17 +228,13 @@ const PreviewScrollTool = Tool.make(agentSurfaceRegistry["preview.scroll"].name,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.scroll"]));
 
-/**
- * MCP `structuredContent` must be a JSON object, and Claude Code rejects the
- * whole result when it is not. Wrapping keeps arrays, strings, numbers, and
- * null valid instead of failing only for non-object expressions.
- */
+/** Wrap non-objects: MCP requires object structuredContent, and Claude Code rejects invalid results entirely. */
 export const PreviewEvaluateResult = Schema.Struct({
   ...presentationFields,
   value: Schema.Unknown.annotate({
     description: "The JSON-serializable value the expression produced, or null.",
   }),
-}).annotate({ description: "The evaluated expression result." });
+});
 
 const PreviewEvaluateTool = Tool.make(agentSurfaceRegistry["preview.evaluate"].name, {
   description: agentSurfaceRegistry["preview.evaluate"].description,

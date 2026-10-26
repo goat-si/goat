@@ -56,10 +56,12 @@ class TestWebSocket {
   readonly sent: string[] = [];
   readonly requests = new Map<number, Deferred.Deferred<typeof RpcRequest.Type>>();
   readonly url: string;
+  readonly sentChanges: Queue.Queue<void>;
   private readonly listeners = new Map<SocketEventType, Set<SocketListener>>();
 
-  constructor(url: string) {
+  constructor(url: string, sentChanges: Queue.Queue<void>) {
     this.url = url;
+    this.sentChanges = sentChanges;
   }
 
   addEventListener(type: SocketEventType, listener: SocketListener) {
@@ -74,12 +76,7 @@ class TestWebSocket {
 
   send(data: string) {
     this.sent.push(data);
-    const request = decodeJson(data);
-    if (isRpcRequest(request)) {
-      const index = this.sent.map((message) => decodeJson(message)).filter(isRpcRequest).length - 1;
-      const waiting = this.requests.get(index);
-      if (waiting !== undefined) Deferred.doneUnsafe(waiting, Effect.succeed(request));
-    }
+    Queue.offerUnsafe(this.sentChanges, undefined);
   }
 
   close(code = 1000, reason = "") {
@@ -217,14 +214,12 @@ const LEGACY_SERVER_CONFIG = {
 const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
   options: RpcSession.RpcSessionOptions = {},
 ) {
-  const sockets = Object.assign([] as TestWebSocket[], {
-    created: new Map<number, Deferred.Deferred<TestWebSocket>>(),
-  });
+  const sentChanges = yield* Queue.unbounded<void>();
+  const sockets = Object.assign([] as TestWebSocket[], { changes: yield* Queue.unbounded<void>() });
   const layerConstructor = Layer.succeed(Socket.WebSocketConstructor, (url) => {
-    const socket = new TestWebSocket(url);
-    const index = sockets.push(socket) - 1;
-    const waiting = sockets.created.get(index);
-    if (waiting !== undefined) Deferred.doneUnsafe(waiting, Effect.succeed(socket));
+    const socket = new TestWebSocket(url, sentChanges);
+    sockets.push(socket);
+    Queue.offerUnsafe(sockets.changes, undefined);
     return socket as unknown as globalThis.WebSocket;
   });
   const layer = RpcSession.layer(options).pipe(Layer.provide(layerConstructor));
@@ -233,31 +228,29 @@ const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
 });
 
 const awaitSocket = Effect.fn("TestRpcSessionFactory.awaitSocket")(function* (
-  sockets: TestWebSocket[] & { created: Map<number, Deferred.Deferred<TestWebSocket>> },
+  sockets: ReadonlyArray<TestWebSocket> & { readonly changes: Queue.Queue<void> },
   index = 0,
 ) {
-  const socket = sockets[index];
-  if (socket !== undefined) return socket;
-  let waiting = sockets.created.get(index);
-  if (waiting === undefined) {
-    waiting = Deferred.makeUnsafe<TestWebSocket>();
-    sockets.created.set(index, waiting);
+  for (;;) {
+    const socket = sockets[index];
+    if (socket) {
+      return socket;
+    }
+    yield* Queue.take(sockets.changes);
   }
-  return yield* Deferred.await(waiting);
 });
 
 const awaitRequest = Effect.fn("TestRpcSessionFactory.awaitRequest")(function* (
   socket: TestWebSocket,
   index = 0,
 ) {
-  const request = socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest)[index];
-  if (request !== undefined) return request;
-  let waiting = socket.requests.get(index);
-  if (waiting === undefined) {
-    waiting = Deferred.makeUnsafe<typeof RpcRequest.Type>();
-    socket.requests.set(index, waiting);
+  for (;;) {
+    const request = socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest)[index];
+    if (request) {
+      return request;
+    }
+    yield* Queue.take(socket.sentChanges);
   }
-  return yield* Deferred.await(waiting);
 });
 
 const completeInitialConfig = Effect.fn("TestRpcSessionFactory.completeInitialConfig")(function* (

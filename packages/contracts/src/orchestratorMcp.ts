@@ -67,26 +67,17 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
 
-const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
-  description: "Complete task or message text for the target agent.",
-});
-const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512)).annotate({
-  description: "Optional concise display title.",
-});
+const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000));
+const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 const OrchestratorMcpClientRequestId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(256),
-).annotate({ description: "Stable idempotency key to reuse when retrying this mutation." });
+).annotate({ description: "Reuse it to retry the same call. A new call gets a new key." });
 
-/**
- * OpenCode 1.15 has been observed serializing nested MCP union objects as JSON
- * strings. Keep the structured object as the documented form while accepting
- * that compatibility shape at the tool boundary and decoding it immediately.
- */
+// OpenCode 1.15 serializes nested MCP union objects as JSON strings; decode that form at the boundary.
 const OrchestratorMcpScheduleFromJsonString = Schema.fromJsonString(
   ScheduledTaskUpsertSchedule,
 ).annotate({
-  description:
-    "Compatibility-only JSON encoding of the schedule object. Prefer a structured object.",
+  description: "JSON-text schedule. Prefer the object form.",
 });
 
 const OrchestratorMcpSchedule = Schema.Union([
@@ -94,7 +85,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, or {type:'webhook'} to run on each request to a generated URL. Never stringify it unless the provider requires the compatibility form.",
+    "Trigger: {type:'interval',everyMs}, {type:'fixed_time',timeOfDay,weekdays?}, or {type:'webhook'}.",
 });
 
 const OrchestratorMcpTargetOptionsFromRecord = Schema.Record(
@@ -157,23 +148,19 @@ export type SshLaunchWorkspace = typeof SshLaunchWorkspace.Type;
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
     ProviderInstanceId.annotate({
-      description: "Configured provider instance id from goat_provider_list.",
+      description: "Provider instance id from `goat_provider_list`.",
     }),
   ),
   driverKind: Schema.optional(
     ProviderDriverKind.annotate({
-      description: "Provider driver kind; prefer providerInstanceId when available.",
+      description: "Prefer `providerInstanceId`.",
     }),
   ),
-  model: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description: "Model id advertised for the selected provider instance.",
-    }),
-  ),
+  model: Schema.optional(TrimmedNonEmptyString),
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Model options from goat_provider_list. For the same provider instance and model, overrides individual inherited values; [] or {} clears them. Claude: {effort: 'max', fastMode: true}; Codex: {reasoningEffort: 'max', serviceTier: 'priority'}. Only use options advertised by the selected model.",
+        "Options from `goat_provider_list`, such as {effort:'max'}. Given values override inherited. [] or {} clears.",
     }),
   ),
 });
@@ -217,9 +204,7 @@ export type OrchestratorMcpTerminalDelegatedTaskStatus =
   typeof OrchestratorMcpTerminalDelegatedTaskStatus.Type;
 
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
-  task: OrchestratorMcpPrompt.annotate({
-    description: "Self-contained task for one delegated child agent/subagent.",
-  }),
+  task: OrchestratorMcpPrompt,
   target: Schema.optional(OrchestratorMcpDelegateTarget),
   remote: Schema.optional(
     Schema.Struct({ cwd: TrimmedNonEmptyString, workspace: Schema.optional(SshLaunchWorkspace) }),
@@ -229,35 +214,40 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
-        "Defaults to shared: use the parent's checkout. Worktree creates a separate checkout from the parent's current local commit before starting the child. Uncommitted edits are not copied.",
+        "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit, for a separate checkout or PR per child. Uncommitted edits stay out.",
     }),
   ),
   mode: Schema.optional(
     Schema.Literals(["async", "wait"]).annotate({
       description:
-        "Defaults to async. Use wait only when this turn needs the child's result before you can continue. A blocking question or a pending approval in the child ends the wait early with the task still running.",
+        "Default 'async'. 'wait' only if this turn needs the result. A question or approval ends the wait.",
     }),
   ),
   timeoutMs: Schema.optional(Schema.Finite).annotate({
-    description:
-      "Wait budget for mode=wait only. Default 10 minutes. Elapsing it returns waitTimedOut=true on that call and does not cancel the child.",
+    description: "Mode 'wait' only. Default 10 min. A timeout does not cancel the child.",
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(
     OrchestratorMcpRuntimeMode.annotate({
       description:
-        "Defaults to inherit; omit it unless the user asks for a supervised child. A narrower mode is not a read-only switch: on most providers, approval-required and auto-accept-edits pause the child at each action that needs approval until a person approves it in the child's thread, which this thread cannot do. To limit what the child does, say so in the task. A mode ranked above this thread's is rejected; that ranking does not promise the child's provider permissions are narrower than this thread's.",
+        "Omit unless the user asks for a supervised child. Narrow modes pause for human approval, not read-only. Above yours is rejected.",
     }),
   ),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
+// Set only on results for still-running tasks whose completion will wake the parent.
+export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
+  "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
+const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
+
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   taskId: NodeId,
   host: Schema.optional(Schema.String),
   childThreadId: Schema.NullOr(ThreadId),
+  link: Schema.optional(Schema.String),
   childRunId: Schema.NullOr(RunId),
   childNodeId: NodeId,
   status: OrchestratorMcpDelegatedTaskStatus,
@@ -273,33 +263,27 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   parentModelSelection: Schema.optional(ModelSelection),
   reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
-  options: Schema.optional(
-    Schema.Array(ProviderOptionSelection).annotate({
-      description:
-        "Stored model option selections for the child run, or its thread before a run starts. Omitted selections use provider defaults.",
-    }),
-  ),
+  options: Schema.optional(Schema.Array(ProviderOptionSelection)),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   hasPendingQuestion: Schema.Boolean.annotate({
     description:
-      "Blocking question ends mode=wait. Pass threadId=childThreadId to goat_pending_request_list, goat_pending_request_read (with requestId) and goat_pending_request_respond, or ask the user; the task's completion still wakes this thread.",
+      "A question blocks the child and ends a wait. Answer via `goat_pending_request_*` on `childThreadId`, or the user does.",
   }),
   pendingApproval: Schema.NullOr(
     Schema.Struct({ requestId: RuntimeRequestId, kind: ProviderRequestKind, runId: RunId }),
   ).annotate({
-    description:
-      "Identity of the oldest pending live approval for this task's own unfinished work, or null. Ends mode=wait without cancelling the child; completion still wakes this thread. This grants no approval authority. Read the fresh full request in childThreadId before responding: the record can outlive its provider callback. Decisions remain with the child's existing approval holder; pending request tools answer questions only.",
+    description: "Oldest pending approval, or null. Ends a wait. Grants no approval rights.",
   }),
   waitTimedOut: Schema.Boolean.annotate({
-    description:
-      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later goat_task_read reads return false and use status for liveness.",
+    description: "True only on the timed-out wait call. The child keeps running.",
   }),
   /** Set when this machine is under resource pressure; see goat_host_status placement. */
   pressure: Schema.optional(HostPressureAdvice),
   /** Set when the remote host has not confirmed it enforces the forwarded goatclaw ceiling. */
   ceiling: Schema.optional(GoatclawCeilingAdvice),
+  next: Schema.optional(OrchestratorMcpRunningTaskNext),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -387,6 +371,7 @@ export type OrchestratorMcpCreatedThreadStatus = typeof OrchestratorMcpCreatedTh
 
 export const OrchestratorMcpCreatedThread = Schema.Struct({
   threadId: ThreadId,
+  link: Schema.optional(Schema.String),
   runId: Schema.NullOr(RunId),
   status: OrchestratorMcpCreatedThreadStatus,
   title: Schema.String,
@@ -410,8 +395,7 @@ export type OrchestratorMcpThreadStatus = typeof OrchestratorMcpThreadStatus.Typ
 
 const OrchestratorMcpProjectTarget = Schema.optional(
   ProjectId.annotate({
-    description:
-      "Project to act on. Omit for the calling thread's project; required when the caller is not a GOAT thread.",
+    description: "Project to use. Default: your thread's project. Required outside a thread.",
   }),
 );
 
@@ -548,7 +532,7 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
 
-/** A pull request linked to a thread; `state` is null until the host has been read. */
+/** state is null until the host is read. */
 export const OrchestratorMcpThreadPullRequest = Schema.Struct({
   ...ThreadPullRequestKey.fields,
   url: TrimmedNonEmptyString,
@@ -562,6 +546,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   host: OrchestratorMcpResultHost,
   title: Schema.String,
+  link: Schema.optional(Schema.String),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   status: OrchestratorMcpThreadStatus,
@@ -571,7 +556,6 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
-  /** Missing on older servers. */
   pullRequests: Schema.optional(Schema.Array(OrchestratorMcpThreadPullRequest)),
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
@@ -697,13 +681,13 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
   afterPosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
-    description: "Maximum timeline items to return, from 1 to 100.",
+    description: "Max items, 1 to 100.",
   }),
   runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
-    description: "Maximum recent runs to return, from 1 to 50.",
+    description: "Max recent runs, 1 to 50.",
   }),
   maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
-    description: "Maximum text characters per item, from 1 to 50000.",
+    description: "Max chars per item, 1 to 50000.",
   }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
@@ -712,6 +696,7 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  link: Schema.optional(Schema.String),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   status: OrchestratorMcpThreadStatus,
@@ -722,7 +707,6 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
-  /** Missing on older servers. */
   pullRequests: Schema.optional(Schema.Array(OrchestratorMcpThreadPullRequest)),
   titleRegeneration: Schema.NullOr(ThreadTitleRegeneration),
   branch: Schema.NullOr(Schema.String),
@@ -812,6 +796,7 @@ export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInp
 export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
+  link: Schema.optional(Schema.String),
   messageId: MessageId,
   runId: RunId,
   taskId: Schema.optional(NodeId),
@@ -859,6 +844,7 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
+  next: Schema.optional(OrchestratorMcpRunningTaskNext),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
@@ -1044,8 +1030,7 @@ export type OrchestratorMcpThreadRetryResult = typeof OrchestratorMcpThreadRetry
 export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
   search: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(200)).annotate({
-      description:
-        "Words to match against model ids and labels. Lists matching models instead of the default short list.",
+      description: "Match model ids and labels. Replaces the short list.",
     }),
   ),
 });
@@ -1113,18 +1098,13 @@ export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabiliti
 
 export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   projectId: OrchestratorMcpProjectTarget,
-  prompt: OrchestratorMcpPrompt.annotate({
-    description: "Prompt executed on every scheduled run.",
-  }),
+  prompt: OrchestratorMcpPrompt,
   schedule: OrchestratorMcpSchedule,
   title: Schema.optional(OrchestratorMcpTitle),
-  enabled: Schema.optional(
-    Schema.Boolean.annotate({ description: "Whether the schedule starts enabled; defaults true." }),
-  ),
+  enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
-      description:
-        "True (default) posts each run into this thread; false creates a fresh top-level thread per run.",
+      description: "Default true: runs post in this thread. False: new thread per run.",
     }),
   ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
@@ -1146,11 +1126,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
-      "Public URL to give the sender. Absent when this environment has no GOAT Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
+      "Public URL for the sender. Absent: no GOAT Connect tunnel, or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
   }),
   webhookUrlUnavailableReason: Schema.optional(Schema.String).annotate({
-    description:
-      "For a webhook task without webhookUrl: why it is absent and what the user can do.",
+    description: "Why webhookUrl is absent and what the user can do.",
   }),
   webhookSignature: Schema.optional(Schema.Literals(["none", "set"])).annotate({
     description: "Whether requests must carry a valid signature.",
@@ -1165,8 +1144,7 @@ export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTa
 export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
   projectId: Schema.optional(
     ProjectId.annotate({
-      description:
-        "Only list this project's tasks. Omit for the calling thread's project, or for every project when the caller is not a GOAT thread.",
+      description: "Default: your thread's project, or all outside a thread.",
     }),
   ),
 });

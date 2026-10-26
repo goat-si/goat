@@ -195,7 +195,7 @@ export const make = ElectronUpdater.of({
           eventTarget.removeListener(eventName, untypedListener);
         }),
     ).pipe(Effect.asVoid);
-  },
+  }),
 });
 
 export const layer = Layer.succeed(ElectronUpdater, make);

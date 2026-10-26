@@ -28,6 +28,7 @@ export type GoatMcpToolSummaryAction =
   | "thread-watch-list"
   | "thread-interrupt"
   | "workflow-stop"
+  | "background-wait"
   | "thread-configuration"
   | "thread-configure"
   | "thread-fork"
@@ -236,6 +237,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
+  ),
+  goat_background_wait: tool(
+    ["Update", "Updating", "Updated", "background waits"],
+    "background-wait",
   ),
   goat_thread_interrupt: tool(
     ["Interrupt", "Interrupting", "Requested an interrupt of", "a GOAT thread"],
@@ -709,6 +714,7 @@ const GOAT_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_thread_fork: "goat_thread_fork",
   t3_thread_interrupt: "goat_thread_interrupt",
   t3_workflow_stop: "goat_workflow_stop",
+  t3_background_wait: "goat_background_wait",
   t3_thread_launch: "goat_thread_launch",
   t3_thread_list: "goat_thread_list",
   t3_thread_merge_back: "goat_thread_merge_back",

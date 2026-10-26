@@ -92,7 +92,6 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         };
       }),
     ),
-  ),
   // Reaching another machine uses this machine's SSH keys, as goat_thread_list does.
   goat_thread_search: McpToolAccess.readsOrReachesHost(
     (input) => input.host !== undefined || input.hosts !== undefined || input.allHosts === true,

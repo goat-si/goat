@@ -81,9 +81,66 @@ import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime
 import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
 import * as NetService from "@goat/shared/Net";
 import * as RelayClient from "@goat/shared/relayClient";
+import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as DocumentText from "./provider/DocumentText.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
+import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
+import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as DeviceService from "./device/DeviceService.ts";
+import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
+import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
+import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
+import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
+import * as ProcessRunner from "./processRunner.ts";
+import * as GitManager from "./git/GitManager.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as ServerOwnership from "./serverOwnership.ts";
+import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
+import * as ServerSettings from "./serverSettings.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
+import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
+import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
+import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as ReviewService from "./review/ReviewService.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
+import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
-import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as McpOAuth from "./auth/McpOAuth.ts";
@@ -92,8 +149,6 @@ import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
-import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
@@ -120,8 +175,6 @@ import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
-import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
-import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -129,12 +182,9 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as FleetFallback from "./fleet/resources/Fallback.ts";
 import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
 import * as FleetPlacement from "./fleet/resources/Placement.ts";
-import * as GitManager from "./git/GitManager.ts";
-import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ServerHttp from "./http.ts";
 import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
@@ -145,11 +195,7 @@ import {
 import * as HubProxyHttp from "./hubProxy/http.ts";
 import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
-import * as Keybindings from "./keybindings.ts";
 import * as MaintenanceAudit from "./maintenance/MaintenanceAudit.ts";
-import * as McpHttpServer from "./mcp/McpHttpServer.ts";
-import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
 import * as Observability from "./observability/Observability.ts";
@@ -160,7 +206,6 @@ import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
@@ -171,44 +216,24 @@ import { fixPath } from "./os-jank.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
-import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
-import * as PreviewManager from "./preview/Manager.ts";
-import * as PortScanner from "./preview/PortScanner.ts";
-import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
-import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
-import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
-import * as ProcessRunner from "./processRunner.ts";
-import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
+import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
+import { acceptsPrivateNetworkConnection, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as ProjectHttp from "./project/http.ts";
-import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
-import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
-import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
-import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
-import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
-import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@goat/provider-muse/server";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
-import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
-import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
-import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
-import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
-import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
-import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
-import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -217,7 +242,6 @@ import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as ReviewService from "./review/ReviewService.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
 import {
   relayHookBaseUrl,
@@ -226,46 +250,24 @@ import {
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as ServerActivation from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import * as ServerOwnership from "./serverOwnership.ts";
-import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
-import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
 
 export { MemorySourceReadBinding } from "./memory/MemoryApplicationLayers.ts";
-import * as ServerSettings from "./serverSettings.ts";
-import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
-import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import { loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
-import * as TerminalManager from "./terminal/Manager.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
-import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
-import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
-import * as VcsProcess from "./vcs/VcsProcess.ts";
-import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
-import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
-import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
-import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
-import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as Ws from "./ws.ts";
 
-// MCP handoff thread IDs include escaped provenance and can exceed find-my-way's
-// 100-character default for one path segment.
+// Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
 } as const;
 
-// Effect's default preemptive shutdown waits 20s before finalizing request scopes.
-// GOAT's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
-// already closes the websocket gracefully.
+// Skip Effect's default 20 s grace; WebSocket scope finalizers already close connections gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
 const layerApplicationObservability = EventLoopMonitor.layer.pipe(
@@ -273,8 +275,7 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(layerResourceAttribution),
 );
 
-// One rotating store behind both logger views, so driver instances never race
-// its rotation.
+// Share rotation state so driver loggers cannot race.
 const layerProviderEventLoggers = Layer.effect(
   ProviderEventLoggers.ProviderEventLoggers,
   Effect.gen(function* () {
@@ -403,7 +404,19 @@ const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     return NodeHttpServer.layer(
-      () => rejectRequestsUntilServing(guardHttpResponseWriteErrors(NodeHttp.createServer())),
+      () => {
+        const server = rejectRequestsUntilServing(
+          guardHttpResponseWriteErrors(NodeHttp.createServer()),
+        );
+        if (config.privateNetworkOnly) {
+          server.on("connection", (socket) => {
+            if (!acceptsPrivateNetworkConnection(socket)) {
+              socket.destroy();
+            }
+          });
+        }
+        return server;
+      },
       {
         host: config.host ?? "127.0.0.1",
         port: config.port,
@@ -418,7 +431,7 @@ const layerHttpServer = Layer.unwrap(
   }),
 );
 
-const layerPlatformServices = NodeServices.layer;
+const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
@@ -436,9 +449,7 @@ export const layerRepositoryIdentityResolver = Layer.effect(
     const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
     return yield* RepositoryIdentityResolver.make({
       refine: Effect.fn(function* (identity: RepositoryIdentity) {
-        for (const kind of SourceControlBuiltInDrivers.BUILT_IN_SOURCE_CONTROL_DRIVERS.map(
-          (driver) => driver.kind,
-        )) {
+        for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
           const provider = yield* registry.get(kind);
           if (provider.refineRepositoryIdentity === undefined) continue;
           const refined = yield* provider.refineRepositoryIdentity({
@@ -984,6 +995,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
+    GuestHttp.layer,
     DeviceHubProxy.layer,
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
@@ -1082,10 +1094,14 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
-  // Both transports consume the same service instance, so caches single-flight across clients
-  // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
+  // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
   Layer.provide(layerPullRequestService),
-  Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
+  // The same activity instance RunExecutionService reports to, by layer memoization.
+  Layer.provide(
+    ServerBrowser.layer.pipe(
+      Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+    ),
+  ),
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ConnectionCatalogBroker.layer),

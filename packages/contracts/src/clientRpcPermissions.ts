@@ -4,6 +4,7 @@ import {
   AuthMemoryReadScope,
   AuthMemoryWriteScope,
   AuthFilesystemReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
@@ -158,6 +159,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.hubProxyEnrollNode]: AuthSettingsWriteScope,
   [WS_METHODS.hubProxyUnenrollNode]: AuthSettingsWriteScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
+  // A guest link hands thread access to someone outside, like a pairing link.
+  [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

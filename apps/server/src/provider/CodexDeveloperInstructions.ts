@@ -1,4 +1,3 @@
-import type { ProviderInteractionMode } from "@goat/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import {
   buildRuntimeInstructions,
@@ -11,11 +10,7 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 
-/**
- * Codex cuts the middle out of any `additionalContext` value over 1,000 tokens,
- * which it counts as UTF-8 bytes divided by four. It does this silently, so
- * every value built here has to fit.
- */
+/** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
@@ -215,13 +210,13 @@ export function buildCodexDevelopmentContext(): Record<
  * its own text for a mode, as newer models do, Codex uses that text and drops
  * the client's `developer_instructions` entirely.
  */
+/** Keep this outside collaboration mode; model-catalog mode text overrides client developer_instructions. */
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | GoatToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
-  // Separate keys keep each value under Codex's per-entry cap. Codex emits
-  // entries in key order, so the numbering preserves the authored order.
+  // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(

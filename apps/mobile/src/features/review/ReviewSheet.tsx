@@ -72,6 +72,7 @@ import { resolveReviewAvailability } from "./reviewAvailability";
 import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
 import { reportShowcaseSceneRendered } from "../showcase/showcaseRenderSignal";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 function ReviewHeader(
   props: Parameters<typeof useReviewHeaderPresentation>[0] & {
@@ -457,6 +458,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
   useAdaptiveWorkspacePaneRole("inspector");
   const { panes, showAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const navigation = useNavigation();
+  const selectDetail = useSelectWorkspaceDetail();
   const insets = useSafeAreaInsets();
   const { themeAppearance: selectedTheme } = useAppearancePreferences();
   const headerIcon = String(useUniwindTheme()["--color-icon"]);
@@ -475,6 +477,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
 
   useEffect(() => {
     showAuxiliaryPane("inspector");
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening review for another thread reselects its inspector pane.
   }, [environmentId, showAuxiliaryPane, threadId]);
   const {
     error,
@@ -483,7 +486,6 @@ function ReviewSheetContent(props: ReviewSheetProps) {
     refreshSelectedSection,
     selectSection,
     isSelectedSectionPending,
-    diffPreviewRevision,
   } = useReviewSections({
     enabled: isEnvironmentReady,
     environmentId,
@@ -507,13 +509,9 @@ function ReviewSheetContent(props: ReviewSheetProps) {
     environmentId,
     cwd: selectedThreadCwd,
     selectedSection,
-    revision: diffPreviewRevision,
     draftMessage,
   });
-  // Resolution returns null while Expo registers the native view (or forever
-  // when the binary lacks it). Rendering a null component type crashes the
-  // app, so callers must fall back — ThreadFeed's ReviewCommentCard does the
-  // same check.
+  // Expo may return null before registration or in older binaries; use the fallback.
   const NativeReviewDiffView = resolveNativeReviewDiffView();
   const nativeReviewDiffViewRef = useRef<NativeReviewDiffViewHandle>(null);
   const showcasedReviewDrawRef = useRef<string | null>(null);
@@ -637,9 +635,9 @@ function ReviewSheetContent(props: ReviewSheetProps) {
       navigation.goBack();
       return;
     }
-    navigation.navigate("Thread", {
-      environmentId: String(environmentId),
-      threadId: String(threadId),
+    selectDetail({
+      name: "Thread",
+      params: { environmentId: String(environmentId), threadId: String(threadId) },
     });
   };
   const androidHeaderSubtitle = [
@@ -746,6 +744,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
               >
                 {listHeader}
                 <View className="min-w-0 flex-1" collapsable={false}>
+                  {/* oxlint-disable-next-line react/static-components -- The resolver returns a cached native component with stable identity. */}
                   <NativeReviewDiffView
                     collapsable={false}
                     testID="review-native-diff-view"
@@ -795,10 +794,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
               showsVerticalScrollIndicator={false}
               className="flex-1"
               refreshControl={
-                // The native diff surface owns pull-to-refresh via onPullToRefresh;
-                // the raw fallback (and empty states) need an explicit control —
-                // iOS has no other refresh affordance here (the explicit
-                // "Refresh current diff" menu is Android-only).
+                // Fallback and empty states need refresh controls; only Android has an explicit refresh menu.
                 <RefreshControl
                   refreshing={isPullRefreshing || isSelectedSectionPending || areFilePatchesPending}
                   onRefresh={() => void handlePullToRefresh()}

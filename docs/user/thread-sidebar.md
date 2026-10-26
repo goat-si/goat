@@ -227,14 +227,12 @@ item you turn on stays on whatever changes later, and **Reset to defaults** retu
 automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
 stay reachable from the command palette or Settings.
 
-### Fold working threads on mobile
+### Working threads
 
-On iOS and Android, turn on **Settings → Thread behavior → Working section** to move threads
-that are working or monitoring into a collapsed **Working** section below the active list.
-A thread returns to the top of the active list when it finishes, fails, or needs an approval
-or answer. The Working section
-lists the thread you last sent work to first. Pinned threads stay in the pinned section. Each
-device keeps its own choice.
+Threads that are working or waiting on work they will resume from move into a collapsed
+**Working** section below the active list. A thread returns to the top of the active list when it
+finishes, fails, or needs an approval or answer. The Working section lists the thread you last
+sent work to first. Pinned threads stay in the pinned section.
 
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
@@ -263,8 +261,8 @@ Press `Escape` while dragging to cancel.
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. An empty thread's inactivity counts from when it was created.
-Work in progress, pending questions or approvals, and live background work
-prevent automatic settlement. An open pull request does not prevent inactivity
+Work in progress, pending questions or approvals, and background work the agent
+is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
 but an old closed or merged pull request does not settle work you
 resumed after it closed. Only your own messages count as resuming. A turn that
@@ -297,8 +295,15 @@ The linked pull request participates in automatic settlement.
 ## Find and reference work
 
 On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
-across connected environments. Message search starts after two characters and
-includes your messages and final agent responses.
+across connected environments by title, branch, pull request, or project.
+Threads you open often or recently rank higher, and for three weeks the thread
+you last picked for a query ranks higher when you type that query again.
+Threads whose messages contain all your words appear below, under **In
+messages**, and open at the matching message. Message search needs at least
+one word of three or more letters, or two for Chinese, Japanese, and Korean.
+On mobile, the thread list search also lists message matches and opens them at
+the matching message; on an iPad with a keyboard, `Cmd+K` opens the same
+palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
@@ -316,8 +321,8 @@ Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
 When the provider reports a reset time, choose **Resume at reset** to schedule a
-continuation. You can cancel it from the thread. Enable **Auto-resume limited
-threads** in **Settings → General** on web and desktop, or **Settings → Thread
+continuation. You can cancel it from the thread. Enable **Resume after
+usage limits** in **Settings → General** on web and desktop, or **Settings → Thread
 behavior** on mobile, to schedule limit stops by default.
 The environment must be running when the reset arrives; it resumes overdue
 continuations after a restart. Stopping the thread, sending a new message,
@@ -326,7 +331,7 @@ archiving, or settling it prevents a pending continuation from starting.
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without
 sending a message; enabling both wakes and continues it. **Wake now** cancels
-the snooze. Enable **Snooze limited threads** in thread behavior settings to
+the snooze. Enable **Snooze until limits reset** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
@@ -335,6 +340,10 @@ finished, on this machine or a connected one. On web and desktop, follow them un
 **Lineage** in the thread details, which counts the ones still running; open one there to read
 it, or choose **Promote to thread** from its menu to make it a regular thread. While a subagent
 is open, it shows beneath the thread that started it until you navigate away.
+
+On mobile, open a subagent from its conversation card or **Agents**. On iOS
+layouts with an inspector, its thread opens beside the parent. Maximize it to
+fill the screen; close the full-screen view to return to the parent and inspector.
 
 Stop ends the thread's current turn. Subagents it delegated in the background keep
 working and report back when they finish; a subagent the turn was waiting on stops

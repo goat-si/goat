@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -6,7 +6,7 @@ import type * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
-import { discoverGrokSkills } from "./skills.ts";
+import { discoverGrokSkills, leadingGrokSkillMention } from "./skills.ts";
 
 const inspectPayload = (skills: ReadonlyArray<unknown>) => JSON.stringify({ skills });
 
@@ -178,8 +178,6 @@ describe("discoverGrokSkills", () => {
     });
   });
 
-  // Workspace skill probes run on their own from the driver, outside the
-  // status check, so they must suppress Grok's launch-time updater themselves.
   it.effect("disables Grok's updater for the probe without touching the caller's env", () => {
     const spawnOptions: Array<ChildProcess.CommandOptions | undefined> = [];
     const environment = { GROK_DISABLE_AUTOUPDATER: "0", GROK_HOME: "/home/dev/.grok" };
@@ -198,5 +196,16 @@ describe("discoverGrokSkills", () => {
       });
       expect(environment.GROK_DISABLE_AUTOUPDATER).toBe("0");
     });
+  });
+});
+
+describe("leadingGrokSkillMention", () => {
+  it.each([
+    { text: "  €deploy\nship it", mention: { name: "deploy", rest: "\nship it" } },
+    { text: "$deploy", mention: { name: "deploy", rest: "" } },
+    { text: "$25 off", mention: undefined },
+    { text: "$deploy, then ship", mention: undefined },
+  ])("reads $text", ({ text, mention }) => {
+    assert.deepEqual(leadingGrokSkillMention(text), mention);
   });
 });

@@ -11,16 +11,22 @@ export {
   resolveFileDiffPath,
   resolveFileDiffPreviousPath,
 } from "@goat/client-runtime/work-log/file-change-diff";
+import { READABLE_LIGHT_THEME_NAME } from "./readableSyntaxTheme";
 
-const DIFF_THEME_NAMES = {
+export const DIFF_THEME_NAMES = {
   light: "pierre-light",
   dark: "pierre-dark",
+  readableLight: READABLE_LIGHT_THEME_NAME,
 } as const;
 
 export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];
 
 export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
-  return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
+  if (theme === "dark") return DIFF_THEME_NAMES.dark;
+  // The New design (data-redesign on <html>) keeps light syntax readable on every code surface.
+  return typeof document !== "undefined" && document.documentElement.hasAttribute("data-redesign")
+    ? DIFF_THEME_NAMES.readableLight
+    : DIFF_THEME_NAMES.light;
 }
 
 const FNV_OFFSET_BASIS_32 = 0x811c9dc5;
@@ -85,12 +91,7 @@ export function getDiffLineStat(files: ReadonlyArray<FileDiffMetadata>): DiffLin
 
 interface RenderablePatchOptions {
   ignoreWhitespace?: boolean | undefined;
-  /**
-   * Pierre's partial-patch parser keeps hunk render starts in source-file
-   * coordinates. Its virtualizer iterates partial patches as compact rows, so
-   * review diffs need compact render starts while retaining collapsedBefore
-   * for the "N unmodified lines" separator.
-   */
+  /** Compact Pierre source offsets for partial-patch rows; retain collapsedBefore for separators. */
   compactPartialHunkOffsets?: boolean;
 }
 
@@ -231,10 +232,7 @@ function hashFileDiffPart(hash: number, value: string | number | boolean | undef
   return fnv1a32(serialized, withLength);
 }
 
-/**
- * Pierre's cache key includes the whole patch, so using it here would repaint
- * every file when one changes.
- */
+// Pierre's whole-patch cache key would repaint every file when one changes.
 export function buildFileDiffContentVersion(fileDiff: FileDiffMetadata): number {
   let hash = FNV_OFFSET_BASIS_32;
   const append = (value: string | number | boolean | undefined) => {
@@ -288,13 +286,13 @@ export function buildFileDiffContentVersion(fileDiff: FileDiffMetadata): number 
 export function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
   switch (fileDiff.type) {
     case "new":
-      return "text-[var(--diffs-addition-base)]";
+      return "text-[var(--diffs-addition-base)] redesign:text-muted-foreground/80";
     case "deleted":
-      return "text-[var(--diffs-deletion-base)]";
+      return "text-[var(--diffs-deletion-base)] redesign:text-muted-foreground/80";
     case "change":
     case "rename-pure":
     case "rename-changed":
-      return "text-[var(--diffs-modified-base)]";
+      return "text-[var(--diffs-modified-base)] redesign:text-muted-foreground/80";
     default:
       return "text-muted-foreground/80";
   }
@@ -362,5 +360,25 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
 
   background-color: var(--diffs-bg) !important;
   color: var(--code-foreground) !important;
+}
+
+/* The library's change-icon colors are tuned for dark canvases; light mode takes the app's darker tokens. */
+[data-change-icon="new"] {
+  color: var(
+    --diff-added-icon,
+    light-dark(var(--diff-addition-foreground), var(--diffs-addition-base))
+  ) !important;
+}
+[data-change-icon="deleted"] {
+  color: light-dark(var(--diff-deletion-foreground), var(--diffs-deletion-base)) !important;
+}
+/* The page sets --diff-modified-icon under the New design: a muted T3 blue, so the common case stays quiet. */
+[data-change-icon="change"],
+[data-change-icon="rename-pure"],
+[data-change-icon="rename-changed"] {
+  color: var(
+    --diff-modified-icon,
+    light-dark(var(--info-foreground), var(--diffs-modified-base))
+  ) !important;
 }
 `;

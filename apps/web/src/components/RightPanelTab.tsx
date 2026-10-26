@@ -1,10 +1,8 @@
-import { pullRequestHostOf, type SourceControlProviderKind } from "@goat/contracts";
+import type { SourceControlProviderKind } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
-import {
-  threadPullRequestKeysEqual,
-  visibleThreadPullRequests,
-} from "@goat/shared/threadPullRequests";
+import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
+import { threadPullRequestKeysEqual } from "@goat/client-runtime/thread-pull-requests";
 import type {
   EnvironmentId,
   PreviewSessionSnapshot,
@@ -54,6 +52,29 @@ import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+
+
+/** Forgejo serves pull requests on its web host; other forges key the host from the repository. */
+function pullRequestHostOf(
+  identity: {
+    readonly canonicalKey?: string | undefined;
+    readonly locator?: { readonly remoteUrl: string } | undefined;
+  },
+  kind: SourceControlProviderKind,
+): string {
+  if (kind === "forgejo") {
+    try {
+      const remote = new URL(identity.locator?.remoteUrl ?? "");
+      if (remote.protocol === "http:" || remote.protocol === "https:") {
+        return remote.host.toLowerCase();
+      }
+    } catch {
+      // SSH remotes do not name the web host.
+    }
+  }
+  const host = identity.canonicalKey?.split("/")[0]?.trim();
+  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
+}
 
 export interface PullRequestTabStatus {
   projectId: string;

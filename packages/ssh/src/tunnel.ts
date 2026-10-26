@@ -165,6 +165,13 @@ const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
+// Cold archive launches download and extract ~70 MB and may wait on an install lock.
+// Lock waits must outlast both downloads and extraction; SSH must outlast install or wait plus readiness.
+// Leave slack for verification and extraction, which have no timeout.
+const REMOTE_ARCHIVE_CHECKSUMS_SECONDS = 30;
+const REMOTE_ARCHIVE_DOWNLOAD_SECONDS = 240;
+const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
+const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;

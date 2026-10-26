@@ -243,8 +243,8 @@ export const make = Effect.gen(function* () {
     get: readClientSettings(fileSystem, environment.clientSettingsPath).pipe(
       Effect.withSpan("desktop.clientSettings.get"),
     ),
-    set: (settings) =>
-      crypto.randomUUIDv4().pipe(
+    set: Effect.fn("desktop.clientSettings.set")(function (settings) {
+      return crypto.randomUUIDv4().pipe(
         Effect.map((uuid) => uuid.replace(/-/g, "")),
         Effect.mapError(
           (cause) =>

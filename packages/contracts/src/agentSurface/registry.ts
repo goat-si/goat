@@ -1,4 +1,5 @@
 import { attachmentEntries } from "./entries/attachment.ts";
+import { backgroundEntries } from "./entries/background.ts";
 import { channelEntries } from "./entries/channel.ts";
 import { cloudAgentEntries } from "./entries/cloud_agent.ts";
 import { cloudMachineEntries } from "./entries/cloud_machine.ts";
@@ -67,6 +68,7 @@ export const agentSurfaceRegistry = {
   ...taskEntries,
   ...reviewFindingsEntries,
   ...workflowEntries,
+  ...backgroundEntries,
   ...scheduleEntries,
   ...handoffEntries,
   ...previewEntries,

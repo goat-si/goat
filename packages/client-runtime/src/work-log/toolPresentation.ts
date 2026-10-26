@@ -1,4 +1,4 @@
-import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
+import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { COMPUTER_USE_TOOL_SOURCE, dynamicToolSurface } from "@goat/shared/toolActivity";
 import type {
   ToolActivityIcon,

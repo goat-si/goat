@@ -50,7 +50,37 @@ const PullRequestListPreferences = Schema.Struct({
 });
 export type PullRequestListPreferences = typeof PullRequestListPreferences.Type;
 
+/**
+ * The page each workspace tab last showed, reopened when the tab returns with columns. `key` is
+ * that page's route key: reopening under the same key reuses the screen a tab kept mounted.
+ */
+const WorkspaceSelections = Schema.Struct({
+  threads: Schema.optional(
+    Schema.Struct({
+      environmentId: Schema.String,
+      threadId: Schema.String,
+      key: Schema.optional(Schema.String),
+    }),
+  ),
+  pullRequests: Schema.optional(
+    Schema.Struct({
+      environmentId: Schema.String,
+      projectId: Schema.String,
+      repository: Schema.String,
+      number: Schema.Number,
+      host: Schema.optional(Schema.String),
+      key: Schema.optional(Schema.String),
+    }),
+  ),
+  settings: Schema.optional(Schema.String),
+  settingsKey: Schema.optional(Schema.String),
+  /** A draft the threads tab showed after its last chat; only meaningful in its session. */
+  threadsDraft: Schema.optional(Schema.Struct({ key: Schema.String, params: Schema.Unknown })),
+});
+export type WorkspaceSelections = typeof WorkspaceSelections.Type;
+
 const isThreadListFilters = Schema.is(ThreadListFilters);
+const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
 
 export interface Preferences {
@@ -73,9 +103,8 @@ export interface Preferences {
   readonly mathRenderingEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
-  /** Environments whose "reclaim database space" notice was dismissed. */
   readonly dismissedDatabaseStorageNotices?: readonly string[];
-  /** What the Return key does in the composer on a hardware keyboard. iOS only. */
+  /** Hardware Return behavior is iOS-only. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   readonly followUpBehavior?: FollowUpBehavior;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
@@ -94,6 +123,7 @@ export interface Preferences {
   readonly pullRequestListFilters?: PullRequestListPreferences;
   /** Whether the computer use readiness details and skill switch are shown. */
   readonly computerUseAdvancedExpanded?: boolean;
+  readonly workspaceSelections?: WorkspaceSelections;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -169,6 +199,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     computerUseAdvancedExpanded?: boolean;
+    workspaceSelections?: WorkspaceSelections;
   } = {};
 
   if (parsed.homeMode === "thread" || parsed.homeMode === "bot") {
@@ -321,6 +352,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isPullRequestListPreferences(parsed.pullRequestListFilters)) {
     preferences.pullRequestListFilters = parsed.pullRequestListFilters;
+  }
+  if (isWorkspaceSelections(parsed.workspaceSelections)) {
+    preferences.workspaceSelections = parsed.workspaceSelections;
   }
   return preferences;
 }

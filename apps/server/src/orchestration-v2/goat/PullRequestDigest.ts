@@ -19,11 +19,7 @@ import {
   type ThreadPullRequestWatch,
   TurnItemId,
 } from "@goat/contracts";
-import {
-  normalizeThreadPullRequestKey,
-  threadPullRequestKeysEqual,
-  threadPullRequestsOf,
-} from "@goat/shared/threadPullRequests";
+import { normalizeThreadPullRequestKey, threadPullRequestKeysEqual, threadPullRequestsOf } from "../../sourceControl/threadPullRequests.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 

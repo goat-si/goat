@@ -8,7 +8,7 @@
  * @module PullRequestWatchWakes
  */
 import { MessageId } from "@goat/contracts";
-import { threadPullRequestKeyOf } from "@goat/shared/threadPullRequests";
+import { threadPullRequestKeyOf } from "../../sourceControl/threadPullRequests.ts";
 
 /** A link as the thread stores it, so both sides normalize the same key. */
 export type WatchedLink = Parameters<typeof threadPullRequestKeyOf>[0];

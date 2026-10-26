@@ -240,9 +240,7 @@ export const layer: Layer.Layer<
                 : { requestedAt: input.subagent.requestedAt }),
             });
           }
-          // A settled turn reaches its adapter too: only the adapter knows
-          // whether it still runs work for the thread, and each one either
-          // stops it or reports there is nothing left to stop.
+          // Settled turns still reach adapters, which alone know whether background work remains.
           yield* session.value.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
@@ -288,9 +286,7 @@ export const layer: Layer.Layer<
           yield* stopComputerUse(input.threadId);
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
-            // No live adapter: nothing can emit a terminal provider-turn update
-            // from interrupt. Do not poll for projection terminalization or the
-            // restart effect stalls; let detach/start proceed.
+            // Without a live adapter, no terminal event can arrive; proceed to detach/start without polling.
             if (loaded.providerTurn.status === "running") {
               yield* Effect.logWarning(
                 "Provider restart interrupt skipped; no live session for a still-projected running turn",
@@ -326,10 +322,7 @@ export const layer: Layer.Layer<
             ) {
               return;
             }
-            // Provider terminal events are projected on a detached ingestion
-            // fiber. Yield through the Node event loop instead of sleeping on
-            // Effect's clock so deterministic runtimes cannot deadlock a
-            // command that is waiting for that projection.
+            // Yield through Node's event loop; detached ingestion cannot advance a deterministic Effect clock.
             yield* yieldToRuntime;
           }
           return yield* new ProviderTurnControlError({

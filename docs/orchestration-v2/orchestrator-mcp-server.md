@@ -293,14 +293,14 @@ the parent when it finishes. A local `mode: "wait"` child stops with the turn wh
 blocking call it answers, unless that wait already timed out. `goat_task_cancel` stops
 either kind.
 
-Each delegated review round uses a new `goat_task_create` call with top-level
+Each independent delegated review round uses a new `goat_task_create` call with top-level
 `role: "review"`, which `goat_review_findings_record` requires, and the original brief,
-prior findings, responses, and unresolved objections. Track each round by its own `taskId` and use
-a distinct `clientRequestId` per round, stable across retries of that round.
-`childThreadId` is backing storage, not a target for another review round through
-`goat_thread_send`. Ordinary thread messaging remains available for user-requested
-conversations; it does not reopen a completed task. There is no task-level follow-up
-API for preserving the same reviewer session.
+prior findings, responses, and unresolved objections. Track each round by its own `taskId`
+and use a distinct `clientRequestId` per round, stable across retries of that round.
+A follow-up that needs the same child's conversation goes through `goat_thread_send`
+on its `childThreadId`. After the original task completes, that follow-up runs as a
+fresh task in the child thread; it does not reopen the completed task or change its
+published result.
 
 Delegation requires an active parent run owned by the MCP credential's
 provider session. The request becomes the V2 command
@@ -556,7 +556,8 @@ and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
 
-Agents mention another thread as `[title](t3-thread://v1/<threadId>)`. The
+Agents mention another thread as `[title](t3-thread://v1/<threadId>)`. Thread
+results carry this ready-made as `link`, so agents never format the id. The
 link carries only the id. Clients first resolve it in the message's environment,
 then use a unique match in another enabled environment. Ambiguous matches stay
 unresolved. Web and desktop show the resolved thread’s current title. Mobile

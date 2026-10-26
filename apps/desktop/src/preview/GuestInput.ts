@@ -11,18 +11,13 @@ import { PREVIEW_AGENT_INPUT_HELD_GLOBAL } from "@goat/contracts";
  * widget, which nothing redirects.
  */
 
-/** CDP input Chromium delivers to the window's focused frame rather than the page's. */
 const FOCUS_ROUTED_INPUT = new Set([
   "Input.insertText",
   "Input.dispatchKeyEvent",
   "Input.imeSetComposition",
 ]);
 
-/**
- * Page script: the document holding the page's focus, or null when a cross-site
- * frame holds it. Electron's direct input reaches only the main frame's process,
- * and `insertText` crashes the page when focus is in another one.
- */
+/** Direct input reaches only the main-frame process; insertText crashes when a cross-site frame has focus. */
 const FOCUSED_DOCUMENT = `(() => {
   let doc = document;
   for (;;) {
@@ -33,11 +28,7 @@ const FOCUSED_DOCUMENT = `(() => {
   }
 })()`;
 
-/**
- * macOS editing commands a key press asks for (Cmd+A is `selectAll`), which
- * Chromium runs only for CDP keys. Clipboard commands stay out: they would read
- * or replace the person's clipboard.
- */
+/** Electron runs editing commands only for CDP keys; exclude clipboard commands to preserve the user's clipboard. */
 const EDITING_COMMANDS = new Set(["selectAll", "undo", "redo"]);
 
 const CROSS_SITE_FOCUS_MESSAGE =
@@ -76,18 +67,13 @@ const MODIFIER_BITS = [
   [8, "shift"],
 ] as const;
 
-/** Electron's accelerator name for a DOM key value, or null when it has none. */
 const keyCodeFor = (key: string) => {
   if ([...key].length === 1) return key;
   if (ARROW_KEYS[key]) return ARROW_KEYS[key];
   return NAMED_KEYS.has(key) || /^F(?:[1-9]|1\d|2[0-4])$/u.test(key) ? key : null;
 };
 
-/**
- * The Electron key events for one CDP `Input.dispatchKeyEvent`. Electron
- * derives key, code, and a char's text from `keyCode`, so typed text travels
- * as `char` events of its own.
- */
+/** Electron derives text from keyCode, so typed text needs separate char events. */
 export const toKeyboardInputEvents = (
   params: Record<string, unknown>,
 ): Array<Electron.KeyboardInputEvent> => {

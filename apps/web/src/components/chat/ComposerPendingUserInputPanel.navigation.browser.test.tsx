@@ -17,6 +17,7 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 import { useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { makeThreadRequestsResolvedAnnouncer } from "@goat/client-runtime/state/thread-requests";
 import { expect, it, vi } from "vite-plus/test";
 
 vi.mock(import("../ChatMarkdown"), () => ({
@@ -125,7 +126,6 @@ function PendingRequestsProbe({
   const state = usePendingThreadRequests({
     environmentId,
     activeThreadId: projection.thread.id,
-    activeThread: projection.thread,
     serverProjection: loading ? null : projection,
     supportsQuestionAttachments: false,
     composerDraftTarget: { environmentId, threadId: projection.thread.id },
@@ -221,6 +221,7 @@ it("isolates drafts by environment, thread and request and discards only resolve
     await act(() => requests.onAdvanceActivePendingUserInput());
   }
 
+  // "first" was answered on another device.
   await show({
     environmentId,
     projection: {
@@ -233,6 +234,12 @@ it("isolates drafts by environment, thread and request and discards only resolve
     },
   });
   expect(requests.activePendingUserInput?.requestId).toBe("second");
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadRef.threadId,
+    )([RuntimeRequestId.make("second")]),
+  );
   for (const [index, scope] of scopes.entries()) {
     await show(scope);
     expect(requests.activePendingQuestionIndex).toBe(index === 0 ? 0 : 1);

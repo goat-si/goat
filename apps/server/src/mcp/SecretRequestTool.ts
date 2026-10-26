@@ -93,6 +93,7 @@ export const makeRequestSecret = (deps: {
           label: input.label,
           reason: input.reason,
           ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
+          ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
           secretStatus,
         })
         .pipe(
@@ -135,6 +136,12 @@ export const makeRequestSecret = (deps: {
       yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
       yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
       if (status !== "saved") return { status };
+      if (input.delivery === "file") {
+        const file = yield* secretRequests
+          .saveToFile({ threadId, turnItemId })
+          .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
+        return { status, file };
+      }
       const secretRef = yield* secretRequests.savedRef({ threadId: threadId, turnItemId });
       if (Option.isNone(secretRef)) {
         return yield* failure(

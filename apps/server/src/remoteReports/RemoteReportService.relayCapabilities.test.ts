@@ -6,13 +6,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/070_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
-import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
-import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
-import fencesMigration from "../persistence/Migrations/106_RemoteReportFences.ts";
+import migration from "../persistence/Migrations/071_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/072_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/075_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/076_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/093_ThreadRunObservedChecks.ts";
+import inboxRunIdMigration from "../persistence/Migrations/103_RemoteReportInboxRunId.ts";
+import fencesMigration from "../persistence/Migrations/107_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const binding = (correlationId: string) => ({

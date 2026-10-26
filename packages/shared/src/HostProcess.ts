@@ -71,34 +71,26 @@ export const IsExecutable = Context.Reference<boolean>("@goat/shared/HostProcess
   defaultValue: () => NodeSea.isSea(),
 });
 
-/**
- * Every IP address this machine answers to: the interface addresses, plus
- * whatever the resolver returns for the machine's own hostname. The latter
- * matters because a hostname can map to an address no interface carries —
- * Debian-style hosts put `127.0.1.1` in `/etc/hosts` — and a program that
- * records "its" address by resolving its hostname (Firefox's profile lock does)
- * will write that one.
- */
+/** Includes hostname-resolved addresses absent from interfaces, such as Debian's 127.0.1.1 used by Firefox locks. */
 export const Addresses = Context.Reference<Effect.Effect<ReadonlySet<string>>>(
   "@goat/shared/HostProcess/Addresses",
   {
-    defaultValue: () =>
-      Effect.gen(function* () {
-        const interfaces = Object.values(NodeOS.networkInterfaces())
-          .flat()
-          .flatMap((entry) => (entry ? [entry.address] : []));
-        const resolved = yield* Effect.tryPromise(() =>
-          NodeDns.promises.lookup(NodeOS.hostname(), { all: true }),
-        ).pipe(
-          Effect.map((entries) => entries.map((entry) => entry.address)),
-          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
-        );
-        return new Set([...interfaces, ...resolved]);
-      }),
+    // The enclosing operation owns the span for this inline handler.
+    defaultValue: Effect.fnUntraced(function* () {
+      const interfaces = Object.values(NodeOS.networkInterfaces())
+        .flat()
+        .flatMap((entry) => (entry ? [entry.address] : []));
+      const resolved = yield* Effect.tryPromise(() =>
+        NodeDns.promises.lookup(NodeOS.hostname(), { all: true }),
+      ).pipe(
+        Effect.map((entries) => entries.map((entry) => entry.address)),
+        Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+      );
+      return new Set([...interfaces, ...resolved]);
+    }),
   },
 );
 
-/** Undefined on platforms without POSIX uids (Windows). */
 export const UserId = Context.Reference<number | undefined>("@goat/shared/HostProcess/UserId", {
   defaultValue: () => process.getuid?.(),
 });

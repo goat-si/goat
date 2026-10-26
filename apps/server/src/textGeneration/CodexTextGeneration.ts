@@ -61,9 +61,7 @@ const CODEX_CHANNEL_RECEPTION_ARGS = [
   "hooks",
 ] as const;
 const CODEX_MCP_LIST_TIMEOUT_MS = 10_000;
-// Plugins and apps bring MCP servers of their own; the user's are listed and
-// turned off by name below. These follow the user's launch args, so they win
-// over a `-c features.plugins=true` there, which `--disable plugins` does not.
+// Plugins/apps add MCP servers; use trailing config overrides because --disable loses to user -c flags.
 const CODEX_NO_PLUGIN_ARGS = [
   "--config",
   "features.plugins=false",
@@ -75,10 +73,7 @@ const CodexMcpServers = Schema.fromJsonString(
 );
 const decodeCodexMcpServers = Schema.decodeEffect(CodexMcpServers);
 
-/**
- * `mcp_servers={}` merges into the user's servers rather than replacing them,
- * so each is named; quoting the name keeps one with a dot a single key.
- */
+// mcp_servers={} merges instead of replacing; disable named entries and quote dotted names.
 const codexMcpServersOff = (names: ReadonlyArray<string>): string | null =>
   names.length === 0
     ? null
@@ -118,9 +113,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     );
 
   const removeTempFileDir = (filePath: string): Effect.Effect<void, never> =>
-    fileSystem
-      .remove(path.dirname(filePath), { recursive: true })
-      .pipe(Effect.catch(() => Effect.void));
+    fileSystem.remove(path.dirname(filePath), { recursive: true }).pipe(Effect.ignore);
 
   /**
    * Reception gets a Codex home of its own, because `--ignore-user-config` still loads the user's
@@ -436,9 +429,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         [
           "exec",
           ...execLaunchArgs,
-          // Text generation needs only the prompt. A user's MCP server would
-          // otherwise start and could act on it, as Claude's --strict-mcp-config
-          // prevents for Claude.
+          // A user's MCP server could act on the text-generation prompt.
           ...CODEX_NO_PLUGIN_ARGS,
           ...(mcpServersOff ? ["--config", mcpServersOff] : []),
           "--ephemeral",

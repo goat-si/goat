@@ -63,7 +63,7 @@ if (fixture === undefined || variant === undefined) {
 }
 
 const museBinary = process.env.GOAT_MUSE_BIN ?? "muse";
-// Started as GOAT starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
+// Match GOAT's launch so Windows needs no GOAT_MUSE_BIN for `muse.cmd`.
 const museStart = Effect.runSync(museLaunch(museBinary));
 const home = process.env.HOME ?? "";
 
@@ -106,7 +106,7 @@ function encodeTranscriptNdjson(transcript: ProviderReplayTranscript): string {
   ].join("\n");
 }
 
-/** Recording follows wall time so a live Muse's own timeouts still elapse. */
+// Follow wall time so live Muse timeouts elapse.
 const followWallClock = Effect.gen(function* () {
   while (true) {
     yield* TestClock.withLive(Effect.sleep(CLOCK_TICK));

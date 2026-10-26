@@ -21,16 +21,21 @@ const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_0
 
 export const HtmlPreviewTool = Tool.make(agentSurfaceRegistry["html.preview"].name, {
   description: agentSurfaceRegistry["html.preview"].description,
+const PAGE_RULES =
+  "Inline <style> and <script>. Local images as absolute paths are inlined. Remote URLs load as-is.";
+
+export const HtmlPreviewTool = Tool.make("html_preview", {
+  description: `Check an HTML page before html_render. Returns PNG, contentHeight, and console output. If it says the browser is still installing, call again in a minute. ${PAGE_RULES} Theme and layout rules are in html_render.`,
   parameters: Schema.Struct({
     html: Html,
     width: Schema.optional(
       Schema.Int.annotate({
-        description: `Viewport width in CSS pixels, 240-1600. Defaults to ${HTML_RENDER_COLUMN_WIDTH}, the reply column; use about 390 to check phones.`,
+        description: `CSS pixels, 240 to 1600. Default ${HTML_RENDER_COLUMN_WIDTH}. Use about 390 for phones.`,
       }),
     ),
     appearance: Schema.optional(
       Schema.Literals(["dark", "light"]).annotate({
-        description: "Theme to preview. Defaults to dark.",
+        description: "Default dark.",
       }),
     ),
   }),

@@ -1,6 +1,7 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { resolveThreadReferenceCopyTarget } from "@goat/shared/threadReference";
 import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
+import { Platform } from "react-native";
+import { resolveThreadReferenceCopyTarget } from "@goat/client-runtime/thread-reference";
 import {
   createContext,
   use,
@@ -15,6 +16,10 @@ import {
 } from "react";
 
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import {
+  firstWorkspaceDetailOpen,
+  workspaceHasColumns,
+} from "../workspace/workspace-selection-store";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useThreadShell } from "../../state/entities";
 import { useThreadProjection } from "../../state/use-thread-detail";
@@ -30,6 +35,7 @@ import {
   subscribeToHardwareKeyboardCommandRegistrations,
   type HardwareKeyboardCommand,
 } from "./hardwareKeyboardCommands";
+import { selectWorkspaceDetail } from "../workspace/workspace-detail-selection";
 
 const EMPTY_COPY_FEEDBACK: GitActionProgress = {
   phase: "idle",
@@ -164,10 +170,13 @@ export function HardwareKeyboardCommandProvider({
       }
 
       if (command === "newTask") {
-        navigation.navigate("Thread", { draft: {} });
+        navigation.dispatch(selectWorkspaceDetail({ name: "Thread", params: { draft: {} } }));
         return;
       }
       if (command === "back") {
+        // Beside a visible list, the first detail page has nothing to go back to.
+        if (Platform.OS === "ios" && workspaceHasColumns() && firstWorkspaceDetailOpen(navigation))
+          return;
         if (navigation.canGoBack()) {
           navigation.goBack();
         } else {

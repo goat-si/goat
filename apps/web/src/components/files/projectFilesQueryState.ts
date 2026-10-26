@@ -17,6 +17,7 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { projectEnvironment } from "~/state/projects";
 import { useProjectPathSearch } from "~/state/queries";
 import { executeAtomQuery } from "@goat/client-runtime/state/runtime";
+import { revisionedQuery } from "~/state/revisionedQuery";
 
 import { FileSaveSession } from "./fileSaveCoordinator";
 
@@ -253,17 +254,19 @@ function errorMessage(cause: unknown): string | null {
 
 const isProjectReadFileError = Schema.is(ProjectReadFileError);
 
+/** `revision` is the workspace mutation id; a new one refetches the listing. */
 export function useProjectEntriesQuery(
   environmentId: EnvironmentId,
   cwd: string,
   directoryPath?: string,
+  revision?: string | null,
 ): ProjectQueryState<ProjectListEntriesResult> {
   const fileAccess = useFilesystemReadAccess(environmentId);
   const { canReadFiles } = fileAccess;
   const atom = canReadFiles
     ? getProjectEntriesQueryAtom(environmentId, cwd, directoryPath)
     : EMPTY_PROJECT_ENTRIES_QUERY_ATOM;
-  const result = useAtomValue(atom);
+  const result = useAtomValue(revisionedQuery(atom, canReadFiles ? revision : undefined));
   const refreshAtom = useAtomRefresh(atom);
   const refresh = () => refreshAtom();
   return {
@@ -278,11 +281,7 @@ export function useProjectEntriesQuery(
   };
 }
 
-/**
- * An empty query is a valid request — the index answers it with
- * frecency-ordered files, so the picker's initial view is recent files without
- * transferring the full workspace listing.
- */
+/** Empty queries return frecency-ranked files without transferring the full workspace listing. */
 export function useProjectFilePickerQuery(
   environmentId: EnvironmentId,
   cwd: string,
@@ -316,8 +315,7 @@ export function useProjectFileQuery(
   relativePath: string | null,
   enabled = true,
 ): ProjectFileQueryState {
-  // A media path is not skipped here: a folder named `assets.png` is only
-  // knowable as a folder from the read failure.
+  // Read media-like paths too; a failed read is how folders with those names are detected.
   const fileAccess = useFilesystemReadAccess(environmentId);
   const { canReadFiles } = fileAccess;
   const isQueryEnabled = enabled;

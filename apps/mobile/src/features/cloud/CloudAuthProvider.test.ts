@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
-  CloudAuthProvider,
   activateCloudRelayAccount,
+  cloudAccountService,
   deactivateCloudRelayAccount,
-} from "./CloudAuthProvider";
+} from "./cloudAccountService";
 import { setAgentAwarenessRelayTokenProvider } from "../agent-awareness/remoteRegistration";
+import { requestConnectOnboarding } from "./connectOnboarding";
+import { restoreCloudComposerDrafts } from "../../state/use-composer-drafts";
 
 const expoConfig = vi.hoisted(() => ({ extra: {} as Record<string, unknown> }));
 
@@ -38,16 +40,38 @@ vi.mock("../../connection/catalog", () => ({
 }));
 
 vi.mock("./cloud-drafts", () => ({ removeCloudEnvironments: {} }));
+vi.mock("./connectOnboarding", () => ({
+  clearConnectOnboardingRequest: vi.fn(),
+  requestConnectOnboarding: vi.fn(),
+}));
 vi.mock("../../state/use-composer-drafts", () => ({
   getComposerCloudAccountId: vi.fn(async () => null),
   restoreCloudComposerDrafts: vi.fn(async () => undefined),
 }));
 
 vi.mock("../agent-awareness/remoteRegistration", () => ({
+  releaseAgentAwarenessRelayTokenProvider: vi.fn(),
   setAgentAwarenessRelayTokenProvider: vi.fn(),
   releaseAgentAwarenessRelayTokenProvider: vi.fn(),
   unregisterAgentAwarenessDeviceForCurrentUser: vi.fn(),
 }));
+
+type ClerkListener = (resources: { readonly user: { readonly id: string } | null }) => void;
+
+function fakeClerk() {
+  const listeners = new Set<ClerkListener>();
+  const clerk = {
+    session: null,
+    addListener: (listener: ClerkListener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as Parameters<typeof cloudAccountService.attach>[0];
+  const emit = (userId: string | null) => {
+    for (const listener of listeners) listener({ user: userId === null ? null : { id: userId } });
+  };
+  return { clerk, emit };
+}
 
 afterEach(() => {
   deactivateCloudRelayAccount();
@@ -69,36 +93,34 @@ describe("CloudAuthProvider relay account isolation", () => {
   });
 });
 
-vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@goat/shared/goatConnect")>()),
-  isGoatConnectEnabled: () => true,
-}));
+describe("cloudAccountService", () => {
+  it("activates the signed-in account once its drafts are restored", async () => {
+    const { clerk, emit } = fakeClerk();
+    using _detach = { [Symbol.dispose]: cloudAccountService.attach(clerk) };
 
-async function renderProvider(): Promise<void> {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  await act(() =>
-    root.render(createElement(CloudAuthProvider, null, createElement("span", null, "Local app"))),
-  );
-  await act(() => root.unmount());
-}
+    emit("account-1");
+    expect(appAtomRegistry.get(managedRelaySessionAtom)).toBeNull();
 
-const completeExtra = {
-  clerk: { publishableKey: "pk_test_example", jwtTemplate: "relay" },
-  relay: { url: "https://relay.example.test" },
-};
+    await vi.waitFor(() =>
+      expect(appAtomRegistry.get(managedRelaySessionAtom)?.accountId).toBe("account-1"),
+    );
+    expect(vi.mocked(restoreCloudComposerDrafts)).toHaveBeenCalledWith("account-1");
+    // Clerk already had this account on its first emission, so this is not a fresh sign-in.
+    expect(vi.mocked(requestConnectOnboarding)).not.toHaveBeenCalled();
+  });
 
-it("does not initialize Clerk when cloud config is incomplete even with a key and relay URL", async () => {
-  expoConfig.extra = { ...completeExtra, clerk: { publishableKey: "pk_test_example" } };
-  await renderProvider();
-  expect(ClerkProvider).not.toHaveBeenCalled();
-  expect(useAuth).not.toHaveBeenCalled();
-});
+  it("retries an activation whose draft restore failed on the next emission", async () => {
+    const { clerk, emit } = fakeClerk();
+    using _detach = { [Symbol.dispose]: cloudAccountService.attach(clerk) };
+    vi.mocked(restoreCloudComposerDrafts).mockRejectedValueOnce(new Error("Storage busy."));
 
-it("initializes Clerk when cloud config is complete", async () => {
-  expoConfig.extra = completeExtra;
-  await renderProvider();
-  expect(vi.mocked(ClerkProvider).mock.calls[0]?.[0]).toMatchObject({
-    publishableKey: "pk_test_example",
+    emit("account-1");
+    await vi.waitFor(() => expect(cloudAccountService.getState()._tag).toBe("Failed"));
+    expect(appAtomRegistry.get(managedRelaySessionAtom)).toBeNull();
+
+    emit("account-1");
+    await vi.waitFor(() =>
+      expect(appAtomRegistry.get(managedRelaySessionAtom)?.accountId).toBe("account-1"),
+    );
   });
 });

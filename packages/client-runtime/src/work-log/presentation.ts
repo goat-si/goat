@@ -18,8 +18,8 @@ import {
 } from "@goat/shared/goatMcpToolPresentation";
 import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
 import { resolveMediaSource } from "@goat/client-runtime/media-source";
-import { parseChangeRequestUrl } from "@goat/shared/changeRequestUrl";
-import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { formatTokens } from "@goat/shared/usageFormat";
 import {
   classifyToolActivity,
@@ -299,15 +299,18 @@ function resolveGoatMcpToolPresentation(
   const payload = asRecord(data);
   const input =
     asRecord(payload?.arguments) ?? asRecord(payload?.input) ?? asRecord(payload?.rawInput);
-  const urlTarget = typeof input?.url === "string" ? parseChangeRequestUrl(input.url) : null;
-  const number = urlTarget?.number ?? input?.number;
+  const urlTarget =
+    typeof input?.url === "string" ? sourceControlClients.parseChangeRequestUrl(input.url) : null;
+  const number = urlTarget?.link.number ?? input?.number;
+  const { shortLabel } = (urlTarget?.definition ?? sourceControlClients.get(undefined))
+    .changeRequest;
   const target =
     actionKind !== undefined &&
     actionKind !== "list-prs" &&
     typeof number === "number" &&
     Number.isSafeInteger(number) &&
     number > 0
-      ? `PR #${number}`
+      ? `${shortLabel} #${number}`
       : detail;
   return {
     displayName: `${verb} ${target}`,
@@ -345,10 +348,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 function workLogEntryIsToolLike(entry: WorkLogPresentationEntry): boolean {
@@ -648,6 +647,7 @@ function summaryActionPriority(action: ToolGroupAction | GoatMcpToolSummaryActio
     case "thread-send":
     case "thread-interrupt":
     case "workflow-stop":
+    case "background-wait":
     case "schedule-create":
     case "schedule-update":
     case "schedule-delete":

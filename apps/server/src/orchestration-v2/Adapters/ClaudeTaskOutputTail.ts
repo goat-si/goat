@@ -15,11 +15,10 @@ import * as Path from "effect/Path";
  * output": the row still gets its full output from the tool result.
  */
 
-/** How often the file is checked while its command runs. */
 const CLAUDE_TASK_OUTPUT_POLL_MS = 250;
 /** Give up looking for a file Claude Code never wrote (a newer layout). */
 const MAX_LOCATE_ATTEMPTS = 40;
-/** Bytes read per poll. A faster writer skips ahead: only the tail is shown anyway. */
+/** Skip ahead of fast writers; only the tail is displayed. */
 const MAX_READ_BYTES = 256 * 1024;
 
 /**
@@ -62,12 +61,7 @@ const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {
   return Option.none<string>();
 });
 
-/**
- * Reads appended output until `stop` completes, then reads once more so the
- * last bytes written before the command exited still reach live viewers. The
- * caller completes `stop` when the tool result arrives or the turn ends, and
- * awaits the returned effect.
- */
+/** Complete stop on tool result or turn end, then await the effect; it performs a final read before returning. */
 export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(function* (input: {
   readonly root: string;
   readonly sessionId: string;
@@ -76,10 +70,12 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
   readonly onChunk: (chunk: string) => Effect.Effect<void>;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
-  // True once stopped: the next read is the last.
-  const pause = Effect.raceFirst(
-    Effect.sleep(CLAUDE_TASK_OUTPUT_POLL_MS).pipe(Effect.as(false)),
-    Deferred.await(input.stop).pipe(Effect.as(true)),
+  const pause = Deferred.await(input.stop).pipe(
+    Effect.as(true),
+    Effect.timeoutOrElse({
+      duration: CLAUDE_TASK_OUTPUT_POLL_MS,
+      orElse: () => Effect.succeed(false),
+    }),
   );
   let file = Option.none<string>();
   for (let attempt = 0; Option.isNone(file); attempt += 1) {
@@ -88,8 +84,6 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
     if (attempt + 1 >= MAX_LOCATE_ATTEMPTS || (yield* pause)) return;
   }
   const filePath = file.value;
-  // `stream: true` keeps a multi-byte character split across reads intact;
-  // invalid bytes become U+FFFD.
   let decoder = new TextDecoder("utf-8", { fatal: false });
   let offset = 0;
   let last = yield* Deferred.isDone(input.stop);
@@ -111,7 +105,7 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
       if (Option.isSome(bytes)) {
         // Skipped output must not splice two unrelated lines together.
         const skipped = start > offset;
-        // Bytes held from before the gap belong to a character we never finished reading.
+        // Reset partial UTF-8 bytes when skipping output.
         if (skipped) decoder = new TextDecoder("utf-8", { fatal: false });
         offset = start + bytes.value.byteLength;
         const text = (skipped ? "\n" : "") + decoder.decode(bytes.value, { stream: true });
@@ -119,7 +113,6 @@ export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(funct
       }
     }
     if (last) {
-      // A command that ended mid-character still shows a replacement character.
       const rest = decoder.decode();
       if (rest.length > 0) yield* input.onChunk(rest);
       return;

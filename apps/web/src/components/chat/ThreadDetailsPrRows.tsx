@@ -5,17 +5,20 @@ import {
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
-} from "@goat/shared/threadPullRequests";
+} from "@goat/client-runtime/thread-pull-requests";
+import { ChevronDownIcon as ChevronDown, ChevronUpIcon as ChevronUp } from "~/components/solar";
 import { Minus, Plus } from "~/components/solar/nodes";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
-import { findProjectOnChangeRequestHost, parseChangeRequestUrl } from "~/lib/openPullRequestLink";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import { findProjectOnChangeRequestHost } from "@goat/client-runtime/change-request-links";
 
 import { useProjects } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { MorphIcon } from "~/components/MorphIcon";
+import { useClientSettings } from "~/hooks/useSettings";
 import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
 
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
@@ -34,9 +37,9 @@ function ThreadDetailsPrLinkRow({
   onStopWatching?: (() => void) | undefined;
 }) {
   const projects = useProjects();
-  const parsed = parseChangeRequestUrl(link.url);
+  const parsed = sourceControlClients.parseChangeRequestUrl(link.url)?.link;
   const project =
-    parsed === null
+    parsed === undefined
       ? null
       : (findProjectOnChangeRequestHost(
           projects.filter((candidate) => candidate.environmentId === environmentId),
@@ -74,6 +77,8 @@ export function ThreadDetailsPrRows({
   onOpenLink: (event: ReactMouseEvent<HTMLElement>, url: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // The plus already means "add" in this card (Add project script).
+  const redesign = useClientSettings((s) => s.redesignEnabled);
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
   const stopWatching = (link: ThreadPullRequestLink | null) =>
     link?.watch === undefined
@@ -123,7 +128,11 @@ export function ThreadDetailsPrRows({
         tone="muted"
         className="w-full active:scale-100"
       >
-        <MorphIcon aria-hidden className="size-4 shrink-0" icon={expanded ? Minus : Plus} />
+        <MorphIcon
+          aria-hidden
+          className="size-4 shrink-0"
+          icon={expanded ? (redesign ? ChevronUp : Minus) : redesign ? ChevronDown : Plus}
+        />
         {expanded ? "Show less" : `Show ${rest.length} more`}
       </ThreadDetailsControl>
     </>

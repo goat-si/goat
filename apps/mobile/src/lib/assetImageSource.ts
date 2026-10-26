@@ -2,11 +2,7 @@ import { LEGACY_ATTACHMENT_CACHE_PREFIX } from "@goat/contracts/legacyT3Names";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import type { ImageSource } from "expo-image";
 
-/**
- * Every mint signs a new URL, and a reconnect mints again, so a URL-keyed cache
- * misses each time. Attachments never change once stored, so they cache under
- * their id instead.
- */
+/** Cache immutable attachments by id; signed URLs change on each mint and reconnect. */
 export function assetImageSource(
   environmentId: EnvironmentId,
   resource: AssetResource,

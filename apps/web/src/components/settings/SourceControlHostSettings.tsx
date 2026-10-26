@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@goat/contracts";
-import type { SourceControlClientDefinition } from "@goat/client-runtime/source-control-clients";
+import type { SourceControlDefinition } from "@goat/client-runtime/source-control-clients";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -14,8 +14,8 @@ export function SourceControlHostSettings({
   onSaved,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly definition: SourceControlClientDefinition & {
-    readonly settings: NonNullable<SourceControlClientDefinition["settings"]>;
+  readonly definition: SourceControlDefinition & {
+    readonly settings: NonNullable<SourceControlDefinition["settings"]>;
   };
   readonly onSaved: () => void;
 }) {

@@ -14,6 +14,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/appearance",
       "/settings/keybindings",
       "/settings/snap-shot",
+      "/settings/beta",
     ],
   },
   {

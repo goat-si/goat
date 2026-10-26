@@ -1,5 +1,17 @@
 import { withClientRequestId } from "../keyedParameters.ts";
 import {
+  ScheduledTaskId,
+  ScheduledTask,
+  OrchestrationSearchThreadsInput,
+  OrchestrationThreadSearchMatch,
+  OrchestrationV2ThreadForkSourcePoint,
+  OrchestrationV2ContextTransfer,
+  TrimmedNonEmptyString,
+  ModelSelection,
+  RuntimeMode,
+  ProviderInteractionMode,
+  RuntimeRequestId,
+  ProviderUserInputAnswers,
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,

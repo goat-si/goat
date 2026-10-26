@@ -8,6 +8,7 @@ import {
   matchComposerAppItems,
   matchComposerCapabilityItems,
 } from "@goat/client-runtime/composerCapabilityItems";
+import { useState } from "react";
 import type {
   EnvironmentId,
   ProjectId,
@@ -40,7 +41,7 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
-import { useComposerPathSearch, useDebouncedValue } from "~/state/queries";
+import { useComposerPathSearch, useDebouncedValue, useThreadSearch } from "~/state/queries";
 import {
   matchesPullRequestQuery,
   rankPullRequestMatches,
@@ -124,6 +125,8 @@ export function useComposerMenuItems({
   /** The drivers of every provider this send goes to, so @computer judges the real targets. */
   readonly capabilityTargetDrivers: ReadonlyArray<string>;
 }) {
+  // Thread mentions rank by recency as of when the composer mounted.
+  const [now] = useState(() => Date.now());
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const pullRequestTriggerQuery =
@@ -157,6 +160,8 @@ export function useComposerMenuItems({
     isPathTrigger ? serverEnvironment.computerUseApps({ environmentId, input: {} }) : null,
   );
   const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
+  // Mounts older settled threads matching the mention, which shells may leave out.
+  useThreadSearch(isPathTrigger ? [environmentId] : [], pathTriggerQuery, { titlesOnly: true });
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -233,6 +238,7 @@ export function useComposerMenuItems({
           environmentId,
           excludeThreadId: activeThreadId,
           query: composerTrigger.query,
+          now,
         }),
         ...workspaceEntries.entries.map((entry) => ({
           id: `path:${entry.kind}:${entry.path}`,

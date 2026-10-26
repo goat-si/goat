@@ -14,7 +14,7 @@ import * as Stream from "effect/Stream";
 import * as NodeZlib from "node:zlib";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
-// POSIX modes cannot be checked on NTFS, so follow the host like the Antigravity suite.
+// NTFS cannot enforce POSIX modes; choose the host platform.
 const hostPlatform: NodeJS.Platform =
   HostProcess.Platform.defaultValue() === "win32" ? "win32" : "linux";
 const executableName =

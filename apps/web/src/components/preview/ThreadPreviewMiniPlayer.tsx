@@ -1,5 +1,6 @@
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@goat/contracts";
 import { previewPdfAssetUrl } from "@goat/shared/preview";
+import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import {
   PanelRightIcon,
@@ -10,6 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -50,7 +52,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { useDeviceState } from "~/state/device";
 
 import { DeviceStreamView } from "../device/DeviceStreamView";
-import type { DeviceScreenSize } from "@goat/client-runtime/device/stream";
+import { deviceStreamScreenAtom } from "../device/deviceStreamSession";
 import type { PreviewStreamViewport } from "@goat/client-runtime/preview/server-browser-stream";
 import { previewBridge } from "./previewBridge";
 import { showPreviewPopup } from "./showPreviewPopup";
@@ -270,7 +272,8 @@ function DeviceMiniPlayer({
   miniPlayer,
 }: Props & { readonly source: Extract<PreviewMiniPlayerSource, { kind: "device" }> }) {
   const { state: deviceState } = useDeviceState(threadRef.environmentId);
-  const [screen, setScreen] = useState<DeviceScreenSize | null>(null);
+  const viewId = useId();
+  const screen = useAtomValue(deviceStreamScreenAtom(viewId));
   const sourceSize = resolveDeviceMiniPlayerSourceSize(source.platform, screen);
   const device = deviceState.devices.find(
     (entry) => entry.hostId === source.hostId && entry.id === source.deviceId,
@@ -312,7 +315,7 @@ function DeviceMiniPlayer({
             deviceName={device?.name ?? source.name}
             deviceDescription={`${hostLabel} · ${device?.version ?? source.platform}`}
             visible
-            onScreen={setScreen}
+            viewId={viewId}
           />
         </div>
       )}
@@ -320,10 +323,7 @@ function DeviceMiniPlayer({
   );
 }
 
-/**
- * Native clipping and the DOM frame use the same radius so their separately
- * composited edges stay aligned.
- */
+/** Match native clipping and DOM radii to align their separately composited edges. */
 function MiniPlayerShell({
   threadRef,
   miniPlayer,
@@ -347,8 +347,7 @@ function MiniPlayerShell({
 }) {
   const canvas = useChatCanvas();
   const gestureRef = useRef<PointerGesture | null>(null);
-  // Touch has no hover, so tapping the handle toggles the pill instead. The
-  // toggle waits for the tap's click, which would otherwise land on the pill.
+  // Touch toggles the pill after the tap's click so that click cannot land on the newly opened pill.
   const [pillOpen, setPillOpen] = useState(false);
   const handleTappedRef = useRef(false);
   const handleRef = useRef<HTMLDivElement | null>(null);

@@ -370,7 +370,9 @@ describe("RemoteEnvironmentAuthorization", () => {
         ),
       ).toHaveLength(1);
       expect(
-        harness.fetch.calls.filter(([url]) => String(url).endsWith("/api/auth/websocket-ticket")),
+        harness.fetch.calls.filter(([url]) =>
+          String(url).endsWith("/api/auth/websocket-ticket/rpc"),
+        ),
       ).toHaveLength(2);
     }),
   );
@@ -403,7 +405,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       expect(harness.fetch.calls).toHaveLength(1);
       expect(String(harness.fetch.calls[0]?.[0])).toBe(
-        "https://environment.example.test/api/auth/websocket-ticket",
+        "https://environment.example.test/api/auth/websocket-ticket/rpc",
       );
     }),
   );
@@ -440,7 +442,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       expect(harness.fetch.calls.map(([url]) => String(url))).toEqual([
         "http://192.168.1.10:3773/.well-known/goat/environment",
-        "http://192.168.1.10:3773/api/auth/websocket-ticket",
+        "http://192.168.1.10:3773/api/auth/websocket-ticket/rpc",
       ]);
     }),
   );

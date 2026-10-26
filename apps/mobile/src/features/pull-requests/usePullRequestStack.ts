@@ -1,6 +1,6 @@
 import { threadPullRequestLinkMode } from "@goat/client-runtime/thread-pull-request-compatibility";
 import type { PullRequestDetail } from "@goat/contracts";
-import { parseChangeRequestUrl } from "@goat/shared/changeRequestUrl";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useMemo } from "react";
 import { useEnvironmentServerConfig, useNavigationThreadShells } from "../../state/entities";
 import { pullRequestStackAtom } from "../../state/pull-requests";
@@ -18,7 +18,9 @@ export function usePullRequestStack(params: PullRequestParams, pr: PullRequestDe
   const reference = useMemo(
     () => ({
       ...pullRequestTarget(params).input,
-      host: params.host ?? (pr ? parseChangeRequestUrl(pr.url)?.host : undefined),
+      host:
+        params.host ??
+        (pr ? sourceControlClients.parseChangeRequestUrl(pr.url)?.link.host : undefined),
     }),
     [params, pr],
   );

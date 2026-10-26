@@ -27,6 +27,11 @@ import {
   TrimmedNonEmptyString,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import * as FileSystem from "effect/FileSystem";
+import * as DocumentText from "../../../provider/DocumentText.ts";
+import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";

@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -84,7 +84,7 @@ const repositoryIdentity = {
     remoteName: "upstream",
     remoteUrl: "https://github.com/t3tools/t3code.git",
   },
-  provider: "github",
+  provider: SourceControlProviderKind.make("github"),
   owner: "t3tools",
   name: "t3code",
   displayName: "T3 Code",

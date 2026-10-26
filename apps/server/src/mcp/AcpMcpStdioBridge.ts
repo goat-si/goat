@@ -1,18 +1,15 @@
-// The bridge relays opaque JSON-RPC lines verbatim; schema-decoding foreign
-// payloads here would reject traffic it must pass through untouched.
+// Relay JSON-RPC verbatim; schema decoding would reject foreign payloads.
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodeReadline from "node:readline";
 
 import { discardResponseBody, responsePayloads } from "@goat/shared/mcpResponsePayloads";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
-/**
- * ACP agents must support stdio MCP servers, while optional http/sse support is
- * unevenly implemented.
- */
+/** ACP mandates stdio MCP support; HTTP/SSE support varies. */
 
 /**
  * transport: the endpoint could not be reached or the connection dropped.
@@ -431,10 +428,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
         ),
     );
 
-    // Only session establishment is ordered; client responses to
-    // server-initiated SSE requests must bypass the barrier or they would
-    // deadlock the still-open HTTP exchange, and normal MCP calls stay
-    // concurrent after initialization.
+    // Order only session establishment; SSE responses must bypass it to avoid deadlock. Calls remain concurrent after initialization.
     let sessionBarrier: Effect.Effect<void> = Effect.void;
     let sessionBarrierPending = false;
 
@@ -458,13 +452,11 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
       line: string,
     ): Effect.fn.Return<void> {
       if (line.trim().length === 0) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
+      const parsed = yield* Effect.try((): unknown => JSON.parse(line)).pipe(Effect.result);
+      if (Result.isFailure(parsed)) {
         return yield* respondWithError(null, "Parse error", -32700);
       }
-      const envelope = asEnvelope(parsed);
+      const envelope = asEnvelope(parsed.success);
       if (envelope === null) return;
       const isResponse = envelope.id !== undefined && ("result" in envelope || "error" in envelope);
       const isSessionHandshake =
@@ -499,7 +491,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
 
     const reader = NodeReadline.createInterface({ input: options.input });
     yield* Stream.runForEach(Stream.fromAsyncIterable(reader, bridgeError), dispatch).pipe(
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
     );
     yield* Fiber.awaitAll(running);
   });

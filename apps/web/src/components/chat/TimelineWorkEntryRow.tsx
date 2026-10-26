@@ -333,7 +333,10 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     workEntry.projectedItem?.item.type === "file_change" ? workEntry.projectedItem.item : null;
   // A failed edit keeps the inspector: its diffStr holds the provider's error.
   const inlineDiffRunId =
-    projectedFileChange !== null && projectedFileChange.status !== "failed" && threadRef
+    projectedFileChange !== null &&
+    projectedFileChange.status !== "failed" &&
+    threadRef &&
+    ctx.onOpenTurnDiff
       ? projectedFileChange.runId
       : null;
   // Expanded edit rows carry Open diff themselves, so the inspector below skips its summary.
@@ -565,11 +568,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               Open subagent
             </InlineButton>
           ) : null}
-          {fileChangeDiff !== null ? (
+          {fileChangeDiff !== null && ctx.onOpenTurnDiff ? (
             <InlineButton
               onClick={(event) => {
                 event.stopPropagation();
-                ctx.onOpenTurnDiff(
+                ctx.onOpenTurnDiff?.(
                   fileChangeDiff.runId,
                   fileChangeDiff.filePath,
                   fileChangeDiff.sourceItem,
@@ -638,7 +641,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       inlineDiffRunId !== null &&
       projectedFileChange !== null &&
       workEntry.projectedItem &&
-      threadRef ? (
+      threadRef &&
+      ctx.onOpenTurnDiff ? (
         <WorkLogDetails kind="panel">
           <FileChangeInlineDiff
             threadRef={threadRef}
@@ -670,6 +674,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               onRollbackCheckpoint={ctx.onRollbackCheckpoint}
               onImageExpand={ctx.onImageExpand}
               hideFileChangeSummary
+              source={ctx.turnItemSource}
             />
           ) : (
             <>
@@ -681,6 +686,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   projectedItem={workEntry.projectedItem}
                   environmentId={ctx.activeThreadEnvironmentId}
                   onImageExpand={onImageExpand}
+                  source={ctx.turnItemSource}
                 />
               ) : null}
             </>

@@ -19,6 +19,7 @@ export const PersistedServerRuntimeState = Schema.Struct({
   pid: Schema.Int,
   ownerId: Schema.optional(Schema.String),
   host: Schema.optional(Schema.String),
+  privateNetworkOnly: Schema.optional(Schema.Boolean),
   port: Schema.Int,
   origin: Schema.String,
   // Dev is single-origin: browsers must pair through this URL, not `origin`.
@@ -56,7 +57,10 @@ const runtimeOriginForConfig = (
 };
 
 export const makePersistedServerRuntimeState = (input: {
-  readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
+  readonly config: Pick<
+    ServerConfig.ServerConfig["Service"],
+    "host" | "privateNetworkOnly" | "devUrl"
+  >;
   readonly instanceId?: string;
   readonly port: number;
   readonly serviceManaged?: boolean;
@@ -68,6 +72,7 @@ export const makePersistedServerRuntimeState = (input: {
     ...(input.instanceId === undefined ? {} : { instanceId: input.instanceId }),
     pid: process.pid,
     ...(input.config.host ? { host: input.config.host } : {}),
+    ...(input.config.privateNetworkOnly ? { privateNetworkOnly: true } : {}),
     port: input.port,
     origin: runtimeOriginForConfig(input.config, input.port),
     ...(input.config.devUrl ? { devUrl: input.config.devUrl.toString() } : {}),
@@ -120,10 +125,7 @@ export const clearPersistedServerRuntimeState = Effect.fn(
   );
 });
 
-/**
- * Signal 0 delivers nothing; it only reports whether the pid exists. EPERM
- * means it exists but belongs to another user, which still counts as alive.
- */
+/** Signal 0 only probes existence; EPERM still means alive. */
 export const isProcessAlive = (pid: number): boolean => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {

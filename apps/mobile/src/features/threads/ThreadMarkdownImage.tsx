@@ -30,12 +30,7 @@ import {
   resolveSvgImageSize,
 } from "./markdownImageSize";
 
-/**
- * Width the feed lays markdown out in. The feed already knows this from its
- * viewport, so an image can size its frame on the first render instead of
- * waiting for its own onLayout, which would change the row's height once more
- * after the list has positioned the rows below it.
- */
+/** Use known feed width immediately; later image measurement would move already-positioned rows. */
 export const MarkdownImageAvailableWidthContext = createContext(0);
 
 export function ThreadMarkdownImageView(props: {
@@ -59,8 +54,13 @@ export function ThreadMarkdownImageView(props: {
     measuredWidth > 0 && contextWidth > 0
       ? Math.min(contextWidth, measuredWidth)
       : contextWidth || measuredWidth;
-  const [decodedSize, setDecodedSize] = useState<{ width: number; height: number } | null>(null);
-  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const [decoded, setDecoded] = useState<{
+    sourceKey: string;
+    size: { width: number; height: number };
+  } | null>(null);
+  const decodedSize = decoded?.sourceKey === props.sourceKey ? decoded.size : null;
+  const [failure, setFailure] = useState({ uri: props.uri, failed: false });
+  if (failure.uri !== props.uri) setFailure({ uri: props.uri, failed: false });
   const [retrying, setRetrying] = useState(false);
   const retryInFlight = useRef(false);
   const [retry, setRetry] = useState<{
@@ -84,7 +84,7 @@ export function ThreadMarkdownImageView(props: {
           ? `${base}${base.includes("?") ? "&" : "?"}retry=${Date.now()}-${revision}${fragment}`
           : renewed;
         setRetry({ source: props.uri, uri: retryUri, revision });
-        setFailedUri(null);
+        setFailure({ uri: props.uri, failed: false });
       }
     } catch {
       // Keep the failed image and its retry action available after a signing failure.
@@ -94,13 +94,6 @@ export function ThreadMarkdownImageView(props: {
     }
   };
 
-  useEffect(() => {
-    setDecodedSize(null);
-  }, [props.sourceKey]);
-
-  useEffect(() => {
-    setFailedUri(null);
-  }, [props.uri]);
 
   const sourceSize = decodedSize ?? props.knownSize ?? null;
   const displaySize: MarkdownImageDisplaySize | null =
@@ -111,7 +104,7 @@ export function ThreadMarkdownImageView(props: {
           sourceHeight: sourceSize.height,
           availableWidth,
         });
-  const failed = props.unavailable || (uri !== null && failedUri === uri);
+  const failed = props.unavailable || (uri !== null && failure.uri === props.uri && failure.failed);
   const canRetry = props.onRetry !== undefined || props.uri !== null;
   const placeholderWidth: ViewStyle["width"] =
     availableWidth > 0 ? Math.min(availableWidth, MARKDOWN_IMAGE_MAX_WIDTH) : "100%";
@@ -179,8 +172,8 @@ export function ThreadMarkdownImageView(props: {
                   key={`${props.sourceKey}:${retry?.revision ?? 0}`}
                   uri={uri}
                   format={props.format}
-                  onLoad={setDecodedSize}
-                  onError={() => setFailedUri(uri)}
+                  onLoad={(size) => setDecoded({ sourceKey: props.sourceKey, size })}
+                  onError={() => setFailure({ uri: props.uri, failed: true })}
                 />
               </View>
             </Pressable>

@@ -161,7 +161,7 @@ export class ServerSecretStore extends Context.Service<
   }
 >()("goat/auth/ServerSecretStore") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;

@@ -397,12 +397,14 @@ Traces are best for one request. Metrics are best for trends.
 Good metric families to watch:
 
 - `goat_rpc_request_duration`
+- `goat_orchestration_command_duration`
 - `goat_provider_turn_duration` (how long the provider adapter takes to start a turn, not the turn's run time)
 - `goat_git_command_duration`
 
 Counters tell you volume and failure rate:
 
 - `goat_rpc_requests_total`
+- `goat_orchestration_commands_total`
 - `goat_provider_turns_total`
 - `goat_git_commands_total`
 
@@ -630,14 +632,30 @@ Service names are fixed: `goat-server` for the backend, `goat-desktop` for the d
 process, and `goat-web` for web client spans the backend forwards, all in `service.namespace`
 `goat`. `OTEL_SERVICE_NAME` and a `service.name` or
 `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations apart with other
-resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development`.
-The UI reports `deployment.environment.name` from its build: `development` under the Vite dev server
-and `production` otherwise.
+resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging`.
+
+Each process reports its own build, not the one it talks to: the server, the desktop main process,
+the UI, and the mobile app each carry `t3code.release.channel` (`dev`, `stable`, `nightly`, or
+`preview`, from their own version; desktop PR builds count as `preview`, and a server not built by a
+release workflow reports `dev`) and `deployment.environment.name` (`development`, `production`, or
+`staging` for `preview`). On the server and the desktop main process either key in
+`OTEL_RESOURCE_ATTRIBUTES` wins. The UI and mobile app never read that variable: Vercel PR previews
+set `VITE_RELEASE_CHANNEL=preview` because their `APP_VERSION` must stay comparable with the
+server's, and the mobile app maps its build variant (`development`, `preview`, `production`), or
+reports `dev` from a development bundle.
 
 Attributes specific to GOAT use the `goat.` prefix. The UI runs as `goat-web` in both a browser
 and the desktop window, since it is the same code, and `goat.client.surface` is `desktop` or
 `web`. The server's `goat.server.managed_by` is `desktop` when the desktop app launched it and
-`standalone` otherwise.
+`standalone` otherwise. The desktop main process reports `goat.desktop.mode` as `development` or
+`packaged` (formerly `service.mode`; dashboards filtering on that key must switch). Node processes
+also report the semantic `process.runtime.name`, `process.runtime.version`, and
+`process.runtime.description`, and UI traces report `browser.language`, `user_agent.original`, and,
+in Chromium, `browser.platform`, `browser.mobile`, and `browser.brands`.
+
+Every resource also carries a `service.instance.id`: random per process for the server and desktop,
+per page load for the UI, and the Expo session on mobile. A `service.instance.id` in
+`OTEL_RESOURCE_ATTRIBUTES` replaces the generated one on the server and desktop.
 
 Releases before the GOAT rename reported `t3code-server`, `t3code-desktop`, and `t3code-web` in
 namespace `t3code`, with `service.runtime` `t3-server` or `t3-web`, and tagged SSH runtime

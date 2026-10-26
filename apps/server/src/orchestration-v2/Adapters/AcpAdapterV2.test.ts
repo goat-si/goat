@@ -23,6 +23,7 @@ import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as DocumentText from "../../provider/DocumentText.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -62,6 +63,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
+import { writeFakeCli } from "@goat/provider-testing/fakeCli";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
@@ -104,6 +106,7 @@ const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factor
 const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
 
 const layerTest = Layer.mergeAll(
+  DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
   NodeServices.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
@@ -310,6 +313,498 @@ const pollProtocolMethods = (events: Queue.Queue<EffectAcpProtocol.AcpProtocolLo
 
 describe("AcpAdapterV2", () => {
   it.live.each(["failed", "recovered", "completed", "cancelled"] as const)(
+const makeInstructionCompactionHarness = Effect.fnUntraced(function* (
+  environment: Readonly<Record<string, string>>,
+) {
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const path = yield* Path.Path;
+  const selfInvocation = yield* resolveSelfInvocation();
+  const mockAgentPath = yield* path.fromFileUrl(
+    new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+  );
+  const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+  const instanceId = ProviderInstanceId.make("acp-test-instruction-compaction");
+  const threadId = ThreadId.make("thread-acp-instruction-compaction");
+  yield* (yield* McpProviderSessions.McpProviderSessions).set({
+    environmentId: EnvironmentId.make("environment-acp-instruction-compaction"),
+    threadId,
+    providerSessionId: "mcp-session-acp-instruction-compaction",
+    providerInstanceId: instanceId,
+    endpoint: "http://127.0.0.1:43123/mcp",
+    authorizationHeader: "Bearer instruction-compaction-token",
+    browserToolsAvailable: true,
+  });
+  const adapter = yield* makeAcpAdapterV2({
+    instanceId,
+    flavor: {
+      driver: ACP_TEST_DRIVER,
+      capabilities: AcpProviderCapabilitiesV2,
+      supportsCompaction: true,
+      makeRuntime: makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        protocolEvents,
+        environment,
+        wrapRuntime: (runtime) => ({
+          ...runtime,
+          // Make compaction during prompt completion deterministic at the adapter boundary.
+          prompt: (payload, options) =>
+            runtime.prompt(payload, options).pipe(Effect.tap(() => runtime.drainEvents)),
+        }),
+      }),
+    },
+    selfInvocation,
+  });
+  const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    cwd: process.cwd(),
+  });
+  const modelSelection = { instanceId, model: "default" } as const;
+  const runtime = yield* adapter.openSession({
+    threadId,
+    providerSessionId: ProviderSessionId.make("provider-session-acp-instruction-compaction"),
+    modelSelection,
+    runtimePolicy,
+  });
+  const providerThread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+  const now = yield* DateTime.now;
+  let ordinal = 0;
+  return Effect.fnUntraced(function* (messageText: string, expectedStatus = "completed") {
+    yield* runtime.startTurn(
+      makeTurnInput({
+        threadId,
+        providerThread,
+        instanceId,
+        runtimePolicy,
+        now,
+        ordinal: ++ordinal,
+        messageText,
+      }),
+    );
+    const terminal = yield* runtime.events.pipe(
+      Stream.filter((event) => event.type === "turn.terminal"),
+      Stream.runHead,
+    );
+    assert.equal(Option.getOrThrow(terminal).status, expectedStatus);
+    while (true) {
+      const event = yield* Queue.take(protocolEvents);
+      if (event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt") {
+        return rawProtocolPromptTextBlocks(event);
+      }
+    }
+  });
+});
+
+function assertReinjectedInstructions(
+  blocks: Array<{ type: "text"; text: string }>,
+  request: string,
+) {
+  const text = blocks[0]?.text ?? "";
+  assert.include(text, "T3 Code interaction mode: Default");
+  assert.include(text, "## T3 Code browser");
+  assert.include(text, "T3 Code orchestration");
+  assert.include(text, `<user_request>\n${request}\n</user_request>`);
+}
+
+describe("AcpAdapterV2", () => {
+  it.live.each(["details", "none"] as const)(
+    "fails the turn on an ACP v2 idle error with %s, settles its open tool, and accepts the next prompt",
+    (details) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const instanceId = ProviderInstanceId.make(`idle-error-${details}`);
+        const threadId = ThreadId.make(`thread-idle-error-${details}`);
+        const childSessionId = "mock-child-session-idle-error";
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            extractBackgroundTaskId: (toolCall) =>
+              toolCall.toolCallId === "tool-call-idle-error-monitor"
+                ? "idle-error-monitor"
+                : undefined,
+            extractSubagentUpdate: (toolCall) =>
+              toolCall.toolCallId === "tool-call-idle-error-subagent"
+                ? {
+                    nativeTaskId: "task-idle-error",
+                    prompt: "child work",
+                    title: "child work",
+                    model: null,
+                    status: toolCall.status === "completed" ? "completed" : "running",
+                    childSessionId,
+                    result: null,
+                    suppressNormalTool: true,
+                  }
+                : undefined,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+              mockAgentPath: yield* path.fromFileUrl(
+                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+              ),
+              environment: { GOAT_ACP_IDLE_ERROR: details },
+            }),
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`session-idle-error-${details}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const runTurn = (ordinal: number) =>
+          Effect.gen(function* () {
+            yield* runtime.startTurn(
+              makeTurnInput({
+                threadId,
+                providerThread,
+                instanceId,
+                runtimePolicy,
+                now: yield* DateTime.now,
+                ordinal,
+              }),
+            );
+            return yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            );
+          });
+
+        const failedEvents = yield* runTurn(1);
+        const failed = failedEvents.at(-1);
+        assert.equal(failed?.type, "turn.terminal");
+        if (failed?.type !== "turn.terminal" || failed.status !== "failed") {
+          return assert.fail("expected a failed terminal");
+        }
+        assert.isTrue(
+          failed.childTurnsContinue,
+          "the run keeps ingesting work that outlives the failed prompt",
+        );
+        const lateSubagent = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+          ),
+          Stream.runHead,
+          Effect.timeoutOption("2 seconds"),
+        );
+        assert.isTrue(
+          Option.isSome(lateSubagent) && Option.isSome(lateSubagent.value),
+          "a subagent finishing after the failed prompt still reports to the run",
+        );
+        assert.deepEqual(
+          failed.failure,
+          details === "details"
+            ? {
+                class: "provider_error",
+                message: "Missing Authentication header",
+                code: "-32000",
+                retryable: null,
+              }
+            : {
+                class: "provider_error",
+                message: "Provider turn failed.",
+                code: null,
+                retryable: null,
+              },
+        );
+        const toolItems = (nativeId: string) =>
+          failedEvents.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === nativeId
+              ? [event.turnItem]
+              : [],
+          );
+        const toolStatuses = toolItems("tool-call-idle-error-1").map((item) => item.status);
+        assert.include(toolStatuses, "running");
+        assert.equal(toolStatuses.at(-1), "failed");
+        assert.deepEqual(
+          toolItems("tool-call-idle-error-monitor").map((item) => item.status),
+          ["running"],
+          "a background monitor outlives the failed turn and keeps its running row",
+        );
+        const childItems = toolItems("task-idle-error:tool:tool-call-idle-error-child");
+        assert.deepEqual(
+          childItems.map((item) => item.status),
+          ["running"],
+          "a child-session tool keeps running in its own thread",
+        );
+        assert.isTrue(childItems.every((item) => item.threadId !== threadId));
+        assert.isEmpty(
+          toolItems("tool-call-idle-error-child"),
+          "the failed turn must not reproject the child tool as a root tool",
+        );
+
+        const nextEvents = yield* runTurn(2);
+        const next = nextEvents.at(-1);
+        assert.equal(next?.type === "turn.terminal" ? next.status : undefined, "completed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // Factory Droid 0.243.0 sends an optional text companion for every AskUser choice.
+  const droidChoice = {
+    type: "string",
+    title: "Format",
+    description: "Which reply format?",
+    oneOf: [
+      { const: "option_0", title: "JSON" },
+      { const: "option_1", title: "Plain text" },
+      { const: "other", title: "Other answer" },
+    ],
+  };
+  const droidSchema = {
+    type: "object",
+    properties: {
+      question_1: droidChoice,
+      question_1_other: { type: "string" },
+      question_2: { ...droidChoice, title: "Alternative" },
+      question_2_other: { type: "string" },
+    },
+    required: ["question_1", "question_2"],
+  };
+  const droidQuestions = ["question_1", "question_2"].map((id, index) => ({
+    id,
+    header: index === 0 ? "Format" : "Alternative",
+    question: "Which reply format?",
+    options: [
+      { label: "JSON", description: "JSON", value: "option_0" },
+      { label: "Plain text", description: "Plain text", value: "option_1" },
+    ],
+  }));
+
+  // regression: #20417 Droid AskUser answers were sent as a cancel
+  it.live.each([
+    {
+      scenario: "preserves selected IDs and encodes custom answers",
+      schema: droidSchema,
+      questions: droidQuestions,
+      answers: { question_1: "option_1", question_2: "Markdown" },
+      result: {
+        action: "accept",
+        content: { question_1: "option_1", question_2: "other", question_2_other: "Markdown" },
+      },
+    },
+    {
+      scenario: "preserves selected labels and attachment paths in custom answers",
+      schema: droidSchema,
+      questions: droidQuestions,
+      withAttachments: true,
+      answers: {
+        question_1: "option_1",
+        question_2: "option_1\n\nAttached notes: keep this custom text",
+      },
+      result: (directory: string) => ({
+        action: "accept",
+        content: {
+          question_1: "other",
+          question_1_other: `Plain text\n\nAttached image "shot.png": ${JSON.stringify(NodePath.join(directory, "droid-shot.png"))}\nAttached file "spec.txt": ${JSON.stringify(NodePath.join(directory, "droid-spec.txt"))}`,
+          question_2: "other",
+          question_2_other: "option_1\n\nAttached notes: keep this custom text",
+        },
+      }),
+    },
+    {
+      scenario: "cancels without accepting answers",
+      schema: droidSchema,
+      questions: droidQuestions,
+      answers: undefined,
+      result: { action: "cancel" },
+    },
+    {
+      scenario: "falls back for an unrelated form",
+      schema: { type: "object", properties: { name: { type: "string" } } },
+      questions: [{ id: "name", header: "Question 1", question: "Your answer?", options: [] }],
+      answers: { name: "Ada" },
+      result: { action: "accept", content: { name: "Ada" } },
+    },
+  ])("Droid elicitation $scenario", ({ schema, questions, answers, result, withAttachments }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-droid-form-" });
+      const statusPath = path.join(directory, "status.json");
+      const expectedResult = typeof result === "function" ? result(directory) : result;
+      let preparedAnswers: ProviderUserInputAnswers | undefined = answers;
+      if (withAttachments && answers !== undefined) {
+        yield* fileSystem.writeFileString(path.join(directory, "droid-shot.png"), "image");
+        yield* fileSystem.writeFileString(path.join(directory, "droid-spec.txt"), "spec");
+        preparedAnswers = yield* appendUserInputAttachmentPaths({
+          answers,
+          attachmentsDir: directory,
+          attachmentsByQuestionId: {
+            question_1: [
+              {
+                type: "image",
+                id: "droid-shot",
+                name: "shot.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+              {
+                type: "file",
+                id: "droid-spec",
+                name: "spec.txt",
+                mimeType: "text/plain",
+                sizeBytes: 4,
+              },
+            ],
+          },
+        });
+      }
+      const driver = ProviderDriverKind.make("acpRegistry");
+      const transcript = yield* decodeAcpReplayTranscript(
+        {
+          provider: driver,
+          protocol: "acp.ndjson-jsonrpc",
+          version: "1",
+          scenario: "droid-form",
+          entries: [
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "initialize", params: "<any>" },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "response",
+                method: "initialize",
+                result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
+              },
+            },
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "session/new", params: "<any>" },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "response",
+                method: "session/new",
+                result: { sessionId: "droid-session" },
+              },
+            },
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "session/prompt", params: "<any>" },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "request",
+                method: "elicitation/create",
+                params: {
+                  mode: "form",
+                  sessionId: "droid-session",
+                  message: "Your answer?",
+                  requestedSchema: schema,
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              frame: {
+                kind: "response",
+                method: "elicitation/create",
+                result: expectedResult,
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                kind: "response",
+                method: "session/prompt",
+                result: { stopReason: "end_turn" },
+              },
+            },
+            { type: "runtime_exit", status: "success" },
+          ],
+        },
+        driver,
+      );
+      const instanceId = ProviderInstanceId.make("droid-form-test");
+      const adapter = yield* makeAcpRegistryAdapterV2({
+        instanceId,
+        selfInvocation: yield* resolveSelfInvocation(),
+        settings: DROID_SETTINGS,
+        environment: {},
+        makeRuntime: makeAcpReplayRuntime({
+          transcript,
+          statusPath,
+          fileSystem,
+          scriptPath: yield* path.fromFileUrl(
+            new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+          ),
+          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+        }),
+      }).pipe(
+        Effect.provide(
+          Layer.mock(AcpRegistryCatalog)({ resolve: () => Effect.die("runtime is injected") }),
+        ),
+      );
+      const threadId = ThreadId.make("droid-form-thread");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: directory,
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+        providerSessionId: ProviderSessionId.make("droid-form-session"),
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const item = Option.getOrThrow(
+        yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+          ),
+          Stream.runHead,
+        ),
+      );
+      if (item.type !== "turn_item.updated" || item.turnItem.type !== "user_input_request")
+        return yield* Effect.die("Expected Droid question");
+      assert.deepEqual(item.turnItem.questions, questions);
+      yield* runtime.respondToRuntimeRequest({
+        requestId: item.turnItem.requestId,
+        ...(preparedAnswers === undefined ? {} : { answers: preparedAnswers }),
+      });
+      const terminal = yield* runtime.events.pipe(
+        Stream.filter((event) => event.type === "turn.terminal"),
+        Stream.runHead,
+      );
+      assert.equal(Option.getOrThrow(terminal).status, "completed");
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live.each(["failed", "recovered", "cancelled"] as const)(
     "projects Mistral retry notices and their %s outcome",
     (outcome) =>
       Effect.gen(function* () {
@@ -597,6 +1092,28 @@ describe("AcpAdapterV2", () => {
       assert.include(yield* nextPrompt, "<computer_use>");
       assert.isTrue(hasDriver(runtimeInputs.at(-1)));
       const runtimesBeforePlan = runtimeInputs.length;
+      const command = yield* runTurn(0, defaultPolicy, "/compact");
+      assert.isTrue(command.prompt.startsWith("/compact"));
+      assert.notInclude(command.prompt, "<t3_code_instructions>");
+      assert.equal(command.textBlockCount, 1);
+      const whitespaceCommand = yield* runTurn(1, defaultPolicy, "  /repro-skill");
+      assert.equal(whitespaceCommand.prompt, "  /repro-skill");
+      assert.equal(whitespaceCommand.textBlockCount, 1);
+      assert.notInclude(whitespaceCommand.prompt, "<t3_code_instructions>");
+      const firstDefault = yield* runTurn(2, defaultPolicy, "First default request.");
+      assert.equal(firstDefault.textBlockCount, 2);
+      assert.include(firstDefault.prompt, "T3 Code interaction mode: Default");
+      assert.include(firstDefault.prompt, "## T3 Code browser");
+      assert.include(firstDefault.prompt, "T3 Code orchestration");
+      assert.notInclude(
+        firstDefault.methods,
+        "session/set_config_option",
+        "Build should preserve the agent's advertised mode default",
+      );
+      assert.include(
+        (yield* runTurn(3, defaultPolicy, "Second default request.")).prompt,
+        "Second default request.",
+      );
 
       // Plan turns get no attachment, so the agent process holding the driver must be replaced.
       yield* sessions.set(attachment);
@@ -923,8 +1440,7 @@ describe("AcpAdapterV2", () => {
       );
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
-      // Devin streams a file write as it generates it: each update resends the
-      // whole file so far, a few characters longer, with no status.
+      // Devin resends the growing file without status on each update.
       const file = `${"x = 1\n".repeat(800)}END_OF_FILE\n`;
       const chunks = 200;
       const streamedWrite = (
@@ -3067,6 +3583,72 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("settles a Grok background command that completed before an ACP v2 idle error", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("grok-idle-error-background");
+      const adapter = yield* makeGrokAdapterV2({
+        instanceId,
+        settings: DEFAULT_GROK_SETTINGS,
+        environment: {},
+        hostPlatform: yield* HostProcess.Platform,
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { GOAT_ACP_IDLE_ERROR: "grok-background" },
+          })(input).pipe(Effect.flatMap(makeXAiPromptCompletionRuntime)),
+      });
+      const threadId = ThreadId.make("grok-idle-error-background");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("grok-idle-error-background"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      const terminal = events.at(-1);
+      assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
+      const command = events.findLast(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "call-idle-error-background",
+      );
+      assert.equal(
+        command?.type === "turn_item.updated" ? command.turnItem.status : undefined,
+        "completed",
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   // Oracle: Grok incident frames. Command completion must release the turn even
   // when the CLI keeps the prompt RPC and process alive. Command polls stay visible.
   it.live(
@@ -3155,8 +3737,91 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  // Oracle: #15888 KillTask reports. Command completion must release the turn even
-  // when the CLI keeps the prompt RPC and process alive. Kill calls stay visible.
+  // Grok expands only a leading `/name`, so a picked leading `$name`
+  // must reach it in that form; anything else keeps the user's text.
+  it.live.each([
+    { text: "$deploy ship it", sent: "/deploy ship it", native: true },
+    { text: "ship $deploy", sent: "ship $deploy", native: false },
+    { text: "$other ship it", sent: "$other ship it", native: false },
+  ])("Grok sends $text with a picked skill as $sent", ({ text, sent, native }) =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const hostPlatform = yield* HostProcess.Platform;
+      // Stands in for `grok inspect --json`, the catalog behind the `$` picker.
+      const catalog = { skills: [{ name: "deploy", source: { path: "/s/deploy/SKILL.md" } }] };
+      const grokPath = writeFakeCli({
+        directory: yield* fileSystem.makeTempDirectoryScoped(),
+        name: "grok",
+        source: `process.stdout.write(${JSON.stringify(`${JSON.stringify(catalog)}\n`)});\n`,
+        platform: hostPlatform,
+      });
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("grok-skill-mention");
+      const adapter = yield* makeGrokAdapterV2({
+        instanceId,
+        settings: { ...DEFAULT_GROK_SETTINGS, binaryPath: grokPath },
+        // The fake CLI needs `node` on its PATH.
+        environment: { ...process.env },
+        hostPlatform,
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents })(input).pipe(
+            Effect.flatMap(makeXAiPromptCompletionRuntime),
+          ),
+      });
+      const threadId = ThreadId.make("grok-skill-mention");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("grok-skill-mention"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          messageText: text,
+        }),
+      );
+      const prompt = yield* Stream.fromQueue(protocolEvents).pipe(
+        Stream.filter(
+          (event) =>
+            event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
+        ),
+        Stream.runHead,
+      );
+      const blocks = rawProtocolPromptTextBlocks(Option.getOrThrow(prompt));
+      if (native) {
+        // Same shape as a typed native command: one bare text block, no T3 instructions.
+        assert.deepEqual(blocks, [{ type: "text", text: sent }]);
+      } else {
+        assert.isTrue(blocks.some((block) => block.text.includes(sent)));
+        assert.isFalse(blocks.some((block) => block.text.trimStart().startsWith("/")));
+      }
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  // Command completion must release the turn even when the CLI keeps the prompt RPC and process
+  // alive. Kill calls stay visible.
   it.live.each([
     { shape: "output_only", expectedCommand: { type: "command_execution", status: "completed" } },
     { shape: "variant_only", expectedCommand: { type: "command_execution", status: "completed" } },
@@ -3859,6 +4524,7 @@ describe("AcpAdapterV2", () => {
       const responseWritten = yield* Deferred.make<void>();
       const releaseResponseAcknowledgement = yield* Deferred.make<void>();
       const responseLifecycle: Array<string> = [];
+      const responseFailed = yield* Deferred.make<void>();
       const instanceId = ProviderInstanceId.make("acp-test-normal-close-held-response");
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
@@ -3881,6 +4547,7 @@ describe("AcpAdapterV2", () => {
           onNativeResponseLifecycle: (event) =>
             Effect.sync(() => {
               responseLifecycle.push(event.type);
+              if (event.type === "failed") Deferred.doneUnsafe(responseFailed, Effect.void);
             }),
         },
       });
@@ -3934,9 +4601,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.await(responseWritten);
 
       const closeFiber = yield* Scope.close(sessionScope, Exit.void).pipe(Effect.forkScoped);
-      while (!responseLifecycle.includes("failed")) {
-        yield* Effect.yieldNow;
-      }
+      yield* Deferred.await(responseFailed);
       const responseExit = yield* Fiber.join(responseFiber);
       if (Exit.isSuccess(responseExit)) {
         assert.fail("normal close must fail a response whose transport acknowledgement is held");
@@ -4627,8 +5292,7 @@ describe("AcpAdapterV2", () => {
       assert.isTrue(yield* hasPendingBackgroundWork);
       assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
 
-      // A production Grok spawn ACK has raw tool status completed but extracts
-      // as a running subagent with its original non-empty prompt.
+      // Grok reports spawn ACKs as completed tools with running subagents and non-empty prompts.
       yield* sessionUpdateHandler!({
         sessionId: "mock-session-1",
         update: {
@@ -5944,6 +6608,7 @@ describe("AcpAdapterV2", () => {
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         const promptGates: Array<Deferred.Deferred<EffectAcpSchema.PromptResponse, never>> = [];
+        const promptStarted = yield* Queue.unbounded<void>();
         const capturedMutation: {
           current:
             | ((mutation: {
@@ -6014,6 +6679,7 @@ describe("AcpAdapterV2", () => {
                   Effect.gen(function* () {
                     const gate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
                     promptGates.push(gate);
+                    yield* Queue.offer(promptStarted, undefined);
                     return yield* Deferred.await(gate);
                   }),
               }),
@@ -6064,9 +6730,7 @@ describe("AcpAdapterV2", () => {
             makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
           )
           .pipe(Effect.forkScoped);
-        while (promptGates.length < 1) {
-          yield* Effect.yieldNow;
-        }
+        yield* Queue.take(promptStarted);
         assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
         const applyMutation = capturedMutation.current;
         if (applyMutation === null) {
@@ -6199,9 +6863,7 @@ describe("AcpAdapterV2", () => {
             }),
           )
           .pipe(Effect.forkScoped);
-        while (promptGates.length < 2) {
-          yield* Effect.yieldNow;
-        }
+        yield* Queue.take(promptStarted);
         if (sessionUpdateHandler === undefined || capturedMutation.current === null) {
           return yield* Effect.die("extensions and session handler must be wired for turn 2");
         }

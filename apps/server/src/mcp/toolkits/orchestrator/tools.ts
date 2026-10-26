@@ -51,6 +51,7 @@ import {
   OrchestratorMcpUpdateScheduledTaskInput,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
+  TrimmedNonEmptyString,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { Tool, Toolkit } from "effect/ai";
@@ -149,6 +150,24 @@ const WorkflowStopTool = Tool.make(agentSurfaceRegistry["workflow.stop"].name, {
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["workflow.stop"]));
+
+const BackgroundWaitTool = Tool.make(agentSurfaceRegistry["background.wait"].name, {
+  description: agentSurfaceRegistry["background.wait"].description,
+  parameters: Schema.Struct({
+    taskIds: Schema.Array(TrimmedNonEmptyString).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(20),
+    ),
+    waiting: Schema.optional(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    matched: Schema.Array(Schema.String),
+    unmatched: Schema.Array(Schema.String),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["background.wait"]));
 
 const ScheduleTaskTool = Tool.make(agentSurfaceRegistry["schedule.create"].name, {
   description: agentSurfaceRegistry["schedule.create"].description,
@@ -366,6 +385,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ReviewFindingsExportTool,
   TaskCancelTool,
   WorkflowStopTool,
+  BackgroundWaitTool,
   ScheduleTaskTool,
   ListScheduledTasksTool,
   UpdateScheduledTaskTool,

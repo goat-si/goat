@@ -13,6 +13,9 @@
 @custom-variant light (&:not(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));
+/* Beta "New design" (Settings -> Beta) sets data-redesign on <html>. The variant adds no
+   specificity, so it loses to dark:, hover: and other variants on the same property. */
+@custom-variant redesign (&:where([data-redesign] *));
 
 /* Secondary hovering pointers reveal sidebar actions on touch-primary devices. */
 @custom-variant any-hover {
@@ -120,7 +123,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --sidebar-control-gap: 0.5rem;
   --sidebar-icon-color: color-mix(
     in srgb,
-    var(--contrast-sidebar-muted-foreground) 60%,
+    var(--contrast-sidebar-muted-foreground) 85%,
     var(--sidebar)
   );
   --sidebar-row-content-inset: 0.625rem;
@@ -183,7 +186,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
    the variables and Settings -> Appearance can override them at runtime. The
    default stacks are mirrored in `appearanceFonts.ts`. */
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", system-ui, sans-serif;
   --font-brand: "Pretendard", sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
@@ -218,7 +222,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* The composer's elevation: a soft drop pulled in under the surface, shared
      by the composer, its context strip and attached banners. */
-  --shadow-composer: 0 12px 28px -18px rgb(0 0 0 / 40%);
+  --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
   --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
   /* Overlap the lower toolbar backdrop by one pixel to cover the composer seam. */
   --spacing-composer-seam: calc(var(--spacing) * 4 - 1px);
@@ -250,6 +254,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --animate-status-ping: status-ping 2s infinite;
   /* GOAT Bot's replying dots: a short hop, then a long hold, stepped like the status pulses. */
   --animate-typing-wave: typing-wave 1.4s 6;
+  /* Stash pulses hold a highlight for 1.2s; the row then eases back over 200ms, the count snaps.
+     The row alternates two identical keyframes so each stash restarts it without a remount. */
+  --animate-stash-pulse-row: stash-pulse-row 1400ms;
+  --animate-stash-pulse-row-alt: stash-pulse-row-alt 1400ms;
+  --animate-stash-pulse-count: stash-pulse-count 1400ms step-start;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
@@ -301,6 +310,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --color-diff-deletion-foreground: var(--diff-deletion-foreground);
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
+  --color-guest: var(--guest);
+  --color-guest-foreground: var(--guest-foreground);
+  --color-guest-surface: var(--guest-surface);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-ring: var(--ring);
   --color-input: var(--contrast-input);
@@ -382,6 +394,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     30%,
     100% {
       translate: 0 0;
+    }
+  }
+  @keyframes stash-pulse-row {
+    from,
+    85.7% {
+      color: var(--color-foreground);
+    }
+  }
+  @keyframes stash-pulse-row-alt {
+    from,
+    85.7% {
+      color: var(--color-foreground);
+    }
+  }
+  @keyframes stash-pulse-count {
+    from,
+    85.7% {
+      color: var(--color-primary);
     }
   }
   @keyframes status-pulse {
@@ -1258,8 +1288,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --goat-bubble-in-foreground: #000;
   --goat-composer-fill: #f2f2f7;
   --goat-hairline: rgb(0 0 0 / 8%);
-  --radius: 0.625rem;
-  --background: var(--color-white);
+  --radius: 0.5rem;
+  --background: var(--color-zinc-25);
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
   --toolbar-foreground: var(--foreground);
@@ -1268,12 +1298,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --toolbar-control-foreground: var(--foreground);
   --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
-  --foreground: var(--color-zinc-800);
+  --foreground: var(--color-zinc-900);
   --card: var(--color-white);
-  --card-foreground: var(--color-zinc-800);
+  --card-foreground: var(--color-zinc-900);
   --popover: var(--color-white);
-  --popover-foreground: var(--color-zinc-800);
-  --primary: oklch(0.55 0.21 259);
+  --popover-foreground: var(--color-zinc-900);
+  --primary: oklch(0.488 0.217 264);
   --primary-foreground: var(--color-white);
   --secondary: var(--color-zinc-50);
   --secondary-foreground: var(--color-zinc-800);
@@ -1282,7 +1312,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --placeholder: var(--muted-foreground);
   --secondary-label: var(--muted-foreground);
   --icon-muted: var(--muted-foreground);
-  --message-surface: var(--accent);
+  /* One step past the accent, so a user turn stands off the near-white canvas. */
+  --message-surface: color-mix(in srgb, var(--color-zinc-200) 55%, var(--color-zinc-100));
   --message-foreground: var(--foreground);
   --message-action: var(--primary);
   --message-action-foreground: var(--primary-foreground);
@@ -1300,6 +1331,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
+  /* Messages from a guest link, and the sidebar Request status. */
+  --guest: var(--color-fuchsia-500);
+  --guest-foreground: var(--color-fuchsia-600);
+  --guest-surface: color-mix(in srgb, var(--guest) 14%, var(--message-surface));
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
   --merged-foreground: var(--color-violet-700);
@@ -1357,17 +1392,19 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --primary: oklch(0.57 0.2 259);
     --secondary: --alpha(var(--color-white) / 5%);
     --secondary-foreground: var(--color-neutral-100);
-    --muted: --alpha(var(--color-white) / 5%);
+    --muted: --alpha(var(--color-white) / 3%);
     --muted-foreground: var(--color-neutral-400);
-    --accent: --alpha(var(--color-white) / 6%);
+    --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
+    --message-surface: var(--accent);
     --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --error-foreground: var(--color-red-400);
     --tool-error-icon: #fca5a5;
     --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
-    --border: --alpha(var(--color-white) / 10%);
-    --input: --alpha(var(--color-white) / 14%);
+    --border: --alpha(var(--color-white) / 8%);
+    --input: --alpha(var(--color-white) / 11%);
     --info-foreground: var(--color-blue-400);
+    --guest-foreground: var(--color-fuchsia-300);
     --success-foreground: var(--color-emerald-400);
     --merged-foreground: var(--color-violet-400);
     --warning-foreground: var(--color-amber-400);
@@ -1396,18 +1433,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
    hierarchy as :root: a gray panel on the white canvas, rows darkening on hover
    and selection, and no chrome hairline in light mode. */
 [data-app-sidebar] {
-  --background: var(--color-white);
-  --foreground: var(--color-zinc-800);
+  --background: var(--color-zinc-25);
+  --foreground: var(--color-zinc-900);
   --card: var(--color-white);
-  --card-foreground: var(--color-zinc-800);
+  --card-foreground: var(--color-zinc-900);
   --accent: var(--color-zinc-100);
   --accent-foreground: var(--color-zinc-900);
   --muted: var(--color-zinc-50);
   --muted-foreground: var(--color-zinc-500);
   --border: var(--color-zinc-200);
   --input: var(--color-zinc-300);
-  --sidebar: oklch(96.2% 0 0);
-  --sidebar-foreground: var(--color-zinc-800);
+  --sidebar: var(--color-zinc-50);
+  --sidebar-foreground: var(--color-zinc-900);
   --sidebar-muted-foreground: var(--color-zinc-500);
   --sidebar-control-surface: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
   --sidebar-row-hover: color-mix(in srgb, var(--color-black) 4%, var(--sidebar));
@@ -1439,6 +1476,54 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --sidebar-border: var(--border);
     --chrome-divider: var(--sidebar-border);
   }
+}
+
+/* New design: modified files get a muted blue so added and deleted files lead. Built from the
+   info token, which themes do not override, so it stays blue in every theme. */
+html[data-redesign] {
+  --diff-modified-icon: color-mix(in srgb, var(--info-foreground) 50%, var(--muted-foreground));
+}
+
+html.dark[data-redesign] {
+  /* On black a gray mix stays as bright as the blue, so dim with transparency instead. */
+  --diff-modified-icon: color-mix(in srgb, var(--info-foreground) 65%, transparent);
+  --diff-added-icon: var(--success-foreground);
+}
+
+/* Blue-orange already spends blue on additions. */
+html[data-redesign][data-diff-color-scheme="blue-orange"] {
+  --diff-modified-icon: var(--muted-foreground);
+  --diff-added-icon: initial;
+}
+
+html.dark[data-redesign][data-diff-color-scheme="blue-orange"] {
+  --diff-modified-icon: color-mix(in srgb, var(--muted-foreground) 65%, transparent);
+}
+
+/* New design: sections in the provider detail pane sit flat in its card instead of nesting
+   cards inside it. Headings and row dividers still separate them. */
+[data-redesign] [data-provider-detail] [data-slot="settings-group"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* New design: a diff header's copy button shows on file hover or focus. */
+@media (hover: hover) {
+  [data-redesign] diffs-container:not(:hover) [data-diff-copy-path]:not(:focus-within) {
+    opacity: 0;
+  }
+}
+
+/* New design: the default dark canvas is true black, matching the sidebar. Raised surfaces
+   keep the tone they had over neutral-950 so cards, popovers, and the composer still lift. */
+html.dark[data-redesign]:not([data-theme-id]) {
+  --background: #000;
+  --surface-raised: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
+  --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
+  --popover: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
+  /* A user turn sits above the composer tone, level with the selected sidebar row. */
+  --message-surface: color-mix(in srgb, var(--color-neutral-950) 92%, var(--color-white));
 }
 
 /* Theme files are expressed in app color roles and mapped to the existing
@@ -1850,6 +1935,21 @@ body {
   padding: 0;
 }
 
+/* New design: sidebar row metadata sits a step below read titles (75% white). */
+[data-redesign] [data-app-sidebar] {
+  @variant dark {
+    --secondary-label: #8f8f8f;
+  }
+}
+
+/* Lighter default icon stroke. In the base layer so stroke-* utilities still win; any
+   CSS beats lucide's stroke-width="2" attribute. */
+@layer base {
+  :where(svg.lucide[stroke-width="2"]) {
+    stroke-width: 1.75;
+  }
+}
+
 html,
 body {
   min-height: calc(100svh + env(safe-area-inset-top));
@@ -1913,7 +2013,7 @@ code {
    inherited sizes on unrelated pre surfaces (terminal previews, approvals).
    Inline code stays relative to its sentence so it never towers over prose;
    diffs and file previews take the size through --diffs-font-size. */
-.chat-markdown .chat-markdown-shiki .shiki,
+.chat-markdown .chat-markdown-shiki :is(.shiki, .diffs),
 .chat-markdown .chat-markdown-codeblock pre,
 :is(.chat-markdown, .composer-tiptap) pre code {
   font-size: var(--font-size-code, inherit);
@@ -2280,7 +2380,7 @@ code {
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--contrast-border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   background: var(--muted);
   padding: 0.8rem 0.9rem;
   scrollbar-width: thin;
@@ -2318,7 +2418,7 @@ code {
   overflow-wrap: anywhere;
 }
 
-:is(.chat-markdown, .composer-tiptap) .chat-markdown-shiki .shiki {
+:is(.chat-markdown, .composer-tiptap) .chat-markdown-shiki :is(.shiki, .diffs) {
   background: transparent !important;
 }
 
@@ -2353,10 +2453,30 @@ code {
   font-size: 0.75rem;
 }
 
+/* New design: tables sit one step under 15px prose instead of three. */
+[data-redesign] .chat-markdown table {
+  font-size: 0.875rem;
+}
+
+[data-redesign] .chat-markdown :is(td, th) {
+  text-wrap: pretty;
+}
+
+/* Top-aligned so wrapped rows share a first line, and the outer columns sit
+   flush with the surrounding prose. */
 .chat-markdown th,
 .chat-markdown td {
   padding: 0.45rem 0.75rem;
   text-align: start;
+  vertical-align: top;
+}
+
+.chat-markdown :is(th, td):first-child {
+  padding-inline-start: 0;
+}
+
+.chat-markdown :is(th, td):last-child {
+  padding-inline-end: 0;
 }
 
 .chat-markdown thead th {
@@ -2410,8 +2530,8 @@ code {
 :root {
   --diff-addition: var(--success);
   --diff-deletion: var(--destructive);
-  --diff-addition-foreground: light-dark(var(--color-emerald-600), var(--color-emerald-400));
-  --diff-deletion-foreground: light-dark(var(--color-red-600), var(--color-red-400));
+  --diff-addition-foreground: light-dark(var(--color-emerald-700), var(--color-emerald-400));
+  --diff-deletion-foreground: light-dark(var(--color-red-700), var(--color-red-400));
 }
 
 /* Chat width setting. Comfortable keeps the default --chat-content-max-width,

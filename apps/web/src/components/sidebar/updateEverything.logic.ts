@@ -47,12 +47,8 @@ export interface SkippedMachine {
   readonly reason: string;
 }
 
-/**
- * Two kinds are in neither list: servers already on the target, and servers this app hosts,
- * which would relaunch the app mid-run and update with the app's own install anyway. A
- * desktop-managed server follows its own app's update feed, so the channel rule does not apply
- * to it.
- */
+/** Skip current and app-hosted servers; the latter update with the app and would relaunch mid-run.
+ * Desktop-managed servers use their own feed. */
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
   targetVersion: string,

@@ -13,6 +13,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import * as McpSchema from "effect/ai/McpSchema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
@@ -37,30 +38,23 @@ const guideDependencies = [
 export const PullRequestTargetInput = Schema.Struct({
   threadId: Schema.optional(
     ThreadId.annotate({
-      description: "Thread to act on. Omit for this thread.",
+      description: "Thread. Default: this thread.",
     }),
   ),
-  url: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description:
-        "The pull request's web URL, for example https://github.com/owner/repo/pull/123. Preferred when you have it; host, repository and number are read from it.",
-    }),
-  ),
+  url: Schema.optional(TrimmedNonEmptyString),
   repository: Schema.optional(
     TrimmedNonEmptyString.annotate({
-      description:
-        "Repository path below the host, for example owner/repo. Required with number when url is omitted.",
+      description: "With `number`, when no `url`.",
     }),
   ),
   number: Schema.optional(
     PositiveInt.annotate({
-      description: "Pull request number. Required with repository when url is omitted.",
+      description: "With `repository`, when no `url`.",
     }),
   ),
   host: Schema.optional(
     TrimmedNonEmptyString.annotate({
-      description:
-        "Host the repository lives on, for example github.com. Defaults to the host of this thread's project.",
+      description: "Default: this project's host.",
     }),
   ),
 });
@@ -90,6 +84,15 @@ export class PullRequestHostRequiredError extends Schema.TaggedError<PullRequest
 ) {
   override get message(): string {
     return "This thread's project has no recognised remote. Pass host or url.";
+  }
+}
+
+export class PullRequestUrlUnavailableError extends Schema.TaggedError<PullRequestUrlUnavailableError>()(
+  "PullRequestUrlUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "This thread's project is on a host with no known pull request URL shape. Pass url.";
   }
 }
 
@@ -189,6 +192,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
+  PullRequestUrlUnavailableError,
   PullRequestThreadRequiredError,
   PullRequestThreadNotFoundError,
   PullRequestLinkFailedError,
@@ -211,9 +215,7 @@ const PullRequestIdentity = {
 
 export const LinkPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
-  alreadyLinked: Schema.Boolean.annotate({
-    description: "True when the pull request was linked to this thread before the call.",
-  }),
+  alreadyLinked: Schema.Boolean,
 });
 export type LinkPullRequestResult = typeof LinkPullRequestResult.Type;
 
@@ -221,20 +223,14 @@ export const UnlinkPullRequestResult = Schema.Struct({
   host: Schema.String,
   repository: Schema.String,
   number: Schema.Int,
-  wasLinked: Schema.Boolean.annotate({
-    description: "False when the pull request was not linked to this thread to begin with.",
-  }),
+  wasLinked: Schema.Boolean,
 });
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
 
 export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
-  watching: Schema.Boolean.annotate({
-    description: "Whether GOAT now watches the pull request for this thread.",
-  }),
-  wasWatching: Schema.Boolean.annotate({
-    description: "Whether it was already watched before the call.",
-  }),
+  watching: Schema.Boolean,
+  wasWatching: Schema.Boolean,
 });
 export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 
@@ -250,7 +246,7 @@ export const ThreadPullRequestEntry = Schema.Struct({
   stack: Schema.NullOr(
     Schema.Struct({
       kind: Schema.Literals(["native", "derived"]),
-      /** 1-based layer, bottom of the stack first. Pull requests built on the same one share it. */
+      /** 1-based layer from the bottom; siblings share a layer. */
       position: Schema.Int,
       size: Schema.Int,
     }),
@@ -289,9 +285,7 @@ const UnlinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unlin
 const ListThreadPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.list"].name, {
   description: agentSurfaceRegistry["pull_request.list"].description,
   parameters: Schema.Struct({
-    threadId: Schema.optional(
-      ThreadId.annotate({ description: "Thread to list. Omit for this thread." }),
-    ),
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
   }),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
@@ -304,7 +298,8 @@ const WatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.watch"
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.watch"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.watch"]))
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 const UnwatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unwatch"].name, {
   description: agentSurfaceRegistry["pull_request.unwatch"].description,
@@ -312,7 +307,8 @@ const UnwatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unwa
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unwatch"]));
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unwatch"]))
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 const GuideTarget = Schema.Struct({
   url: PullRequestTargetInput.fields.url,
@@ -324,8 +320,7 @@ const GuideTarget = Schema.Struct({
 const GuideOutcome = Schema.Struct({
   ...PullRequestIdentity,
   outcome: Schema.Literals(["started", "running", "failed"]).annotate({
-    description:
-      "started: a run began. running: one was already going for this head and the call joined it. failed: this pull request could not be guided; see detail.",
+    description: "started: a run began. running: joined a run for this head. failed: see detail.",
   }),
   detail: Schema.NullOr(Schema.String),
 });
@@ -341,8 +336,7 @@ export const ReadPullRequestGuideResult = Schema.Struct({
   run: Schema.NullOr(PullRequestReviewGuideRun),
   currentHeadSha: Schema.NullOr(Schema.String),
   stale: Schema.Boolean.annotate({
-    description:
-      "True when the guide was written for an earlier head than the pull request has now.",
+    description: "True when the PR head moved after the guide was written.",
   }),
 });
 export type ReadPullRequestGuideResult = typeof ReadPullRequestGuideResult.Type;

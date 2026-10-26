@@ -130,32 +130,32 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
         requestUrl,
         attempts: attempt,
       }),
-    onNone: () =>
-      Effect.gen(function* () {
-        const lastFailure = yield* Ref.get(lastProbeFailure);
-        yield* Effect.logWarning("httpReadiness.timedOut", {
+    // The enclosing operation owns the span for this inline handler.
+    onNone: Effect.fnUntraced(function* () {
+      const lastFailure = yield* Ref.get(lastProbeFailure);
+      yield* Effect.logWarning("httpReadiness.timedOut", {
+        baseUrl: input.baseUrl,
+        requestUrl,
+        timeoutMs,
+        intervalMs,
+        probeTimeoutMs,
+        attempts: attempt,
+        probeTimeouts,
+        lastFailure,
+      });
+      return yield* Effect.fail(
+        fail({
+          kind: "overall-timeout",
           baseUrl: input.baseUrl,
-          requestUrl,
           timeoutMs,
-          intervalMs,
-          probeTimeoutMs,
           attempts: attempt,
           probeTimeouts,
+          // Probes that failed without timing out (refused, reset, non-2xx).
+          otherFailures: probeFailures - probeTimeouts,
+          lastProbeTimeoutMs,
           lastFailure,
-        });
-        return yield* Effect.fail(
-          fail({
-            kind: "overall-timeout",
-            baseUrl: input.baseUrl,
-            timeoutMs,
-            attempts: attempt,
-            probeTimeouts,
-            // Probes that failed without timing out (refused, reset, non-2xx).
-            otherFailures: probeFailures - probeTimeouts,
-            lastProbeTimeoutMs,
-            lastFailure,
-          }),
-        );
-      }),
+        }),
+      );
+    }),
   });
 });

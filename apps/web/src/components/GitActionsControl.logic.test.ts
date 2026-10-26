@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, type VcsStatusResult } from "@goat/contracts";
+import { EnvironmentId, ThreadId, SourceControlProviderKind, type VcsStatusResult } from "@goat/contracts";
 import {
   SshConnectionTarget,
   SshConnectionProfile,
@@ -6,6 +6,7 @@ import {
   PrimaryConnectionTarget,
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import * as Option from "effect/Option";
 import { assert, describe, it } from "vite-plus/test";
 import {
@@ -14,6 +15,7 @@ import {
   buildMenuItems,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
+  resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
 } from "./GitActionsControl.logic";
@@ -136,6 +138,35 @@ describe("when: ref has no upstream configured", () => {
       label: "Publish repository",
       disabled: false,
     });
+  });
+});
+
+describe("when: the ref is on GitLab", () => {
+  const gitLab = {
+    sourceControlProvider: {
+      kind: SourceControlProviderKind.make("gitlab"),
+      name: "GitLab",
+      baseUrl: "https://gitlab.com",
+    },
+  };
+
+  it("names merge requests in actions and the default-ref dialog", () => {
+    const ahead = status({ ...gitLab, hasUpstream: false, aheadCount: 2 });
+    assert.equal(resolveQuickAction(ahead, false).label, "Push & create MR");
+    assert.equal(
+      resolveQuickAction(status({ ...gitLab, hasWorkingTreeChanges: true }), false).label,
+      "Commit, push & MR",
+    );
+    assert.equal(buildMenuItems(ahead, false).find((item) => item.id === "pr")?.label, "Create MR");
+
+    const copy = resolveDefaultBranchActionDialogCopy({
+      action: "create_pr",
+      branchName: "main",
+      includesCommit: false,
+      terminology: sourceControlClients.get("gitlab").changeRequest,
+    });
+    assert.equal(copy.title, "Push & create MR from default ref?");
+    assert.include(copy.description, "create a merge request on");
   });
 });
 

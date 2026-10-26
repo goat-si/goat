@@ -15,9 +15,7 @@ Register every pull request you create or work on, each layer of a stack include
 export const COMPUTER_USE_INSTRUCTION_SECTIONS = builtInSkillSections(["computer-use"]);
 export const COMPUTER_USE_INSTRUCTIONS = COMPUTER_USE_INSTRUCTION_SECTIONS.join("\n\n");
 
-/**
- * Shared runtime context; omit model and effort when the harness manages them dynamically.
- */
+/** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
   readonly model?: string | undefined;

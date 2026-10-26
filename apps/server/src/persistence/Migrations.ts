@@ -76,46 +76,46 @@ import Migration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
 import Migration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
 import Migration0067 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
-import Migration0069 from "./Migrations/069_ServerActivityIndexes.ts";
-import Migration0070 from "./Migrations/070_RemoteReports.ts";
-import Migration0071 from "./Migrations/071_RemoteDispatches.ts";
-import Migration0072 from "./Migrations/072_ChannelLedger.ts";
-import Migration0073 from "./Migrations/073_RemoteDispatchQuestions.ts";
-import Migration0074 from "./Migrations/074_ThreadRunResults.ts";
-import Migration0075 from "./Migrations/075_RemoteReportRelay.ts";
-import Migration0076 from "./Migrations/076_ProjectionTurnItemRequestIndex.ts";
-import Migration0077 from "./Migrations/077_Memory.ts";
-import Migration0078 from "./Migrations/078_MemoryHubSync.ts";
-import Migration0079 from "./Migrations/079_MemorySearchCounters.ts";
-import Migration0080 from "./Migrations/080_MemoryTaskGrantCeiling.ts";
-import Migration0081 from "./Migrations/081_MemoryImportLineage.ts";
-import Migration0082 from "./Migrations/082_MemoryCheckpointAccounting.ts";
-import Migration0083 from "./Migrations/083_MemoryReportLifecycle.ts";
-import Migration0084 from "./Migrations/084_MemoryUsageCounters.ts";
-import Migration0085 from "./Migrations/085_MemoryRevertResults.ts";
-import Migration0086 from "./Migrations/086_HandoffLookupIndex.ts";
-import Migration0087 from "./Migrations/087_MemoryLastReadySpace.ts";
-import Migration0088 from "./Migrations/088_MemoryHubAdministered.ts";
-import Migration0089 from "./Migrations/089_MemoryCheckpointLifecycle.ts";
-import Migration0090 from "./Migrations/090_FleetGoals.ts";
-import Migration0091 from "./Migrations/091_FleetHealth.ts";
-import Migration0092 from "./Migrations/092_ThreadRunObservedChecks.ts";
-import Migration0093 from "./Migrations/093_RemoteDispatchObservation.ts";
-import Migration0094 from "./Migrations/094_MemoryRevisionCheckpointSize.ts";
-import Migration0095 from "./Migrations/095_HubNodes.ts";
-import Migration0096 from "./Migrations/096_MemorySummaryWorkThreadIndex.ts";
-import Migration0097 from "./Migrations/097_ThreadHistoryArchives.ts";
-
-import Migration0098 from "./Migrations/098_PermissionProfiles.ts";
-import Migration0099 from "./Migrations/099_DecisionInbox.ts";
-import Migration0100 from "./Migrations/100_HumanStepRecords.ts";
-import Migration0101 from "./Migrations/101_McpRequestReservations.ts";
-import Migration0102 from "./Migrations/102_RemoteReportInboxRunId.ts";
-import Migration0103 from "./Migrations/103_RemoteReportReceipts.ts";
-import Migration0104 from "./Migrations/104_PendingAttachmentUploads.ts";
-import Migration0105 from "./Migrations/105_ScheduledTaskWebhookSecretRef.ts";
-import Migration0106 from "./Migrations/106_RemoteReportFences.ts";
-import Migration0107 from "./Migrations/107_HubProvisionedLinks.ts";
+import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0070 from "./Migrations/070_ServerActivityIndexes.ts";
+import Migration0071 from "./Migrations/071_RemoteReports.ts";
+import Migration0072 from "./Migrations/072_RemoteDispatches.ts";
+import Migration0073 from "./Migrations/073_ChannelLedger.ts";
+import Migration0074 from "./Migrations/074_RemoteDispatchQuestions.ts";
+import Migration0075 from "./Migrations/075_ThreadRunResults.ts";
+import Migration0076 from "./Migrations/076_RemoteReportRelay.ts";
+import Migration0077 from "./Migrations/077_ProjectionTurnItemRequestIndex.ts";
+import Migration0078 from "./Migrations/078_Memory.ts";
+import Migration0079 from "./Migrations/079_MemoryHubSync.ts";
+import Migration0080 from "./Migrations/080_MemorySearchCounters.ts";
+import Migration0081 from "./Migrations/081_MemoryTaskGrantCeiling.ts";
+import Migration0082 from "./Migrations/082_MemoryImportLineage.ts";
+import Migration0083 from "./Migrations/083_MemoryCheckpointAccounting.ts";
+import Migration0084 from "./Migrations/084_MemoryReportLifecycle.ts";
+import Migration0085 from "./Migrations/085_MemoryUsageCounters.ts";
+import Migration0086 from "./Migrations/086_MemoryRevertResults.ts";
+import Migration0087 from "./Migrations/087_HandoffLookupIndex.ts";
+import Migration0088 from "./Migrations/088_MemoryLastReadySpace.ts";
+import Migration0089 from "./Migrations/089_MemoryHubAdministered.ts";
+import Migration0090 from "./Migrations/090_MemoryCheckpointLifecycle.ts";
+import Migration0091 from "./Migrations/091_FleetGoals.ts";
+import Migration0092 from "./Migrations/092_FleetHealth.ts";
+import Migration0093 from "./Migrations/093_ThreadRunObservedChecks.ts";
+import Migration0094 from "./Migrations/094_RemoteDispatchObservation.ts";
+import Migration0095 from "./Migrations/095_MemoryRevisionCheckpointSize.ts";
+import Migration0096 from "./Migrations/096_HubNodes.ts";
+import Migration0097 from "./Migrations/097_MemorySummaryWorkThreadIndex.ts";
+import Migration0098 from "./Migrations/098_ThreadHistoryArchives.ts";
+import Migration0099 from "./Migrations/099_PermissionProfiles.ts";
+import Migration0100 from "./Migrations/100_DecisionInbox.ts";
+import Migration0101 from "./Migrations/101_HumanStepRecords.ts";
+import Migration0102 from "./Migrations/102_McpRequestReservations.ts";
+import Migration0103 from "./Migrations/103_RemoteReportInboxRunId.ts";
+import Migration0104 from "./Migrations/104_RemoteReportReceipts.ts";
+import Migration0105 from "./Migrations/105_PendingAttachmentUploads.ts";
+import Migration0106 from "./Migrations/106_ScheduledTaskWebhookSecretRef.ts";
+import Migration0107 from "./Migrations/107_RemoteReportFences.ts";
+import Migration0108 from "./Migrations/108_HubProvisionedLinks.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -187,47 +187,48 @@ export const migrationEntries = [
   [66, "RepairClientSettlementTimestamps", Migration0066],
   [67, "WebhookDedupe", Migration0067],
   [68, "ShellStopRequestIndex", Migration0068],
+  [69, "ThreadMessageSearch", Migration0069],
   // GOAT's own migrations follow upstream's. When an upstream sync claims these ids, move them
   // up and add the names to GOAT_MIGRATION_NAMES; reconcileGoatMigrationIds fixes old ledgers.
-  [69, "ServerActivityIndexes", Migration0069],
-  [70, "RemoteReports", Migration0070],
-  [71, "RemoteDispatches", Migration0071],
-  [72, "ChannelLedger", Migration0072],
-  [73, "RemoteDispatchQuestions", Migration0073],
-  [74, "ThreadRunResults", Migration0074],
-  [75, "RemoteReportRelay", Migration0075],
-  [76, "ProjectionTurnItemRequestIndex", Migration0076],
-  [77, "Memory", Migration0077],
-  [78, "MemoryHubSync", Migration0078],
-  [79, "MemorySearchCounters", Migration0079],
-  [80, "MemoryTaskGrantCeiling", Migration0080],
-  [81, "MemoryImportLineage", Migration0081],
-  [82, "MemoryCheckpointAccounting", Migration0082],
-  [83, "MemoryReportLifecycle", Migration0083],
-  [84, "MemoryUsageCounters", Migration0084],
-  [85, "MemoryRevertResults", Migration0085],
-  [86, "HandoffLookupIndex", Migration0086],
-  [87, "MemoryLastReadySpace", Migration0087],
-  [88, "MemoryHubAdministered", Migration0088],
-  [89, "MemoryCheckpointLifecycle", Migration0089],
-  [90, "FleetGoals", Migration0090],
-  [91, "FleetHealth", Migration0091],
-  [92, "ThreadRunObservedChecks", Migration0092],
-  [93, "RemoteDispatchObservation", Migration0093],
-  [94, "MemoryRevisionCheckpointSize", Migration0094],
-  [95, "HubNodes", Migration0095],
-  [96, "MemorySummaryWorkThreadIndex", Migration0096],
-  [97, "ThreadHistoryArchives", Migration0097],
-  [98, "PermissionProfiles", Migration0098],
-  [99, "DecisionInbox", Migration0099],
-  [100, "HumanStepRecords", Migration0100],
-  [101, "McpRequestReservations", Migration0101],
-  [102, "RemoteReportInboxRunId", Migration0102],
-  [103, "RemoteReportReceipts", Migration0103],
-  [104, "PendingAttachmentUploads", Migration0104],
-  [105, "ScheduledTaskWebhookSecretRef", Migration0105],
-  [106, "RemoteReportFences", Migration0106],
-  [107, "HubProvisionedLinks", Migration0107],
+  [70, "ServerActivityIndexes", Migration0070],
+  [71, "RemoteReports", Migration0071],
+  [72, "RemoteDispatches", Migration0072],
+  [73, "ChannelLedger", Migration0073],
+  [74, "RemoteDispatchQuestions", Migration0074],
+  [75, "ThreadRunResults", Migration0075],
+  [76, "RemoteReportRelay", Migration0076],
+  [77, "ProjectionTurnItemRequestIndex", Migration0077],
+  [78, "Memory", Migration0078],
+  [79, "MemoryHubSync", Migration0079],
+  [80, "MemorySearchCounters", Migration0080],
+  [81, "MemoryTaskGrantCeiling", Migration0081],
+  [82, "MemoryImportLineage", Migration0082],
+  [83, "MemoryCheckpointAccounting", Migration0083],
+  [84, "MemoryReportLifecycle", Migration0084],
+  [85, "MemoryUsageCounters", Migration0085],
+  [86, "MemoryRevertResults", Migration0086],
+  [87, "HandoffLookupIndex", Migration0087],
+  [88, "MemoryLastReadySpace", Migration0088],
+  [89, "MemoryHubAdministered", Migration0089],
+  [90, "MemoryCheckpointLifecycle", Migration0090],
+  [91, "FleetGoals", Migration0091],
+  [92, "FleetHealth", Migration0092],
+  [93, "ThreadRunObservedChecks", Migration0093],
+  [94, "RemoteDispatchObservation", Migration0094],
+  [95, "MemoryRevisionCheckpointSize", Migration0095],
+  [96, "HubNodes", Migration0096],
+  [97, "MemorySummaryWorkThreadIndex", Migration0097],
+  [98, "ThreadHistoryArchives", Migration0098],
+  [99, "PermissionProfiles", Migration0099],
+  [100, "DecisionInbox", Migration0100],
+  [101, "HumanStepRecords", Migration0101],
+  [102, "McpRequestReservations", Migration0102],
+  [103, "RemoteReportInboxRunId", Migration0103],
+  [104, "RemoteReportReceipts", Migration0104],
+  [105, "PendingAttachmentUploads", Migration0105],
+  [106, "ScheduledTaskWebhookSecretRef", Migration0106],
+  [107, "RemoteReportFences", Migration0107],
+  [108, "HubProvisionedLinks", Migration0108],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -245,12 +246,7 @@ const makeMigrationLoader = (throughId?: number) =>
 
 const FIRST_V2_MIGRATION_ID = 55;
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {
