@@ -513,7 +513,7 @@
   "apps/web/src/components/contextChipParts.tsx": { "nonNull": 4 },
   "apps/web/src/components/contextPresentationRegistry.ts": { "nonNull": 1 },
   "apps/web/src/components/diffs/useReviewFilePatches.ts": { "nonNull": 3 },
-  "apps/web/src/components/files/AttachmentFilePreview.browser.test.tsx": { "lines": 2761 },
+  "apps/web/src/components/files/AttachmentFilePreview.browser.test.tsx": { "lines": 2762 },
   "apps/web/src/components/files/FileMarkdownSelectionToolbar.tsx": { "nonNull": 2 },
   "apps/web/src/components/files/FilePreviewPanel.tsx": { "lines": 1740 },
   "apps/web/src/components/files/LargeTextViewer.tsx": { "nonNull": 3 },
