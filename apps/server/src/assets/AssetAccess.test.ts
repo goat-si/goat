@@ -1279,7 +1279,7 @@ describe("AssetAccess", () => {
         const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
         expect(response.headers.get("content-type")).toBe(expectedContentType);
         expect(response.headers.get("content-disposition")).toContain("attachment;");
-        expect(response.headers.get("accept-ranges")).toBeNull();
+        expect(response.headers.get("accept-ranges")).toBe("bytes");
       }
     }).pipe(Effect.provide(layerTest)),
   );
