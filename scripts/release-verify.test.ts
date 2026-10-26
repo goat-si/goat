@@ -198,6 +198,14 @@ describe("release payload helpers", () => {
     expect(exposureProblems("goat", "/home/runner/.cargo/registry/src/x.rs", hosted, true)).toEqual(
       ["goat: absolute build path"],
     );
+    // Dependency WebAssembly bundled into client/assets carries its vendor CI's cargo paths.
+    const officeWasm = "client/assets/docx_edit_bg-D7N4HOOt.wasm";
+    expect(
+      exposureProblems(officeWasm, "/home/runner/.cargo/registry/src/index.crates.io-x/", hosted),
+    ).toEqual([]);
+    expect(exposureProblems(officeWasm, "/home/runner/work/goat/goat/x", hosted)).toEqual([
+      `${officeWasm}: absolute build path`,
+    ]);
     // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
     const cua = "win-unpacked/resources/cua-driver/cua-driver.exe";
     const windowsRunner = ["C:\\Users\\runneradmin", "C:\\a\\goat\\goat"];

@@ -171,6 +171,9 @@ const thirdParty =
   /(?:^|\/)node_modules\/|\/Contents\/Frameworks\/|\/[Rr]esources\/cua-driver\/|(?:^|\/)(?:(?:win|linux)(?:-[a-z0-9]+)?-unpacked|__appImage-[a-z0-9]+)\/(?!resources\/)/;
 // GOAT's own workspace packages stay GOAT code even when they land in node_modules.
 const goatPackage = /(?:^|\/)node_modules\/@goat\//;
+// Bundlers copy dependency WebAssembly (the office previews' Rust crates, built on their
+// vendors' hosted CI) into client/assets, so a compiled module is judged like a dependency.
+const compiledModule = /\.wasm$/i;
 const buildPath =
   /\/Users\/[A-Za-z0-9._-]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
 
@@ -205,7 +208,9 @@ export function exposureProblems(
 ): string[] {
   const normalized = name.replace(/\\/g, "/");
   const problems: string[] = [];
-  const ours = !thirdParty.test(normalized) || goatPackage.test(normalized);
+  const ours =
+    (!thirdParty.test(normalized) && !compiledModule.test(normalized)) ||
+    goatPackage.test(normalized);
   if (ours && /\.map$/i.test(normalized)) problems.push(`${name}: source map`);
   if (ours && /\.(?:ts|tsx|mts|cts)$/i.test(normalized)) problems.push(`${name}: original source`);
   if (/(?:^|\/)\.git(?:\/|$)/.test(normalized)) problems.push(`${name}: git metadata`);
