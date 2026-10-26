@@ -99,9 +99,9 @@ export const scheduleEntries = {
     toolkit: "thread",
     summary: "Run a scheduled task now through the existing scheduler.",
     description:
-      "Dispatch a manual run of a scheduled task. Retry with the same clientRequestId to reuse the first run. Completion covers dispatch and bookkeeping; the provider turn may still be running. threadId names the dispatched thread, or is null if dispatch failed.",
+      "Dispatch a manual run of a scheduled task. Retry with the same clientRequestId to reuse the first firing. The response acknowledges dispatch; lastRun.status tracks the actual queued, running or terminal run. threadId names the dispatched thread, or is null before a destination is known.",
     guide:
-      "Requires a full-access/default caller. Retry with the same clientRequestId to reuse the first manual run; a new key requests a new run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
+      "Requires a full-access/default caller. Retry with the same clientRequestId to reuse the first manual firing; a new key requests a new firing. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRun, lastRunStatus, runCount and nextRunAt. lastRun.firingId identifies this firing, and lastRun.runId names its exact run. lastRun.dispatchStatus accepted means dispatch succeeded; only lastRun.status completed means the agent run completed. Use schedule.list to reconcile a cached mutation response. Older hosts omit lastRun; their succeeded status only proves dispatch. A task without a bound thread reports the fresh thread it launched.",
     idempotency: "key",
     reconcile: "schedule.list",
     effect: "destructive",

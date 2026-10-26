@@ -3040,7 +3040,18 @@ describe("OrchestratorMcpService provider resolution", () => {
       updatedAt: "2026-10-05T00:00:00.000Z",
       nextRunAt: null,
       lastRunAt: null,
-      lastRunStatus: "never",
+      lastRunStatus: "running",
+      lastRun: {
+        firingId: CommandId.make("firing"),
+        dispatchStatus: "accepted",
+        status: "queued",
+        threadId: ThreadId.make("thread:scheduled-run"),
+        runId: RunId.make("run:scheduled-run"),
+        requestedAt: "2026-10-15T00:00:00.000Z",
+        dispatchedAt: null,
+        startedAt: null,
+        completedAt: null,
+      },
       lastRunError: null,
       runCount: 0,
       webhook: {
@@ -3113,6 +3124,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           listed.tasks.map((summary) => summary.webhookUrl),
           [undefined, "https://t3.example/hooks/secret"],
         );
+        assert.equal(listed.tasks[0]?.lastRun?.runId, "run:scheduled-run");
         assert.include(listed.tasks[0]?.webhookUrlUnavailableReason ?? "", "withheld");
         assert.equal(listed.tasks[1]?.webhookUrlUnavailableReason, undefined);
       }),

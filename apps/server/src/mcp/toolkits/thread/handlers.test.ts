@@ -49,7 +49,24 @@ const client = McpSchema.McpServerClient.of({
 
 // The handler reads only these fields of a stored task.
 const task = (id: string, threadId: string | null, lastRunStatus: "succeeded" | "failed") =>
-  ({ id, threadId, lastRunStatus, runCount: 1, nextRunAt: null }) as never;
+  ({
+    id,
+    threadId,
+    lastRunStatus,
+    runCount: 1,
+    nextRunAt: null,
+    lastRun: {
+      firingId: "firing",
+      dispatchStatus: "accepted",
+      status: "queued",
+      threadId: "launched-thread",
+      runId: "exact-run",
+      requestedAt: "2026-10-15T00:00:00.000Z",
+      dispatchedAt: null,
+      startedAt: null,
+      completedAt: null,
+    },
+  }) as never;
 
 it.effect("goat_schedule_run reports the thread the run dispatched to, not the binding", () =>
   Effect.gen(function* () {
@@ -64,6 +81,7 @@ it.effect("goat_schedule_run reports the thread the run dispatched to, not the b
     // A task without a binding launches a fresh thread on every run.
     const launched = yield* run("task-unbound");
     expect(launched.structuredContent).toMatchObject({
+      lastRun: { firingId: "firing", runId: "exact-run", status: "queued" },
       taskId: "task-unbound",
       threadId: "launched-thread",
       lastRunStatus: "succeeded",
