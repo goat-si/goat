@@ -143,6 +143,11 @@ describe("release payload helpers", () => {
       expect(exposureProblems("main.js", content).length).toBeGreaterThan(0);
     // Clients and the CLI ship this link; a source-repository URL here blocks every nightly.
     expect(exposureProblems("main.js", GOAT_CONNECT_COMING_SOON.guideUrl)).toEqual([]);
+    // The web bundle's privacy link (apps/web/src/legalLinks.ts); a source-repository URL there
+    // failed nightly 271.
+    expect(
+      exposureProblems("main.js", "https://goat-si.github.io/goat/privacy-policy/#usage-data"),
+    ).toEqual([]);
     expect(exposureProblems("node_modules/pkg/types.d.ts")).toEqual([]);
     expect(
       exposureProblems(
