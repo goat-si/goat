@@ -35,7 +35,7 @@ const context = {
   limits: DEFAULT_SCREEN_RUN_LIMITS,
 };
 const call = (
-  method: "list_tabs" | "select_tab" | "observe",
+  method: "list_tabs" | "select_tab" | "observe" | "open_tab",
   callId: number,
   args: ScreenHostCall["args"],
   targetRef?: ScreenTargetRef,
@@ -254,5 +254,47 @@ it.effect("binds the exact mentioned browser instance and tab, not its title", (
       .dispatch(call("select_tab", 3, { mentionId: "mention" }), context)
       .pipe(Effect.result);
     expect(replaced._tag).toBe("Failure");
+  }),
+);
+
+it.effect("Stop still closes the agent's own temporary tab after its generation moved", () =>
+  Effect.gen(function* () {
+    let generation = 1;
+    const closes: Array<{ controlGeneration?: number }> = [];
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("temporary"),
+      title: "New tab",
+      url: "https://example.test/",
+      owner: "agent" as const,
+      ownedByCaller: true,
+      controlGeneration: 1,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([{ ...tab, controlGeneration: generation }]),
+      invoke: <A>(request: { operation: string; exact?: { controlGeneration?: number } }) =>
+        Effect.sync(() => {
+          if (request.operation === "close") closes.push({ ...request.exact });
+          return {
+            available: true,
+            visible: true,
+            tabId: tab.tabId,
+            url: tab.url,
+            title: tab.title,
+            loading: false,
+            control: { owner: "agent", ownedByCaller: true, generation },
+          } as A;
+        }),
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    yield* host.dispatch(call("open_tab", 1, { url: tab.url }), context);
+    // The person's Stop bumps the tab's control generation before cleanup reads it.
+    generation = 2;
+    const outcomes = yield* host.releaseControl({ runId: "run", turnId: "turn" });
+    expect(outcomes).toEqual([{ tabId: "temporary", status: "closed" }]);
+    expect(closes).toEqual([expect.objectContaining({ controlGeneration: 2 })]);
   }),
 );

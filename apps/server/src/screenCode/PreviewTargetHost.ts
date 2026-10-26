@@ -59,9 +59,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
     `${identity.runId}\u0000${identity.turnId}`;
+  const stopCleanups = new Set<string>();
   const close = (tab: TabClaim) => {
     const scope = tabScopes.get(`${tab.runId}\u0000${tab.turnId}`);
     if (!scope) return Effect.die(new Error("Turn scope expired before tab cleanup"));
+    // A person's Stop moves the tab's generation before this cleanup runs. The tab is still the
+    // agent's own and no person holds it, so closing it is what that Stop asked for.
+    const afterStop = stopCleanups.has(turnKey(tab));
     const route = {
       browserInstanceId: tab.browserInstanceId,
       connectionId: tab.connectionId,
@@ -77,7 +81,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       });
       if (
         current.tabId !== tab.tabId ||
-        current.control?.generation !== tab.controlGeneration ||
+        current.control === undefined ||
+        (!afterStop && current.control.generation !== tab.controlGeneration) ||
         !current.control.ownedByCaller ||
         current.control.owner === "human"
       )
@@ -88,7 +93,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         input: {},
         exact: {
           ...route,
-          controlGeneration: tab.controlGeneration,
+          controlGeneration: current.control.generation,
           origin: originOf(current.url),
         },
       });
@@ -601,7 +606,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       fence: false,
       ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
     });
-    return yield* claims.releaseTurn(input, authority);
+    const key = turnKey(input);
+    stopCleanups.add(key);
+    return yield* claims
+      .releaseTurn(input, authority)
+      .pipe(Effect.ensuring(Effect.sync(() => stopCleanups.delete(key))));
   });
   const setBindingHints = (
     identity: Pick<ScreenHostContext, "runId" | "turnId">,
