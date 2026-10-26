@@ -145,6 +145,23 @@ describe("goat-ci-result for an ignored event", () => {
       assert.equal(await main(env, io(api([green, rerunFailed]), settled())), 1);
     });
 
+    it("polls instead of spinning while the listing keeps disagreeing with itself", async () => {
+      const green = [real(1, R1), own];
+      const newer = [real(1, R1), real(2, R2, { status: "in_progress" }), own];
+      const newerFailed = [real(1, R1), real(2, R2, { result: "failure" }), own];
+      const flapping = [green, newer, green, newer, green, newer, green, newer, newerFailed];
+      let sleeps = 0;
+      const run = io(api(flapping), { t: 10 * MINUTE });
+      const sleep = run.sleep;
+      run.sleep = async (ms) => {
+        sleeps += 1;
+        await sleep(ms);
+      };
+      assert.equal(await main(env, run), 1);
+      // Each disagreement between a listing and its confirmation is followed by a poll interval.
+      assert.ok(sleeps >= 4, "slept " + sleeps + " times");
+    });
+
     it("decides at once on a re-run of an ignored run created long ago", async () => {
       const fake = api([[real(1, R1), own]]);
       assert.equal(await main(env, io(fake, { t: 10 * MINUTE })), 0);
