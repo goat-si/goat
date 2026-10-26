@@ -12,7 +12,9 @@ name: goat-ci
 #
 # A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
-# beside the changes that check:changed also runs before a push. The full suite runs on request.
+# selected by check:changed: changed, companion, and importing tests (directly or through
+# testkit/fixture files), plus special suites. Production chains belong to broader lanes.
+# The full suite runs on request.
 # Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
 # reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
 # memory growth suite). Nothing runs on push, so merging into dev starts no CI. Run the workflow by
@@ -248,7 +250,8 @@ jobs:
         if: matrix.task == 'test'
         run: vp run --filter @goat/web test
 
-      # The test files beside the changes, as check:changed runs them: from the repository root,
+      # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
+      # special suites, as check:changed runs them: from the repository root,
       # whose Vitest config hands each file to its package's config. CI script tests use node:test.
       # A selected file that no Vitest project collects fails here, so a quick run cannot pass
       # without running a test it chose.
