@@ -140,7 +140,7 @@ const windowsCaptureUnchecked = (machine: string) =>
 // A Mac's helper proves capture only through a check, and loses that proof whenever GOAT, its
 // helper or the Mac restarts, updates or wakes, so pending there means unproven, not consent.
 const macCaptureUnchecked = (machine: string) =>
-  `Not checked since GOAT, its helper or this Mac last restarted, updated or woke. Run the check in GOAT's computer use settings on ${machine} to prove a real window capture.`;
+  `Not checked since GOAT, its helper or this Mac last restarted, updated or woke. Run the check in the GOAT desktop app's computer use settings on ${machine} to prove a real window capture.`;
 const TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {

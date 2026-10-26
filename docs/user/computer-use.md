@@ -146,9 +146,9 @@ computer use on from the desktop app on that Mac, GOAT walks you through both
 and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
 a GOAT window visible and the Mac unlocked while it checks.
-GOAT keeps that result only until it, its helper or the Mac restarts, updates or
-wakes; the setting then shows the capture step as not checked and offers **Run
-check** whenever no agent is using computer use.
+After GOAT, its helper or the Mac restarts, updates or wakes, the check may need
+to run again. In the GOAT desktop app on that Mac, choose **Run check** when it is
+available.
 
 If a permission stays off after you allow it, quit and reopen GOAT. After GOAT
 updates, **Accessibility** can show as on in System Settings while macOS still
