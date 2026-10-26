@@ -58,7 +58,12 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
-import { issueAppServerCredential, probeAppServer, shouldMoveToAppServer } from "./appServer.ts";
+import {
+  type AppServerProbe,
+  issueAppServerCredential,
+  probeAppServer,
+  shouldMoveToAppServer,
+} from "./appServer.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -152,6 +157,8 @@ const SSH_READY_MAX_TIMEOUT_MS = 60_000;
 // How long an open forward has to answer before it counts as dead. A forward
 // whose TCP connection died during sleep accepts locally and never answers.
 const EXISTING_TUNNEL_CHECK_TIMEOUT_MS = 2_000;
+/** How long a target uses the managed server after its GOAT app server refused a credential. */
+const APP_SERVER_REFUSAL_MS = 600_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
@@ -1582,6 +1589,8 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       never,
       ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
     >,
+    /** The app server refused a credential recently, so this launch goes to the managed server. */
+    skipAppServer = false,
   ): Effect.fn.Return<
     | {
         readonly status: "ready";
@@ -1605,7 +1614,9 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
         });
         // The host's GOAT app server comes first; see appServer.ts. It is never started, stopped,
         // replaced or updated from here, so no launch cleanup is registered for it.
-        const app = yield* restore(probeAppServer(target, input));
+        const app: AppServerProbe = skipAppServer
+          ? { kind: "declined", reason: "credential-failed" }
+          : yield* restore(probeAppServer(target, input));
         if (app.kind === "attach") {
           yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
             ...sshTargetLogFields(target),
@@ -2537,6 +2548,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     masters: new Map<string, SshMasterConnection>(),
   };
   const tunnels = new Map<string, SshTunnelEntry>();
+  // Until when each target skips the GOAT app server after it refused a credential.
+  const appServerRefusals = new Map<string, number>();
   // One slot per target, consumed by the next ensure attempt.
   const reconnectSelections = new Map<string, ReconnectSelection>();
   const selectionRevisions = new Map<string, number>();
@@ -3087,6 +3100,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                   yield* stopRemoteServer(input.resolvedTarget, authOptions).pipe(Effect.ignore);
                 }),
               ).pipe(Effect.provideService(Scope.Scope, launchScope)),
+            (appServerRefusals.get(input.key) ?? 0) > (yield* Clock.currentTimeMillis),
           ),
         );
       });
@@ -3129,6 +3143,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const retainedPending = deferredIntent?.pending;
     const remoteLaunch =
       observedLaunch.status === "ready" &&
+      // A managed replacement intent never describes the app server.
+      observedLaunch.remoteServerKind !== "app" &&
       observedLaunch.pending === undefined &&
       retainedPending !== undefined &&
       deferredIntent !== undefined &&
@@ -3937,7 +3953,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               target: entry.target,
               operation: (authOptions) =>
                 issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
-            })
+            }).pipe(
+              // A desktop reconnecting after this lands on the managed server.
+              Effect.tapError((error) =>
+                entry.remoteServerKind === "app" && error._tag === "SshPairingError"
+                  ? Clock.currentTimeMillis.pipe(
+                      Effect.map((now) => {
+                        appServerRefusals.set(key, now + APP_SERVER_REFUSAL_MS);
+                        entry.attachmentInvalidated = true;
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            )
           : null;
         const currentPin = yield* readManagedPin(entry.target).pipe(
           Effect.mapError(() => supersededPreparation()),
@@ -4381,6 +4409,26 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       if (observed?.status?.state === "preparing" || observed?.status?.state === "update_waiting")
         if (observed.status.state === "update_waiting" || flights.isActive(key)) return observed;
       const requestedVersion = runner?.archiveVersion?.trim() ?? "";
+      // The managed runtime probe below does not see the app server; ask it directly.
+      if (entry?.remoteServerKind === "app") {
+        const app = yield* probeAppServer(resolvedTarget, {
+          batchMode: "yes",
+          interactiveAuth: false,
+        });
+        if (app.kind === "attach" && app.port === entry.remotePort) {
+          const providers = observed?.status?.providers;
+          return {
+            kind: "ok",
+            status: {
+              host: target.alias || target.hostname,
+              requestedVersion,
+              runtimeVersion: app.version,
+              state: providers?.ready === false ? "providers_not_ready" : "ready",
+              ...(providers === undefined ? {} : { providers }),
+            },
+          } satisfies SshHostResult;
+        }
+      }
       const output = yield* runSshCommand(resolvedTarget, {
         batchMode: "yes",
         interactiveAuth: false,
@@ -4687,6 +4735,45 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
+  /**
+   * Issues a credential against the target's current attachment. When that is the GOAT app server
+   * and it refuses, the target moves to the managed server on the same local port, so the caller's
+   * forward stays valid, and the credential is issued once more there. Hub work never depends on
+   * an app server that can be reached but cannot sign anyone in.
+   */
+  const withAppServerFallback = <A, E, R>(
+    key: string,
+    resolvedTarget: DesktopSshEnvironmentTarget,
+    runner: RemoteGoatRunnerOptions | undefined,
+    issue: (selection: PreparedRemoteRuntime | undefined) => Effect.Effect<A, E, R>,
+  ) => {
+    const entry = tunnels.get(key);
+    if (entry?.remoteServerKind !== "app") return issue(entry?.selectedRuntime);
+    return issue(entry.selectedRuntime).pipe(
+      Effect.catchIf(
+        (error): error is E & SshPairingError => error instanceof SshPairingError,
+        (error) =>
+          Effect.gen(function* () {
+            yield* Effect.logWarning("ssh.appServer.credential.fallback", {
+              ...sshTargetLogFields(resolvedTarget),
+              cause: error.message,
+            });
+            appServerRefusals.set(key, (yield* Clock.currentTimeMillis) + APP_SERVER_REFUSAL_MS);
+            entry.attachmentInvalidated = true;
+            const next = yield* ensureTunnelEntry(
+              key,
+              resolvedTarget,
+              runner,
+              false,
+              managedAliases.has(resolvedTarget.alias),
+            );
+            if ("type" in next) return yield* error;
+            return yield* issue(next.selectedRuntime);
+          }),
+      ),
+    );
+  };
+
   const issueMcpClientSession = Effect.fn("ssh/tunnel.issueMcpClientSession")(function* (
     target: DesktopSshEnvironmentTarget,
     sessionOptions: RemoteMcpClientSessionOptions,
@@ -4712,19 +4799,21 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // Session preparation waits for a launch in flight and reuses its selection.
     const issue = Effect.gen(function* () {
       if (sessionOptions.requireReady === true) yield* requireReadyEntry(target, key);
-      return yield* runWithSshAuth({
-        key,
-        keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
-        target: resolvedTarget,
-        operation: (authOptions) =>
-          issueRemoteMcpClientSession(
-            resolvedTarget,
-            sessionOptions,
-            authOptions,
-            runner,
-            tunnels.get(key)?.selectedRuntime,
-          ),
-      });
+      return yield* withAppServerFallback(key, resolvedTarget, runner, (selection) =>
+        runWithSshAuth({
+          key,
+          keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
+          target: resolvedTarget,
+          operation: (authOptions) =>
+            issueRemoteMcpClientSession(
+              resolvedTarget,
+              sessionOptions,
+              authOptions,
+              runner,
+              selection,
+            ),
+        }),
+      );
     });
     return yield* (
       sessionOptions.requireReady === true
@@ -4766,19 +4855,23 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     }
     return yield* withTargetLock(
       key,
-      runWithSshAuth({
-        key,
-        keyOnly: managedAliases.has(resolvedTarget.alias),
-        target: resolvedTarget,
-        operation: (authOptions) =>
-          issueRemoteClientSession(
-            resolvedTarget,
-            sessionOptions,
-            authOptions,
-            runner,
-            tunnels.get(key)?.selectedRuntime,
-          ),
-      }),
+      Effect.suspend(() =>
+        withAppServerFallback(key, resolvedTarget, runner, (selection) =>
+          runWithSshAuth({
+            key,
+            keyOnly: managedAliases.has(resolvedTarget.alias),
+            target: resolvedTarget,
+            operation: (authOptions) =>
+              issueRemoteClientSession(
+                resolvedTarget,
+                sessionOptions,
+                authOptions,
+                runner,
+                selection,
+              ),
+          }),
+        ),
+      ),
     );
   });
 

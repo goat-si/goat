@@ -13,8 +13,21 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { parseAppServerProbe, probeAppServer, shouldMoveToAppServer } from "./appServer.ts";
-import { ARCHIVE, makeSuccessfulProcess, remoteShell, uploadTarget } from "./tunnel.fixture.ts";
-import { issueRemoteMcpClientSession, launchOrReuseRemoteServer } from "./tunnel.ts";
+import {
+  ARCHIVE,
+  makeSuccessfulProcess,
+  remoteShell,
+  testHttpClient,
+  testNetService,
+  uploadTarget,
+} from "./tunnel.fixture.ts";
+import * as SshAuth from "./auth.ts";
+import * as NetService from "@goat/shared/Net";
+import {
+  SshEnvironmentManager,
+  issueRemoteMcpClientSession,
+  launchOrReuseRemoteServer,
+} from "./tunnel.ts";
 
 const TOKEN = "app-control-secret";
 
@@ -24,7 +37,7 @@ interface AppServer {
 }
 
 /** A loopback stand-in for the GOAT app's server: its descriptor and its runtime session route. */
-const startAppServer = (descriptor: object) =>
+const startAppServer = (descriptor: object, sessionStatus = 200) =>
   Effect.acquireRelease(
     Effect.callback<AppServer & { readonly server: NodeHttp.Server }>((resume) => {
       const sessions: AppServer["sessions"] = [];
@@ -42,7 +55,7 @@ const startAppServer = (descriptor: object) =>
               header: typeof header === "string" ? header : undefined,
               body: JSON.parse(body),
             });
-            response.statusCode = header === TOKEN ? 200 : 403;
+            response.statusCode = header === TOKEN ? sessionStatus : 403;
             response.end(
               JSON.stringify({ token: "app-session-token", expiresAt: "2026-10-27T00:00:00.000Z" }),
             );
@@ -272,5 +285,62 @@ describe("moving a managed attachment to the app server", () => {
         expect(yield* decide("idle", { remoteServerKind: "app" })).toBe(false);
         expect(yield* decide("idle", { selection: { appServerDeclined: true } })).toBe(false);
       }),
+  );
+});
+
+describe("manager on a host running the app server", () => {
+  const managerLayer = (spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>) =>
+    Layer.mergeAll(
+      NodeServices.layer,
+      spawner,
+      Layer.succeed(HttpClient.HttpClient, testHttpClient),
+      Layer.succeed(NetService.NetService, testNetService),
+      Layer.succeed(SshAuth.SshPasswordPrompt, {
+        isAvailable: false,
+        request: () => Effect.die("no password prompt in this test"),
+      }),
+    ).pipe((base) =>
+      SshEnvironmentManager.layer({
+        resolveCliRunner: Effect.succeed(ARCHIVE),
+        leaveRemoteServerRunning: true,
+      }).pipe(Layer.provideMerge(base)),
+    );
+  const appProbes = (scripts: ReadonlyArray<string>) =>
+    scripts.filter((script) => script.includes("GOAT_APP_SERVER=live")).length;
+
+  it.live(
+    "reports the attached app server as ready, and hands the host to the managed server when it refuses a credential",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* startAppServer(attachableDescriptor, 500);
+        const host = yield* makeHost({ pid: process.pid, port: app.port });
+        yield* Effect.gen(function* () {
+          const manager = yield* SshEnvironmentManager;
+          const bootstrap = yield* manager.ensureEnvironment(uploadTarget);
+          expect("type" in bootstrap ? bootstrap.type : bootstrap.remoteServerKind).toBe("app");
+          const status = yield* manager.status(uploadTarget);
+          expect(status.kind === "ok" ? status.status : status).toMatchObject({
+            state: "ready",
+            runtimeVersion: attachableDescriptor.serverVersion,
+          });
+
+          const before = host.scripts.length;
+          // The managed runtime cannot be installed in this fixture, so the retry fails after the move.
+          yield* manager
+            .issueMcpClientSession(uploadTarget, {
+              label: "hub",
+              ttl: "12h",
+              runtimeModeCeiling: null,
+            })
+            .pipe(Effect.flip);
+          expect(app.sessions).toHaveLength(1);
+          const after = host.scripts.slice(before);
+          expect(appProbes(after)).toBe(0);
+          expect(after.some((script) => script.includes("ready_version()"))).toBe(true);
+          // Later connections keep to the managed server instead of the refusing app server.
+          yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.ignore);
+          expect(appProbes(host.scripts.slice(before))).toBe(0);
+        }).pipe(Effect.provide(managerLayer(host.spawner)));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
