@@ -86,15 +86,9 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     nativeFileChooser,
     setChooserFiles,
     openFileChooser: () => {
-      if (
-        !events.emit("filechooser", {
-          isMultiple: () => false,
-          element: () => ({ getAttribute: async () => ".csv" }),
-          setFiles: setChooserFiles,
-        })
-      ) {
-        nativeFileChooser();
-      }
+      const chooser = { isMultiple: () => false, setFiles: setChooserFiles };
+      const element = () => ({ getAttribute: async () => ".csv" });
+      if (!events.emit("filechooser", { ...chooser, element })) nativeFileChooser();
     },
     emitAsync: (name: string, ...args: unknown[]) =>
       Promise.all(events.listeners(name).map((listener) => listener(...args))),
@@ -147,6 +141,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     sessions,
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
+    cookies: async () => [],
     newCDPSession: async (target: unknown) => {
       const session = makeSession(target === page ? undefined : (target as MockFrame));
       sessions.push(session);

@@ -26,6 +26,12 @@ export interface LayerCandidate {
   readonly overContent: boolean;
   /** The document, its body, <main> or role=main: content, never an overlay. */
   readonly mainContent: boolean;
+  /** Holds no element or text of its own, like the scrim behind a modal. */
+  readonly empty: boolean;
+  /** The viewport edge a fixed or sticky bar spans, such as a cookie banner's "bottom"; "" when none. */
+  readonly edge: "" | "top" | "bottom" | "left" | "right";
+  /** Its id, class or accessible name speaks of cookies or consent. */
+  readonly consent: boolean;
   readonly selectorHint: string;
 }
 
@@ -95,15 +101,21 @@ const LAYERS_SCRIPT = `(gridSize) => {
     );
   // A hit anywhere inside an overlay counts for the outermost large layer over page content, so
   // an overlay split into panels is one layer, and an app shell or root around it is not chosen.
+  // A small modal filled by a wrapper or button still counts as the modal, not the child hit.
+  const isModal = (element) =>
+    (element.getAttribute("role") || "").toLowerCase() === "alertdialog" ||
+    element.getAttribute("aria-modal") === "true";
   const promote = (hit, stack) => {
     let overlay = null;
     let dialog = null;
+    let modal = null;
     for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
+      if (!modal && isModal(node)) modal = node;
       if (!qualifies(node)) continue;
       if (coversContent(node, stack)) overlay = node;
       if (isDialog(node)) dialog = node;
     }
-    return overlay || dialog || hit;
+    return overlay || dialog || modal || hit;
   };
   const collapse = (text) => (text || "").replace(/\\s+/g, " ").trim();
   const nameOf = (element) => {
@@ -129,6 +141,40 @@ const LAYERS_SCRIPT = `(gridSize) => {
     return classes.length > 0 ? tag + "." + classes.join(".") : tag;
   };
   const hits = new Map();
+  // A bar docked to an edge lies outside the grid, which spans 5% to 95% of the viewport.
+  const docked = (hit) => {
+    for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
+      const position = getComputedStyle(node).position;
+      if (position === "fixed" || position === "sticky") return node;
+    }
+    return null;
+  };
+  const edgeOf = (element, position) => {
+    if (position !== "fixed" && position !== "sticky") return "";
+    const rect = element.getBoundingClientRect();
+    if (rect.width >= 0.9 * width) {
+      if (rect.bottom >= height - 2 && rect.top > 0) return "bottom";
+      if (rect.top <= 2 && rect.bottom < height) return "top";
+    }
+    if (rect.height >= 0.9 * height) {
+      if (rect.right >= width - 2 && rect.left > 0) return "right";
+      if (rect.left <= 2 && rect.right < width) return "left";
+    }
+    return "";
+  };
+  const edgePoints = [];
+  if (width > 0 && height > 0) {
+    for (let step = 0; step < gridSize; step++) {
+      const x = width * 0.05 + ((step + 0.5) * width * 0.9) / gridSize;
+      const y = height * 0.05 + ((step + 0.5) * height * 0.9) / gridSize;
+      edgePoints.push([x, height * 0.025], [x, height * 0.975], [width * 0.025, y], [width * 0.975, y]);
+    }
+  }
+  for (const [x, y] of edgePoints) {
+    const hit = topmost(document.elementsFromPoint(x, y), x, y);
+    const bar = hit && docked(hit);
+    if (bar && !hits.has(bar)) hits.set(bar, { count: 0, overContent: false });
+  }
   if (width > 0 && height > 0) {
     for (let row = 0; row < gridSize; row++) {
       for (let column = 0; column < gridSize; column++) {
@@ -148,6 +194,10 @@ const LAYERS_SCRIPT = `(gridSize) => {
   const total = gridSize * gridSize;
   const candidates = [...hits].map(([element, { count, overContent }]) => {
     const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const visible =
+      Math.max(0, Math.min(rect.right, width) - Math.max(rect.left, 0)) *
+      Math.max(0, Math.min(rect.bottom, height) - Math.max(rect.top, 0));
     const role = (element.getAttribute("role") || "").toLowerCase();
     const mainContent =
       element === document.documentElement ||
@@ -159,32 +209,63 @@ const LAYERS_SCRIPT = `(gridSize) => {
       role,
       // Content needs no name, and reading the whole body's text would force a full layout.
       name: mainContent ? "" : nameOf(element).slice(0, 200),
-      coverage: count / total,
+      // A bar only the edge pass found has no grid share; its visible area stands in.
+      coverage: count > 0 ? count / total : visible / (width * height),
       position: style.position,
       pointerEvents: style.pointerEvents,
       zIndex: style.zIndex,
       ariaModal: element.getAttribute("aria-modal") === "true",
       overContent,
       mainContent,
+      empty: element.childElementCount === 0 && !collapse(element.textContent),
+      edge: mainContent ? "" : edgeOf(element, style.position),
+      consent:
+        !mainContent &&
+        /cookie|consent|gdpr/i.test(
+          [element.id, element.getAttribute("class"), collapse(element.getAttribute("aria-label"))].join(" "),
+        ),
       selectorHint: hintOf(element),
     };
   });
   return { viewport: { width, height }, candidates };
 }`;
 
+/** aria-modal or alertdialog declares the rest of the page inert, however small its own box. */
+const isModal = (candidate: LayerCandidate) =>
+  candidate.role === "alertdialog" || candidate.ariaModal;
+
+/**
+ * A consent bar docked across an edge covers little but sits over the page until answered. A
+ * docked bar counts only as a dialog or by naming cookies or consent, so a site header, nav bar
+ * or toolbar, which are docked too, never does.
+ */
+const isConsentBar = (candidate: LayerCandidate) =>
+  candidate.edge !== "" && (candidate.role === "dialog" || isModal(candidate) || candidate.consent);
+
 const isBlocking = (candidate: LayerCandidate) => {
-  if (candidate.coverage < BLOCKING_COVERAGE || candidate.pointerEvents === "none") return false;
-  if (candidate.role === "dialog" || candidate.role === "alertdialog" || candidate.ariaModal)
-    return true;
-  if (candidate.mainContent || !candidate.overContent) return false;
+  if (candidate.pointerEvents === "none") return false;
+  if (isModal(candidate)) return true;
+  if (candidate.coverage < BLOCKING_COVERAGE)
+    return !candidate.mainContent && isConsentBar(candidate);
+  if (candidate.role === "dialog") return true;
+  if (candidate.mainContent) return false;
+  // A scrim holds nothing itself, so it blocks even where the page beneath it is blank.
+  if (!candidate.overContent)
+    return candidate.empty && candidate.position === "fixed" && candidate.zIndex !== "auto";
   if (candidate.position === "fixed") return true;
   // Apps often root themselves in an absolute full-page box; an overlay also stacks above.
   return candidate.position === "absolute" && candidate.zIndex !== "auto";
 };
 
 /** The widest candidate that blocks the page, or null when the content is reachable. */
-export const pickBlocking = (candidates: ReadonlyArray<LayerCandidate>) =>
-  candidates.toSorted((left, right) => right.coverage - left.coverage).find(isBlocking) ?? null;
+export const pickBlocking = (candidates: ReadonlyArray<LayerCandidate>) => {
+  const blocking = candidates
+    .toSorted((left, right) => right.coverage - left.coverage)
+    .filter(isBlocking);
+  // A scrim has no name or control to act on; the modal over it does.
+  const widest = blocking[0];
+  return (widest?.empty ? blocking.find(isModal) : undefined) ?? widest ?? null;
+};
 
 /** Page-controlled text, kept to one line so it cannot add lines to the header. */
 const oneLine = (text: string) => text.replace(/\s+/g, " ").replaceAll('"', "'").trim();
@@ -199,11 +280,61 @@ export const layersHeader = (report: LayersReport) => {
     .slice(0, MAX_NAME_LENGTH);
   const coverage = Math.round(blocking.coverage * 100);
   const kind = oneLine(blocking.role || blocking.tagName);
-  return `@layers blocking=${kind} "${name}" coverage=${coverage}% hint=${oneLine(blocking.selectorHint)}`;
+  const edge =
+    blocking.coverage < BLOCKING_COVERAGE && blocking.edge ? ` edge=${blocking.edge}` : "";
+  return `@layers blocking=${kind} "${name}" coverage=${coverage}%${edge} hint=${oneLine(blocking.selectorHint)}`;
+};
+
+type LayersPage = Pick<Page, "evaluate"> & Partial<Pick<Page, "frames" | "mainFrame">>;
+type Sampled = Omit<LayersReport, "blocking">;
+
+// Page-side code is passed as source: the server compiles without DOM types.
+const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
+  target.evaluate(`(${LAYERS_SCRIPT})(${grid})`) as Promise<Sampled>;
+
+/**
+ * A modal inside an iframe blocks that frame's part of the page. Only modals count there, so a
+ * frame's own header or full-frame app root never reads as blocking the page.
+ */
+const frameModals = async (page: LayersPage, grid: number, viewport: Sampled["viewport"]) => {
+  if (typeof page.frames !== "function" || typeof page.mainFrame !== "function") return [];
+  const main = page.mainFrame();
+  const area = viewport.width * viewport.height;
+  const found = await Promise.all(
+    page
+      .frames()
+      .filter((frame) => frame !== main)
+      .map(async (frame) => {
+        const [sampled, box] = await Promise.all([
+          sampleIn(frame, grid).catch(() => null),
+          frame
+            .frameElement()
+            .then((element) => element.boundingBox())
+            .catch(() => null),
+        ]);
+        if (!sampled || !Array.isArray(sampled.candidates) || !box || area <= 0) return [];
+        const share = (box.width * box.height) / area;
+        return sampled.candidates.filter(isModal).map((candidate) => ({
+          ...candidate,
+          coverage: Math.min(1, candidate.coverage * share),
+          selectorHint: `iframe ${candidate.selectorHint}`,
+        }));
+      }),
+  );
+  return found.flat();
+};
+
+const sampleLayers = async (page: LayersPage, grid: number): Promise<Sampled> => {
+  const sampled = await sampleIn(page, grid);
+  if (!sampled || !Array.isArray(sampled.candidates)) return sampled;
+  const framed = await frameModals(page, grid, sampled.viewport);
+  return framed.length === 0
+    ? sampled
+    : { ...sampled, candidates: [...sampled.candidates, ...framed] };
 };
 
 export const describeLayers = async (
-  page: Pick<Page, "evaluate">,
+  page: LayersPage,
   control: Pick<SessionControl, "observe">,
   options: { readonly grid?: number } = {},
 ): Promise<LayersReport> => {
@@ -213,11 +344,7 @@ export const describeLayers = async (
       : DEFAULT_GRID;
   // Names are page text, so a private tab withholds them like any other observation.
   return control.observe(async () => {
-    // Page-side code is passed as source: the server compiles without DOM types.
-    const sampled = (await page.evaluate(`(${LAYERS_SCRIPT})(${grid})`)) as Omit<
-      LayersReport,
-      "blocking"
-    >;
+    const sampled = await sampleLayers(page, grid);
     return { ...sampled, blocking: pickBlocking(sampled.candidates) };
   });
 };
@@ -226,15 +353,8 @@ export const describeLayers = async (
  * Samples the page's layers and formats the @layers header line for a snapshot. Falls back to
  * @layers none when the page stub has no layer candidates.
  */
-export const readLayersHeader = async (
-  page: Pick<Page, "evaluate">,
-  grid = DEFAULT_GRID,
-): Promise<string> => {
-  // Page-side code is passed as source: the server compiles without DOM types.
-  const sampled = (await page.evaluate(`(${LAYERS_SCRIPT})(${grid})`).catch(() => null)) as Omit<
-    LayersReport,
-    "blocking"
-  > | null;
+export const readLayersHeader = async (page: LayersPage, grid = DEFAULT_GRID): Promise<string> => {
+  const sampled = await sampleLayers(page, grid).catch(() => null);
   if (!sampled || !Array.isArray(sampled.candidates)) return "@layers none";
   return layersHeader({ ...sampled, blocking: pickBlocking(sampled.candidates) });
 };

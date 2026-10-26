@@ -21,6 +21,9 @@ const candidate = (overrides: Partial<LayerCandidate>): LayerCandidate => ({
   ariaModal: false,
   overContent: true,
   mainContent: false,
+  empty: false,
+  edge: "",
+  consent: false,
   selectorHint: "div",
   ...overrides,
 });
@@ -51,6 +54,26 @@ describe("pickBlocking", () => {
     expect(pickBlocking([candidate({ ariaModal: true, position: "relative" })])).not.toBeNull();
     expect(pickBlocking([dialog, banner])).toBe(banner);
   });
+
+  it("blocks for a scrim over blank page and names the small modal on it", () => {
+    const scrim = candidate({ coverage: 0.88, overContent: false, empty: true, zIndex: "50" });
+    const modal = candidate({ role: "dialog", ariaModal: true, coverage: 0.12, name: "Signup" });
+    expect(pickBlocking([scrim])).toBe(scrim);
+    expect(pickBlocking([scrim, modal])).toBe(modal);
+    expect(pickBlocking([candidate({ role: "dialog", coverage: 0.12 })])).toBeNull();
+    expect(
+      pickBlocking([candidate({ overContent: false, empty: true, zIndex: "auto" })]),
+    ).toBeNull();
+  });
+
+  it("blocks for a consent bar on an edge, never for a docked header or toolbar", () => {
+    const bar = { coverage: 0.1, overContent: false, edge: "bottom" } as const;
+    expect(pickBlocking([candidate({ ...bar, consent: true })])).not.toBeNull();
+    expect(pickBlocking([candidate({ ...bar, edge: "right", role: "dialog" })])).not.toBeNull();
+    expect(pickBlocking([candidate({ ...bar, edge: "top", role: "banner" })])).toBeNull();
+    expect(pickBlocking([candidate({ ...bar, role: "navigation" })])).toBeNull();
+    expect(pickBlocking([candidate({ ...bar, edge: "", consent: true })])).toBeNull();
+  });
 });
 
 describe("layersHeader", () => {
@@ -76,6 +99,11 @@ describe("layersHeader", () => {
       /^@layers blocking=dialog "Accept 'all' cookies x+" coverage=84% hint=#consent$/,
     );
     expect(header.split('"')[1]).toHaveLength(80);
+    expect(
+      layersHeader(
+        report(candidate({ role: "region", name: "Cookies", coverage: 0.1, edge: "bottom" })),
+      ),
+    ).toBe('@layers blocking=region "Cookies" coverage=10% edge=bottom hint=div');
     const hostile = layersHeader(report(candidate({ role: "dialog\nx", selectorHint: "#a\nb" })));
     expect(hostile.split("\n")).toHaveLength(1);
   });
@@ -175,6 +203,73 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
         '<div style="position:fixed;inset:0;z-index:5;pointer-events:none;background:rgba(0,0,0,.1)"></div>',
     );
     expect(report.blocking).toBeNull();
+  });
+
+  it("reports a small modal over a scrim with only blank page beneath", async () => {
+    const report = await layers(
+      "<p>Short page.</p>" +
+        '<div class="backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50"></div>' +
+        '<div id="signup" role="dialog" aria-modal="true" aria-label="Newsletter signup" style="position:fixed;top:20%;left:25%;width:50%;height:20%;background:#fff;z-index:51"><button>Close</button></div>',
+    );
+    expect(report.blocking).toMatchObject({ name: "Newsletter signup", selectorHint: "#signup" });
+  });
+
+  it("reports a small modal a wrapper or button fills, not the child", async () => {
+    const report = await layers(
+      "<p>Short page.</p>" +
+        '<div id="confirm" role="alertdialog" aria-label="Delete file?" style="position:fixed;top:30%;left:30%;width:40%;height:30%;z-index:5">' +
+        '<div class="content" style="width:100%;height:100%"><button style="width:100%;height:100%">Delete</button></div></div>',
+    );
+    expect(report.blocking).toMatchObject({ name: "Delete file?", selectorHint: "#confirm" });
+  });
+
+  it("reports a modal inside a same-origin or cross-origin iframe", async () => {
+    const modal =
+      '<div id="sso" role="dialog" aria-modal="true" aria-label="Sign in" style="position:fixed;inset:20%"><div style="width:100%;height:100%"><button style="width:100%;height:100%">Continue</button></div></div>';
+    await context.route("http://frame.test/**", (route) =>
+      route.fulfill({ contentType: "text/html", body: modal }),
+    );
+    for (const frame of [`srcdoc='${modal}'`, 'src="http://frame.test/"']) {
+      await page.setContent(
+        `${article}<iframe ${frame} style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>`,
+      );
+      await page.frames()[1]?.waitForSelector("#sso");
+      const report = await describeLayers(page, control);
+      expect(report.blocking).toMatchObject({ name: "Sign in", selectorHint: "iframe #sso" });
+    }
+  });
+
+  it("does not flag body content, a chat widget or an iframe without a modal", async () => {
+    await page.setContent(
+      `${article}<iframe srcdoc="<main><p>Embedded article.</p><button>Play</button></main>"></iframe>` +
+        '<div role="dialog" aria-label="Chat" style="position:fixed;right:20px;bottom:20px;width:20%;height:15%"><div style="width:100%;height:100%"><button style="width:100%;height:100%">Chat</button></div></div>',
+    );
+    await page.frames()[1]?.waitForSelector("button");
+    expect(layersHeader(await describeLayers(page, control))).toBe("@layers none");
+  });
+
+  it("reports a cookie banner docked to the bottom or the side", async () => {
+    const bottom = await layers(
+      article +
+        '<div id="cookies" role="region" aria-label="Cookie consent" style="position:fixed;left:0;right:0;bottom:0;height:10%;background:#222;z-index:60">We use cookies. <button>Accept</button></div>',
+    );
+    expect(layersHeader(bottom)).toMatch(
+      /^@layers blocking=region "Cookie consent" coverage=\d+% edge=bottom hint=#cookies$/,
+    );
+    const side = await layers(
+      article +
+        '<aside id="prefs" role="dialog" aria-label="Privacy choices" style="position:fixed;top:0;bottom:0;right:0;width:20%;background:#eee">Choose <button>Save</button></aside>',
+    );
+    expect(side.blocking).toMatchObject({ edge: "right", selectorHint: "#prefs" });
+  });
+
+  it("does not flag a sticky header, a fixed toolbar or a cookie policy link", async () => {
+    const report = await layers(
+      '<header role="banner" style="position:sticky;top:0;height:10%;background:#fff;z-index:9"><nav>Home <a href="#">Cookie policy</a></nav></header>' +
+        article +
+        '<div role="toolbar" style="position:fixed;left:0;right:0;bottom:0;height:8%;background:#ddd"><button>Bold</button></div>',
+    );
+    expect(layersHeader(report)).toBe("@layers none");
   });
 
   it("refuses to describe a private tab", async () => {

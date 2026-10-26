@@ -15,6 +15,7 @@
 import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
+import { REDACTED, redactCookieValues } from "./cookieValues.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
@@ -179,20 +180,9 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, timeoutMs, secre
   }
 }`;
 
-const REDACTED = "[redacted]";
-/** Cookie values this long are redacted wherever they appear, even inside other text. */
-const MIN_SECRET_LENGTH = 6;
-/**
- * Shorter values down to this length are redacted as whole tokens. One or two characters cannot
- * hold a credential and match everywhere, so those are redacted only as name=value.
- */
-const MIN_TOKEN_LENGTH = 3;
 /** Names of fields and query parameters whose values are credentials, matched loosely. */
 const SECRET_NAME =
   /token|secret|passw|session|cookie|credential|authoriz|^auth$|api[-_]?key|csrf|xsrf/i;
-
-/** Escapes text for use as a literal inside a RegExp. */
-const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Replaces credentials in text bound for an agent. Each cookie is redacted wherever it appears as
@@ -206,36 +196,13 @@ export const redactSecrets = (
   text: string,
   cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>,
 ) => {
-  let result = text.replace(
-    /^(\s*(?:proxy-)?(?:authorization|cookie|set-cookie)\s*:).*$/gim,
-    `$1 ${REDACTED}`,
+  const result = redactCookieValues(
+    text.replace(
+      /^(\s*(?:proxy-)?(?:authorization|cookie|set-cookie)\s*:).*$/gim,
+      `$1 ${REDACTED}`,
+    ),
+    cookies,
   );
-  for (const { name, value } of cookies) {
-    if (!name || !value) continue;
-    result = result.replace(
-      new RegExp(
-        `(^|[^\\w-])(${literal(name)})=(${literal(value)}|${literal(encodeURIComponent(value))})(?![\\w%-])`,
-        "g",
-      ),
-      `$1$2=${REDACTED}`,
-    );
-  }
-  // Longest first, so a value containing another is replaced whole.
-  const values = [...new Set(cookies.map((cookie) => cookie.value))]
-    .filter((value) => value.length >= MIN_TOKEN_LENGTH)
-    .toSorted((left, right) => right.length - left.length);
-  for (const value of values) {
-    for (const form of new Set([value, encodeURIComponent(value)])) {
-      result =
-        value.length >= MIN_SECRET_LENGTH
-          ? result.replaceAll(form, REDACTED)
-          : // A short value only as a whole token, so "ab12" never eats into "ab123" or a word.
-            result.replace(
-              new RegExp(`(?<![A-Za-z0-9])${literal(form)}(?![A-Za-z0-9])`, "g"),
-              REDACTED,
-            );
-    }
-  }
   return (
     result
       .replace(
