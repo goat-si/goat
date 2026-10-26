@@ -1,8 +1,5 @@
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import {
   pullRequestListLines,
   resolveThreadPullRequestChains,

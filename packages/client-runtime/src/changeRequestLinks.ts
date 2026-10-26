@@ -1,9 +1,4 @@
-import type {
-  EnvironmentId,
-  ProjectId,
-  PullRequestRef,
-  RepositoryIdentity,
-} from "@goat/contracts";
+import type { EnvironmentId, ProjectId, PullRequestRef, RepositoryIdentity } from "@goat/contracts";
 import type { ChangeRequestLink } from "@goat/source-control-core/shared/definition";
 
 import { sourceControlClients } from "./sourceControlClients.ts";

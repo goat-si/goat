@@ -354,6 +354,7 @@ function mountProjectFlow(
 describe("add project source environment", () => {
   it("blocks local add on a requested unavailable host until reconnect or manual choice", async () => {
     state.scopes = new Set([AuthOrchestrationOperateScope]);
+    state.otherScopes = new Set([AuthOrchestrationOperateScope]);
     state.dispatch.mockReset();
     state.environments = [
       { environmentId: "environment", environmentLabel: "Environment" },
@@ -404,6 +405,7 @@ describe("add project source environment", () => {
 
   it("keeps a manual host selection when the requested host finishes connecting", async () => {
     state.scopes = new Set([AuthOrchestrationOperateScope]);
+    state.otherScopes = new Set([AuthOrchestrationOperateScope]);
     state.dispatch.mockReset();
     const navigation = mountProjectFlow(false, true, false, "AddProject");
     state.environments = [
@@ -443,6 +445,7 @@ describe("add project source environment", () => {
 
   it("follows warm environment requests while preserving manual selection between requests", async () => {
     state.scopes = new Set([AuthOrchestrationOperateScope]);
+    state.otherScopes = new Set([AuthOrchestrationOperateScope]);
     state.dispatch.mockReset();
     const navigation = mountProjectFlow(false, true, false, "AddProject");
     state.environments = [

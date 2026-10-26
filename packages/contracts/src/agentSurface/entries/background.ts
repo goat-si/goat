@@ -15,7 +15,8 @@ export const backgroundEntries = {
       "Sets the awaited flag on the named background tasks of the caller's own thread; repeating the same call leaves the same flags.",
     effect: "write",
     capability: "none",
-    capabilityReason: "Changes only the waiting state of the calling thread's own background tasks.",
+    capabilityReason:
+      "Changes only the waiting state of the calling thread's own background tasks.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",

@@ -31,7 +31,8 @@ vi.mock("../../env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../env")>()),
   isElectron: true,
 }));
-vi.mock("./useUpdateEverything", () => ({
+vi.mock("./useUpdateEverything", async (original) => ({
+  ...(await original<typeof import("./useUpdateEverything")>()),
   useUpdateEverything: () => ({ hasUpdates: false, summary: "", lines: [], restarts: [] }),
 }));
 

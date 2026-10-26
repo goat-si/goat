@@ -379,6 +379,25 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-src-" });
       const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-dest-" });
       const source = yield* createFixtureSource(sourceDir);
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          for (const [rowid, threadId, role, streaming, createdBy] of [
+            [7, "stopped-thread", "user", 0, "user"],
+            [42, "fork-thread", "assistant", 0, "agent"],
+            [101, "archived-thread", "assistant", 0, "agent"],
+            [130, "running-thread", "assistant", 0, "agent"],
+            [177, "fork-thread", "assistant", 1, "agent"],
+            [200, "fork-thread", "user", 0, "agent"],
+          ] as const) {
+            yield* sql`INSERT INTO orchestration_v2_projection_messages
+              (rowid, message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+              VALUES (${rowid}, ${`message-${rowid}`}, ${threadId}, ${role}, ${streaming},
+                '2026-08-01', '2026-08-01', ${JSON.stringify({ text: "searchable message", createdBy })})`;
+          }
+        }),
+      );
 
       const result = yield* runMigrateDevDb(
         { baseDir: destDir, source, projects: 5, threadsPerProject: 2 },
@@ -394,6 +413,25 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             yield* sql`SELECT rowid, body FROM memory_items_fts WHERE memory_items_fts MATCH 'searchable'`,
             [{ rowid: 42, body: "synthetic searchable memory" }],
           );
+          const indexedMessages = () => sql<{ message_id: string }>`
+            SELECT messages.message_id FROM orchestration_v2_message_search AS search
+            JOIN orchestration_v2_projection_messages AS messages ON messages.rowid = search.rowid
+            WHERE orchestration_v2_message_search MATCH 'searchable'
+            ORDER BY messages.message_id`;
+          assert.deepStrictEqual(yield* indexedMessages(), [
+            { message_id: "message-42" },
+            { message_id: "message-7" },
+          ]);
+          assert.deepStrictEqual(
+            yield* sql`SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+              WHERE orchestration_v2_message_search MATCH 'searchable'`,
+            [{ count: 2 }],
+          );
+          yield* sql`UPDATE orchestration_v2_projection_messages
+            SET payload_json = '{"text":"revised message"}' WHERE message_id = 'message-42'`;
+          assert.deepStrictEqual(yield* indexedMessages(), [{ message_id: "message-7" }]);
+          yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'message-7'`;
+          assert.deepStrictEqual(yield* indexedMessages(), []);
           const threads = yield* sql<{ thread_id: string }>`
             SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
           const events = yield* sql<{ stream_id: string }>`

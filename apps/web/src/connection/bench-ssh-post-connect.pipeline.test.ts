@@ -107,7 +107,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
       });
       return Response.json(state.descriptor);
     }
-    if (path.endsWith("/websocket-ticket")) {
+    if (path.endsWith("/websocket-ticket/rpc")) {
       Deferred.doneUnsafe(ticketStarted, Effect.void);
       const token = authorization?.replace(/^Bearer /, "") ?? "";
       return runPromise(options?.ticket?.(token) ?? Effect.succeed(ticket(token)), {
@@ -257,13 +257,13 @@ describe("SSH session and ticket pipeline", () => {
         expect(h.state.sockets).toEqual([]);
         expect(h.requests.map((r) => r.path)).toEqual([
           "/.well-known/goat/environment",
-          "/api/auth/websocket-ticket",
+          "/api/auth/websocket-ticket/rpc",
         ]);
         yield* Deferred.succeed(session, AUTHENTICATED);
         const connected = yield* Fiber.join(fiber);
         expect(connected.prepared.socketUrl).toContain("wsTicket=saved-token");
         expect(h.state.sockets).toHaveLength(1);
-        expect(h.requests.filter((r) => r.path.endsWith("/websocket-ticket"))).toHaveLength(1);
+        expect(h.requests.filter((r) => r.path.endsWith("/websocket-ticket/rpc"))).toHaveLength(1);
       }).pipe(Effect.scoped),
   );
 

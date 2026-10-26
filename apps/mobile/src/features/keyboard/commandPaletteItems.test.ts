@@ -63,7 +63,9 @@ it("finds memory management aliases and opens only when selected", () => {
     opens++;
   });
   for (const alias of ["forget", "conflict", "revert", "sync", "import"]) {
-    expect(filterCommandPaletteItems([item], `>${alias}`, [])).toEqual([item]);
+    expect(filterCommandPaletteItems([item], `>${alias}`, [])).toEqual([
+      { ...item, titleRanges: [] },
+    ]);
   }
   expect(opens).toBe(0);
   item.run();

@@ -170,7 +170,7 @@ describe("CDP relay extra sessions", () => {
     expect(written.find((m) => m["id"] === 4)).toHaveProperty("error");
     relay.receive(JSON.stringify({ id: 5, method: "DOM.enable", sessionId: extra }));
     await settle();
-    expect(send).toHaveBeenLastCalledWith("DOM.enable", {}, undefined);
+    expect(send).toHaveBeenLastCalledWith("DOM.enable", {}, undefined, extra);
     written.length = 0;
     relay.event("Page.loadEventFired", { timestamp: 1 }, undefined);
     expect(written.map((m) => m["sessionId"])).toEqual(["goat-preview-page", extra]);

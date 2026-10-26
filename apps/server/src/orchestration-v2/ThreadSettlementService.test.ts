@@ -957,7 +957,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
           const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
           yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
           assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
-          yield* fixture.updateSettings({ sidebarAutoSettleAfterDays: 4 });
+          yield* TestClock.adjust("2 minutes");
           yield* Deferred.await(periodicLookupStarted);
 
           yield* Ref.set(

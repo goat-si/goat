@@ -290,7 +290,10 @@ export const discardPendingAttachment = Effect.fn("AttachmentUpload.discardPendi
   // force ignores only a missing path, so every other failure is reported.
   yield* Effect.forEach(
     attachmentPathCandidatesById({ attachmentsDir: config.attachmentsDir, attachmentId }),
-    (candidate) => fileSystem.remove(candidate, { force: true }),
+    (candidate) =>
+      fileSystem
+        .remove(candidate, { force: true })
+        .pipe(Effect.andThen(fileSystem.remove(`${candidate}.txt`, { force: true }))),
     { discard: true },
   );
 });

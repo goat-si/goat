@@ -2,13 +2,15 @@ import { DEFAULT_SERVER_SETTINGS, type ServerSettingsPatch } from "@goat/contrac
 import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
-import { act } from "react";
+import { useSyncExternalStore, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const { Children, mocks } = vi.hoisted(() => ({
   Children: ({ children }: { children?: ReactNode }) => children,
   mocks: {
+    revision: 0,
+    listeners: new Set<() => void>(),
     branchNaming: { onChange: (_patch: ServerSettingsPatch) => {} },
     updateSettings: vi.fn(),
     alert: vi.fn(),
@@ -138,19 +140,28 @@ vi.mock("./components/BranchNamingSettings", () => ({
   },
 }));
 vi.mock("./settings-environment-filter", () => ({
-  useSettingsEnvironmentFilter: () => ({
-    selectedTargets: mocks.targets,
-    projectGroups: [
-      {
-        key: "project",
-        label: "Project",
-        members: mocks.targets.map((target) => ({
-          project: { environmentId: target.environmentId, id: "project" },
-        })),
+  useSettingsEnvironmentFilter: () => {
+    useSyncExternalStore(
+      (listener) => {
+        mocks.listeners.add(listener);
+        return () => mocks.listeners.delete(listener);
       },
-    ],
-    selectedProjectKey: mocks.projectSelected ? "project" : null,
-  }),
+      () => mocks.revision,
+    );
+    return {
+      selectedTargets: mocks.targets,
+      projectGroups: [
+        {
+          key: "project",
+          label: "Project",
+          members: mocks.targets.map((target) => ({
+            project: { environmentId: target.environmentId, id: "project" },
+          })),
+        },
+      ],
+      selectedProjectKey: mocks.projectSelected ? "project" : null,
+    };
+  },
 }));
 
 import {
@@ -177,6 +188,11 @@ function environment(environmentId: string, label: string) {
   };
 }
 
+function render(element: ReactNode) {
+  mocks.revision++;
+  for (const listener of mocks.listeners) listener();
+  root.render(element);
+}
 let root: Root;
 let container: HTMLDivElement;
 
@@ -199,7 +215,7 @@ describe("maintenance automatic server updates", () => {
   const automaticUpdates = () => button("Automatic server updates");
 
   it("disables the switch until the server advertises the capability", () => {
-    act(() => root.render(<SettingsEnvironmentMaintenanceRouteScreen />));
+    act(() => render(<SettingsEnvironmentMaintenanceRouteScreen />));
     expect(automaticUpdates().disabled).toBe(true);
     expect(automaticUpdates().getAttribute("aria-description")).toBe(
       "Update this server to change this setting.",
@@ -217,7 +233,7 @@ describe("maintenance automatic server updates", () => {
         },
       },
     }));
-    act(() => root.render(<SettingsEnvironmentMaintenanceRouteScreen />));
+    act(() => render(<SettingsEnvironmentMaintenanceRouteScreen />));
     expect(automaticUpdates().disabled).toBe(false);
     expect(automaticUpdates().getAttribute("aria-description")).toBe(
       "When this server runs as a background service, install new releases from its channel while no threads are running. A failed update rolls back.",
@@ -231,7 +247,7 @@ describe("SettingsServerControlsRouteScreen", () => {
     const other: AgentToolListing = shippedDefault === "core" ? "full" : "core";
     const choice = (listing: AgentToolListing) =>
       buttonStartingWith(listing === "core" ? "Core" : "All tools");
-    act(() => root.render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
     expect(choice(shippedDefault).getAttribute("aria-pressed")).toBe("true");
     expect(choice(shippedDefault).textContent).toContain("(default)");
 
@@ -243,14 +259,14 @@ describe("SettingsServerControlsRouteScreen", () => {
 
     // A project has no override for this key, so the choice is not offered there.
     mocks.projectSelected = true;
-    act(() => root.render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
     expect(choice(other).disabled).toBe(true);
   });
 
   it("sends a draft saved during a pending write once that write settles", async () => {
     const pending = Promise.withResolvers<AsyncResult.Success<void>>();
     mocks.updateSettings.mockReturnValueOnce(pending.promise);
-    act(() => root.render(<SettingsEnvironmentSourceControlRouteScreen />));
+    act(() => render(<SettingsEnvironmentSourceControlRouteScreen />));
 
     act(() => mocks.branchNaming.onChange({ branchNamingMode: "custom" }));
     act(() => mocks.branchNaming.onChange({ branchNameInstructions: "Use issue IDs." }));

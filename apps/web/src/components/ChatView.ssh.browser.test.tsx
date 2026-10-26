@@ -44,6 +44,7 @@ vi.mock("../hooks/useEnvironmentDisconnectDelay", async (original) => {
 vi.mock("./chat/MessagesTimeline", async () => {
   const React = await import("react");
   const { resolveTimelineIsAtEnd } = await import("./chat/MessagesTimeline.logic");
+  const { attachTimelineViewport } = await import("./chat/timelineViewport");
   const listsByNode = new WeakMap<HTMLDivElement, LegendListRef>();
   return {
     MessagesTimeline: (props: ComponentProps<typeof MessagesTimeline>) => {
@@ -78,6 +79,12 @@ vi.mock("./chat/MessagesTimeline", async () => {
         state.list = list;
         props.listRef.current = list;
         props.onScrollableNodeChange?.(node);
+        const viewport = node ? attachTimelineViewport(node) : null;
+        const detach = viewport ? props.onViewportAttach?.(viewport) : undefined;
+        return () => {
+          detach?.();
+          viewport?.dispose();
+        };
       };
       if (!version) return null;
       return (

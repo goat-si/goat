@@ -109,7 +109,8 @@ export const make = Effect.gen(function* () {
               isDevelopment: linux.isDevelopment,
               appVersion: Electron.app.getVersion(),
             }).displayName,
-            execTarget: process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() ||
+            execTarget:
+              process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() ||
               process.env.APPIMAGE?.trim() ||
               process.execPath,
             schemes: ElectronProtocol.getDesktopLinkSchemes(linux.isDevelopment),

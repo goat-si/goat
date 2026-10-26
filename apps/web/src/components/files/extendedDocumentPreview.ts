@@ -1,7 +1,4 @@
-import {
-  IMAGE_DIMENSIONS_HEADER_BYTES,
-  readImageDimensions,
-} from "@goat/shared/imageDimensions";
+import { IMAGE_DIMENSIONS_HEADER_BYTES, readImageDimensions } from "@goat/shared/imageDimensions";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { decodeHTMLAttribute, decodeHTMLStrict as decodeEntities } from "entities";
 import type JSZip from "jszip";

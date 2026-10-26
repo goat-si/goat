@@ -24,8 +24,7 @@ const legacyPermissionEnvironmentsAtom = Atom.make((get) =>
   }),
 ).pipe(Atom.withLabel("web-legacy-permission-environments"));
 
-const dismissalKey = (environmentId: EnvironmentId) =>
-  `goat:permission-update:v1:${environmentId}`;
+const dismissalKey = (environmentId: EnvironmentId) => `goat:permission-update:v1:${environmentId}`;
 
 function showPermissionNotice(
   router: AnyRouter,

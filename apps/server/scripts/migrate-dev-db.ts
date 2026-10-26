@@ -523,7 +523,8 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
           WHERE ${rootIsVisible(sql)}`;
       }
       for (const { name } of tables) {
-        if (cleared.has(name) || virtualTables.has(name)) continue;
+        // Contentless message search is rebuilt; contentful FTS tables retain their rows and rowids.
+        if (cleared.has(name) || name === "orchestration_v2_message_search") continue;
         const nullable = threadIdNullable.get(name);
         const predicates: Array<string> = [];
         if (filtered) {

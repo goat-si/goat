@@ -2902,8 +2902,7 @@ it.effect.each(["completed", "failed"] as const)(
     }),
 );
 
-// Background commands keep the consumer alive for the whole session; only the agent's own
-// turn and the children it drives should hold the browser tab focused.
+// Background commands outlive the turn; only the root and its children hold preview focus.
 it.effect.each([
   { name: "ends once the root turn finishes beside background work", openSubagent: false },
   { name: "stays while a run-owned subagent continues", openSubagent: true },
@@ -3325,6 +3324,7 @@ function captureRootRunTermination(input: {
           },
         },
       });
+      yield* input.afterStart?.(ingestionDone) ?? Effect.void;
       yield* Deferred.await(ingestionDone);
       const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
       return !(yield* activity.active(ids.threadId));
@@ -3979,7 +3979,7 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
           );
         yield* service.startRootRun({
           commandId: CommandId.make("remote-inbox"),
-          appThread: { id: ids.threadId } as OrchestrationV2AppThread,
+          appThread: rootAppThread(ids.threadId),
           providerSessionId: ProviderSessionId.make("remote-inbox"),
           session: {
             events: Stream.empty,

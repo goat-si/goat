@@ -60,7 +60,7 @@ export const layer = Layer.effectContext(
       setHub: (environmentId) =>
         catalog.update((document) => setCatalogHub(document, environmentId)),
     });
-    
+
     const githubRoutingPermissions = yield* makePullRequestRoutingPermissions({
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>

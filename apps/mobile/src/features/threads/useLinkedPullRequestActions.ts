@@ -9,10 +9,7 @@ import {
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
 import { planThreadPullRequestMutation } from "@goat/client-runtime/thread-pull-request-compatibility";
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { AuthOrchestrationOperateScope, type ThreadPullRequestLink } from "@goat/contracts";
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useMemo } from "react";

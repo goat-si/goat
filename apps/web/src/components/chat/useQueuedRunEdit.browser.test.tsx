@@ -1,11 +1,5 @@
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
-import {
-  EnvironmentId,
-  MessageId,
-  RunId,
-  ThreadId,
-  type ScopedThreadRef,
-} from "@goat/contracts";
+import { EnvironmentId, MessageId, RunId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import { useImperativeHandle, type RefObject } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 

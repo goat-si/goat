@@ -94,7 +94,6 @@ export function ThreadMarkdownImageView(props: {
     }
   };
 
-
   const sourceSize = decodedSize ?? props.knownSize ?? null;
   const displaySize: MarkdownImageDisplaySize | null =
     sourceSize === null || availableWidth <= 0

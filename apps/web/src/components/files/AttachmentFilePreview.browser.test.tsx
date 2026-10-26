@@ -295,7 +295,7 @@ describe("bounded binary previews", () => {
     );
     await vi.waitFor(() =>
       expect(screen.container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Unable to load image.",
+        "Unable to load workspace image.",
       ),
     );
     await act(() =>

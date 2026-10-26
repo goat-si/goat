@@ -253,8 +253,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 const className = cn(
                   "group flex w-full items-start gap-2.5 rounded-md bg-transparent py-1.5 ps-2 text-left sm:ps-1.5 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
                   isSelected ? "text-foreground" : "text-foreground/70 hover:bg-muted/30",
-                  (disabled || isResponding) && "opacity-50 cursor-not-allowed",
-                  !disabled && !isResponding && "cursor-pointer",
+                  responseDisabled && "opacity-50 cursor-not-allowed",
+                  !responseDisabled && "cursor-pointer",
                 );
                 // The h-5 slots match the label's line box, so the indicator and shortcut stay on its first line.
                 const content = (
@@ -284,7 +284,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                     key={`${activeQuestion.id}:${optionValue}`}
                     type="button"
                     aria-pressed={isSelected}
-                    disabled={disabled || isResponding}
+                    disabled={responseDisabled}
                     onClick={() => {
                       handleOptionSelection(activeQuestion.id, optionValue);
                     }}

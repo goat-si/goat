@@ -37,7 +37,13 @@ describe("resolveUserMessagePresentation", () => {
           },
         },
       }),
-    ).toEqual({ text: "Why?", attribution: "guest", scheduledTaskId: undefined, guestName: "Sam" });
+    ).toEqual({
+      text: "Why?",
+      attribution: "guest",
+      scheduledTaskId: undefined,
+      guestName: "Sam",
+      standingInstructions: null,
+    });
   });
 
   it("attributes older server-sent restart continuations to T3 Code, not another agent", () => {

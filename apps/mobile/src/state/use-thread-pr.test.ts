@@ -57,12 +57,12 @@ function linkedPr(
 
 describe("presentThreadLinkedPullRequests", () => {
   it.each([
-    ["closed", false, "closed", false, "closed", false, "text-pr-closed"],
+    ["closed", false, "closed", false, "closed", false, "text-adaptive-rose-600-400"],
     ["open", true, "open", true, "open", true, "text-foreground-muted"],
     ["open", true, "open", false, "open", false, "text-pr-open"],
     ["closed", false, "open", false, "open", false, "text-pr-open"],
     ["merged", false, "merged", false, "merged", false, "text-pr-merged"],
-    ["closed", false, "merged", false, "closed", false, "text-pr-closed"],
+    ["closed", false, "merged", false, "closed", false, "text-adaptive-rose-600-400"],
   ] as const)(
     "colors linked %s (draft %s) and %s (draft %s) by their aggregate state",
     (firstState, firstDraft, secondState, secondDraft, state, isDraft, textClassName) => {

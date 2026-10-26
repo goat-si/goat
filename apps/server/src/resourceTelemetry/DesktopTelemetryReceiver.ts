@@ -874,10 +874,18 @@ export const layerTest = (
             changes: Stream.empty,
           })),
         ),
-      setDiagnosticsDemand: Effect.fn("DesktopTelemetryReceiver.setDiagnosticsDemand")(function () { return Effect.void; }),
-      requestDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.requestDesktopUpdate")(function () { return Effect.void; }),
-      commitDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.commitDesktopUpdate")(function () { return Effect.void; }),
-      cancelDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.cancelDesktopUpdate")(function () { return Effect.void; }),
+      setDiagnosticsDemand: Effect.fn("DesktopTelemetryReceiver.setDiagnosticsDemand")(function () {
+        return Effect.void;
+      }),
+      requestDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.requestDesktopUpdate")(function () {
+        return Effect.void;
+      }),
+      commitDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.commitDesktopUpdate")(function () {
+        return Effect.void;
+      }),
+      cancelDesktopUpdate: Effect.fn("DesktopTelemetryReceiver.cancelDesktopUpdate")(function () {
+        return Effect.void;
+      }),
       cuaApps: Stream.empty,
       requestCuaApps: () =>
         Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),

@@ -2,10 +2,7 @@ import { usePullRequestConnected } from "./usePullRequestConnected";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import type { PullRequestAction, PullRequestDetail } from "@goat/contracts";
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import Animated from "react-native-reanimated";
 import { PR_ROW_LAYOUT, PR_DISCLOSURE_ENTER, PR_ROW_EXIT } from "./pullRequestAnimations";
 import { useState } from "react";

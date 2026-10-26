@@ -2,10 +2,7 @@ import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@goat/client-runtime/markdown-images";
-import {
-  audioMimeTypeFromExtension,
-  mediaMimeTypeFromExtension,
-} from "@goat/shared/mediaPreview";
+import { audioMimeTypeFromExtension, mediaMimeTypeFromExtension } from "@goat/shared/mediaPreview";
 import { splitFilePathPosition } from "@goat/shared/fileLinks";
 import { parseMarkdownFileLink } from "@goat/shared/markdownLinks";
 import {

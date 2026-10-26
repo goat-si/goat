@@ -587,13 +587,11 @@ export function buildReviewParsedDiff(
   diff: string | null | undefined,
   cacheScope: string,
 ): ReviewParsedDiff {
-  // Only line breaks: a hunk can end in a blank context line, which is a single space.
-  const normalized = diff?.replace(/^\s+/, "").replace(/[\r\n]+$/, "");
-  if (!normalized) {
+  if (!diff?.trim()) {
     return { kind: "empty" };
   }
 
-  const { text, truncated } = splitTruncationMarker(normalized);
+  const { text, truncated } = splitTruncationMarker(diff);
   if (text.length === 0) {
     return { kind: "empty" };
   }

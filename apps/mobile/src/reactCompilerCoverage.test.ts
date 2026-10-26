@@ -16,7 +16,6 @@ const metroConfig: Promise<{ transformer: { babelTransformerPath: string } }> =
 const KNOWN_BAILOUTS: Record<string, string> = {
   "src/components/ComposerAttachmentStrip.tsx": "unsupported syntax",
   "src/components/MediaVideoPlayer.tsx": "??=",
-  "src/components/ui/AndroidAnchoredMenu.tsx": "ref read during render",
   "src/components/ui/Menu.tsx": "ref read during render",
   "src/features/connection/ConnectionsNewRouteScreen.tsx": "try/finally",
   "src/features/decisions/useDecisionInbox.ts": "optional chain in a condition",
@@ -28,9 +27,7 @@ const KNOWN_BAILOUTS: Record<string, string> = {
   "src/features/settings/MemoryProjectSettings.tsx": "try/finally",
   "src/features/settings/MemorySharingSettings.tsx": "try/finally",
   "src/features/settings/SettingsMemoryRouteScreen.tsx": "try/finally",
-  "src/features/terminal/ThreadTerminalRouteScreen.tsx": "ref read during render",
   "src/features/threads/HumanHandoffCard.tsx": "try without catch",
-  "src/features/threads/PendingUserInputCard.tsx": "mutates a frozen value",
   "src/features/threads/ThreadArrangementSheet.tsx": "ref read during render",
   "src/features/threads/ThreadMarkdownImage.tsx": "try/finally",
   "src/features/threads/ThreadRouteScreen.tsx": "try without catch",

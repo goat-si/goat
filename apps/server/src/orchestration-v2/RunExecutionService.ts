@@ -1796,8 +1796,8 @@ export const layer: Layer.Layer<
                 );
               }),
           ),
-          Effect.ensuring(closeEventSubscription),
           Effect.ensuring(endPreviewActivity),
+          Effect.ensuring(closeEventSubscription),
           Effect.forkDetach,
         );
         // A failed start can interrupt the fork before it begins executing

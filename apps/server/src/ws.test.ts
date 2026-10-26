@@ -584,6 +584,17 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
+const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
+  getEnvironmentId: Effect.succeed(EnvironmentId.make("config-test")),
+  getDescriptor: Effect.succeed({
+    environmentId: EnvironmentId.make("config-test"),
+    label: "Config test",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "0.0.0",
+    capabilities: { repositoryIdentity: false },
+  }),
+});
+
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(MemoryService.MemoryService)({
@@ -747,16 +758,7 @@ it.effect(
           scratchRoot: Effect.succeedNone,
           namedProjectsRoot: process.cwd(),
         }),
-        Layer.mock(ServerEnvironment.ServerEnvironment)({
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("config-test")),
-          getDescriptor: Effect.succeed({
-            environmentId: EnvironmentId.make("config-test"),
-            label: "Config test",
-            platform: { os: "linux", arch: "x64" },
-            serverVersion: "0.0.0",
-            capabilities: { repositoryIdentity: false },
-          }),
-        }),
+        layerConfigEnvironment,
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({
           getDescriptor: () =>
             Effect.succeed({
@@ -924,6 +926,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       Layer.mock(UsageLimitSources.UsageLimitSources)({
         current: Effect.succeed([]),
         streamChanges: Stream.make([]),
+        projectProviders: (providers) => Effect.succeed(providers),
       }),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
         resolveTargets: () => Effect.succeed([]),
@@ -933,15 +936,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         scratchRoot: Effect.succeedNone,
         namedProjectsRoot: process.cwd(),
       }),
-      Layer.mock(ServerEnvironment.ServerEnvironment)({
-        getDescriptor: Effect.succeed({
-          environmentId: EnvironmentId.make("config-test"),
-          label: "Config test",
-          platform: { os: "linux", arch: "x64" },
-          serverVersion: "0.0.0",
-          capabilities: { repositoryIdentity: false },
-        }),
-      }),
+      layerConfigEnvironment,
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({
         getDescriptor: () =>
           Effect.succeed({

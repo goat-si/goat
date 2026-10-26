@@ -1,4 +1,7 @@
-import { threadPullRequestKeysEqual, threadPullRequestsOf } from "../../sourceControl/threadPullRequests.ts";
+import {
+  threadPullRequestKeysEqual,
+  threadPullRequestsOf,
+} from "../../sourceControl/threadPullRequests.ts";
 import {
   ChatAttachment,
   OrchestrationMessageContext,

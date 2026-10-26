@@ -96,7 +96,10 @@ vi.mock("./sidebar/SidebarChrome", () => ({
   SidebarCollapsedBrand: () => null,
 }));
 vi.mock("../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
-vi.mock("./sidebar/mainAppLocation", () => ({ MainAppLocationTracker: () => null }));
+vi.mock("./sidebar/mainAppLocation", async (original) => ({
+  ...(await original<typeof import("./sidebar/mainAppLocation")>()),
+  MainAppLocationTracker: () => null,
+}));
 vi.mock("./sidebar/DestinationRail", async () => {
   const { createContext } = await import("react");
   return { DestinationRail: () => null, DestinationRailVisibleContext: createContext(false) };

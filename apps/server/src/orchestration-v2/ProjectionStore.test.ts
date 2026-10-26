@@ -2145,6 +2145,19 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.strictEqual(snapshot.projection.turnItems[0]?.ordinal, 925);
         assert.strictEqual(snapshot.projection.turnItems.at(-1)?.ordinal, 1_000);
       }
+      const setTurnType = (
+        type: "command_execution" | "user_message",
+        start: number,
+        end = start,
+      ) => sql`
+        UPDATE orchestration_v2_projection_turn_items
+        SET type = ${type}, payload_json = json_set(payload_json,
+          '$.type', ${type}, '$.createdBy', 'user', '$.creationSource', 'web',
+          '$.inputIntent', 'turn_start', '$.messageId', turn_item_id, '$.text', 'Turn',
+          '$.attachments', json('[]'))
+        WHERE thread_id = ${threadId} AND ordinal BETWEEN ${start} AND ${end}
+      `;
+      for (const ordinal of [1, 1000]) yield* setTurnType("user_message", ordinal);
       const humanWindow = () =>
         projectionStore.getThreadSnapshotWindow(threadId, {
           rowLimit: 77,
@@ -2155,14 +2168,9 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
       );
       // With the newest user turn 1,000 rows back, the window pages from inside it.
-      const setNewestTurnType = (type: "command_execution" | "user_message") => sql`
-        UPDATE orchestration_v2_projection_turn_items
-        SET type = ${type}, payload_json = json_set(payload_json, '$.type', ${type})
-        WHERE thread_id = ${threadId} AND ordinal = 1000
-      `;
-      yield* setNewestTurnType("command_execution");
+      yield* setTurnType("command_execution", 1000);
       assert.lengthOf((yield* humanWindow()).projection.turnItems, 77);
-      yield* setNewestTurnType("user_message");
+      yield* setTurnType("user_message", 1000);
 
       // Fewer than 75 rows still need a byte pass after materializing wire payloads.
       yield* sql`
@@ -2204,16 +2212,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         WHERE thread_id = ${threadId} AND ordinal BETWEEN 2 AND 70
       `;
 
-      // A targeted page that needs more than 20 human turns must still reach its target
-      // after the byte pass re-bounds it.
-      yield* sql`
-        UPDATE orchestration_v2_projection_turn_items
-        SET type = 'user_message', payload_json = json_set(payload_json,
-          '$.type', 'user_message', '$.createdBy', 'user', '$.creationSource', 'web',
-          '$.inputIntent', 'turn_start', '$.messageId', turn_item_id, '$.text', 'Turn',
-          '$.attachments', json('[]'))
-        WHERE thread_id = ${threadId} AND ordinal BETWEEN 600 AND 624
-      `;
+      // Byte bounds must not cut off a target beyond 20 human turns.
+      yield* setTurnType("user_message", 600, 624);
       const targetedPage = yield* projectionStore.getThreadHistoryPage(
         threadId,
         encodeThreadHistoryCursor({

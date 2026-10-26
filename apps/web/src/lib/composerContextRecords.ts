@@ -1,7 +1,4 @@
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import {
   COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,

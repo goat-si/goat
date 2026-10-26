@@ -161,7 +161,7 @@ describe("RemoteEnvironmentAuthorization with Connect disabled", () => {
       expect(result.socketUrl).toContain("wsTicket=paired-ticket");
       expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
         `${endpoint.httpBaseUrl}.well-known/goat/environment`,
-        `${endpoint.httpBaseUrl}api/auth/websocket-ticket`,
+        `${endpoint.httpBaseUrl}api/auth/websocket-ticket/rpc`,
       ]);
     }).pipe(Effect.scoped),
   );

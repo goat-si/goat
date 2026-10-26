@@ -170,13 +170,13 @@ describe("scoreThreadSearch", () => {
   it("ranks a title holding the words above the app's own branch prefix and project name", () => {
     const busy = { activityAt: NOW, opens: { openedAt: NOW, score: 6, picks: [] } };
     expect(
-      rankTitles("t3 connect", [
+      rankTitles("goat connect", [
         thread("Diagnose Connect provisioning failures", {
           ...busy,
-          branch: "t3/diagnose-connect",
-          projectTitle: "t3code",
+          branch: "goat/diagnose-connect",
+          projectTitle: "goat",
         }),
-        thread("GOAT Connect Tunnel Lifecycle Review", { projectTitle: "t3code" }),
+        thread("GOAT Connect Tunnel Lifecycle Review", { projectTitle: "goat" }),
       ])[0],
     ).toBe("GOAT Connect Tunnel Lifecycle Review");
     expect(
@@ -279,7 +279,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
 
   it("says which field matched when the title does not", () => {
     const subject = thread("Trim model lists", {
-      branch: "t3/cleanup-payloads",
+      branch: "goat/cleanup-payloads",
       pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
     });
     for (const query of ["#22889", "pr 22889", "pr22889", "pull request #22889"]) {

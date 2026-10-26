@@ -1380,7 +1380,7 @@ describe("sidebar delegated children", () => {
     const background = delegatedChild("background", {
       status: "completed",
       activeRunId: null,
-      pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+      pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor", awaited: true }],
     });
     expect(background.runtime?.status).toBe("idle");
     expect(sidebarDelegatedChildState(background)).toBe("working");
@@ -1390,7 +1390,7 @@ describe("sidebar delegated children", () => {
         delegatedChild("background-with-stale-run", {
           status: "completed",
           activeRunId: RunId.make("stale-run"),
-          pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+          pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor", awaited: true }],
         }),
       ),
     ).toBe(false);
@@ -1967,14 +1967,14 @@ describe("Activity Priority", () => {
       "unread",
     ]);
     expect(sortPriorityThreadsForSidebar(threads.toReversed(), ranks)).toEqual(ordered);
-    // A streaming thread's updatedAt moves constantly; it must not reorder rows.
     const streamed = threads.map((candidate) =>
       candidate === attention ? { ...candidate, updatedAt: "2999-01-01T00:00:00.000Z" } : candidate,
     );
     expect(sortPriorityThreadsForSidebar(streamed, ranks).map((thread) => thread.id)).toEqual(
       ordered.map((thread) => thread.id),
     );
-    expect(searchSidebarThreads(ordered, "Thread")).toEqual(ordered);
+    const search = searchSidebarThreads(ordered, "Thread", undefined, Date.parse(after));
+    expect(search.titleMatches).toEqual([childAttention, working, unread, attention, tie]);
     expect(
       resolveAdjacentThreadId({
         threadIds: ordered.map((thread) => thread.id),

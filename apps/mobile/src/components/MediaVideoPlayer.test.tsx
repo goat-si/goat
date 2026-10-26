@@ -42,6 +42,11 @@ vi.mock("expo", async () => {
     },
   };
 });
+vi.mock("expo-audio", () => ({
+  AudioModule: { setAudioSessionOwner: vi.fn() },
+  setAudioModeAsync: vi.fn(async () => {}),
+  setIsAudioActiveAsync: vi.fn(async () => {}),
+}));
 vi.mock("expo-video", () => ({ useVideoPlayer: () => mock.player, VideoView: () => <video /> }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },

@@ -1,8 +1,5 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import type { PullRequestComment } from "@goat/contracts";

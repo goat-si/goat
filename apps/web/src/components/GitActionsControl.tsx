@@ -1725,7 +1725,8 @@ export default function GitActionsControl({
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </ThreadDetailsControl>
-      ) : quietEmptyDraft || (compact && !gitActionProgress && !visibleInlineSuccess && !sshFetchBack.visible) ? null : (
+      ) : quietEmptyDraft ||
+        (compact && !gitActionProgress && !visibleInlineSuccess && !sshFetchBack.visible) ? null : (
         <ActionGroup
           role="group"
           aria-label="Git actions"

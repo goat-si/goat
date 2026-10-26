@@ -13335,45 +13335,29 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           transcript,
           '{"type":"assistant","uuid":"wf-growing-1","message":{"role":"assistant","stop_reason":"end_turn","id":"msg_first","content":[{"type":"text","text":"A2 first turn"}]}}\n',
         );
-        yield* Queue.offer(
-          harness.sdkMessages,
+        yield* harness.offerAndWait(
           workflowSnapshot({ uuid: "00000000-0000-4000-8000-0000000010b1", state: "done" }),
         );
-        yield* harness.awaitUntil(
-          () =>
-            threadMessages(harness.events, secondThreadId).at(-1)?.message.text === "A2 first turn",
-          "partial transcript answer",
+        assert.equal(
+          threadMessages(harness.events, secondThreadId).at(-1)?.message.text,
+          "A2 first turn",
         );
         // The terminal notification reads the same partial answer a second time.
         const notification = workflowNotification({
           uuid: "00000000-0000-4000-8000-0000000010b2",
           status: "completed",
         });
-        yield* Queue.offer(harness.sdkMessages, notification);
-        yield* harness.awaitUntil(
-          () =>
-            harness.events.some(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.type === "subagent" &&
-                event.turnItem.nativeItemRef?.nativeId === WORKFLOW_TASK_ID &&
-                event.turnItem.status === "completed",
-            ),
-          "terminal workflow notification",
+        yield* harness.offerAndWait(notification);
+        assert.equal(
+          workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+          "completed",
         );
         NodeFS.appendFileSync(
           transcript,
           '{"type":"assistant","uuid":"wf-growing-2","message":{"role":"assistant","stop_reason":"end_turn","id":"msg_second","content":[{"type":"text","text":"A2 second turn"}]}}\n',
         );
-        yield* Queue.offer(
-          harness.sdkMessages,
+        yield* harness.offerAndWait(
           claudeSdkFrame({ ...notification, uuid: "00000000-0000-4000-8000-0000000010b3" }),
-        );
-        yield* harness.awaitUntil(
-          () =>
-            threadMessages(harness.events, secondThreadId).at(-1)?.message.text ===
-            "A2 second turn",
-          "appended terminal transcript answer",
         );
         // Each transcript line is its own message; the reread adds only the new one.
         assert.deepEqual(

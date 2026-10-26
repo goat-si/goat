@@ -8,7 +8,6 @@ import {
   releaseAgentAwarenessRelayTokenProvider,
   setAgentAwarenessRelayTokenProvider,
 } from "../agent-awareness/remoteRegistration";
-import { CloudAuthProvider } from "./CloudAuthProvider";
 
 vi.mock("expo-constants", () => ({
   default: {
@@ -56,6 +55,7 @@ vi.mock("../agent-awareness/remoteRegistration", () => ({
 it("mounts local children without Clerk or token reads and retains persisted registration", async () => {
   const readClerkToken = vi.fn(async () => "old-token");
   setManagedRelaySession(appAtomRegistry, { accountId: "old-account", readClerkToken });
+  const { CloudAuthProvider } = await import("./CloudAuthProvider");
   const container = document.createElement("div");
   const root = createRoot(container);
   try {

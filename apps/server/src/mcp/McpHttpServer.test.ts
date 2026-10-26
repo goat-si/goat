@@ -494,12 +494,12 @@ it.effect.each(["limit", "runLimit", "maxCharsPerItem"])(
   },
 );
 
-it("keeps cross-tool routing out of the delegate_task description", () => {
+it("keeps GOAT task isolation and completion guidance in the delegate_task description", () => {
   const description = OrchestratorToolkit.tools.delegate_task.description ?? "";
-  expect(description).toContain("Start one child agent with only `task`");
-  // Review rounds, follow-ups, and polling are routed in the system text.
-  expect(description).not.toContain("t3_thread_send");
-  expect(description).not.toContain("Do not poll");
+  expect(description).toContain("Delegate a child task");
+  expect(description).toContain("GOAT-managed checkout");
+  expect(description).toContain("Completion wakes this thread");
+  expect(description).not.toContain("goat_thread_send");
   expect(description).not.toContain("Prefer native");
 });
 
@@ -519,8 +519,8 @@ it.effect(
       const linkTool = server.tools.find(({ tool }) => tool.name === "goat_pull_request_link");
       expect(linkTool?.tool.annotations?.idempotentHint).toBe(true);
       expect(linkTool?.tool.annotations?.openWorldHint).toBe(false);
-      expect(linkTool?.tool.description).toContain("Link a PR to this thread");
-      expect(linkTool?.tool.description).toContain("settles the thread on merge");
+      expect(linkTool?.tool.description).toContain("Register every pull request you open");
+      expect(linkTool?.tool.description).toContain("link every layer");
 
       const denied = yield* server
         .callTool({ name: "goat_pull_request_list", arguments: {} })
@@ -851,7 +851,6 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(clickTool?.tool.outputSchema).toMatchObject({
         type: "object",
         additionalProperties: true,
-        description: "The preview action completed successfully.",
       });
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "goat_preview_navigate");

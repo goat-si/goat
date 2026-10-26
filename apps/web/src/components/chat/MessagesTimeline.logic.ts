@@ -7,10 +7,7 @@ import * as Equal from "effect/Equal";
 import { assistantCitationLabel, collectAssistantCitations } from "@goat/shared/assistantCitations";
 import { shallow } from "zustand/vanilla/shallow";
 import { claudeResumeCompactionAge } from "@goat/shared/claudeCompaction";
-import {
-  IDLE_COMPACTING_LABELS,
-  IDLE_COMPACTION_TITLES,
-} from "@goat/client-runtime/user-message";
+import { IDLE_COMPACTING_LABELS, IDLE_COMPACTION_TITLES } from "@goat/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@goat/client-runtime/handoff";
 import { renderCodexDirectivesForCopy } from "@goat/shared/codexMarkdownDirectives";
 import {

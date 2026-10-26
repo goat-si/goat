@@ -6,7 +6,7 @@ import { builtInSkillSections } from "./builtinSkills/registry.ts";
  */
 export const GOAT_PULL_REQUEST_INSTRUCTIONS = `## GOAT pull requests
 
-Register every pull request you create or work on, each layer of a stack included, with \`pull_request.link\` and its full URL; gh and other CLIs do not register it. Before finishing PR work, check \`pull_request.list\` and link what is missing, and report a failed link instead of claiming it. A delegated task returns PR URLs, head SHA, and check state to its parent instead of watching. Asked to monitor a PR, run \`pull_request.watch\` and end the turn; GOAT wakes you on its events. Run \`pull_request.unwatch\` when you hand the work back.`;
+Link each PR you create, take over, or push to: one goat_pull_request_link per PR, full URL, every stack layer, as your next call. CLIs do not link for you. If linking fails, say so. Skip PRs you only read or review, or background PRs. Call goat_pull_request_watch when asked to monitor or babysit, or when work you were asked to do, such as a merge, still waits on checks or reviews, even after an earlier unwatch. Update and push the branch first, then watch and end your turn. Otherwise act now or hand back. Delegated children never watch, even if the brief says babysit. After PR work, a child's last line is: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. Never wait with sleep, loops, or gh --watch. At handback, call goat_pull_request_unwatch for watched PRs.`;
 
 /**
  * GOAT's built-in computer use skill for this host, attached only when the turn actually has the

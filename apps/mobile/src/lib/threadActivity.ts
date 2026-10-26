@@ -86,10 +86,7 @@ import {
   mcpAppFromToolItem,
 } from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
-import {
-  IDLE_COMPACTION_TITLES,
-  IDLE_COMPACTING_LABELS,
-} from "@goat/client-runtime/user-message";
+import { IDLE_COMPACTION_TITLES, IDLE_COMPACTING_LABELS } from "@goat/client-runtime/user-message";
 
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 

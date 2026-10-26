@@ -111,19 +111,21 @@ const layerBase: Layer.Layer<EventStoreV2, never, OrchestrationEventStore.Orches
         // Every event the log keeps, projects and publishes passes here, and agent output in any of
         // them may carry the agent's GOAT credential.
         append: Effect.fn("EventStoreV2.append")(function (input) {
-            return applicationEvents.appendAgentEvents({ ...input, events: redactGoatCredentialsDeep(input.events) }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new EventStoreAppendEventsError({
-                  eventCount: input.events.length,
-                  cause,
-                }),
-            ),
-          );
+          return applicationEvents
+            .appendAgentEvents({ ...input, events: redactGoatCredentialsDeep(input.events) })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new EventStoreAppendEventsError({
+                    eventCount: input.events.length,
+                    cause,
+                  }),
+              ),
+            );
         }),
         appendProjectEvent: Effect.fn("EventStoreV2.appendProjectEvent")(function (event) {
           return applicationEvents
-              .appendProjectEvent(redactGoatCredentialsDeep(event))
+            .appendProjectEvent(redactGoatCredentialsDeep(event))
             .pipe(
               Effect.mapError((cause) => new EventStoreAppendEventsError({ eventCount: 1, cause })),
             );

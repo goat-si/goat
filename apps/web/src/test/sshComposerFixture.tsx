@@ -78,7 +78,8 @@ vi.mock("/src/hooks/useSettings", async (original) => ({
   useClientSettingsHydrated: () => true,
 }));
 vi.mock("/src/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
-vi.mock("/src/hooks/useTheme", () => ({
+vi.mock("/src/hooks/useTheme", async (original) => ({
+  ...(await original<typeof import("~/hooks/useTheme")>()),
   useTheme: () => ({ resolvedTheme: "light" }),
   useRenderedAppearance: () => "light",
 }));

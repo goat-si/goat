@@ -50,7 +50,7 @@ interface TimelineAnchor {
 
 /** One visit to a thread; a switch starts a new one from the remembered position. */
 interface TimelineFollowVisit {
-  readonly threadKey: string | null;
+  readonly threadKey: string;
   readonly followEnd: boolean;
 }
 
@@ -187,13 +187,13 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     setTimelineAnchor,
   } = input;
   const [visitState, setVisit] = useState<TimelineFollowVisit>({
-    threadKey: activeThreadKey,
+    threadKey: routeThreadKey,
     followEnd: true,
   });
   let visit = visitState;
-  if (visit.threadKey !== activeThreadKey) {
+  if (visit.threadKey !== routeThreadKey) {
     visit = {
-      threadKey: activeThreadKey,
+      threadKey: routeThreadKey,
       followEnd: readTimelinePosition(routeThreadKey)?.atEnd !== false,
     };
     setVisit(visit);
@@ -332,9 +332,11 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   };
   const onComposerPageScrollReleaseStable = useStableCallback(onComposerPageScrollRelease);
   const scrollToEndFrameRef = useRef<number | null>(null);
+  const pendingScrollToEndRef = useRef<object | null>(null);
   const cancelPendingScrollToEnd = () => {
     if (scrollToEndFrameRef.current !== null) cancelAnimationFrame(scrollToEndFrameRef.current);
     scrollToEndFrameRef.current = null;
+    pendingScrollToEndRef.current = null;
   };
   // A frame scheduled on one thread cannot scroll the list after a route switch.
   // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Cleanup belongs to the route that scheduled the frame.
@@ -350,8 +352,12 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     // The anchored end space must be gone before the scroll measures, or the
     // list lands short of the real end.
     const list = legendListRef.current;
+    const request = {};
+    pendingScrollToEndRef.current = request;
     scrollToEndFrameRef.current = requestAnimationFrame(() => {
+      if (pendingScrollToEndRef.current !== request) return;
       scrollToEndFrameRef.current = null;
+      pendingScrollToEndRef.current = null;
       if (!list || legendListRef.current !== list || readCurrentFollow().mode !== "following")
         return;
       void Promise.resolve(
@@ -523,7 +529,12 @@ export function useTimelineFollow(input: TimelineFollowInput) {
       return;
     }
     const { before, after } = followStore.dispatch(visit, {
-      type: isAtEnd ? "reachedEnd" : "leftEnd",
+      type:
+        isAtEnd && scroll.intent === "toward-end"
+          ? "followEnd"
+          : isAtEnd
+            ? "reachedEnd"
+            : "leftEnd",
     });
     if (after === before) return;
     if (after.mode === "following") {

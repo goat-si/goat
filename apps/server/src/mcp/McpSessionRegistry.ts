@@ -398,6 +398,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             threadId: ThreadId.make(request.threadId),
             providerSessionId,
             providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+            subagent: request.subagent === true,
           },
           client: undefined,
           capabilities: new Set<McpInvocationContext.McpCapability>([

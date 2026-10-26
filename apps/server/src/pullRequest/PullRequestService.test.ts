@@ -1388,6 +1388,7 @@ it.effect(
           providers: [
             fakePullRequestProvider(SourceControlProviderKind.make("github"), {
               runAction,
+              getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
               getChangeRequestSummary: () =>
                 Effect.succeed(changeRequest(1, "2026-09-03T00:00:00Z")),
               ...(rewrites ? { mergeMessageRewrite: (message: string) => message } : {}),
@@ -1418,6 +1419,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
         ],
         providers: [
           fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
             getChangeRequestSummary: () =>
               confirmationFails
                 ? Effect.fail(
@@ -1475,6 +1477,7 @@ it.effect("refreshes every reader before a queued merge confirmation finishes", 
         ],
         providers: [
           fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
             getChangeRequestSummary: () =>
               Effect.gen(function* () {
                 yield* Deferred.succeed(confirmationStarted, undefined);
@@ -2162,6 +2165,11 @@ it.effect("routes Azure reads and writes through the requested organization's ch
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("azure-devops"), {
           ...keyedByCanonicalKey,
+          getChangeRequest: (input) =>
+            Effect.sync(() => {
+              seen.push(`hold ${input.cwd} ${input.repository}`);
+              return { ...hostedChangeRequest(""), number: input.number };
+            }),
           getChangeRequestSummary: (input) =>
             Effect.sync(() => {
               seen.push(`read ${input.cwd} ${input.repository}`);
@@ -2182,7 +2190,12 @@ it.effect("routes Azure reads and writes through the requested organization's ch
     };
     yield* service.summary(reference, { recoverTransientFailure: false });
     yield* service.runAction({ ...reference, action: "merge" });
-    assert.deepStrictEqual(seen, ["read /org-b web", "write /org-b web", "read /org-b web"]);
+    assert.deepStrictEqual(seen, [
+      "read /org-b web",
+      "hold /org-b web",
+      "write /org-b web",
+      "read /org-b web",
+    ]);
   }),
 );
 
@@ -2229,6 +2242,11 @@ it.effect.each([
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("azure-devops"), {
           ...keyedByCanonicalKey,
+          getChangeRequest: (input) =>
+            Effect.sync(() => {
+              seen.push(`hold ${input.cwd} ${input.repository}`);
+              return { ...hostedChangeRequest(""), number: input.number };
+            }),
           getChangeRequestSummary: (input) =>
             Effect.sync(() => {
               seen.push(`read ${input.cwd} ${input.repository}`);
@@ -2249,7 +2267,12 @@ it.effect.each([
     };
     yield* service.summary(reference, { recoverTransientFailure: false });
     yield* service.runAction({ ...reference, action: "merge" });
-    assert.deepStrictEqual(seen, ["read /target web", "write /target web", "read /target web"]);
+    assert.deepStrictEqual(seen, [
+      "read /target web",
+      "hold /target web",
+      "write /target web",
+      "read /target web",
+    ]);
   }),
 );
 
@@ -3854,6 +3877,7 @@ const environmentViewedProvider = (
     },
     getFilesViewed: () => Effect.die("the host keeps no marks of its own"),
     setFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+    getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
     getChangeRequestSummary: () => Effect.succeed(changeRequest(1, "2026-07-02T00:00:00Z")),
     getFileRevisions: (input) => {
       asked.push(input.paths);

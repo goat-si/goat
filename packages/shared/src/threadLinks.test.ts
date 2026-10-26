@@ -100,7 +100,7 @@ describe("thread links", () => {
 
   it("writes the thread id verbatim so the link opens that exact thread", () => {
     const link = formatThreadLink("thread:delegated-task:mcp%3A1", "Fix");
-    expect(link).toBe("[Fix](t3-thread://v1/thread:delegated-task:mcp%3A1)");
+    expect(link).toBe("[Fix](goat-thread://v1/thread:delegated-task:mcp%3A1)");
     expect(parseThreadLinkHref(link.slice(link.indexOf("](") + 2, -1))).toBe(
       "thread:delegated-task:mcp%3A1",
     );

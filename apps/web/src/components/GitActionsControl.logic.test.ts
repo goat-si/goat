@@ -1,4 +1,9 @@
-import { EnvironmentId, ThreadId, SourceControlProviderKind, type VcsStatusResult } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  SourceControlProviderKind,
+  type VcsStatusResult,
+} from "@goat/contracts";
 import {
   SshConnectionTarget,
   SshConnectionProfile,

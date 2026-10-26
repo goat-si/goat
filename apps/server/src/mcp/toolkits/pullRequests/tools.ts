@@ -298,7 +298,8 @@ const WatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.watch"
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.watch"]))
+})
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.watch"]))
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 const UnwatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unwatch"].name, {
@@ -307,7 +308,8 @@ const UnwatchPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unwa
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
   dependencies,
-}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unwatch"]))
+})
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unwatch"]))
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromSubagents);
 
 const GuideTarget = Schema.Struct({

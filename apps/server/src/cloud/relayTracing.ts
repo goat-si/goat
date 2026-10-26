@@ -1,7 +1,4 @@
-import {
-  nodeProcessRuntimeAttributes,
-  processServiceInstanceId,
-} from "@goat/shared/observability";
+import { nodeProcessRuntimeAttributes, processServiceInstanceId } from "@goat/shared/observability";
 import * as RelayTracing from "@goat/shared/relayTracing";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

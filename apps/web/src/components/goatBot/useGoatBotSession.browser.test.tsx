@@ -141,7 +141,7 @@ vi.mock("~/state/environments", async (importOriginal) => ({
       .map((entry) => entry.environmentId);
   },
 }));
-vi.mock("~/hooks/useMediaQuery", () => ({ useIsMobile: () => false }));
+vi.mock("~/hooks/useMediaQuery", () => ({ useIsMobile: () => false, useMediaQuery: () => false }));
 vi.mock("~/hooks/useSettings", async (importOriginal) => {
   const { DEFAULT_CLIENT_SETTINGS } = await import("@goat/contracts/settings");
   return {

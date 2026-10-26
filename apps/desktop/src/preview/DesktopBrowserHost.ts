@@ -352,7 +352,6 @@ export const make = Effect.gen(function* () {
           // A child session's screencast is not the page's, such as a late one on a detached session.
           if (sessionId === undefined && method === "Page.startScreencast") {
             tab.screencasts.add(owner);
-            if (owner !== undefined) streamingOwners.add(owner);
           } else if (sessionId === undefined && method === "Page.stopScreencast") {
             tab.screencasts.delete(owner);
           }
@@ -393,6 +392,9 @@ export const make = Effect.gen(function* () {
         sessionDetached: (owner) => {
           detachedOwners.add(owner);
           dropSessionHolds(tab, owner);
+        },
+        screencastRequested: (owner) => {
+          streamingOwners.add(owner);
         },
         targetId: () =>
           debuggee

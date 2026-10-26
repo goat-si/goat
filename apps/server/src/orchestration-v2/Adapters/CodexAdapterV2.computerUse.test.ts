@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
-import { TestClock } from "effect/testing";
+import * as Stream from "effect/Stream";
 
 import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
@@ -308,7 +308,7 @@ describe("Codex computer use attachment", () => {
             { threadId: root, objective: "turn-1", status: "paused" },
             { goal: goal(0, "paused") },
           );
-          yield* f.turnStart(5, 1, true);
+          yield* f.turnStart(5, 1, true, false, root, "Start working toward this goal: turn-1");
           request(6, "thread/goal/set", { threadId: root, status: "active" }, { goal: goal(0) });
           notice("thread/goal/updated", { threadId: root, turnId: "turn-1", goal: goal(0) });
           f.turnCompleted(1);
@@ -332,9 +332,11 @@ describe("Codex computer use attachment", () => {
           });
           const replay = yield* f.open;
           yield* replay.startTurn(1, "/goal turn-1");
-          while ((yield* replay.goalTokens) !== 11) {}
-          yield* TestClock.adjust("5 seconds");
-          yield* replay.terminal;
+          yield* replay.goalUpdates.pipe(
+            Stream.filter((tokens) => tokens === 11),
+            Stream.take(1),
+            Stream.runDrain,
+          );
           yield* sessions.set(withCua("control:b"));
           yield* replay.startTurn(3);
           assert.deepEqual(

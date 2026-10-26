@@ -9,7 +9,10 @@ import {
   type ThreadPullRequestWatch,
 } from "@goat/contracts";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
-import { normalizeThreadPullRequestKey, threadPullRequestKeyOf } from "../sourceControl/threadPullRequests.ts";
+import {
+  normalizeThreadPullRequestKey,
+  threadPullRequestKeyOf,
+} from "../sourceControl/threadPullRequests.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";

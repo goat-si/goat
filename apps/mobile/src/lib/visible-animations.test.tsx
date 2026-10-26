@@ -1,4 +1,4 @@
-import { act, createElement, useState, useSyncExternalStore, type ReactNode } from "react";
+import { act, createElement, useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -42,43 +42,22 @@ vi.mock("react-native", () => ({
     },
   },
 }));
-vi.mock("react-native-reanimated", () => ({
-  default: {
-    View: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
-  },
-  useSharedValue: (initial: number) =>
-    useState(() => {
-      let value: unknown = initial;
-      const shared = {
-        get value() {
-          return value;
-        },
-        set value(next: unknown) {
-          value = next;
-          if (next === "repeating") h.running.add(shared);
-          else h.running.delete(shared);
-        },
-      };
-      return shared;
-    })[0],
-  useAnimatedStyle: () => ({}),
-  withRepeat: (...args: unknown[]) => {
-    h.repeat(...args);
-    return "repeating";
-  },
-  withTiming: () => "timing",
-  cancelAnimation: (value: object) => {
-    h.cancel(value);
-    h.running.delete(value);
-  },
-  Easing: { out: (value: unknown) => value, inOut: (value: unknown) => value, cubic: 0, quad: 0 },
-  ReduceMotion: { System: "system" },
-}));
-vi.mock("../features/settings/appearance/AppearancePreferencesProvider", () => ({
-  useAppearancePreferences: () => ({ themeAppearance: "dark", themeVariables: {} }),
-}));
-vi.mock("./mobileTheme", () => ({ themeColorWithAlpha: () => "transparent" }));
-import { ConnectionStatusDot } from "../features/connection/ConnectionStatusDot";
+import { useVisibleAnimation } from "./use-visible-animation";
+
+function AnimationHarness() {
+  const visible = useVisibleAnimation();
+  useEffect(() => {
+    if (!visible) return;
+    const animation = {};
+    h.repeat();
+    h.running.add(animation);
+    return () => {
+      h.cancel();
+      h.running.delete(animation);
+    };
+  }, [visible]);
+  return null;
+}
 
 let root: Root;
 beforeEach(() => {
@@ -97,7 +76,7 @@ afterEach(() => {
   expect(h.motionListeners.size).toBe(0);
 });
 async function mount() {
-  await act(async () => root.render(<ConnectionStatusDot state="reconnecting" pulse />));
+  await act(async () => root.render(<AnimationHarness />));
 }
 function app(state: string) {
   act(() => {
@@ -118,7 +97,7 @@ function motion(value: boolean) {
   });
 }
 
-describe("connection status dot animation lifecycle", () => {
+describe("visible animation lifecycle", () => {
   it("cancels on background/inactive and restarts on active", async () => {
     await mount();
     expect(h.running.size).toBe(1);

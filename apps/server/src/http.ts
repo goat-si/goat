@@ -246,6 +246,9 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   let status = 200;
   let offset = 0n;
   let bytesToRead: bigint | undefined;
+  let rangeSize = mediaInfo?.size;
+  let ifRangeMatches = ifRangeHeader === undefined;
+  headers["Accept-Ranges"] = "bytes";
   if (isMedia) {
     const fs = yield* FileSystem.FileSystem;
     const info = mediaInfo
@@ -276,7 +279,6 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
       remainingSeconds > 0
         ? `private, max-age=${remainingSeconds}, must-revalidate`
         : "private, no-store";
-    headers["Accept-Ranges"] = "bytes";
     // A guarded descriptor pins the inode, and its size, mtime and ctime identify the bytes it
     // serves, so that ETag is strong. Unguarded metadata stays weak: revalidation only.
     if (mtime !== null) {
@@ -290,31 +292,36 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     }
     // If-Range joins bytes from two reads, so it needs an exact strong ETag match. Dates and weak
     // ETags fall back to the full body.
-    const ifRangeMatches =
+    rangeSize = info.size;
+    ifRangeMatches =
       ifRangeHeader === undefined ||
       (info.strong && headers.ETag !== undefined && ifRangeHeader.trim() === headers.ETag);
-    if (method === "GET" && rangeHeader && ifRangeMatches) {
-      const range = assetByteRange(rangeHeader, info.size);
-      if (range?._tag === "Unsatisfiable") {
-        return HttpServerResponse.empty({
-          status: 416,
-          headers: {
-            ...headers,
-            "Cache-Control": "private, no-store",
-            "Content-Range": `bytes */${info.size}`,
-          },
-        });
-      }
-      if (range?._tag === "Range") {
-        status = 206;
-        offset = range.offset;
-        bytesToRead = range.bytesToRead;
-        headers["Content-Range"] = range.contentRange;
-      }
-    }
     if (method === "HEAD") {
       headers["Content-Length"] = String(info.size);
       return HttpServerResponse.empty({ status, headers });
+    }
+  }
+  if (method === "GET" && rangeHeader && ifRangeMatches) {
+    if (rangeSize === undefined) {
+      const fs = yield* FileSystem.FileSystem;
+      rangeSize = (yield* fs.stat(asset.path)).size;
+    }
+    const range = assetByteRange(rangeHeader, rangeSize);
+    if (range?._tag === "Unsatisfiable") {
+      return HttpServerResponse.empty({
+        status: 416,
+        headers: {
+          ...headers,
+          "Cache-Control": "private, no-store",
+          "Content-Range": `bytes */${rangeSize}`,
+        },
+      });
+    }
+    if (range?._tag === "Range") {
+      status = 206;
+      offset = range.offset;
+      bytesToRead = range.bytesToRead;
+      headers["Content-Range"] = range.contentRange;
     }
   }
   if (mediaFile && mediaInfo) {

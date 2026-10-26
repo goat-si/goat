@@ -1,3 +1,4 @@
+import "../../testing/decisionNativeHarness";
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
@@ -119,7 +120,9 @@ vi.mock("../../state/threads", async () => {
     get.addFinalizer(() => fixture.activeItems--);
     return get(detail);
   }).pipe(Atom.setIdleTTL(0));
+  const settledShelf = Atom.make(new Map());
   return {
+    olderSettledThreads: { shelfAtom: () => settledShelf },
     decisionInbox: { itemsAtom: fixture.items, summaryAtom: fixture.summary },
     threadEnvironment: { respondToApproval: "approval", respondToUserInput: "userInput" },
     environmentThreads: { stateAtom },
@@ -225,6 +228,10 @@ vi.mock("@react-navigation/native", () => ({
   }),
   useFocusEffect: () => {},
 }));
+vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
+  useSelectWorkspaceDetail: () => (detail: { name: string; params?: ScopedThreadRef }) =>
+    fixture.navigate(detail.name, detail.params),
+}));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: ScopedThreadRef | null) =>
     ref ? { title: `Thread ${ref.threadId}` } : null,
@@ -235,17 +242,6 @@ vi.mock("../../state/use-remote-environment-registry", () => ({
   useSavedRemoteConnection: (id: EnvironmentId | null) =>
     id ? { environmentLabel: `Environment ${id}` } : null,
   useSavedRemoteConnections: () => ({ savedConnectionsById: {} }),
-}));
-vi.mock("react-native-reanimated", () => ({
-  default: { View: Box },
-  Easing: { out: (value: unknown) => value, cubic: "cubic" },
-  FadeInUp: { duration: () => ({ easing: () => undefined }) },
-  FadeOutDown: { duration: () => ({ easing: () => undefined }) },
-  LinearTransition: { duration: () => undefined },
-  useAnimatedStyle: () => ({}),
-  useDerivedValue: (value: () => number) => ({ value: value() }),
-  useSharedValue: (value: number) => ({ value }),
-  withTiming: (value: number) => value,
 }));
 vi.mock("../../components/ui/ControlPill", () => ({
   ControlPill: PressHost,
@@ -988,7 +984,7 @@ vi.mock("../../components/ui/FloatingActionButton", () => ({
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../../components/CompactBrandTitle", () => ({ CompactBrandTitle: () => null }));
 vi.mock("../../state/queries", () => ({
-  useThreadSearch: () => ({ matches: [], isPending: false }),
+  useThreadSearch: (_ids: unknown, query: string) => ({ matches: [], query, isPending: false }),
 }));
 vi.mock("../../state/thread-order", () => ({ usePendingThreadOrder: () => null }));
 vi.mock("../../state/use-thread-outbox", () => ({ useQueuedThreadKeys: () => new Set() }));

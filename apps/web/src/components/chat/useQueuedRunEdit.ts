@@ -1,8 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  makeQueuedRunEditStore,
-  makeQueuedRunsAtom,
-} from "@goat/client-runtime/queued-run-edit";
+import { makeQueuedRunEditStore, makeQueuedRunsAtom } from "@goat/client-runtime/queued-run-edit";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,

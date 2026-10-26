@@ -54,7 +54,7 @@ const approval = homeThread("approval", {
   },
 });
 const background = homeThread("background", {
-  pendingBackgroundTasks: [{ taskId: "watcher", kind: "monitor" }],
+  pendingBackgroundTasks: [{ taskId: "watcher", kind: "monitor", awaited: true }],
 });
 const finished = homeThread("finished");
 const subagent = homeThread("subagent", {

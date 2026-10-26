@@ -4629,7 +4629,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly status: OrchestrationV2Subagent["status"];
               readonly attempt: number;
               readonly transcriptReadAttempts: number;
-              readonly finalTranscriptRead: boolean;
               readonly agentId: string | undefined;
               readonly transcriptCursor: WorkflowAgentTranscriptCursor;
               readonly nextItemOrdinal: number;
@@ -5924,9 +5923,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               settled &&
               transcriptDir !== undefined &&
               agentId !== undefined &&
-              (input.coordinator.task.status === "running"
-                ? (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3
-                : restarted || previous?.finalTranscriptRead !== true);
+              (input.coordinator.task.status !== "running" ||
+                (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3);
             const readLiveTranscript =
               status === "running" && transcriptDir !== undefined && agentId !== undefined;
             if (!changed && !readTranscript && !readLiveTranscript) continue;
@@ -6166,13 +6164,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 transcriptReadAttempts:
                   (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
-                finalTranscriptRead:
-                  (!restarted && previous?.finalTranscriptRead === true) ||
-                  (readTranscript &&
-                    transcriptRead &&
-                    transcriptDrained &&
-                    textShown &&
-                    input.coordinator.task.status !== "running"),
                 transcriptCursor,
                 nextItemOrdinal,
                 toolCalls,

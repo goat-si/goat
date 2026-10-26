@@ -226,7 +226,11 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
           sections.map((section) => (
             <SettingsSection key={section.title ?? "tabs"} title={section.title}>
               {section.rows.map(({ id, element, ...row }) =>
-                element === undefined ? <SettingsRow key={id} {...row} /> : <View key={id}>{element}</View>,
+                element === undefined ? (
+                  <SettingsRow key={id} {...row} />
+                ) : (
+                  <View key={id}>{element}</View>
+                ),
               )}
             </SettingsSection>
           ))
@@ -307,14 +311,12 @@ function useSettingsIndexSections(): SettingsListSection[] {
     {
       title: "Server settings",
       rows: [
-        ...selectedTargets.map(
-          (target): SettingsListRow => ({
-            id: `memory-${target.environmentId}`,
-            icon: "brain",
-            label: "Memory",
-            element: <MemoryEnvironmentEntry environmentId={target.environmentId} />,
-          }),
-        ),
+        ...selectedTargets.map((target): SettingsListRow => ({
+          id: `memory-${target.environmentId}`,
+          icon: "brain",
+          label: "Memory",
+          element: <MemoryEnvironmentEntry environmentId={target.environmentId} />,
+        })),
         serverPage("SettingsProviderAccounts", "person.crop.circle", "Provider accounts"),
         serverPage("SettingsEnvironmentNewThreads", "text.bubble", "New threads"),
         serverPage("SettingsEnvironmentSourceControl", "arrow.triangle.branch", "Source control"),

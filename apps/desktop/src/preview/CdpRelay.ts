@@ -14,6 +14,8 @@ export interface CdpRelayTarget {
     owner?: string,
   ) => Promise<unknown>;
   readonly sessionDetached?: (owner: string) => void;
+  /** Shared native starts omit owners; report each viewer before its input can arrive. */
+  readonly screencastRequested?: (owner: string) => void;
   /** The page's own CDP target id; Playwright keys the main frame by it. */
   readonly targetId: () => Promise<string>;
   readonly url: () => string;
@@ -150,6 +152,7 @@ export function createCdpRelayConnection(
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
     const viewer = command.sessionId ?? PAGE_SESSION_ID;
     const child = sessions.get(viewer) === "page" ? undefined : viewer;
+    const owner = child === undefined && viewer !== PAGE_SESSION_ID ? viewer : undefined;
     // The page itself is already running, but its child frames are not:
     // Playwright auto-attaches with waitForDebuggerOnStart, so Chromium pauses
     // every new cross-site iframe and worker until this reaches it. Swallowing
@@ -160,6 +163,7 @@ export function createCdpRelayConnection(
     if (child === undefined) {
       switch (command.method) {
         case "Page.startScreencast":
+          if (owner !== undefined) target.screencastRequested?.(owner);
           return screencast.start(viewer, command.params ?? {}).then(() => ({}));
         case "Page.stopScreencast":
           return screencast.stop(viewer).then(() => ({}));
@@ -169,7 +173,7 @@ export function createCdpRelayConnection(
       }
     }
     if (command.method === "Emulation.setFocusEmulationEnabled") return Promise.resolve({});
-    return target.send(command.method, command.params ?? {}, child, viewer);
+    return target.send(command.method, command.params ?? {}, child, owner);
   };
 
   return {

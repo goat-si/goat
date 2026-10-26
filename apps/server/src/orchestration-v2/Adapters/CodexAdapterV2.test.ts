@@ -290,6 +290,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
+  const mcpKeys = ["goat_code_runtime", "goat_code_tools", "goat_code_orchestration_01"];
   it.effect.each([undefined, false, true])(
     "selects native collaboration modes without prompt overrides with hasGoatMcp=%s",
     (hasGoatMcp) =>
@@ -318,7 +319,11 @@ describe("CodexAdapterV2 runtime policy", () => {
               },
             });
             assert.equal(params.effort, reasoningEffort);
-            assert.equal(params.additionalContext !== undefined, hasGoatMcp === true);
+            const context = params.additionalContext;
+            assert.deepInclude(context, buildCodexDevelopmentContext());
+            for (const key of mcpKeys) {
+              assert.equal(context?.[key] !== undefined, hasGoatMcp === true);
+            }
           }
         }
       }),
@@ -3309,6 +3314,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   input: [{ type: "text", text: "Continue where you left off." }],
                   cwd: "/workspace",
                   model: "gpt-5.4",
+                  collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
+                  additionalContext: buildCodexDevelopmentContext(),
                   approvalPolicy: "never",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
@@ -5091,6 +5098,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             input,
             cwd: "/workspace",
             model: "gpt-5.4",
+            collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
+            additionalContext: buildCodexDevelopmentContext(),
             approvalPolicy: "never",
             approvalsReviewer: "user",
             sandboxPolicy: { type: "dangerFullAccess" },

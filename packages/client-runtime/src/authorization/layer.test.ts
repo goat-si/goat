@@ -252,7 +252,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       expect(authorized.verifiedEndpoint).toEqual(verifiedSshEndpoint);
       expect(harness.fetch.calls.map(([url]) => String(url))).toEqual([
         `${ENDPOINT.httpBaseUrl}/.well-known/goat/environment`,
-        `${ENDPOINT.httpBaseUrl}/api/auth/websocket-ticket`,
+        `${ENDPOINT.httpBaseUrl}/api/auth/websocket-ticket/rpc`,
       ]);
       expect(new Headers(harness.fetch.calls[0]?.[1].headers).has("Authorization")).toBe(false);
     }),

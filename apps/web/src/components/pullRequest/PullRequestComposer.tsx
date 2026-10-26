@@ -1,7 +1,4 @@
-import {
-  capitalizeTerm,
-  sourceControlClients,
-} from "@goat/client-runtime/source-control-clients";
+import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@goat/contracts";
 import { MessageSquareIcon, TrashIcon as Trash2Icon, XIcon } from "~/components/solar";
 import { useRef, useState } from "react";

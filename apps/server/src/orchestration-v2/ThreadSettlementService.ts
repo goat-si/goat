@@ -369,7 +369,12 @@ export const make = Effect.gen(function* () {
       ]);
       keys.set(thread.id, key);
       const previous = evaluated.get(thread.id);
-      return mergedPullRequest !== null || previous?.key !== key || previous.expiresAt <= nowMs;
+      return (
+        threadId !== undefined ||
+        mergedPullRequest !== null ||
+        previous?.key !== key ||
+        previous.expiresAt <= nowMs
+      );
     });
     const rememberEvaluation = (
       thread: (typeof candidates)[number],
@@ -572,7 +577,7 @@ export const make = Effect.gen(function* () {
       groups.entries(),
       ([key, group]) =>
         Effect.gen(function* () {
-          const cached = lookupCache.get(key);
+          const cached = threadId === undefined ? lookupCache.get(key) : undefined;
           const pullRequest =
             cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
               ? cached.value
