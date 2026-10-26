@@ -104,3 +104,7 @@ export const pushCursorState = (
   if (tab.desktop) pushDesktop(cursor);
   return true;
 };
+
+/** Keep pointer order at least as fresh as the last cursor state delivered to this tab. */
+export const nextPointerSequence = (previous: number, cursor?: AgentCursorSnapshot): number =>
+  Math.max(previous + 1, cursor?.identity.sequence ?? 0);

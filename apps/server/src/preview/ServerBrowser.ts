@@ -1499,8 +1499,11 @@ const make = Effect.gen(function* () {
       if (tab.viewers.size === 0 && !encoder && !tab.desktop)
         return tab.control.assertAgentMayDispatch();
       const show = (next: "move" | "click") => {
-        const sequence = ++pointerSequence;
         const currentCursor = cursorByTab.get(tab);
+        const sequence = (pointerSequence = ServerBrowserScreen.nextPointerSequence(
+          pointerSequence,
+          currentCursor,
+        ));
         const cursor =
           currentCursor?.phase === "hidden" || currentCursor?.phase === "yielded"
             ? undefined

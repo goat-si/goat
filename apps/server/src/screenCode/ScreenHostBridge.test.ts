@@ -226,3 +226,27 @@ it.effect("trusted host call phases end when the cell is cut", () =>
     expect(events).toEqual(["thinking", "resting", "hidden"]);
   }),
 );
+
+it.effect("takeover yields the cursor while private cutoff hides it", () =>
+  Effect.gen(function* () {
+    for (const [reason, terminal] of [
+      ["takeover", "yielded"],
+      ["private", "hidden"],
+    ] as const) {
+      const events: string[] = [];
+      const bridge = new ScreenHostBridge(
+        new ScreenCursorPhases((event) => events.push(event.phase)),
+      );
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Effect.succeed({ value: true, category: "confirmed", evidence: ["done"] }),
+      });
+      yield* bridge.handle(
+        call(1),
+        context(() => Effect.void),
+      );
+      yield* bridge.cutCell("r", "t", "c", reason);
+      expect(events.at(-1)).toBe(terminal);
+    }
+  }),
+);

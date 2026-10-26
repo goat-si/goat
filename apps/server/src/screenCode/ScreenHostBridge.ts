@@ -446,17 +446,17 @@ export class ScreenHostBridge {
     runId: string,
     turnId: string,
     cellId: string,
-    _reason: string,
+    reason: string,
   ) {
-    this.cutCellNow(runId, turnId, cellId);
+    this.cutCellNow(runId, turnId, cellId, reason);
   });
 
-  cutCellNow(runId: string, turnId: string, cellId: string, reason?: ScreenRunError["code"]): void {
+  cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
-      if (reason) state.cutoffReason = reason;
+      if (reason === "permission_denied") state.cutoffReason = reason;
       state.cutoff.abort();
     }
     const turn = `${runId}\u0000${turnId}`;
@@ -467,7 +467,7 @@ export class ScreenHostBridge {
     }
     if (closed.size >= 4096) this.fencedTurns.add(turn);
     else closed.add(cellId);
-    this.endCellTargets(runId, turnId, cellId);
+    this.endCellTargets(runId, turnId, cellId, reason);
   }
 
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
@@ -524,12 +524,12 @@ export class ScreenHostBridge {
     runId: string,
     turnId: string,
     targetId: string,
-    _reason: string,
+    reason: string,
   ) {
-    this.invalidateTargetNow(runId, turnId, targetId);
+    this.invalidateTargetNow(runId, turnId, targetId, reason);
   });
 
-  invalidateTargetNow(runId: string, turnId: string, targetId: string): void {
+  invalidateTargetNow(runId: string, turnId: string, targetId: string, reason?: string): void {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
     if (!invalid) {
@@ -539,7 +539,11 @@ export class ScreenHostBridge {
     if (invalid.size >= 4096) this.fencedTurns.add(turn);
     else invalid.add(targetId);
     const ref = this.targetRefs.get(targetId);
-    if (ref) this.cursorPhases?.ended(ref);
+    if (ref)
+      this.cursorPhases?.ended(
+        ref,
+        reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",
+      );
   }
 
   finishTurn = Effect.fn("ScreenHostBridge.finishTurn")(function* (
@@ -565,11 +569,15 @@ export class ScreenHostBridge {
       if (cellId.startsWith(`${turn}\u0000`)) this.cells.delete(cellId);
   });
 
-  private endCellTargets(runId: string, turnId: string, cellId: string): void {
+  private endCellTargets(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
     for (const targetId of this.cellTargets.get(id) ?? []) {
       const ref = this.targetRefs.get(targetId);
-      if (ref) this.cursorPhases?.ended(ref);
+      if (ref)
+        this.cursorPhases?.ended(
+          ref,
+          reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",
+        );
     }
     this.cellTargets.delete(id);
   }

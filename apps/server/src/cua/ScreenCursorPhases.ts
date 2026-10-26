@@ -71,6 +71,7 @@ export class ScreenCursorPhases {
     const state = this.targets.get(this.key(ref));
     if (!state || state.ended || state.owner.generation !== ref.generation) return;
     if (!state.pending.delete(callId) || state.pending.size > 0) return;
+    // Keep "resting" as the shipped six-phase wire name while clients and the helper consume it.
     this.publish({
       op: "show",
       identity: { ...state.owner, sequence: ++state.sequence },

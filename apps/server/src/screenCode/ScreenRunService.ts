@@ -341,14 +341,19 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     for (const controlId of controls)
       yield* options.leases.releaseForeground({ threadId: ThreadId.make(threadId), controlId });
   });
-  const fenceNow = (change: { threadId?: string; tabId?: string; controlId?: string }) => {
+  const fenceNow = (change: {
+    kind?: string;
+    threadId?: string;
+    tabId?: string;
+    controlId?: string;
+  }) => {
     for (const [id, turn] of turns) {
       if (change.threadId !== undefined && turn.threadId !== change.threadId) continue;
       const [runId, turnId] = id.split("\u0000");
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
       let touched = cellId !== undefined;
-      if (cellId) bridge.cutCellNow(runId, turnId, cellId);
+      if (cellId) bridge.cutCellNow(runId, turnId, cellId, change.kind);
       for (const [targetId, route] of routes) {
         if (route.runId !== runId || route.turnId !== turnId) continue;
         if (!cellId && change.tabId !== undefined && route.tabId !== change.tabId) continue;
@@ -359,7 +364,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         touched = true;
-        bridge.invalidateTargetNow(runId, turnId, targetId);
+        bridge.invalidateTargetNow(runId, turnId, targetId, change.kind);
         options.desktopHost?.invalidateTarget(targetId);
         options.tabHost?.invalidateTarget(targetId);
       }

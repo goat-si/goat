@@ -7,6 +7,7 @@ import {
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
+  type AgentCursorSnapshot,
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,23 @@ import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import { nextPointerSequence } from "./ServerBrowserScreen.ts";
+
+it("pointer sequence reaches the last published cursor state", () => {
+  const cursor = {
+    phase: "thinking",
+    identity: {
+      environmentId: EnvironmentId.make("env"),
+      runId: "run",
+      turnId: "turn",
+      targetId: "tab",
+      generation: 1,
+      sequence: 17,
+    },
+  } satisfies AgentCursorSnapshot;
+  expect(nextPointerSequence(3, cursor)).toBe(17);
+  expect(nextPointerSequence(17, cursor)).toBe(18);
+});
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
 // One fake Chromium context per test; its page refuses every locator, so input never lands.
