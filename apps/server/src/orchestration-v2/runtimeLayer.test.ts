@@ -848,7 +848,9 @@ it.effect.each([
             ? scenario
             : "usage_limit";
     const resetAt = DateTime.formatIso(DateTime.add(now, { hours: 1 }));
+    // Seed recovered failures without racing live terminal-run queue promotion.
     yield* events.write({
+      commandId: CommandId.make(`command:runtime-reconcile:fallback-failure:${scenario}`),
       events: [
         {
           id: EventId.make(`fallback-run:${scenario}`),

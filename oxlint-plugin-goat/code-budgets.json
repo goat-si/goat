@@ -341,7 +341,7 @@
   "apps/server/src/orchestration-v2/assistantStreaming.ts": { "nonNull": 2 },
   "apps/server/src/orchestration-v2/legacy/LegacyV1Cutover.integration.test.ts": { "lines": 1025 },
   "apps/server/src/orchestration-v2/pullRequestWatch.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8688 },
+  "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8690 },
   "apps/server/src/orchestration-v2/testkit/FakeCloudAdapter.ts": { "nonNull": 4 },
   "apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts": { "nonNull": 1 },
   "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 3083 },
