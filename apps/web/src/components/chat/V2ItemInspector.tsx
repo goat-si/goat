@@ -10,6 +10,7 @@ import {
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
   turnItemOutputImages,
+  turnItemOutputLinks,
   turnItemOutputText,
 } from "@goat/client-runtime/work-log/item-detail";
 import { commandDisplayText } from "@goat/client-runtime/work-log/command-label";
@@ -163,8 +164,9 @@ function useFetchedTurnItem(
   return {
     item,
     output: {
-      output: turnItemOutputText(item),
+      output: turnItemOutputText(item, { omitLinks: true }),
       images: turnItemOutputImages(item),
+      links: turnItemOutputLinks(item),
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -181,6 +183,7 @@ function useFetchedTurnItem(
 interface ToolOutputState {
   readonly output: string | null;
   readonly images: ReturnType<typeof turnItemOutputImages>;
+  readonly links: ReturnType<typeof turnItemOutputLinks>;
   readonly environmentId: EnvironmentId;
   readonly pending: boolean;
   readonly error: string | null;
@@ -201,6 +204,31 @@ function ToolOutput(props: ToolOutputState) {
       onImageExpand={props.onImageExpand}
     />
   ));
+  const links =
+    props.links.length > 0 ? (
+      <ul className="space-y-0.5">
+        {props.links.map((link) => {
+          const href = resolveExternalWebLinkHref(link.uri);
+          return (
+            <li key={link.uri} className="truncate">
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-foreground/85 hover:underline"
+                >
+                  {link.name}
+                  <ExternalLinkIcon className="size-3 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-foreground/85">{link.name}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    ) : null;
   const text = props.output ? (
     <div
       className={cn(
@@ -214,12 +242,13 @@ function ToolOutput(props: ToolOutputState) {
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
     <div className="text-destructive">Couldn&apos;t load output: {props.error}</div>
-  ) : props.empty && images.length === 0 ? (
+  ) : props.empty && images.length === 0 && links === null ? (
     <div className="text-muted-foreground italic">No output.</div>
   ) : null;
   return (
     <>
       {images}
+      {links}
       {text}
     </>
   );
