@@ -24,6 +24,7 @@ import * as RepositoryResolver from "../../project/RepositoryIdentityResolver.ts
 import { parseCodexMemory } from "./CodexMemoryImporter.ts";
 import { parseClaudeMemory } from "./ClaudeMemoryImporter.ts";
 import { parseOmoMemory } from "./OmoMemoryImporter.ts";
+import { parseAsideMemory } from "./AsideMemoryImporter.ts";
 import {
   buildMemoryImportFixture,
   MEMORY_IMPORT_FIXTURE_PROFILES,
@@ -42,7 +43,6 @@ import type {
   PreparedImportCommit,
 } from "./MemoryImportTypes.ts";
 import { makeProviderMemoryImport } from "./ProviderMemoryImport.ts";
-
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(uuid(1));
 const environmentId = M.EnvironmentId.make("synthetic-coordinator");
@@ -53,6 +53,7 @@ const parsers: MemoryImportParsers = {
   codex: parseCodexMemory,
   claude: parseClaudeMemory,
   omo: parseOmoMemory,
+  aside: parseAsideMemory,
 };
 const processing: M.MemoryProcessingStatus = {
   lastReceivedHubSequence: 0,
@@ -381,7 +382,6 @@ const issue = (e: unknown, expected: string) => {
   assert.instanceOf(e, M.MemoryImportRpcError);
   if (isImportError(e)) assert.equal(e.issue, expected);
 };
-
 describe("ProviderMemoryImport closed coordinator", () => {
   it.effect.each(MEMORY_IMPORT_FIXTURE_PROFILES)(
     "four actions with real parser %s and durable restart replay",

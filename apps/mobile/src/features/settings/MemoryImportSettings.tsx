@@ -3,11 +3,16 @@ import { useFocusEffect } from "@react-navigation/native";
 import {
   MemoryOperationId,
   sessionGrantsScope,
-  type MemoryImportFormat,
+  type MemoryImportSourceFormat,
   type MemoryImportProviderResult,
   type MemoryScope,
   type MemorySpaceId,
 } from "@goat/contracts";
+import {
+  memoryImportFormatLabels,
+  memoryImportFormats,
+  memoryImportIssueReason,
+} from "@goat/client-runtime/memory-import-workflow";
 import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 import * as Crypto from "expo-crypto";
@@ -18,6 +23,7 @@ import { mobileMemoryImportRecovery } from "../../persistence/memory-import-reco
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { memoryEnvironment as memory } from "../../state/memory";
 import { environmentSession } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
@@ -54,6 +60,9 @@ export function MemoryImportSettings({
   const registry = useContext(RegistryContext);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const allowed = useAtomValue(memory.importProvider.permissionAtom(params.environmentId));
+  const formats = memoryImportFormats(
+    useAtomValue(serverEnvironment.configValueAtom(params.environmentId))?.environment.capabilities,
+  );
   const connection = useAtomValue(
     environmentSession.preparedConnectionValueAtom(params.environmentId),
   );
@@ -70,7 +79,7 @@ export function MemoryImportSettings({
     }),
   );
   const state = useSyncExternalStore(workflow.subscribe, workflow.getSnapshot);
-  const [format, setFormat] = useState<MemoryImportFormat | null>(null);
+  const [format, setFormat] = useState<MemoryImportSourceFormat | null>(null);
   const [sources, setSources] = useState<Discovery | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -224,8 +233,13 @@ export function MemoryImportSettings({
   return (
     <SettingsSection title="Import memories">
       <Copy>
-        Import from Codex, Claude or OMO. Other provider profiles are not supported. Choose a
-        profile, preview its memories and confirm a destination before applying.
+        Import from{" "}
+        {formats.includes("aside") ? "Codex, Claude, OMO or Aside" : "Codex, Claude or OMO"}. Other
+        provider profiles are not supported. Choose a profile, preview its memories and confirm a
+        destination before applying.
+        {formats.includes("aside")
+          ? " Aside imports only the Current section of each page; project pages need a project scope."
+          : ""}
       </Copy>
       <Copy>
         Destination:{" "}
@@ -239,10 +253,10 @@ export function MemoryImportSettings({
               : "Choose a scope"}
       </Copy>
       {!allowed ? <Copy>Memory write and file read permissions are required.</Copy> : null}
-      {(["codex", "claude", "omo"] as const).map((value) => (
+      {formats.map((value) => (
         <Action
           key={value}
-          label={`Discover ${value === "codex" ? "Codex" : value === "claude" ? "Claude" : "OMO"} profiles`}
+          label={`Discover ${memoryImportFormatLabels[value]} profiles`}
           disabled={!writable}
           onPress={() => {
             invalidateSelection();
@@ -258,7 +272,11 @@ export function MemoryImportSettings({
       {sources?.sources.map((source, index) => (
         <Action
           key={source.sourceId}
-          label={`Preview ${format === "codex" ? "Codex" : format === "claude" ? "Claude" : "OMO"} profile ${index + 1}`}
+          label={
+            source.format === "aside"
+              ? `Preview Aside ${source.label}`
+              : `Preview ${format ? memoryImportFormatLabels[format] : ""} profile ${index + 1}`
+          }
           disabled={!writable}
           onPress={() => {
             setSelected(new Set());
@@ -280,8 +298,9 @@ export function MemoryImportSettings({
               key={item.sourceItemKey}
               label={
                 item.issue
-                  ? `Memory ${index + 1} unavailable`
-                  : (item.title ?? `Memory ${index + 1}`)
+                  ? `${format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`}: ${memoryImportIssueReason(item.issue, "item")}`
+                  : (item.title ??
+                    (format === "aside" ? item.sourceItemKey : `Memory ${index + 1}`))
               }
               {...(item.tooLargeForTurnStart
                 ? { subtitle: "Stored, but too large to add to new turns automatically" }
