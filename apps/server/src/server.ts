@@ -252,6 +252,7 @@ import {
   ScheduledTaskWebhookOrigin,
 } from "./scheduledTasks/ScheduledTaskService.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
+import * as AutomationHold from "./automationHold.ts";
 import * as ServerActivation from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
@@ -1141,6 +1142,11 @@ const layerMakeServer = Layer.unwrap(
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One hold for the whole server, read where automation starts; see AutomationHold.
+    const layerAutomationHold = Layer.succeed(
+      AutomationHold.AutomationHold,
+      yield* AutomationHold.makeFromStateDir(config.stateDir),
+    );
     // One slot for the whole server: every projection store reads through it, and the archive
     // service fills it once it has loaded which threads are archived.
     const layerArchiveGate = Layer.succeed(
@@ -1301,6 +1307,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
+      Layer.provide(layerAutomationHold),
       Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),

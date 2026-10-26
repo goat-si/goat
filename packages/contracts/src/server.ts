@@ -30,6 +30,7 @@ import { CodexRouteStatus } from "./codexRoute.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
+import { AutomationHold } from "./automationHold.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -658,6 +659,8 @@ export const ServerConfig = Schema.Struct({
    * Windows only, and only once the server has checked; absent means nothing to report.
    */
   worktreeCheckoutHealth: ForwardCompatibleOptional(ServerWorktreeCheckoutHealth),
+  /** Set while a nightly copy's automation is held; null once resumed, absent from older servers. */
+  automationHold: Schema.optionalKey(Schema.NullOr(AutomationHold)),
   /**
    * Never sent in a config snapshot: the theme stream emits the current set
    * before any change, so a snapshot carrying it too would hand every

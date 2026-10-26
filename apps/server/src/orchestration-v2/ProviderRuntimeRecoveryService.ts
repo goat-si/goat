@@ -22,6 +22,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AutomationHold from "../automationHold.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 import { isBufferedProviderNotification } from "./NotificationMailbox.ts";
 import {
@@ -699,7 +700,7 @@ export const make = Effect.gen(function* () {
         });
       }
       const continuationRun =
-        continueAfterRestart && trigger === "startup"
+        continueAfterRestart && trigger === "startup" && !(yield* AutomationHold.isHeld)
           ? restartContinuationRun(
               { ...projection, providerSessions: sessionsLiveAtStart(projection, stoppedThisPass) },
               now,
@@ -843,6 +844,7 @@ export const make = Effect.gen(function* () {
   });
 
   const prepareForShutdown = Effect.gen(function* () {
+    if (yield* AutomationHold.isHeld) return;
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
     if (!enabled) return;
     const threadIds = yield* projections.getRecoveryThreadIds("runtime");

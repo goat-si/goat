@@ -1,4 +1,5 @@
 import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@goat/contracts";
+import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -6,9 +7,12 @@ import * as Base64 from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopSafeStorageSiblingKeys from "../app/DesktopSafeStorageSiblingKeys.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 
 type PersistedSavedEnvironmentDesktopSsh = NonNullable<
@@ -63,6 +67,12 @@ const SavedEnvironmentRegistryDocumentJson = fromLenientJson(
 const decodeSavedEnvironmentRegistryDocumentJson = Schema.decodeEffect(
   SavedEnvironmentRegistryDocumentJson,
 );
+const encodeSavedEnvironmentRegistryDocumentJson = Schema.encodeEffect(
+  SavedEnvironmentRegistryDocumentJson,
+);
+
+// RFC 6750 b64token: CBC padding alone cannot establish that a sibling key recovered a token.
+const isBearerToken = (plaintext: string) => /^[A-Za-z0-9\-._~+/]+=*$/.test(plaintext);
 
 const DesktopSavedEnvironmentSecretProtectionOperation = Schema.Literals([
   "check-encryption-availability",
@@ -227,6 +237,77 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
 
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
+  const siblingKeys = yield* DesktopSafeStorageSiblingKeys.DesktopSafeStorageSiblingKeys;
+  const lock = yield* Semaphore.make(1);
+  // If persistence fails, retain the recovered value so a read does not repeat Keychain prompts.
+  const recoveredSecrets = new Map<
+    string,
+    { readonly plaintext: string; readonly runtimeName: string }
+  >();
+
+  const recoverSecret = Effect.fn("desktop.savedEnvironments.recoverSecret")(function* (
+    environmentId: string,
+    encoded: string,
+    secretBytes: Uint8Array,
+    originalError: ElectronSafeStorage.ElectronSafeStorageDecryptError,
+  ) {
+    const registryPath = environment.savedEnvironmentRegistryPath;
+    const recover = Effect.gen(function* () {
+      const raw = yield* fileSystem.readFileString(registryPath);
+      const current = yield* decodeSavedEnvironmentRegistryDocumentJson(raw);
+      if (
+        !current.records?.some(
+          (record) =>
+            record.environmentId === environmentId && record.encryptedBearerToken === encoded,
+        )
+      ) {
+        return yield* originalError;
+      }
+      const remembered = recoveredSecrets.get(encoded);
+      const recovered =
+        remembered === undefined
+          ? yield* siblingKeys.decrypt(secretBytes, isBearerToken)
+          : Option.some(remembered);
+      if (Option.isNone(recovered)) return yield* originalError;
+      const { plaintext, runtimeName } = recovered.value;
+      recoveredSecrets.set(encoded, recovered.value);
+      yield* Effect.gen(function* () {
+        const encryptedBearerToken = Base64.encode(yield* safeStorage.encryptString(plaintext));
+        const slug = runtimeName.replace(/[^A-Za-z0-9._-]/g, "-");
+        yield* writeFileStringAtomically({
+          filePath: `${registryPath}.${slug}.backup`,
+          contents: raw,
+        });
+        // A key prompt can outlive another writer's save; never replace that newer document.
+        if ((yield* fileSystem.readFileString(registryPath)) !== raw) return;
+        const contents = yield* encodeSavedEnvironmentRegistryDocumentJson({
+          ...current,
+          records: (current.records ?? []).map((record) =>
+            record.environmentId === environmentId ? { ...record, encryptedBearerToken } : record,
+          ),
+        });
+        yield* writeFileStringAtomically({
+          filePath: registryPath,
+          contents: `${contents}\n`,
+        });
+        recoveredSecrets.delete(encoded);
+      }).pipe(
+        Effect.catch(() =>
+          Effect.logWarning(
+            "Could not re-encrypt a recovered saved-environment token; kept its original file",
+            {
+              registryPath,
+              environmentId,
+            },
+          ),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, environment.path),
+      );
+      return plaintext;
+    });
+    return yield* recover.pipe(Effect.mapError(() => originalError));
+  });
 
   return DesktopSavedEnvironments.of({
     getRegistry: readRegistryDocument(fileSystem, environment.savedEnvironmentRegistryPath).pipe(
@@ -271,6 +352,7 @@ export const make = Effect.gen(function* () {
       );
       return Option.some(
         yield* safeStorage.decryptString(secretBytes).pipe(
+          Effect.catch((error) => recoverSecret(environmentId, encoded.value, secretBytes, error)),
           Effect.mapError(
             (cause) =>
               new DesktopSavedEnvironmentSecretProtectionError({
@@ -282,7 +364,7 @@ export const make = Effect.gen(function* () {
           ),
         ),
       );
-    }),
+    }, lock.withPermits(1)),
   });
 });
 

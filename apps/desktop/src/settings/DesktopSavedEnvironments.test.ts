@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopSafeStorageSiblingKeys from "../app/DesktopSafeStorageSiblingKeys.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopSavedEnvironments from "./DesktopSavedEnvironments.ts";
 
@@ -129,6 +130,17 @@ function layer(
   const layerDependencies = Layer.mergeAll(
     layerEnvironment,
     layerSafeStorage,
+    Layer.succeed(DesktopSafeStorageSiblingKeys.DesktopSafeStorageSiblingKeys, {
+      decrypt: (ciphertext, accept) => {
+        const decoded = textDecoder.decode(ciphertext);
+        const plaintext = decoded.slice("stable:".length);
+        return Effect.succeed(
+          decoded.startsWith("stable:") && accept(plaintext)
+            ? Option.some({ plaintext, runtimeName: "GOAT Alpha" })
+            : Option.none(),
+        );
+      },
+    }),
     NodeServices.layer,
     fileSystemLayer,
   );
@@ -153,6 +165,81 @@ const withSavedEnvironments = <A, E, R>(
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("DesktopSavedEnvironments", () => {
+  it.effect(
+    "#1009 recovers copied legacy bearer tokens and re-encrypts with the current channel key",
+    () =>
+      withSavedEnvironments(
+        Effect.gen(function* () {
+          const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const fs = yield* FileSystem.FileSystem;
+          const original = Base64.encode(textEncoder.encode("stable:bearer-token"));
+          yield* seedSavedEnvironmentRegistry(original);
+          const before = yield* fs.readFileString(environment.savedEnvironmentRegistryPath);
+          assert.deepEqual(
+            yield* savedEnvironments.getSecret(savedRegistryRecord.environmentId),
+            Option.some("bearer-token"),
+          );
+          const rewritten = yield* fs.readFileString(environment.savedEnvironmentRegistryPath);
+          assert.include(rewritten, Base64.encode(textEncoder.encode("enc:bearer-token")));
+          assert.notInclude(rewritten, original);
+          assert.notInclude(rewritten, "bearer-token");
+          assert.equal(
+            yield* fs.readFileString(
+              `${environment.savedEnvironmentRegistryPath}.GOAT-Alpha.backup`,
+            ),
+            before,
+          );
+          assert.deepEqual(
+            yield* savedEnvironments.getSecret(savedRegistryRecord.environmentId),
+            Option.some("bearer-token"),
+          );
+          assert.deepEqual(yield* savedEnvironments.getRegistry, [savedRegistryRecord]);
+        }),
+      ),
+  );
+
+  it.effect("keeps recovered legacy credentials readable when their backup cannot be written", () =>
+    withSavedEnvironments(
+      Effect.gen(function* () {
+        const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fs = yield* FileSystem.FileSystem;
+        yield* seedSavedEnvironmentRegistry(
+          Base64.encode(textEncoder.encode("stable:bearer-token")),
+        );
+        const before = yield* fs.readFileString(environment.savedEnvironmentRegistryPath);
+        yield* fs.makeDirectory(`${environment.savedEnvironmentRegistryPath}.GOAT-Alpha.backup`);
+        assert.deepEqual(
+          yield* savedEnvironments.getSecret(savedRegistryRecord.environmentId),
+          Option.some("bearer-token"),
+        );
+        assert.equal(yield* fs.readFileString(environment.savedEnvironmentRegistryPath), before);
+      }),
+    ),
+  );
+
+  it.effect(
+    "rejects sibling plaintext that is not a bearer token without changing the legacy file",
+    () =>
+      withSavedEnvironments(
+        Effect.gen(function* () {
+          const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const fs = yield* FileSystem.FileSystem;
+          yield* seedSavedEnvironmentRegistry(
+            Base64.encode(textEncoder.encode("stable:bad token\n")),
+          );
+          const before = yield* fs.readFileString(environment.savedEnvironmentRegistryPath);
+          const error = yield* savedEnvironments
+            .getSecret(savedRegistryRecord.environmentId)
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "DesktopSavedEnvironmentSecretProtectionError");
+          assert.equal(yield* fs.readFileString(environment.savedEnvironmentRegistryPath), before);
+        }),
+      ),
+  );
+
   it.effect("loads lenient saved environment registry documents", () =>
     withSavedEnvironments(
       Effect.gen(function* () {

@@ -28,6 +28,7 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -232,6 +233,7 @@ const normalizeCwd = (cwd: string) =>
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const automationHold = yield* AutomationHold.AutomationHold;
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
   const autoPullPolicy = yield* VcsAutoPullPolicy;
   const workflow = yield* GitWorkflowService.GitWorkflowService;
@@ -427,6 +429,7 @@ export const make = Effect.gen(function* () {
     remote: VcsStatusRemoteResult | null,
     policyCwds: ReadonlyArray<string>,
   ) {
+    if ((yield* automationHold.current) !== null) return null;
     let pullAttempted = false;
     return yield* Effect.gen(function* () {
       const autoPullEnabled = (yield* Effect.forEach(policyCwds, autoPullPolicy.isEnabled, {

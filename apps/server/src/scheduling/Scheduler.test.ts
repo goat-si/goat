@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as Scheduler from "./Scheduler.ts";
 
@@ -106,5 +107,37 @@ it.effect("holds due work and the clock until startup recovery activates the ser
       Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
     );
     assert.isAtLeast(yield* Ref.get(runs), 1);
+  }),
+);
+
+it.effect("skips held sources until automation is resumed, and keeps exempt sources running", () =>
+  Effect.gen(function* () {
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    const receipts = yield* Queue.unbounded<string>();
+    yield* Effect.gen(function* () {
+      const scheduler = yield* Scheduler.Scheduler;
+      yield* scheduler.register(
+        "scheduled-tasks",
+        Queue.offer(receipts, "held").pipe(Effect.asVoid),
+      );
+      yield* scheduler.register("clock", Queue.offer(receipts, "exempt").pipe(Effect.asVoid), {
+        whileAutomationHeld: "run",
+      });
+      assert.equal(yield* Queue.take(receipts), "exempt");
+      yield* TestClock.adjust("5 seconds");
+      assert.equal(yield* Queue.take(receipts), "exempt");
+      assert.equal(yield* Queue.size(receipts), 0);
+
+      yield* hold.release;
+      yield* TestClock.adjust("5 seconds");
+      const resumed = [yield* Queue.take(receipts), yield* Queue.take(receipts)].toSorted();
+      assert.deepEqual(resumed, ["exempt", "held"]);
+    }).pipe(
+      Effect.provide(Scheduler.layer),
+      Effect.provideService(AutomationHold.AutomationHold, hold),
+    );
   }),
 );

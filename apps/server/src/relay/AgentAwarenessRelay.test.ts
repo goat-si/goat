@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as AutomationHold from "../automationHold.ts";
 import {
   PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
@@ -293,6 +294,34 @@ const makeTestRelay = Effect.fnUntraced(function* (
 });
 
 describe("AgentAwarenessRelay", () => {
+  it.effect(
+    "held: publishes nothing and parks event consumption; release: publishes unchanged state",
+    () =>
+      Effect.gen(function* () {
+        const hold = yield* AutomationHold.makeInMemory({
+          reason: "channel-copy",
+          heldAt: "2026-10-25T00:00:00.000Z",
+        });
+        const pulls = yield* Queue.unbounded<void>();
+        const { relay, publications, catchUp } = yield* makeTestRelay({
+          domainEvents: Stream.fromEffect(Queue.offer(pulls, undefined)).pipe(
+            Stream.flatMap(() => Stream.never),
+          ),
+        }).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+        yield* relay.start();
+        yield* relay.publishThread(THREAD_ID);
+        yield* TestClock.adjust("1 second");
+        assert.deepEqual(publications, []);
+        assert.equal(yield* Queue.size(pulls), 0);
+        assert.equal(catchUp.shellSnapshotReads, 0);
+        yield* hold.release;
+        yield* Queue.take(pulls);
+        yield* relay.publishThread(THREAD_ID);
+        assert.equal(publications.length, 1);
+        assert.equal(publications[0]?.state?.phase, "running");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("coalesces queued updates and reruns a thread dirtied during publishing", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

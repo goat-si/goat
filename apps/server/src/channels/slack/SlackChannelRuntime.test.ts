@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
 
+import * as AutomationHold from "../../automationHold.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
 import { statusEventsAfter } from "./SlackChannelRuntime.ts";
 import {
@@ -111,6 +112,38 @@ const apply = (input: SlackChannelRuntime.SlackRuntimeConnection) =>
   Effect.flatMap(SlackChannelRuntime.SlackChannelRuntime, (runtime) => runtime.apply(input));
 
 describe("SlackChannelRuntime", () => {
+  it.effect(
+    "opens no sessions and sends nothing while held, then connects the current configuration on release",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        const hold = yield* AutomationHold.makeInMemory({
+          reason: "channel-copy",
+          heldAt: "2026-10-25T00:00:00.000Z",
+        });
+        yield* run(
+          h,
+          Effect.gen(function* () {
+            yield* apply(connection());
+            yield* apply(connection({ enabled: false }));
+            yield* apply(connection({ appToken: "xapp-current" }));
+            yield* TestClock.adjust("1 minute");
+            yield* Effect.flip(send(h.registry));
+            assert.deepEqual(h.sdk.calls, []);
+            assert.equal(h.sdk.sessions.length, 0);
+            assert.equal(h.sdk.posted.length, 0);
+
+            yield* hold.release;
+            yield* awaitStatus("connected");
+            assert.equal(h.sdk.sessions.length, 1);
+            assert.equal(latestSession(h.sdk).appToken, "xapp-current");
+            yield* send(h.registry);
+            assert.equal(h.sdk.posted.length, 1);
+          }),
+        ).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+      }),
+  );
+
   it.effect("connects, hands events to the gateway as the owner, and acknowledges them", () => {
     const h = harness();
     return run(

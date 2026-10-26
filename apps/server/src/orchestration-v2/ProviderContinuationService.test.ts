@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
@@ -106,6 +107,28 @@ function layerTest(input: {
   );
   return Layer.merge(ProviderContinuationRequests.layer, layerWorker);
 }
+
+it.effect("does not dispatch continuations while held and dispatches after release", () =>
+  Effect.gen(function* () {
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    const dispatched = yield* Queue.unbounded<unknown>();
+    yield* Effect.gen(function* () {
+      const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+      yield* requests.offer(request());
+      yield* TestClock.adjust("1 second");
+      assert.equal(yield* Queue.size(dispatched), 0);
+      yield* hold.release;
+      yield* Queue.take(dispatched);
+    }).pipe(
+      Effect.provide(layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) })),
+      Effect.provideService(AutomationHold.AutomationHold, hold),
+      Effect.scoped,
+    );
+  }),
+);
 
 describe("ProviderContinuationService", () => {
   it.effect("recovers an unaccepted persisted steer using the same delivery identity", () =>

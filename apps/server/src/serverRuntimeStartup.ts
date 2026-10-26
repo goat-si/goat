@@ -48,6 +48,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { getServerOwners } from "./telemetry/Identify.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as AutomationHold from "./automationHold.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -192,6 +193,7 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   projects: ReadonlyArray<Pick<Project, "id" | "workspaceRoot" | "autoPull">>,
   settings = DEFAULT_SERVER_SETTINGS,
 ) {
+  yield* AutomationHold.awaitRelease;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const workspaceRoots = [
     ...new Set(

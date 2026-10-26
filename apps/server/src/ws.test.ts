@@ -159,9 +159,9 @@ import {
   makeMemoryImportHandlers,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
-  withLateEditorConfig,
   WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
+import { withLateEditorConfig } from "./serverConfigUpdates.ts";
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
@@ -244,6 +244,28 @@ it.effect("sends a Defender result that missed the snapshot, once", () =>
     if (late?.type === "snapshot") {
       assert.deepEqual(late.config.worktreeCheckoutHealth, health);
     }
+  }),
+);
+
+it.effect("tells config subscribers when a held copy's automation is resumed, once", () =>
+  Effect.gen(function* () {
+    const hold = { reason: "channel-copy" as const, heldAt: "2026-10-25T00:00:00.000Z" };
+    const events = yield* withLateEditorConfig(
+      snapshotConfig({ automationHold: hold }),
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.succeed(undefined as never),
+      },
+      Stream.empty,
+      // The hold stream replays the state the snapshot already carries, then the release.
+      Stream.make(hold, null, null),
+    ).pipe(Stream.runCollect);
+
+    const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
+    assert.equal(snapshots.length, 1);
+    const [late] = snapshots;
+    if (late?.type === "snapshot") assert.equal(late.config.automationHold, null);
   }),
 );
 

@@ -6,7 +6,17 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
+import * as AutomationHold from "../automationHold.ts";
 import { forkParked } from "../serverActivation.ts";
+
+export interface SchedulerSourceOptions {
+  /**
+   * Sources skip their runs while automation is held (see AutomationHold) unless they only read
+   * or keep local bookkeeping. A held run is skipped, not queued: the next tick after release
+   * finds the same due work.
+   */
+  readonly whileAutomationHeld?: "skip" | "run";
+}
 
 export class Scheduler extends Context.Service<
   Scheduler,
@@ -14,6 +24,7 @@ export class Scheduler extends Context.Service<
     readonly register: <E, R>(
       name: string,
       runDueWork: Effect.Effect<void, E, R>,
+      options?: SchedulerSourceOptions,
     ) => Effect.Effect<void, never, R | Scope.Scope>;
   }
 >()("goat/scheduling/Scheduler") {}
@@ -23,11 +34,16 @@ const make = Effect.gen(function* () {
   const register: Scheduler["Service"]["register"] = Effect.fn("Scheduler.register")(function* <
     E,
     R,
-  >(name: string, runDueWork: Effect.Effect<void, E, R>) {
+  >(name: string, runDueWork: Effect.Effect<void, E, R>, options?: SchedulerSourceOptions) {
     const scope = yield* Effect.scope;
     const context = yield* Effect.context<R>();
+    const hold = yield* AutomationHold.AutomationHold;
     const permit = yield* Semaphore.make(1);
-    const run = runDueWork.pipe(
+    const gated =
+      options?.whileAutomationHeld === "run"
+        ? runDueWork
+        : hold.current.pipe(Effect.flatMap((held) => (held === null ? runDueWork : Effect.void)));
+    const run = gated.pipe(
       Effect.provideContext(context),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)

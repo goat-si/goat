@@ -17,6 +17,7 @@ describe("DesktopEarlyElectronStartup", () => {
       const preference = resolveEarlyLinuxPasswordStorePreference({
         env,
         homeDirectory: "/home/alice",
+        appVersion: "1.2.3",
         joinPath,
         readFileString: (path) => {
           observed.push(path);
@@ -28,10 +29,28 @@ describe("DesktopEarlyElectronStartup", () => {
     }
   });
 
+  it("reads a nightly build's early settings from the nightly state, as the app does later", () => {
+    const observed: string[] = [];
+    resolveEarlyLinuxPasswordStorePreference({
+      env: {},
+      homeDirectory: "/home/alice",
+      appVersion: "1.2.3-nightly.20261011.1",
+      joinPath,
+      readFileString: (path) => {
+        observed.push(path);
+        return "{}";
+      },
+    });
+    assert.deepEqual(observed, [
+      "/home/alice/.goat/desktop-nightly/userdata/desktop-settings.json",
+    ]);
+  });
+
   it("reads the persisted linux password-store preference before Electron is ready", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { GOAT_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
+      appVersion: "1.2.3",
       joinPath,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3-test/userdata/desktop-settings.json");
@@ -46,6 +65,7 @@ describe("DesktopEarlyElectronStartup", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { GOAT_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
+      appVersion: "1.2.3",
       joinPath,
       readFileString: () => `{
         // manually edited setting
@@ -60,6 +80,7 @@ describe("DesktopEarlyElectronStartup", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {},
       homeDirectory: "/home/user",
+      appVersion: "1.2.3",
       joinPath,
       readFileString: () => {
         throw new Error("missing");
@@ -75,6 +96,7 @@ describe("DesktopEarlyElectronStartup", () => {
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
       },
       homeDirectory: "/home/user",
+      appVersion: "1.2.3",
       joinPath,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.goat/dev/desktop-settings.json");
@@ -92,6 +114,7 @@ describe("DesktopEarlyElectronStartup", () => {
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
       },
       homeDirectory: "/home/user",
+      appVersion: "1.2.3",
       joinPath,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.goat/dev/desktop-settings.json");
@@ -185,6 +208,7 @@ describe("Linux device scale persistence failures", () => {
   const input = {
     env: { GOAT_HOME: "/isolated" },
     homeDirectory: "/home/user",
+    appVersion: "1.2.3",
     joinPath: NodePath.posix.join,
   };
 

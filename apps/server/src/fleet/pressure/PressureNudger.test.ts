@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as AutomationHold from "../../automationHold.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostStatusMcpService from "../../mcp/HostStatusMcpService.ts";
 import type { LaunchWatch } from "../../mcp/launchWatch.ts";
@@ -169,6 +170,29 @@ const sent = (world: World) =>
     );
 
 describe("PressureNudger.tick", () => {
+  it.effect("holds pressure wakes until automation is released", () => {
+    const world = makeWorld();
+    world.local = pressure("critical");
+    return Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      yield* Effect.gen(function* () {
+        yield* tick;
+        expect(world.commands).toEqual([]);
+        yield* hold.release;
+        yield* tick;
+        expect(
+          world.commands.filter((command) => command.type === "message.dispatch"),
+        ).toHaveLength(2);
+      }).pipe(
+        Effect.provide(layer(world)),
+        Effect.provideService(AutomationHold.AutomationHold, hold),
+      );
+    });
+  });
+
   it.effect("keeps one status row per host in place and wakes only when it gets worse", () => {
     const world = makeWorld();
     const critical = (thread: string, row: string, since: string) =>

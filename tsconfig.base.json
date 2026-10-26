@@ -496,6 +496,7 @@
               "apps/server/src/channels/SlackChannelSettings.ts",
               "apps/server/src/channels/slack/SlackChannelAdapter.interactive.test.ts",
               "apps/server/src/channels/testkit/ChannelHarness.ts",
+              "apps/server/src/cloud/managedTunnelStartup.test.ts",
               "apps/server/src/cua/ComputerUseAttachment.test.ts",
               "apps/server/src/cua/ComputerUseLeaseRoute.test.ts",
               "apps/server/src/cua/ComputerUseLeases.testkit.ts",
@@ -601,6 +602,7 @@
           {
             "include": [
               "apps/desktop/src/window/material/DesktopWindowMaterial.ts",
+              "apps/server/src/automationHold.ts",
               "apps/server/src/orchestration-v2/EventSink.ts",
               "apps/server/src/scheduledTasks/ScheduledTaskRuns.ts",
               "apps/server/src/workspace/WorkspaceFileSystem.ts",
@@ -638,6 +640,7 @@
               "apps/server/src/orchestration-v2/ThreadManagementService.ts",
               "apps/server/src/provider/CodexProvider.ts",
               "apps/server/src/remoteReports/RemoteDispatchCoordinator.test.ts",
+              "apps/server/src/remoteReports/RemoteDispatchCoordinator.testkit.ts",
               "apps/server/src/sshRemote/SshRemoteDispatch.ts",
               "apps/web/src/connection/storage.ts",
               "packages/client-runtime/src/state/commandPermissions.ts",
