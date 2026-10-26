@@ -393,8 +393,8 @@ final class DriverService {
     posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
     var environment = driverEnvironment([])
     environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
-    let argv = [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
-      .map { strdup($0) } + [nil]
+    let arguments: [String] = [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
+    let argv = arguments.map { strdup($0) } + [nil]
     let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
     var child: pid_t = 0
     let spawned = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)

@@ -70,10 +70,9 @@ func runMcp() -> Never {
   environment["CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED"] = "1"
   environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
 
-  let argv =
-    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId].map {
-      strdup($0)
-    } + [nil]
+  let driverArguments: [String] =
+    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId]
+  let argv = driverArguments.map { strdup($0) } + [nil]
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
   var child: pid_t = 0
   let requests = Pipe()
