@@ -1,3 +1,5 @@
+import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
+import { makeCloudResultItemGuard } from "./CloudResultItemGuard.ts";
 import {
   CommandId,
   EventId,
@@ -243,11 +245,18 @@ const layerBase: Layer.Layer<
   | ProjectionStore.ProjectionStoreV2
   | ProjectStore.ProjectStoreV2
   | SqlClient.SqlClient
+  | ScheduledTaskRuns.ScheduledTaskRuns
   | TurnItemPositionStore.TurnItemPositionStoreV2
 > = Layer.effect(
   EventSinkV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const scheduledRuns = yield* ScheduledTaskRuns.ScheduledTaskRuns;
+    type CommitOutcomes = {
+      readonly runs: ReadonlyArray<RunOutcome>;
+      readonly scheduledChanged: boolean;
+    };
+    const emptyOutcomes: CommitOutcomes = { runs: [], scheduledChanged: false };
     const commandReceipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
     const eventStore = yield* EventStore.EventStoreV2;
@@ -279,11 +288,12 @@ const layerBase: Layer.Layer<
     // Recorded before publication, so an interrupted publish cannot lose a committed outcome.
     const publishStoredEvents = (
       events: ReadonlyArray<OrchestrationV2StoredEvent>,
-      outcomes: ReadonlyArray<RunOutcome>,
+      outcomes: CommitOutcomes,
     ) =>
       runOutcomes
-        .record(outcomes)
+        .record(outcomes.runs)
         .pipe(
+          Effect.andThen(outcomes.scheduledChanged ? scheduledRuns.publish : Effect.void),
           Effect.andThen(eventStore.publishCommitted(events)),
           Effect.andThen(publishLiveEvents(events)),
         );
@@ -363,46 +373,12 @@ const layerBase: Layer.Layer<
         });
       });
 
-    // Cloud finalization writes a message and its ordinary assistant item together.
-    // Check persisted items inside the ownership-gated transaction: exact provider
-    // text from this run is reused; other text and prior runs never suppress a result.
-    // Replayed synthetic results keep their original message, position and timing.
-    const guardCloudResultItems = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
-      Effect.gen(function* () {
-        const skippedItems = new Set<string>();
-        const skippedMessages = new Set<string>();
-        for (const event of events) {
-          if (
-            event.type !== "turn-item.updated" ||
-            event.payload.type !== "assistant_message" ||
-            event.payload.runId === null ||
-            event.payload.id !== `turn-item:cloud-result:${event.payload.runId}`
-          )
-            continue;
-          const item = event.payload;
-          const runId = event.payload.runId;
-          const { turnItems } = yield* projectionStore.getThreadRecords(
-            item.threadId,
-            ["turnItems"],
-            { turnItemRunId: runId, turnItemTypes: ["assistant_message"] },
-          );
-          if (turnItems.some((existing) => existing.id === item.id)) {
-            skippedItems.add(item.id);
-            skippedMessages.add(item.messageId);
-          } else if (
-            turnItems.some(
-              (existing) => existing.type === "assistant_message" && existing.text === item.text,
-            )
-          ) {
-            skippedItems.add(item.id);
-          }
-        }
-        return events.filter((event) =>
-          event.type === "turn-item.updated"
-            ? !skippedItems.has(event.payload.id)
-            : event.type !== "message.updated" || !skippedMessages.has(event.payload.id),
-        );
-      });
+    const guardCloudResultItems = makeCloudResultItemGuard((threadId, runId) =>
+      projectionStore.getThreadRecords(threadId, ["turnItems"], {
+        turnItemRunId: runId,
+        turnItemTypes: ["assistant_message"],
+      }),
+    );
 
     const normalizeEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) => {
       const runOrdinals = new Map(
@@ -463,7 +439,10 @@ const layerBase: Layer.Layer<
           `;
         }
         // Read lineage here, on the connection this transaction holds; see makeRunOutcomeRecorder.
-        return yield* runOutcomes.prepare(storedEvents);
+        return {
+          runs: yield* runOutcomes.prepare(storedEvents),
+          scheduledChanged: yield* scheduledRuns.record(storedEvents),
+        } satisfies CommitOutcomes;
       });
 
     const writeCloudTaskMetadataEffect = Effect.fn(
@@ -502,7 +481,7 @@ const layerBase: Layer.Layer<
             row.active_attempt_id !== input.activeAttemptId ||
             !["completed", "interrupted", "failed", "cancelled"].includes(row.run_status)
           )
-            return { committed: [], outcomes: [] };
+            return { committed: [], outcomes: emptyOutcomes };
           const latest = yield* decodeProviderThreadPayload(row.payload_json);
           if (
             !latest.cloudTask ||
@@ -512,7 +491,7 @@ const layerBase: Layer.Layer<
             latest.providerInstanceId !== input.providerInstanceId ||
             latest.nativeThreadRef?.nativeId !== input.nativeId
           )
-            return { committed: [], outcomes: [] };
+            return { committed: [], outcomes: emptyOutcomes };
           // Whitelist fields so a stale observer cannot replace the finalized task snapshot.
           const patch: { url?: string; title?: string; progress?: string } = {};
           if (typeof input.metadata.title === "string")
@@ -534,7 +513,7 @@ const layerBase: Layer.Layer<
               ([key, value]) => latest.cloudTask?.[key as keyof typeof patch] === value,
             )
           )
-            return { committed: [], outcomes: [] };
+            return { committed: [], outcomes: emptyOutcomes };
           const now = yield* DateTime.now;
           const stored = yield* eventStore.append({
             events: yield* normalizeEvents([
@@ -583,7 +562,7 @@ const layerBase: Layer.Layer<
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1
             `;
-            if (owners.length > 0) return { committed: [], outcomes: [] };
+            if (owners.length > 0) return { committed: [], outcomes: emptyOutcomes };
           }
           // Checkpoint capture can finish after a cohort writer reads its parent run.
           // Merge in this transaction so the event log and projection keep that completion.
@@ -1181,13 +1160,13 @@ const layerBase: Layer.Layer<
  * Keeping the outbox instance shared with the worker is important because enqueue notifications
  * are in-memory wakeups backed by the durable SQL queue.
  */
-export const layerFromStores = layerBase;
+export const layerFromStores = layerBase.pipe(Layer.provide(ScheduledTaskRuns.layer));
 
 export const layer: Layer.Layer<
   EventSinkV2,
   never,
   EventStore.EventStoreV2 | ProjectionStore.ProjectionStoreV2 | SqlClient.SqlClient
-> = layerBase.pipe(
+> = layerFromStores.pipe(
   Layer.provide(
     Layer.mergeAll(
       CommandReceiptStore.layer,

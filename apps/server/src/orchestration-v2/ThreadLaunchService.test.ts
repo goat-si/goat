@@ -60,6 +60,44 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
 
+it.effect("does not report a scheduled run completed when dispatch is only queued", () => {
+  const harness = makeHarness();
+  const layerTasks = ScheduledTasks.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        harness.layer,
+        NodeCrypto.layer,
+        Scheduler.layer,
+        Layer.mock(SecretRequests.SecretRequests)({}),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const tasks = yield* ScheduledTasks.ScheduledTaskService;
+    const { task } = yield* tasks.upsert({
+      id: ScheduledTaskId.make("scheduled-task:outcome-regression"),
+      title: "Synthetic outcome",
+      prompt: "Synthetic scheduled work",
+      enabled: false,
+      schedule: { type: "interval", everyMs: 60000 },
+      projectId,
+      threadId: null,
+      workspaceStrategy: { type: "root" },
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const result = yield* tasks.runNow({ id: task.id });
+    assert.equal(result.task.lastRun?.dispatchStatus, "accepted");
+    assert.equal(result.task.lastRun?.threadId, result.threadId);
+    assert.isString(result.task.lastRun?.runId);
+    assert.notEqual(result.task.lastRunStatus, "succeeded");
+    assert.equal(result.task.lastRun?.completedAt, null);
+  }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerTasks)));
+});
+
 it.effect.each(
   (["new", "existing"] as const).flatMap((target) =>
     (["user", "agent"] as const).map((createdBy) => ({ target, createdBy })),
@@ -104,7 +142,7 @@ it.effect.each(
         creationSource: createdBy === "agent" ? "mcp" : "web",
       });
       const result = yield* tasks.runNow({ id: task.id });
-      assert.equal(result.task.lastRunStatus, "succeeded");
+      assert.equal(result.task.lastRun?.dispatchStatus, "accepted");
       const projectThreads = yield* threads.listProjectThreads({
         projectId,
         includeSubagents: false,
@@ -209,7 +247,7 @@ it.effect("runs a thread-bound automation on the provider the thread uses now", 
     });
 
     const result = yield* tasks.runNow({ id: task.id });
-    assert.equal(result.task.lastRunStatus, "succeeded");
+    assert.equal(result.task.lastRun?.dispatchStatus, "accepted");
     const projection = yield* threads.getThreadProjection(launched.threadId);
     const message = projection.messages.find((item) => item.scheduledTaskId === task.id);
     const run = projection.runs.find((item) => item.id === message?.runId);
@@ -827,7 +865,7 @@ it.effect("runs a Scratch scheduled task saved with a worktree in its own folder
       WHERE task_id = ${task.id}
     `;
     const ran = yield* tasks.runNow({ id: task.id });
-    assert.equal(ran.task.lastRunStatus, "succeeded");
+    assert.equal(ran.task.lastRun?.dispatchStatus, "accepted");
     const [thread] = yield* threads.listProjectThreads({ projectId, includeSubagents: false });
     assert.isDefined(thread);
     const projection = yield* preparationSettled(thread!.id);
