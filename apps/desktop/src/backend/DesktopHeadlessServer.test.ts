@@ -69,8 +69,11 @@ const fakeListener = (answer: (request: number) => ListenerAnswer | null) => {
   });
 };
 
-/** A runtime binary that records each invocation and prints a fresh session. */
-const fakeRuntime = () => {
+/**
+ * A runtime binary that records each invocation and prints a fresh session.
+ * `expiresAt` names each session's expiry by call number; null makes that call fail.
+ */
+const fakeRuntime = (expiresAt: (call: number) => string | null) => {
   const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.sync(() => {
@@ -79,14 +82,15 @@ const fakeRuntime = () => {
         readonly args: ReadonlyArray<string>;
       };
       calls.push({ command: executable, args });
+      const expiry = expiresAt(calls.length);
       const stdout = JSON.stringify({
         sessionId: `session-${calls.length}`,
         token: `token-${calls.length}`,
-        expiresAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: expiry,
       });
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(expiry === null ? 1 : 0)),
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         unref: Effect.succeed(Effect.void),
@@ -108,6 +112,7 @@ const setup = (input?: {
   attachEnabled?: () => boolean;
   platform?: NodeJS.Platform;
   listener?: (request: number) => ListenerAnswer | null;
+  expiresAt?: (call: number) => string | null;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -124,7 +129,7 @@ const setup = (input?: {
       yield* fs.makeDirectory(runtimeDir, { recursive: true });
       yield* fs.writeFileString(path.join(runtimeDir, ".install-complete"), `${VERSION}\n`);
     }
-    const runtime = fakeRuntime();
+    const runtime = fakeRuntime(input?.expiresAt ?? (() => "2099-01-01T00:00:00.000Z"));
     const environment = DesktopEnvironment.DesktopEnvironment.of({
       path,
       platform: input?.platform ?? "darwin",
@@ -323,6 +328,27 @@ it.layer(NodeServices.layer)("DesktopHeadlessServer", (it) => {
       replaced = true;
       yield* service.refresh;
       expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("detaches a session kept through a failed renewal once the listener changes", () =>
+    Effect.gen(function* () {
+      let replaced = false;
+      const { service, calls, writeRuntime } = yield* setup({
+        listener: () => (replaced ? { instanceId: "a-later-start" } : {}),
+        // The first session is inside the renewal margin; renewing it fails.
+        expiresAt: (call) => (call === 1 ? "1970-01-01T01:00:00.000Z" : null),
+      });
+      yield* writeRuntime(runtimeJson({}));
+      yield* service.refresh;
+      yield* service.refresh;
+      expect(calls).toHaveLength(2);
+      expect(Option.getOrThrow(yield* service.bootstrap).accessToken).toBe("token-1");
+
+      replaced = true;
+      yield* service.refresh;
+      expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+      expect(calls).toHaveLength(2);
     }).pipe(Effect.scoped),
   );
 

@@ -272,12 +272,13 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
     const now = yield* Clock.currentTimeMillis;
     const current = yield* Ref.get(attached);
     const lastFailure = yield* Ref.get(failed);
-    if (
+    const backingOff =
       Option.isSome(lastFailure) &&
       lastFailure.value.identity === identity &&
-      now - lastFailure.value.atMs < FAILED_ISSUE_RETRY_MS
-    )
-      return;
+      now - lastFailure.value.atMs < FAILED_ISSUE_RETRY_MS;
+    const holding = Option.isSome(current) && current.value.identity === identity;
+    // A session kept through a failed renewal is still re-checked on every poll.
+    if (backingOff && !holding) return;
     const reject = Effect.gen(function* () {
       yield* Ref.set(failed, Option.some({ identity, atMs: now }));
       yield* Ref.set(attached, Option.none());
@@ -290,11 +291,7 @@ export const makeWith = Effect.fn("DesktopHeadlessServer.make")(function* (optio
         Effect.isSuccess,
       );
     if (!(yield* verified("before session"))) return yield* reject;
-    if (
-      Option.isSome(current) &&
-      current.value.identity === identity &&
-      current.value.expiresAtMs - now > SESSION_RENEW_MARGIN_MS
-    )
+    if (backingOff || (holding && current.value.expiresAtMs - now > SESSION_RENEW_MARGIN_MS))
       return;
     const issued = yield* issueSession(runtime.value).pipe(
       Effect.tapError((cause) =>
