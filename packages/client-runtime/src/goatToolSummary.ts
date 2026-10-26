@@ -327,6 +327,12 @@ export function summarizeGoatToolCalls(
     case "worktree-cleanup":
       label = phrase("Cleaned up", "clean up", `stale worktrees ${times}`);
       break;
+    case "storage-usage":
+      label = phrase("Read", "read", `GOAT disk usage ${times}`);
+      break;
+    case "storage-clean":
+      label = phrase("Cleaned up", "clean up", `GOAT storage ${times}`);
+      break;
     case "project-list":
       label = phrase("Listed", "list", `projects ${times}`);
       break;

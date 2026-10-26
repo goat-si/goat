@@ -17,6 +17,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as WorktreeInventoryService from "../../WorktreeInventoryService.ts";
 import * as WorktreeMcpService from "../../WorktreeMcpService.ts";
 import { WorktreeToolkit } from "./tools.ts";
+import { storageHandlers } from "../storage/handlers.ts";
 
 const requireWorktreeCapability = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((context) =>
@@ -130,6 +131,7 @@ const handlers = {
       return yield* service.status(scope);
     }),
   ),
+  ...storageHandlers,
 } satisfies McpToolAccess.Handlers<typeof WorktreeToolkit.tools>;
 
 export const layer = McpToolAccess.toLayer(WorktreeToolkit, handlers);

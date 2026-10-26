@@ -43,6 +43,17 @@ const RPC_REQUIRED_SCOPES = {
 };
 
 describe("RPC authorization scopes", () => {
+  it.effect("refuses storage item deletion without environment maintenance authority", () =>
+    Effect.gen(function* () {
+      const method = WS_METHODS.serverCleanUpStorageItems;
+      const payload = { items: [{ id: "rotated_logs:/logs", token: "reviewed" }] };
+      const denied = yield* Effect.flip(
+        RpcAuthorization.authorizeRpcCall([AuthSettingsWriteScope], method, payload),
+      );
+      expect(denied.requiredPermission).toBe(AuthEnvironmentMaintainScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthEnvironmentMaintainScope], method, payload);
+    }),
+  );
   it.effect("accepts only the owning desktop with settings write scope as a catalog host", () =>
     Effect.gen(function* () {
       for (const method of [
