@@ -36,6 +36,7 @@ export class ObservationIndex {
       regions: Map<
         string,
         {
+          kind?: "window" | "viewport" | "document" | "element";
           x: number;
           y: number;
           width: number;
@@ -88,6 +89,7 @@ export class ObservationIndex {
     observationId: string,
     regionId: string,
     bounds: {
+      kind?: "window" | "viewport" | "document" | "element";
       x: number;
       y: number;
       width: number;
@@ -115,7 +117,9 @@ export class ObservationIndex {
     return true;
   }
 
-  resolvePoint(ref: ScreenPointRef): { targetId: string; x: number; y: number } | undefined {
+  resolvePoint(
+    ref: ScreenPointRef,
+  ): { targetId: string; x: number; y: number; kind?: "document" } | undefined {
     if (!Number.isFinite(ref.x) || !Number.isFinite(ref.y)) return undefined;
     for (const [targetId, entry] of this.byTarget) {
       if (entry.observationId !== ref.observationId) continue;
@@ -128,7 +132,12 @@ export class ObservationIndex {
         ref.y >= bounds.pixelHeight
       )
         return undefined;
-      return { targetId, x: bounds.x + ref.x / bounds.scale, y: bounds.y + ref.y / bounds.scale };
+      return {
+        targetId,
+        x: bounds.x + ref.x / bounds.scale,
+        y: bounds.y + ref.y / bounds.scale,
+        ...(bounds.kind === "document" ? { kind: "document" as const } : {}),
+      };
     }
     return undefined;
   }
