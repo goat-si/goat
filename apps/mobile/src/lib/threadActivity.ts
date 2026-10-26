@@ -28,6 +28,7 @@ import {
   commandProgramName,
 } from "@goat/client-runtime/work-log/command-label";
 import {
+  commandVerb,
   contextCompactionLabel,
   formatCommandActionsLabel,
   liveThoughtLine,
@@ -336,7 +337,10 @@ export function workEntryRowLabel(
   // Expanded, an inspecting command shows the command it ran.
   const commandActionsLabel = expanded ? null : commandActionsRowLabel(entry);
   if (commandActionsLabel) return commandActionsLabel;
-  if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
+  if (entry.command?.trim()) {
+    const verb = commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false));
+    return compactWorkEntryText(`${verb} ${commandDisplayText(entry.command)}`);
+  }
   const action = toolGroupAction(entry);
   const isToolRead = action === "read" && entry.itemType === "dynamic_tool";
   if (action === "code-search" || action === "search") {
@@ -1921,18 +1925,7 @@ function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boo
   }
   const command = activity.workEntry.command?.trim();
   if (command) {
-    const program = commandProgramName(command);
-    const verb =
-      status === "inProgress"
-        ? "Running"
-        : status === "failed"
-          ? "Failed"
-          : status === "declined"
-            ? "Declined"
-            : status === "stopped"
-              ? "Stopped"
-              : "Ran";
-    return `${verb} ${program ?? "command"}`;
+    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
   return activity.detail ?? activity.summary;
 }

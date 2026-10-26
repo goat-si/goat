@@ -2749,7 +2749,7 @@ describe("v2 run and attempt history", () => {
     expect(stoppedRows.map((row) => row.id)).toEqual(["stopped-command-entry", "interrupt-result"]);
     expect(stoppedRows[0]).toMatchObject({
       kind: "work",
-      displayLabel: "sleep 90 && echo slept",
+      displayLabel: "Stopped sleep 90 && echo slept",
     });
   });
 });
@@ -3978,7 +3978,7 @@ describe("GOAT read command labels", () => {
         { ...readEntry, structuredPayload: { ...item, commandActions: [] } },
         "/repo",
       ),
-    ).toBe("sed -n '1,80p' apps/web/src/main.tsx");
+    ).toBe("Running sed -n '1,80p' apps/web/src/main.tsx");
   });
 });
 

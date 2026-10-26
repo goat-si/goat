@@ -56,6 +56,13 @@ one. An agent waits up to ten minutes for your answer, or until the request
 expires if sooner. If it stops waiting, answering later wakes the thread so it
 can continue.
 
+Your pointer stays where you put it. By default agents never move it: they
+click through an element's accessibility action, the keyboard, or a background
+click that shows only their own cursor, and a call that would move your pointer
+does not run. If an app ignores background clicks, the agent tells you. To let
+full access agents move your pointer for such apps, turn on **Let agents move my
+pointer** under **Settings > Integrations > Computer use > Advanced**.
+
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
@@ -139,6 +146,9 @@ computer use on from the desktop app on that Mac, GOAT walks you through both
 and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
 a GOAT window visible and the Mac unlocked while it checks.
+After GOAT, its helper or the Mac restarts, updates or wakes, the check may need
+to run again. In the GOAT desktop app on that Mac, choose **Run check** when it is
+available.
 
 If a permission stays off after you allow it, quit and reopen GOAT. After GOAT
 updates, **Accessibility** can show as on in System Settings while macOS still

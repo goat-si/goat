@@ -202,8 +202,8 @@ it.effect(
       expect(events).toEqual([`ready:${OWNED}:quiet`, `ssh:${OWNED}`]);
       expect(scripts).toEqual([
         {
-          script:
-            'if [ -f "$HOME/.goat/userdata/environment-id" ]; then cat "$HOME/.goat/userdata/environment-id"; fi',
+          // With no attachment, the app server's identity applies only while it could be attached.
+          script: SshTunnel.hostEnvironmentIdScript(null),
           timeoutMs: 15_000,
         },
       ]);

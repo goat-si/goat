@@ -35,13 +35,22 @@ const state = vi.hoisted(() => ({
       ) => void),
   surfaceCalls: [] as Array<string>,
   routeThread: null as string | null,
+  sessionListeners: new Set<() => void>(),
 }));
 
 vi.mock("../../../state/previewSessions", async () => {
   const { Atom } = await import("effect/reactivity");
   const { useSyncExternalStore } = await import("react");
   return {
-    usePreviewSessions: () => state.sessions,
+    // A subscription, like the real sessions atom: a new list re-renders its readers.
+    usePreviewSessions: () =>
+      useSyncExternalStore(
+        (listener) => {
+          state.sessionListeners.add(listener);
+          return () => state.sessionListeners.delete(listener);
+        },
+        () => state.sessions,
+      ),
     // A subscription, like the real frames atom: a new event re-renders its reader.
     useDesktopSessionFrame: (_environmentId: string, sessionId: string | null) => {
       state.frameRequests.push(sessionId);
@@ -72,6 +81,14 @@ vi.mock("../../../state/entities", () => ({
   // The preview runtime module reads these; outside the desktop app no tab is drawn natively.
   readEnvironmentSupportsServerBrowser: () => true,
   useEnvironmentSupportsServerBrowser: () => true,
+}));
+// Pop out uses the browser's picture-in-picture, which a headless test page cannot open.
+vi.mock("../../../browser/serverPictureInPicture", () => ({
+  serverPictureInPictureKey: (threadId: string, tabId: string) => JSON.stringify([threadId, tabId]),
+  supportsServerPictureInPicture: () => true,
+  useServerPictureInPictureKey: () => null,
+  openServerPictureInPicture: async () => undefined,
+  closeServerPictureInPicture: () => undefined,
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
 vi.mock("../../../hooks/useThreadRouteTarget", () => ({
@@ -109,7 +126,7 @@ import { AgentScreenCardView } from "./AgentScreenCard";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
-import { usePreviewSessionStack } from "./previewSessionStackStore";
+import { openPreviewSessionStack, usePreviewSessionStack } from "./previewSessionStackStore";
 import { usePreviewMiniPlayerStore } from "../../../previewMiniPlayerStore";
 
 const environmentId = "env-cards" as EnvironmentId;
@@ -186,6 +203,7 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
     narrow: false,
     revealedWhileNarrow: false,
     dismissed: new Set(),
+    hiddenLive: new Map(),
     expanded: null,
     focus: null,
     focusRequest: 0,
@@ -647,18 +665,36 @@ it("draws the agent's cursor where it is on the window, inside a letterboxed pic
   // A square frame in the 16:10 card: bands left and right, and the center stays the center.
   state.frame = { type: "frame", seq: 1, width: 10, height: 10, mime: "image/jpeg", data: "AAAA" };
   await using screen = await render(cardView(desk).element);
-  const marker = () => screen.container.querySelector<HTMLElement>("[data-testid='agent-cursor']");
+  // The browser's cursor mark, shared by every agent screen.
+  const marker = () => screen.container.querySelector<HTMLElement>("[data-agent-browser-cursor]");
   await vi.waitFor(() => expect(marker()).not.toBeNull());
   const picture = screen.container.querySelector("img")!.getBoundingClientRect();
   // Where the marker sits, in whole pixels: layout may round the measured box by a fraction.
   const at = () =>
     marker()!
-      .style.transform.match(/-?[\d.]+/g)!
+      .style.transform.match(/translate3d\(([^)]*)\)/)![1]!
+      .match(/-?[\d.]+/g)!
+      .slice(0, 2)
       .map((value) => Math.round(Number(value)));
   await vi.waitFor(() =>
     expect(at()).toEqual([Math.round(picture.width / 2), Math.round(picture.height / 2)]),
   );
-  expect(marker()!.dataset.phase).toBe("acting");
+  // Acting is drawn as the browser's click mark.
+  expect(marker()!.dataset.phase).toBe("click");
+  // A new frame of the same window is not a new action: the click mark is not replayed.
+  const ping = marker()!.firstElementChild;
+  await sendFrame({
+    type: "frame",
+    seq: 2,
+    width: 10,
+    height: 10,
+    mime: "image/jpeg",
+    data: "BBBB",
+  });
+  await vi.waitFor(() =>
+    expect(screen.container.querySelector("img")?.getAttribute("src")).toContain("BBBB"),
+  );
+  expect(marker()!.firstElementChild).toBe(ping);
   // At the left edge of the window: the point sits past the empty band, not at the card's edge.
   await screen.rerender(
     cardView({
@@ -672,6 +708,7 @@ it("draws the agent's cursor where it is on the window, inside a letterboxed pic
   await vi.waitFor(() =>
     expect(at()).toEqual([Math.round((picture.width - picture.height) / 2), 0]),
   );
+  expect(marker()!.dataset.phase).toBe("move");
   // A point for another window than the one shown is not drawn.
   await screen.rerender(
     cardView({
@@ -746,6 +783,78 @@ it("keeps a stopped session's dimmed card until the person closes it", async () 
   await expect
     .element(screen.getByRole("button", { name: "Agents on screen" }))
     .not.toBeInTheDocument();
+});
+
+it("closes a working browser tab's card while its agent works, and the header brings it back", async () => {
+  setup([browserTab(), desktopApp()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const tab = screen.getByRole("article", { name: /GOAT \(Dev\)/ });
+  const list = screen.getByRole("button", { name: "Agents on screen" });
+  await expect.element(tab).toBeVisible();
+  await expect.element(list).toHaveAttribute("aria-pressed", "true");
+  await userEvent.hover(tab);
+  await userEvent.click(tab.getByRole("button", { name: "Close" }));
+  await expect.element(tab).not.toBeInTheDocument();
+  // The agent was not stopped; only its card was put away.
+  expect(state.control).not.toHaveBeenCalled();
+  // The other card stays, and the list button says a card is put away.
+  await expect.element(screen.getByRole("article", { name: /Thread thread-desk/ })).toBeVisible();
+  await expect.element(list).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(list);
+  await expect.element(screen.getByRole("article", { name: /GOAT \(Dev\)/ })).toBeVisible();
+  await expect.element(list).toHaveAttribute("aria-pressed", "true");
+});
+
+it("keeps the list button to bring back the only card the person closed", async () => {
+  setup([browserTab()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const tab = screen.getByRole("article");
+  await userEvent.hover(tab);
+  await userEvent.click(tab.getByRole("button", { name: "Close" }));
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  // Its agent stops while the card is put away: the list button still brings it back.
+  state.sessions = [
+    browserTab({
+      status: "stopped",
+      capabilities: { controls: ["stopAll"], frames: true, privateMode: true, humanInput: true },
+    }),
+  ];
+  await act(() => {
+    for (const listener of state.sessionListeners) listener();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Agents on screen" }));
+  await expect.element(screen.getByRole("article")).toBeVisible();
+});
+
+it("brings back a closed card when a person asks to show its tab", async () => {
+  setup([browserTab()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const tab = screen.getByRole("article");
+  await userEvent.hover(tab);
+  await userEvent.click(tab.getByRole("button", { name: "Close" }));
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  // The agent showing its tab again on its own leaves the person's choice alone.
+  act(() =>
+    openPreviewSessionStack({
+      environmentId,
+      focus: { kind: "browser", threadId: "thread-1", tabId: "tab-1" },
+      automatic: true,
+    }),
+  );
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  act(() =>
+    openPreviewSessionStack({
+      environmentId,
+      focus: { kind: "browser", threadId: "thread-1", tabId: "tab-1" },
+    }),
+  );
+  await expect.element(screen.getByRole("article")).toBeVisible();
 });
 
 it("leaves room for the pinned thread details card above the cards", async () => {

@@ -43,6 +43,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
 import { TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
@@ -76,7 +77,6 @@ const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512)
 const OrchestratorMcpClientRequestId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(256),
 ).annotate({ description: "Stable idempotency key to reuse when retrying this mutation." });
-
 /**
  * OpenCode 1.15 has been observed serializing nested MCP union objects as JSON
  * strings. Keep the structured object as the documented form while accepting
@@ -747,6 +747,7 @@ export const OrchestratorMcpThreadRun = Schema.Struct({
   runId: RunId,
   ordinal: PositiveInt,
   status: OrchestrationV2RunStatus,
+  terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
   requestedAt: IsoDateTime,
@@ -905,6 +906,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
     Schema.Struct({
       runId: RunId,
       status: OrchestrationV2RunStatus,
+      terminationCause: Schema.optional(OrchestrationV2RunTerminationCause),
       requestedAt: IsoDateTime,
       startedAt: Schema.NullOr(IsoDateTime),
       completedAt: Schema.NullOr(IsoDateTime),

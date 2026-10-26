@@ -42,11 +42,13 @@ updates the hash in the guard.
 goat-ci runs on pull requests and by hand. It does not run on push, so merging into `dev` starts
 nothing. On a pull request the `goat-scope` job diffs the merge commit against its base, and
 `.github/scripts/goat-ci-scope.cjs` picks the matrix. A pull request, draft or ready, gets a quick
-run: `check`, `typecheck`, and `test-changed`, the test files beside the changed files that
-`vp run check:changed` runs before a push (`scripts/lib/changed-tests.ts`, so the two never pick
-different files). Suites that find their files another way are added: shared prompt text adds the
-replay suites, and a changed or deleted non-test `.ts`/`.tsx` file under an app's `src` adds that
-app's `reactCompilerCoverage` suite when it has one (web and mobile do).
+run: `check`, `typecheck`, and `test-changed`. The shared selector
+(`scripts/lib/changed-tests.ts`) picks changed tests, companion tests, and tests that import a
+changed source directly or through testkit/fixture files, so `vp run check:changed` and the PR
+run pick the same files. Production importer chains remain in broader lanes. Existing special
+suites also run: shared prompt text adds replay suites, and a changed or deleted non-test
+`.ts`/`.tsx` file under an app's `src` adds that app's `reactCompilerCoverage` suite when it has
+one (web and mobile do).
 Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
 full suite runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
@@ -66,13 +68,25 @@ job summary lists each chosen server test file and the change that reached it.
 
 Labels widen a run as soon as they are added: `ci:full` runs everything, `ci:affected` what the
 changes reach, `ci:server` adds the full server suite, and `ci:memory` the memory growth suite.
-Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and
-supersedes the old one. Any other label, and any edit that keeps the base, starts a run in a
-concurrency group of its own whose jobs all skip. GitHub lists a skipped job under its raw name
-expression, so the run neither cancels the real one nor puts a skipped check with a real name on
-the commit. `goat-ci-result` is the one check to read: it fails when goat-scope or any
-selected task failed or was cancelled, and its notice says whether the run was quick and names the
-label and the command that start the full run.
+Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and supersedes
+the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub still
+creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite on the
+head commit (#1672). So its `republish` job reports `goat-ci-result`: on a hosted runner, it waits
+for the newest real goat-ci run of the same pull request on the same head and repeats that run's
+`goat-ci-result`. Success passes and anything else fails, so a newer real run decides even when it
+was cancelled. The run listing can lag behind events, so it decides only once its own run is a
+minute old and a second listing names the same run and attempt; a real run listed more than a
+minute after a later edit's run, or created out of event order, can still be missed. A wait that
+outlives the six-hour hosted job limit fails. Ignored runs take a concurrency group of their own
+per pull request, because a group holds one pending run and an ignored newcomer would cancel a real
+run waiting there. Skipped jobs
+keep their raw name expressions, so no skipped check carries a real name. A re-run keeps its run's
+original suite, and a republished result is never refreshed: after re-running a real run that an
+edit or label followed, re-run that later run too. Until then a red re-run stays hidden behind a
+republished green, and a green one stays blocked behind a republished red (#1691). `goat-ci-result`
+is the one check to read: it fails when goat-scope or any selected task failed or was cancelled, and
+its notice says whether the run was quick and names the label and the command that start the full
+run.
 
 A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
 (the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
@@ -101,9 +115,9 @@ do not count, so the untouched `.github/pull_request_template.md` never satisfie
 or maintain role.
 
 The repository variable `GOAT_SCREENSHOT_GATE` selects `warn` (the default: annotation only),
-`enforce` (the job fails), or `off`. goat-ci does not run on description edits, and a label other
-than `ci:*` (the waiver included) starts no job, so the script reads the live PR and a re-run of
-that one job re-evaluates it. Switching modes is in
+`enforce` (the job fails), or `off`. A description edit, or a label other than `ci:*` (the waiver
+included), runs no goat-ci task, so the script reads the live PR and a re-run of that one job
+re-evaluates it, followed by a re-run of the goat-ci run the edit or label started. Switching modes is in
 [the operations guide](../docs/operations/pr-screenshot-gate.md).
 
 An embed counts only if it loads for a reader. A relative path resolves against the PR page, and a

@@ -1,3 +1,9 @@
+import {
+  POWERSHELL_FLAGS,
+  POWERSHELL_OPTIONS_WITH_VALUE,
+  powerShellCommandArgumentIndex,
+} from "./powerShellOptions.ts";
+
 type CommandWrapper = "env" | "sudo";
 type CommandProgramContext = "exec" | "shell";
 
@@ -16,16 +22,6 @@ const SHELL_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--rcfile", "--init-file"]
 const SHELL_COMMAND_WRAPPERS = new Set(["builtin", "command", "exec"]);
 const SHELL_PRECOMMAND_MODIFIERS = new Set(["nocorrect", "noglob", "time"]);
 const POWERSHELL_SETUP_PROGRAMS = new Set(["pop-location", "push-location", "set-location"]);
-const POWERSHELL_FLAGS = new Set(["-mta", "-nologo", "-noninteractive", "-noprofile", "-sta"]);
-const POWERSHELL_OPTIONS_WITH_VALUE = new Set([
-  "-configurationname",
-  "-executionpolicy",
-  "-inputformat",
-  "-outputformat",
-  "-version",
-  "-windowstyle",
-  "-workingdirectory",
-]);
 const START_PROCESS_FLAGS = new Set([
   "-confirm",
   "-debug",
@@ -1386,8 +1382,12 @@ function withoutShellWrapper(command: string): string {
     ?.split(/[\\/]/u)
     .at(-1)
     ?.replace(/\.exe$/iu, "");
-  if (!tokens || !program || !SHELL_PROGRAMS.has(program)) return trimmed;
-  const scriptIndex = shellCommandArgumentIndex(tokens, 1);
+  if (!tokens || !program) return trimmed;
+  const scriptIndex = POWERSHELL_PROGRAMS.has(program.toLowerCase())
+    ? powerShellCommandArgumentIndex(tokens)
+    : SHELL_PROGRAMS.has(program)
+      ? shellCommandArgumentIndex(tokens, 1)
+      : null;
   // Positional arguments can affect the script; keep those invocations intact.
   if (scriptIndex === null || scriptIndex !== tokens.length - 1) return trimmed;
   return tokens[scriptIndex]?.trim() || trimmed;

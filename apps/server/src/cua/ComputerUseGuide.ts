@@ -62,11 +62,12 @@ const skillPointer = (skillPath: string) =>
 export function makeAppGuide(platform: NodeJS.Platform, skillPath: string | undefined) {
   const told = new Set<string>();
   let pointed = skillPath === undefined;
-  return (line: string): string => {
+  return (line: string, context?: { readonly tool?: string | undefined }): string => {
     // Answers can carry megabytes of screenshot; only parse one that can need a note.
     if (
       pointed &&
       !line.includes('"app_name"') &&
+      context?.tool !== "launch_app" &&
       !(skillPath !== undefined && line.includes('"protocolVersion"'))
     )
       return line;
@@ -76,7 +77,11 @@ export function makeAppGuide(platform: NodeJS.Platform, skillPath: string | unde
         instructions?: unknown;
         content?: unknown;
         isError?: unknown;
-        structuredContent?: { app_name?: unknown };
+        structuredContent?: {
+          app_name?: unknown;
+          pid?: unknown;
+          launch_state?: { process_running?: unknown; window_ready?: unknown };
+        };
       };
     };
     try {
@@ -95,6 +100,21 @@ export function makeAppGuide(platform: NodeJS.Platform, skillPath: string | unde
     if (result === undefined || result.isError === true || !Array.isArray(result.content))
       return line;
     const added: Array<{ type: "text"; text: string }> = [];
+    const pid = result.structuredContent?.pid;
+    const launched = result.structuredContent?.launch_state;
+    if (
+      context?.tool === "launch_app" &&
+      typeof pid === "number" &&
+      Number.isSafeInteger(pid) &&
+      pid > 0 &&
+      launched?.process_running === true &&
+      launched.window_ready === false
+    ) {
+      added.push({
+        type: "text",
+        text: `The app launched without a ready window. Call list_windows({ pid: ${pid} }) once, choose only that app's window for the task, then call get_window_state(pid, window_id) before input. If the listing is empty, report that the app has not exposed a window yet; do not input, invent a window id, switch apps, poll, or take foreground.`,
+      });
+    }
     if (!pointed && skillPath !== undefined) {
       pointed = true;
       added.push({ type: "text", text: skillPointer(skillPath) });

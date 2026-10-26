@@ -154,7 +154,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `owner-security` 패키지 소유자, 보안 신고, 기여 정책
 
 - 경로: `scripts/build-desktop-artifact.ts`의 Linux `maintainer`와 staged `author`, `.github/SECURITY.md`, `CONTRIBUTING.md`, `scripts/lib/goat-rename/rules-owner.ts`
-- 정책: maintainer·author는 `GOAT <jun@lidgeai.com>`, 보안 신고는 goat-si/goat의 GitHub private vulnerability reporting이다. `.github/SECURITY.md`는 GOAT 파일이라 충돌에서 GOAT 쪽을 둔다. CONTRIBUTING은 upstream 변경을 받고 GOAT 주인 문단, Ideas 링크, maintainer 문장, triage 신뢰 기준 문단을 다시 얹는다. upstream 쪽을 받은 줄은 머지 뒤 `--apply`가 `rules-owner.ts` 규칙으로 GOAT 값으로 바꾼다. triage 스킬과 `TRIAGE_EXEMPTIONS.td`는 아직 upstream 기준이다 ([10.015](./10.015_t3_chase_owner_and_security.md)).
+- 정책: maintainer·author는 `GOAT <jun@lidgeai.com>`, 보안 신고는 goat-si/goat의 GitHub private vulnerability reporting이다. `.github/SECURITY.md`는 GOAT 파일이라 충돌에서 GOAT 쪽을 둔다. CONTRIBUTING은 upstream 변경을 받고 GOAT 주인 문단, Ideas 링크, maintainer 문장, triage 신뢰 기준 문단을 다시 얹는다. upstream 쪽을 받은 줄은 머지 뒤 `--apply`가 `rules-owner.ts` 규칙으로 GOAT 값으로 바꾼다. triage 스킬과 `TRIAGE_EXEMPTIONS.td`는 아직 upstream 기준이다 ([10.015](./_fin/10/10.015_t3_chase_owner_and_security.md)).
 
 ### `pdf-viewer` PDF.js 파일 뷰어
 

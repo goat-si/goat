@@ -625,6 +625,13 @@ export const ComputerUseRefusalDetail = Schema.Literals([
    * (ADR-0023 D17). Nothing was sent; holderThreadId and app say who and which.
    */
   "app_busy",
+  /**
+   * A foreground pointer call on a window whose last read offered element tokens the agent has
+   * not tried: foreground takes the person's cursor, so tokens and the keyboard come first.
+   */
+  "token_first",
+  /** It would move the person's hardware pointer, which this host keeps still (cuaMovePointer). */
+  "pointer_locked",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

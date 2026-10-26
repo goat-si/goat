@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Relay from "./relay.ts";
 import type * as Acp from "effect-acp/compat";
+import { AcpRequestError } from "effect-acp/errors";
 import { ProviderInstanceId } from "@goat/contracts";
 
 const launch = {
@@ -51,6 +52,7 @@ const Rpc = Schema.fromJsonString(
 );
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decode = Schema.decodeSync(Rpc);
+const isAcpRequestError = Schema.is(AcpRequestError);
 
 it.effect(
   "real ACP boundary configures flat/grouped repos before prompt and rejects missing/mismatched choices",
@@ -442,6 +444,12 @@ it.effect(
                 if (Result.isFailure(response)) {
                   assert.equal(response.failure.stage, "relay");
                   assert.notInclude(response.failure.message, "Synthetic vendor diagnostic");
+                  const cause = response.failure.cause;
+                  assert.isTrue(isAcpRequestError(cause));
+                  if (isAcpRequestError(cause)) {
+                    assert.equal(cause.code, -32000);
+                    assert.equal(cause.method, "session/prompt");
+                  }
                 }
                 assert.deepEqual(methods, [
                   "initialize",

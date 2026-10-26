@@ -9,10 +9,12 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { realRunSuffix } = require("./goat-ci-result-mirror.cjs");
 
 const root = path.resolve(__dirname, "../..");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
 
+const runName = workflow.match(/\nrun-name: >-\n  (.*)\n/)[1];
 const types = workflow
   .match(/\n  pull_request:\n[\s\S]*?\n    types: \[([^\]]*)\]/)[1]
   .split(",")
@@ -22,7 +24,9 @@ const group = concurrency.match(/  group: >-\n    (.*)\n/)[1];
 const cancel = concurrency.match(/  cancel-in-progress: (.*)/)[1];
 
 function job(id) {
-  const body = workflow.split("\n  " + id + ":\n")[1].split(/\n  [a-z-]+:\n/)[0];
+  const body = workflow.split("\n  " + id + ":\n")[1]?.split(/\n  [a-z-]+:\n/)[0];
+  // A job the workflow lacks never runs.
+  if (body === undefined) return { name: "(no " + id + " job)", if: "false" };
   return { name: body.match(/^    name: (.*)$/m)[1], if: body.match(/^    if: (.*)$/m)?.[1] };
 }
 const jobs = {
@@ -30,6 +34,7 @@ const jobs = {
   ci: job("ci"),
   screenshot: job("screenshot-gate"),
   result: job("result"),
+  republish: job("republish"),
 };
 
 // The subset of GitHub's expression language goat-ci uses, with its loose equality: strings compare
@@ -150,6 +155,7 @@ const interpolate = (field, context) =>
 const repository = "goat-si/goat";
 const pullRequest = (repo = repository) => ({
   number: 7,
+  title: "Fix it",
   head: { repo: { full_name: repo } },
   base: { ref: "dev" },
 });
@@ -176,23 +182,27 @@ function runFor(eventName, event) {
   const scope = gate(jobs.scope);
   return {
     triggers: eventName !== "pull_request" || types.includes(event.action),
+    title: interpolate(runName, context),
     group: interpolate(group, context),
     cancel: interpolate(cancel, context) === "true",
     scope,
     ci: named(jobs.ci, scope.runs),
     screenshot: gate(jobs.screenshot),
     result: gate(jobs.result),
+    republish: gate(jobs.republish),
   };
 }
 
 const realRun = {
   triggers: true,
+  title: "Fix it (#7)",
   group: "goat-ci-refs/pull/7/merge",
   cancel: true,
   scope: { name: "goat-scope", runs: true },
   ci: "goat-check",
   screenshot: { name: "goat-screenshot-gate", runs: true },
   result: { name: "goat-ci-result", runs: true },
+  republish: skipped(jobs.republish),
 };
 const requiredNames = [
   realRun.scope.name,
@@ -200,25 +210,38 @@ const requiredNames = [
   realRun.screenshot.name,
   realRun.result.name,
 ];
-const skipped = (spec) => ({ name: unwrap(spec.name), runs: false });
+function skipped(spec) {
+  return { name: unwrap(spec.name), runs: false };
+}
+// GitHub reads a required check from the newest goat-ci suite on the head commit, and an ignored
+// event creates one (#1672), so its republish job reports goat-ci-result. Its group is its own per
+// pull request: a group holds one pending run, so sharing the real one could cancel a real run.
 const ignoredRun = {
   triggers: true,
-  group: "goat-ci-9001",
-  cancel: false,
+  title: "Fix it (#7, ignored event)",
+  group: "goat-ci-refs/pull/7/merge-ignored",
+  cancel: true,
   scope: skipped(jobs.scope),
   ci: unwrap(jobs.ci.name),
   screenshot: skipped(jobs.screenshot),
   result: skipped(jobs.result),
+  republish: { name: "goat-ci-result", runs: true },
 };
 
-it("lists an ignored run's skipped jobs under names no required check uses", () => {
+it("lists every skipped job under a name no required check uses", () => {
   const names = [
     ignoredRun.scope.name,
     ignoredRun.ci,
     ignoredRun.screenshot.name,
     ignoredRun.result.name,
+    realRun.republish.name,
   ];
   for (const name of names) assert.ok(!requiredNames.includes(name), name);
+});
+
+it("names real runs the way goat-ci-result-mirror.cjs finds them, and ignored runs otherwise", () => {
+  assert.ok(realRun.title.endsWith(realRunSuffix(7)));
+  assert.ok(!ignoredRun.title.endsWith(realRunSuffix(7)));
 });
 
 describe("goat-ci pull request triggers", () => {
@@ -231,7 +254,7 @@ describe("goat-ci pull request triggers", () => {
     assert.deepEqual(runFor("pull_request", retarget), realRun);
   });
 
-  it("skips a title or body edit in a group of its own, so it neither cancels CI nor reports under a required name", () => {
+  it("runs only republish for a title or body edit, in a per pull request group that cannot cancel real CI (#1672)", () => {
     for (const changes of [{ title: { from: "old title" } }, { body: { from: "old body" } }, {}]) {
       assert.deepEqual(
         runFor("pull_request", { action: "edited", changes, pull_request: pullRequest() }),
@@ -253,7 +276,7 @@ describe("goat-ci pull request triggers", () => {
     assert.deepEqual(runFor("pull_request", full), realRun);
   });
 
-  it("still ignores a label other than ci:*", () => {
+  it("treats a label other than ci:* like a title edit", () => {
     const label = { action: "labeled", label: { name: "size:S" }, pull_request: pullRequest() };
     assert.deepEqual(runFor("pull_request", label), ignoredRun);
   });
@@ -265,18 +288,41 @@ describe("goat-ci pull request triggers", () => {
       pull_request: pullRequest("someone/goat"),
     };
     const run = runFor("pull_request", retarget);
-    assert.deepEqual([run.scope.runs, run.screenshot.runs, run.result.runs], [false, false, false]);
+    assert.deepEqual(
+      [run.scope.runs, run.screenshot.runs, run.result.runs, run.republish.runs],
+      [false, false, false, false],
+    );
+  });
+
+  it("never reports goat-ci-result for a fork's ignored edit", () => {
+    const edit = {
+      action: "edited",
+      changes: { body: { from: "old body" } },
+      pull_request: pullRequest("someone/goat"),
+    };
+    const run = runFor("pull_request", edit);
+    assert.deepEqual([run.result.runs, run.republish.runs], [false, false]);
+    assert.ok(
+      !requiredNames.includes(run.result.name) && !requiredNames.includes(run.republish.name),
+    );
   });
 
   it("gives a manual run its own group that cancels nothing", () => {
     const run = runFor("workflow_dispatch", { inputs: { lane: "all" } });
     assert.deepEqual(
-      { group: run.group, cancel: run.cancel, scope: run.scope, result: run.result },
+      {
+        group: run.group,
+        cancel: run.cancel,
+        scope: run.scope,
+        result: run.result,
+        republish: run.republish.runs,
+      },
       {
         group: "goat-ci-9001",
         cancel: false,
         scope: { name: "goat-scope", runs: true },
         result: { name: "goat-ci-result", runs: true },
+        republish: false,
       },
     );
   });

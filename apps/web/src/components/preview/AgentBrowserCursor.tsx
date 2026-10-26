@@ -80,6 +80,7 @@ export function AgentCursorMark(props: {
       }}
       aria-hidden="true"
       data-agent-browser-cursor
+      data-phase={phase}
     >
       {phase === "click" ? (
         <span

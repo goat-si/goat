@@ -1,7 +1,6 @@
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as ByteSize from "effect/ByteSize";
@@ -88,6 +87,7 @@ import { makePullRequestSetup } from "./pullRequestSetup.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
+import { makePrLookupGitState } from "./prLookupGitState.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -140,8 +140,8 @@ export class GitManager extends Context.Service<
       options?: GitRemoteStatusOptions,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
     /**
-     * `refresh` asks the host again. `freshGitState` rereads the branch's git
-     * state without forcing a host refresh; use it before persisting a result.
+     * `refresh` asks the host again. `freshGitState` validates recent git reads
+     * without forcing a host refresh; use it before persisting a result.
      */
     readonly branchPullRequest: (
       input: { readonly cwd: string; readonly branch: string },
@@ -179,7 +179,6 @@ const PR_LOOKUP_NO_OPEN_PR_CACHE_TTL = Duration.minutes(5);
 const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
-const PR_LOOKUP_GIT_STATE_TTL = Duration.minutes(5);
 const PR_THREAD_CONTEXT_BYTES = 16_000;
 const PR_THREAD_COMMAND_OUTPUT_CHARS = 2_000;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
@@ -1150,14 +1149,16 @@ export const make = Effect.gen(function* () {
     normalizeStatusCacheKey(cwd).pipe(
       Effect.flatMap((cacheKey) => Cache.invalidate(localStatusResultCache, cacheKey)),
     );
-  const prLookupEpochByCwd = new Map<string, number>();
-  const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
-  const bumpPrLookupEpoch = (cwd: string) =>
-    normalizeStatusCacheKey(cwd).pipe(
-      Effect.map((cacheKey) => {
-        prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
-      }),
-    );
+  const {
+    epoch: prLookupEpoch,
+    bumpEpoch: bumpPrLookupEpoch,
+    remember: rememberPrLookupGitState,
+    forget: forgetPrLookupGitState,
+    validate: validatePrLookupGitState,
+  } = yield* makePrLookupGitState({
+    normalizeCwd: normalizeStatusCacheKey,
+    capacity: PR_LOOKUP_CACHE_CAPACITY,
+  });
   const prLookupCacheKey = (
     cwd: string,
     details: {
@@ -2417,54 +2418,6 @@ export const make = Effect.gen(function* () {
     });
     return mergeGitStatusParts(local, remote);
   });
-  // A merged or closed answer can settle a thread or remove its worktree, so
-  // branchPullRequest confirms one against fresh reads, and discovery asks for
-  // fresh reads (`freshGitState`) before it persists an answer.
-  const prLookupGitStateByKey = new Map<
-    string,
-    { readonly readAtMs: number; readonly value: string | null }
-  >();
-  const rememberPrLookupGitState = Effect.fn("GitManager.rememberPrLookupGitState")(function* <E>(
-    cwd: string,
-    key: string,
-    fresh: boolean,
-    read: Effect.Effect<string | null, E>,
-  ) {
-    const entryKey = `${cwd}\u0000${key}`;
-    const readAtMs = yield* Clock.currentTimeMillis;
-    const remembered = prLookupGitStateByKey.get(entryKey);
-    if (
-      !fresh &&
-      remembered !== undefined &&
-      readAtMs - remembered.readAtMs < Duration.toMillis(PR_LOOKUP_GIT_STATE_TTL)
-    ) {
-      return remembered.value;
-    }
-    // invalidateStatus bumps the epoch. A read that started before a GOAT git
-    // action, or before a newer read finished, must not replace their state.
-    const epoch = prLookupEpoch(cwd);
-    const value = yield* read;
-    const latest = prLookupGitStateByKey.get(entryKey);
-    if (prLookupEpoch(cwd) !== epoch || (latest !== undefined && latest.readAtMs > readAtMs)) {
-      return value;
-    }
-    prLookupGitStateByKey.delete(entryKey);
-    if (prLookupGitStateByKey.size >= PR_LOOKUP_CACHE_CAPACITY) {
-      const oldestKey = prLookupGitStateByKey.keys().next().value;
-      if (oldestKey !== undefined) prLookupGitStateByKey.delete(oldestKey);
-    }
-    prLookupGitStateByKey.set(entryKey, { readAtMs, value });
-    return value;
-  });
-  const forgetPrLookupGitState = (cwd: string) =>
-    normalizeStatusCacheKey(cwd).pipe(
-      Effect.map((cacheCwd) => {
-        const prefix = `${cacheCwd}\u0000`;
-        for (const key of prLookupGitStateByKey.keys()) {
-          if (key.startsWith(prefix)) prLookupGitStateByKey.delete(key);
-        }
-      }),
-    );
   const resolvePrLookupRepositoryIdentity = Effect.fn("resolvePrLookupRepositoryIdentity")(
     function* (
       cwd: string,
@@ -2504,7 +2457,7 @@ export const make = Effect.gen(function* () {
     branch: string,
     options: { readonly refresh: boolean; readonly freshGitState: boolean },
   ) {
-    const remember = <E>(key: string, read: Effect.Effect<string | null, E>) =>
+    const remember = (key: string, read: Effect.Effect<string | null, GitCommandError>) =>
       rememberPrLookupGitState(cacheCwd, key, options.freshGitState, read);
     const remotes = yield* remember(
       "remotes",
@@ -2684,6 +2637,7 @@ export const make = Effect.gen(function* () {
     const cacheCwd = yield* normalizeStatusCacheKey(cwd);
     const refresh = options?.refresh === true;
     const freshGitState = refresh || options?.freshGitState === true;
+    yield* validatePrLookupGitState(cacheCwd, branch, refresh);
     const pullRequest = yield* lookupBranchPullRequest(cacheCwd, branch, {
       refresh,
       freshGitState,

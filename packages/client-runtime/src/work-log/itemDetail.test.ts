@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
+import {
+  turnItemHasDetail,
+  turnItemOutputImages,
+  turnItemOutputLinks,
+  turnItemOutputText,
+} from "./itemDetail.ts";
 
 function toolItem(output: unknown): OrchestrationV2TurnItem {
   return {
@@ -51,4 +56,43 @@ describe("tool image output parsing", () => {
       expect(turnItemOutputText(overflow)).toBe("Two additional screenshots:\n[image]\n[image]");
     },
   );
+});
+
+describe("MCP resource link output", () => {
+  const link = { type: "resource_link", uri: "https://example.com/report", name: "report" };
+  const uriOnlyResource = { type: "resource", resource: { uri: "file:///tmp/notes.md" } };
+  const textResource = { type: "resource", resource: { uri: "file:///tmp/a.md", text: "body" } };
+
+  it.each([
+    ["an array", (blocks: unknown[]) => blocks],
+    ["a content wrapper", (blocks: unknown[]) => ({ content: blocks })],
+    [
+      "a content and structuredContent wrapper",
+      (blocks: unknown[]) => ({ content: blocks, structuredContent: { ok: true } }),
+    ],
+  ])("lists links once in %s and keeps embedded resource text", (_shape, wrap) => {
+    const item = toolItem(
+      wrap([{ type: "text", text: "Saved" }, link, uriOnlyResource, textResource]),
+    );
+    expect(turnItemOutputLinks(item)).toEqual([
+      { uri: "https://example.com/report", name: "report" },
+      { uri: "file:///tmp/notes.md", name: "file:///tmp/notes.md" },
+    ]);
+    expect(turnItemOutputText(item, { omitLinks: true })).toBe("Saved\nbody");
+    // Clients without a link list, such as mobile, still read the URIs as text.
+    expect(turnItemOutputText(item)).toBe(
+      "Saved\nhttps://example.com/report\nfile:///tmp/notes.md\nbody",
+    );
+  });
+
+  it("does not fall back to JSON when a structured result holds only links", () => {
+    const item = toolItem({ content: [link], structuredContent: { id: 7 } });
+    expect(turnItemOutputText(item, { omitLinks: true })).toBeNull();
+    expect(turnItemOutputLinks(item)).toHaveLength(1);
+  });
+
+  it("makes a call with no input expandable when its output is only links", () => {
+    expect(turnItemHasDetail(toolItem([link]))).toBe(true);
+    expect(turnItemHasDetail(toolItem([]))).toBe(false);
+  });
 });

@@ -44,12 +44,15 @@ One failing embed fails the gate, and the summary names each one with its reason
 timeouts, and 408, 429, or 5xx responses get three attempts. If an image still cannot be fetched,
 the result is `inconclusive` (see below), not a failure.
 
-goat-ci does not start on description edits, and a label other than `ci:*` (the waiver included)
-starts no job. The script reads the live PR, so re-run only the `goat-screenshot-gate` job after
-adding a screenshot or the label:
+A description edit, or a label other than `ci:*` (the waiver included), runs no goat-ci task: its
+goat-ci run only repeats the earlier `goat-ci-result`. The script reads the live PR, so after
+adding a screenshot or the label, re-run the `goat-screenshot-gate` job of the run that tested the
+head, then re-run the newer goat-ci run the edit or label started so `goat-ci-result` takes the new
+verdict:
 
 ```sh
 gh run rerun <run-id> --job <job-id> -R goat-si/goat
+gh run rerun <newer-run-id> -R goat-si/goat
 ```
 
 ## Modes

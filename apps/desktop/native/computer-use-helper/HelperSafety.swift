@@ -17,6 +17,10 @@ enum FocusedSecureField: Equatable {
 }
 
 enum HelperSafety {
+  /// Private mode is off for now (#1695): a focus read that failed on every tick paused
+  /// all agent work. While true, secret fields neither pause agents nor block preview frames.
+  static let privateModeDisabled = true
+
   /// Reading the system-wide focused element: kAXErrorNoValue means nothing has focus, which is
   /// a readable answer. Any other error (APIDisabled when the grant is missing or stale,
   /// CannotComplete when the focused app does not answer) leaves the question open, and private

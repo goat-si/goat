@@ -22,7 +22,8 @@ import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const thread = ThreadId.make("thread-person");
 
-it.effect(
+// quarantine: #1695 private mode is switched off; re-enable with it
+it.effect.skip(
   "a standalone Linux server's own helper: its signals count as detected, it watches while an agent controls the host, and its secret field pauses",
   () =>
     Effect.gen(function* () {

@@ -1093,17 +1093,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             method: string,
             params: Record<string, unknown>,
           ) {
+            // The CDP relay acks frames once every viewer that asked for them has.
             if (method === "Page.screencastFrame") {
-              const sessionId = params["sessionId"];
-              if (typeof sessionId === "number") {
-                yield* attemptPromise(
-                  {
-                    operation: "ackScreencastFrame",
-                    webContentsId: wc.id,
-                  },
-                  () => wcDebugger.sendCommand("Page.screencastFrameAck", { sessionId }),
-                ).pipe(Effect.ignore);
-              }
               const tabId = yield* tabIdForWebContents(wc.id);
               const metadata =
                 typeof params["metadata"] === "object" && params["metadata"] !== null

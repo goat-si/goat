@@ -71,6 +71,13 @@ describe("computer use skill text", () => {
     expect(guidance).not.toContain("the person's own keyboard or pointer where GOAT can detect it");
   });
 
+  it("puts the element token and the keyboard before foreground, which takes the person's cursor", () => {
+    const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
+    expect(guidance).toContain("never as the retry for a point click");
+    expect(guidance).toContain("`token_first`");
+    expect(guidance).toContain("then the keyboard (`press_key` Return opens a selected row");
+  });
+
   it("fits every section into one Codex context entry on every host", () => {
     for (const platform of PLATFORMS)
       for (const section of builtInSkillSections(["computer-use"], platform))

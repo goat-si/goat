@@ -56,7 +56,11 @@ const fakeRuntime = () => {
   return { calls, spawner };
 };
 
-const setup = (input?: { stateDir?: (home: string) => string; installed?: boolean }) =>
+const setup = (input?: {
+  stateDir?: (home: string) => string;
+  installed?: boolean;
+  attachEnabled?: () => boolean;
+}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -76,7 +80,9 @@ const setup = (input?: { stateDir?: (home: string) => string; installed?: boolea
       homeDirectory: home,
       stateDir: input?.stateDir?.(home) ?? path.join(goatHome, "desktop", "userdata"),
     } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
-    const service = yield* DesktopHeadlessServer.make.pipe(
+    const service = yield* DesktopHeadlessServer.makeWith({
+      attachEnabled: Effect.sync(input?.attachEnabled ?? (() => true)),
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, runtime.spawner),
     );
@@ -169,5 +175,27 @@ it.layer(NodeServices.layer)("DesktopHeadlessServer", (it) => {
       expect(Option.isNone(yield* service.bootstrap)).toBe(true);
       expect(calls).toHaveLength(0);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "does not attach while the person turned the headless server off, and drops it when they do",
+    () =>
+      Effect.gen(function* () {
+        let on = true;
+        const { service, calls, writeRuntime } = yield* setup({ attachEnabled: () => on });
+        yield* writeRuntime(runtimeJson({}));
+        yield* service.refresh;
+        expect(Option.isSome(yield* service.bootstrap)).toBe(true);
+
+        on = false;
+        yield* service.refresh;
+        expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+
+        // A restarted server stays hidden too, and no session is issued for it.
+        yield* writeRuntime(runtimeJson({ startedAt: "2026-10-12T11:00:00.000Z" }));
+        yield* service.refresh;
+        expect(Option.isNone(yield* service.bootstrap)).toBe(true);
+        expect(calls).toHaveLength(1);
+      }).pipe(Effect.scoped),
   );
 });

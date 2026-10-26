@@ -694,11 +694,13 @@ const make = Effect.gen(function* () {
   const completedContinuations = (namespace: "ssh" | ProviderContinuationPath) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
+      // The redundant status term matches the resolved-handoff partial index; without it this
+      // poll scans every turn item.
       const rows = yield* sql<{
         handoff_json: string;
       }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items WHERE type = 'human_handoff' AND status = 'completed'
-      AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
+      AND status <> 'waiting' AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
         Effect.mapError(unavailable),
       );
       const results: Array<{

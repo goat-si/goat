@@ -353,6 +353,6 @@ describe("commands that only inspect files", () => {
           itemType: "web_search",
         },
       ]).summary,
-    ).toBe("Explored 1 file, 2 searches, 1 list, ran 2 commands, and performed 1 other action");
+    ).toBe("Explored 1 file, 2 searches, 1 list, ran 2 commands, and searched the web 1 time");
   });
 });

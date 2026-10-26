@@ -40,12 +40,13 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { makeTokenFirst, TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
-import { driverExitReason, markUnverified } from "./ComputerUseDriverOutcome.ts";
+import { driverExitReason } from "./ComputerUseDriverOutcome.ts";
 import {
   approvedApps,
   learnApps,
@@ -120,12 +121,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
+  const tokenFirst = makeTokenFirst();
   const outstanding = new Map<
     string,
     {
       readonly id: JsonRpcId;
       readonly method: string;
       readonly tool?: string;
+      readonly args?: unknown;
       readonly unfiltered?: boolean;
       readonly reservationId?: string;
       readonly connectionId: string;
@@ -245,6 +248,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         Effect.gen(function* () {
           if (finished !== undefined || lifecycle.current !== current) return;
           const message = parse(line);
+          let tool: string | undefined;
           if (message?.id !== undefined && message.id !== null && message.method === undefined) {
             const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
             // Only the answer to a list_apps request still waiting for it says which app a pid is.
@@ -263,7 +267,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
-            if (request.method === "tools/call") line = markUnverified(request.tool, line);
+            tool = request.method === "tools/call" ? request.tool : undefined;
+            if (request.method === "tools/call") line = tokenFirst.reply(request, message, line);
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
@@ -339,7 +344,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
             }
           }
-          yield* options.output(admitDriverReplyScreenshots(line));
+          yield* options.output(admitDriverReplyScreenshots(line), { tool });
         }),
       ),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper
@@ -662,6 +667,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     if (sharedNow() && takesScreen(message.params?.name, message.params?.arguments))
       return refusal(id, message.method, "screen_shared", SCREEN_SHARED);
+    if (tokenFirst.refuses(message.params?.name, message.params?.arguments))
+      return refusal(id, message.method, "token_first", TOKEN_FIRST_MESSAGE);
     const focusNow = yield* Clock.currentTimeMillis;
     if (
       requiresForeground({
@@ -938,6 +945,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           id,
           method: message!.method!,
           ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+          args: message?.params?.arguments,
           unfiltered: Object.keys(message?.params?.arguments ?? {}).every(
             (key) => key === "session",
           ),
