@@ -87,6 +87,7 @@ import {
   openCodeToolTurnItem,
 } from "./toolItems.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
+
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
 export const OPENCODE_SDK_PROTOCOL = "opencode-sdk.sse" as const;
@@ -3319,9 +3320,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 buildRuntimeInstructions({
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
-                  screenCode: McpProviderSession.carriesScreenCodeSkill(
-                    yield* mcpSessions.read(turnInput.threadId),
-                  ),
+                  skills: yield* mcpSessions.read(turnInput.threadId),
                   computerUse:
                     (yield* syncCuaDriver(turnInput.threadId)) &&
                     McpProviderSession.carriesComputerUseSkill(

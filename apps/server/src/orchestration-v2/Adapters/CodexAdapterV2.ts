@@ -182,6 +182,8 @@ import {
   settledCodexFailure,
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
+import { codexTurnSkills } from "./CodexTurnSkills.ts";
+
 const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -267,6 +269,7 @@ const CODEX_CLIENT_CAPABILITIES = {
   optOutNotificationMethods: ["turn/diff/updated"],
   extensions: { [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
 } as const;
+
 export const CodexProviderCapabilitiesV2 = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: true,
@@ -686,6 +689,7 @@ const decodeTurnSandboxPolicy = Schema.decodeUnknownEffect(
 const decodeTurnReasoningEffort = Schema.decodeUnknownEffect(
   Schema.Union([CodexSchema.V2TurnStartParams__ReasoningEffort, Schema.Null]),
 );
+
 const CodexTurnStartParamsWithCollaborationMode = CodexSchema.V2TurnStartParams.pipe(
   Schema.fieldsAssign({
     collaborationMode: Schema.optionalKey(CodexSchema.ClientRequest__CollaborationMode),
@@ -7179,11 +7183,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasGoatMcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
-              computerUse:
-                mcpSession !== undefined &&
-                runtime.cuaDriver !== undefined &&
-                McpProviderSession.carriesComputerUseSkill(mcpSession),
-              screenCode: McpProviderSession.carriesScreenCodeSkill(mcpSession),
+              ...codexTurnSkills(mcpSession, runtime.cuaDriver),
               computerUseDeferred,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),

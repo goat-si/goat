@@ -2,26 +2,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpServerRequest } from "effect/http";
 
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
-import { GENERIC_REFUSAL } from "./mcpUnauthorized.ts";
 
-export const normalizeMcpHttpResponse = (
-  response: HttpServerResponse.HttpServerResponse,
-): HttpServerResponse.HttpServerResponse => {
-  const bodyIsEmpty =
-    response.body._tag === "Empty" ||
-    (response.body._tag === "Uint8Array" && response.body.contentLength === 0) ||
-    (response.body._tag === "Raw" && response.body.contentLength === 0);
-  return response.status === 200 && bodyIsEmpty
-    ? HttpServerResponse.setStatus(response, 202)
-    : response;
-};
-
-// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
-export const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
-
+export const GENERIC_REFUSAL = "A valid GOAT MCP credential is required.";
 const RETRY_AT_NEXT_TURN =
   "GOAT re-authenticates the thread with a fresh credential when its next turn starts; retry this tool then.";
 

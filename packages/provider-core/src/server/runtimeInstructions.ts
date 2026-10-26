@@ -1,4 +1,8 @@
 import { builtInSkillSections } from "./builtinSkills/registry.ts";
+import { screenCodeRuntimeInstructions } from "./builtinSkills/screenCodeRuntime.ts";
+import { carriesComputerUseSkill, carriesScreenCodeSkill } from "./mcpSession.ts";
+import type { McpProviderSessionConfig } from "./mcpSession.ts";
+export { SCREEN_CODE_INSTRUCTION_SECTIONS } from "./builtinSkills/screenCodeRuntime.ts";
 
 /**
  * Only useful with the GOAT MCP server, so it travels with the orchestration sections; an
@@ -14,8 +18,6 @@ Link each PR you create, take over, or push to with goat_pull_request_link (full
  */
 export const COMPUTER_USE_INSTRUCTION_SECTIONS = builtInSkillSections(["computer-use"]);
 export const COMPUTER_USE_INSTRUCTIONS = COMPUTER_USE_INSTRUCTION_SECTIONS.join("\n\n");
-export const SCREEN_CODE_INSTRUCTION_SECTIONS = builtInSkillSections(["screen-code"]);
-export const SCREEN_CODE_INSTRUCTIONS = "Screen: goat_screen_run";
 
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
@@ -25,6 +27,8 @@ export function buildRuntimeInstructions(runtime: {
   readonly reasoningEffort?: string | undefined;
   /** True when this turn carries the computer use skill (see `resolveBuiltInSkills`). */
   readonly computerUse?: boolean | undefined;
+  /** The turn's MCP session: narrows `computerUse` and, absent `screenCode`, decides the screen guide. */
+  readonly skills?: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined;
   readonly screenCode?: boolean | undefined;
   readonly screenCodeSkillPath?: string | undefined;
   /** Cursor and ACP resend this block on later turns under the 300-byte budget. */
@@ -38,15 +42,14 @@ export function buildRuntimeInstructions(runtime: {
     modelName && modelName !== model ? `${modelName} (model slug: ${model})` : model;
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
-  const computerUse = runtime.computerUse ? `\n\n${COMPUTER_USE_INSTRUCTIONS}` : "";
-  const screenCodePointer = runtime.screenCodeSkillPath
-    ? ` Read the screen-code skill at ${toSingleLine(runtime.screenCodeSkillPath)} before the first cell.`
-    : "";
-  const screenCode = !runtime.screenCode
-    ? ""
-    : runtime.screenCodeCompact && runtime.screenCodeSkillPath !== undefined
-      ? `\n${SCREEN_CODE_INSTRUCTIONS}${screenCodePointer}`
-      : `\n\n${SCREEN_CODE_INSTRUCTION_SECTIONS.join("\n\n")}${screenCodePointer}`;
+  const computerUse =
+    runtime.computerUse && carriesComputerUseSkill(runtime.skills)
+      ? `\n\n${COMPUTER_USE_INSTRUCTIONS}`
+      : "";
+  const screenCode = screenCodeRuntimeInstructions({
+    ...runtime,
+    screenCode: runtime.screenCode ?? carriesScreenCodeSkill(runtime.skills),
+  });
   return `<runtime_info>You run in GOAT through the ${harness} harness${modelInfo}${effortInfo}; say so only if asked. Markdown can embed images and videos by absolute file path.</runtime_info>${computerUse}${screenCode}`;
 }
 

@@ -88,6 +88,7 @@ import { turnScopedSelectionTransition } from "@goat/provider-core/server/select
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
 import { openCodeFileUris, openCodeToolTurnItem, type OpenCodeToolResult } from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
+
 const OpenCode2ProviderCapabilities = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: true,
@@ -3188,9 +3189,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         buildRuntimeInstructions({
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
-          screenCode: McpProviderSession.carriesScreenCodeSkill(mcpSession),
-          computerUse:
-            state.cua !== undefined && McpProviderSession.carriesComputerUseSkill(mcpSession),
+          skills: mcpSession,
+          computerUse: state.cua !== undefined,
         }),
         goatOrchestrationSystemPrompt(mcpAvailable),
         availability.read || availability.write || availability.source

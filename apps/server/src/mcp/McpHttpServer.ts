@@ -59,7 +59,6 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
@@ -130,15 +129,8 @@ import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
 import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
-import { ScreenRunTool, ScreenToolkit, validScreenRunPayload } from "./toolkits/screen/tools.ts";
-import { screenRunMcpResult } from "./toolkits/screen/result.ts";
-import { unauthorized } from "./mcpUnauthorized.ts";
-import {
-  normalizeMcpHttpResponse,
-  looksLikeProviderToken,
-  credentialRefusalMessage,
-  refusedToolCallId,
-} from "./mcpAuthResponse.ts";
+import { screenRunTool } from "./toolkits/screen/mcpTool.ts";
+import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
 export { credentialRefusalMessage } from "./mcpAuthResponse.ts";
 import {
   PreviewSnapshotTool,
@@ -162,6 +154,45 @@ import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 
+const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
+  HttpServerRequest.toURL(request).pipe(
+    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
+  );
+
+/** Launched agents cannot open OAuth browsers; OAuth would mint credentials outliving their session. */
+const unauthorized = (input: {
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly presentedToken: boolean;
+  readonly offerOAuth: boolean;
+  readonly message?: string;
+}) => {
+  const metadataUrl = input.offerOAuth
+    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
+    : undefined;
+  const challenge = [
+    "Bearer",
+    [
+      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
+      ...(input.presentedToken ? ['error="invalid_token"'] : []),
+    ].join(", "),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return HttpServerResponse.jsonUnsafe(
+    {
+      error: "invalid_mcp_credential",
+      message: input.message ?? GENERIC_REFUSAL,
+    },
+    {
+      status: 401,
+      headers: {
+        "cache-control": "no-store",
+        "www-authenticate": challenge,
+      },
+    },
+  );
+};
+
 export class McpClientAuthenticator extends Context.Service<
   McpClientAuthenticator,
   {
@@ -184,6 +215,21 @@ type McpAuthMiddleware = (
   Types.unhandled,
   HttpServerRequest.HttpServerRequest
 >;
+
+const normalizeMcpHttpResponse = (
+  response: HttpServerResponse.HttpServerResponse,
+): HttpServerResponse.HttpServerResponse => {
+  const bodyIsEmpty =
+    response.body._tag === "Empty" ||
+    (response.body._tag === "Uint8Array" && response.body.contentLength === 0) ||
+    (response.body._tag === "Raw" && response.body.contentLength === 0);
+  return response.status === 200 && bodyIsEmpty
+    ? HttpServerResponse.setStatus(response, 202)
+    : response;
+};
+
+// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
+const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
 
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
@@ -614,62 +660,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
 
 const registerScreenRun = Effect.fn("McpHttpServer.registerScreenRun")(function* () {
   const server = yield* McpServer.McpServer;
-  const threads = yield* ThreadManagementService.ThreadManagementService;
-  const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
-  const built = yield* decodeAsAdvertised(ScreenToolkit);
-  const tool = ScreenRunTool;
-  yield* server.addTool({
-    tool: new McpSchema.Tool({
-      name: tool.name,
-      description: Tool.getDescription(tool),
-      inputSchema: Tool.getJsonSchema(tool),
-      annotations: {
-        ...Context.getOption(tool.annotations, Tool.Title).pipe(
-          Option.map((title) => ({ title })),
-          Option.getOrUndefined,
-        ),
-        readOnlyHint: Context.get(tool.annotations, Tool.Readonly),
-        destructiveHint: Context.get(tool.annotations, Tool.Destructive),
-        idempotentHint: Context.get(tool.annotations, Tool.Idempotent),
-        openWorldHint: Context.get(tool.annotations, Tool.OpenWorld),
-      },
-    }),
-    annotations: tool.annotations,
-    handle: (payload) =>
-      Effect.withFiber((fiber) => {
-        if (!validScreenRunPayload(payload))
-          return Effect.succeed(
-            new McpSchema.CallToolResult({
-              isError: true,
-              content: [{ type: "text", text: "Invalid screen run input." }],
-            }),
-          );
-        if (Option.isNone(screen))
-          return Effect.succeed(
-            new McpSchema.CallToolResult({
-              isError: true,
-              content: [{ type: "text", text: "Screen run is unavailable on this GOAT host." }],
-            }),
-          );
-        const invocation = Context.getUnsafe(
-          fiber.context,
-          McpInvocationContext.McpInvocationContext,
-        );
-        return built.handle("goat_screen_run", payload).pipe(
-          Stream.unwrap,
-          Stream.run(Sink.last()),
-          Effect.flatMap(Effect.fromOption),
-          Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
-          Effect.provideService(ScreenRunService.ScreenRunService, screen.value),
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.map(({ encodedResult }) => screenRunMcpResult(encodedResult)),
-          Effect.matchCauseEffect({
-            onFailure: imageToolFailure(tool.name, "screen_run", "Screen run failed."),
-            onSuccess: Effect.succeed,
-          }),
-        );
-      }),
-  });
+  yield* server.addTool(yield* screenRunTool);
 });
 
 const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function* <

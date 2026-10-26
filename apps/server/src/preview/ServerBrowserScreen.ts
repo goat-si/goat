@@ -3,10 +3,21 @@ import {
   type AgentCursorSnapshot,
   type PreviewAutomationRequest,
 } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 
+import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
-import type { ServerTab } from "./ServerBrowserTypes.ts";
-import { BrowserControlInterrupted } from "./SessionControl.ts";
+import { BrowserControlInterrupted, type SessionControl } from "./SessionControl.ts";
+
+/** The parts of a server browser tab that screen runs check and draw on. */
+export interface ScreenTab {
+  readonly threadId: string;
+  readonly tabId: string;
+  readonly control: SessionControl;
+  readonly page: { readonly url: () => string };
+  readonly desktop: object | null;
+  readonly viewers: ReadonlySet<{ readonly push: (output: ServerBrowserViewerOutput) => void }>;
+}
 
 /** A change in who may drive a tab, reported so screen runs bound to it can stop. */
 export interface AuthorityChange {
@@ -16,9 +27,16 @@ export interface AuthorityChange {
 }
 export type AuthorityListener = (change: AuthorityChange) => void;
 
+/** The trusted screen host supplies the exact tab after claim admission. */
+export type CursorStateSink = (input: {
+  readonly threadId: string;
+  readonly tabId: string;
+  readonly cursor: AgentCursorSnapshot;
+}) => Effect.Effect<boolean>;
+
 /** Reports only real control changes: generation moves, not every viewer or owner update. */
 export const authorityReporter = (
-  tab: Pick<ServerTab, "control" | "threadId" | "tabId">,
+  tab: Pick<ScreenTab, "control" | "threadId" | "tabId">,
   notify: AuthorityListener,
 ) => {
   let observedGeneration = tab.control.generation;
@@ -52,7 +70,7 @@ const originOf = (url: string): string | null => {
 };
 
 /** A screen run acts only on the exact tab, control generation and origin it observed. */
-export const assertScreenExpectation = (tab: ServerTab, request: PreviewAutomationRequest) => {
+export const assertScreenExpectation = (tab: ScreenTab, request: PreviewAutomationRequest) => {
   const expected = request.screenExpectation;
   if (!expected) return;
   if (
@@ -66,6 +84,24 @@ export const assertScreenExpectation = (tab: ServerTab, request: PreviewAutomati
     throw new BrowserControlInterrupted("Page origin changed; bind and observe again.");
 };
 
+/** Passes a read's result through once the tab still matches what the screen run observed. */
+export const recheck =
+  (tab: ScreenTab | undefined, request: PreviewAutomationRequest) =>
+  <A>(result: A): A => {
+    if (tab) assertScreenExpectation(tab, request);
+    return result;
+  };
+
+/** Checks the screen expectation on both sides of a read; a missing tab reads unchecked. */
+export const checkedAround = async <Tab extends ScreenTab | undefined, A>(
+  tab: Tab,
+  request: PreviewAutomationRequest,
+  read: (tab: Tab) => Promise<A>,
+): Promise<A> => {
+  if (tab) assertScreenExpectation(tab, request);
+  return read(tab).then(recheck(tab, request));
+};
+
 export const assertScreenConnection = (request: PreviewAutomationRequest, connectionId: string) => {
   const expected = request.screenExpectation;
   if (
@@ -76,9 +112,15 @@ export const assertScreenConnection = (request: PreviewAutomationRequest, connec
     throw new BrowserControlInterrupted("Exact browser connection changed.");
 };
 
+/** A secret field has focus: closing now would throw away what the person is typing. */
+export const refusePrivateClose = (tab: ScreenTab) => {
+  if (tab.control.isPrivate)
+    throw new BrowserControlInterrupted("A private field has focus in this tab.", "privateMode");
+};
+
 /** Call when the action starts; the gate rechecks the screen expectation right before input lands. */
 export const screenActionGate = (
-  tab: ServerTab,
+  tab: ScreenTab,
   request: PreviewAutomationRequest,
 ): DispatchGate => {
   const base = tab.control.dispatchGate(request.screenExpectation?.controlGeneration);
@@ -96,7 +138,7 @@ export const screenActionGate = (
  * hiding or yielding always goes through so a stale cursor never lingers.
  */
 export const pushCursorState = (
-  tab: ServerTab,
+  tab: ScreenTab,
   cursor: AgentCursorSnapshot,
   pushDesktop: (cursor: AgentCursorSnapshot) => void,
 ): boolean => {
@@ -114,3 +156,42 @@ export const pushCursorState = (
 /** Keep pointer order at least as fresh as the last cursor state delivered to this tab. */
 export const nextPointerSequence = (previous: number, cursor?: AgentCursorSnapshot): number =>
   Math.max(previous + 1, cursor?.identity.sequence ?? 0);
+
+/** The screen state one ServerBrowser keeps: authority listeners and each tab's last cursor. */
+export const makeSurface = <Tab extends ScreenTab>(
+  findTab: (threadId: string, tabId: string) => Tab | undefined,
+  pushDesktop: (
+    key: { readonly threadId: string; readonly tabId: string },
+    cursor: AgentCursorSnapshot,
+  ) => void,
+) => {
+  const listeners = new Set<AuthorityListener>();
+  const cursorByTab = new WeakMap<Tab, AgentCursorSnapshot>();
+  const notify: AuthorityListener = (change) => {
+    for (const listener of listeners) listener(change);
+  };
+  const onAuthorityChange = (listener: AuthorityListener) => {
+    listeners.add(listener);
+    return () => void listeners.delete(listener);
+  };
+  /** The next pointer sequence, and the visible cursor to draw the pointer with. */
+  const nextPointer = (tab: Tab, previous: number) => {
+    const current = cursorByTab.get(tab);
+    const cursor =
+      current?.phase === "hidden" || current?.phase === "yielded" ? undefined : current;
+    return {
+      sequence: nextPointerSequence(previous, current),
+      withCursor: cursor ? { cursor } : {},
+    };
+  };
+  const cursorState: CursorStateSink = (input) =>
+    Effect.sync(() => {
+      const tab = findTab(input.threadId, input.tabId);
+      if (!tab) return false;
+      const key = { threadId: tab.threadId, tabId: tab.tabId };
+      const sent = pushCursorState(tab, input.cursor, (cursor) => pushDesktop(key, cursor));
+      if (sent) cursorByTab.set(tab, input.cursor);
+      return sent;
+    });
+  return { notify, nextPointer, service: { onAuthorityChange, cursorState } };
+};

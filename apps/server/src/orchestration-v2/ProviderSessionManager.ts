@@ -5,7 +5,6 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
-  COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
   type AuthEnvironmentScope,
@@ -75,12 +74,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
-import {
-  resolveAttachedScreenSkills,
-  sameScreenBindingHints,
-  screenSurfaceAttached,
-} from "./ScreenSkills.ts";
-import { installScreenCodeSkillWhenActive, screenSkillPath } from "./ScreenCodeSkillInstall.ts";
+import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -733,30 +727,15 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
-                const computerUseAttached = computerUse._tag === "proxied";
-                if (
-                  screenSurfaceAttached({
-                    browserToolsAvailable,
-                    usableThread,
-                    computerUseAttached,
-                  })
-                )
-                  capabilities.add("screen");
-                const activeSkills = yield* resolveAttachedScreenSkills({
+                const withTurnSkills = yield* prepareScreenTurn({
                   browserToolsAvailable,
                   usableThread,
-                  computerUseAttached,
+                  computerUse,
+                  capabilities,
                   serverSettings,
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
                 });
-                const skillPath = yield* installScreenCodeSkillWhenActive(activeSkills);
-                const withTurnSkills = (config: McpProviderSessionConfig) =>
-                  ComputerUse.withComputerUse(
-                    { ...config, builtInSkills: activeSkills, ...screenSkillPath(skillPath) },
-                    computerUse,
-                    COMPUTER_USE_LEASE_ROUTE,
-                  );
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.

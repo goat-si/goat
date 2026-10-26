@@ -16,7 +16,7 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
-import type { BoundPreviewTab } from "../mcp/PreviewAutomationBroker.ts";
+import type { BoundPreviewTab } from "./BoundPreviewTabs.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
   observationReplyBudget,

@@ -4,17 +4,6 @@ import {
   previewControlMessage,
 } from "./previewAutomationControl.ts";
 
-import {
-  PreviewAutomationClientId,
-  PreviewAutomationConnectionId,
-  PreviewAutomationScreenshot,
-  PreviewAutomationScreenExpectation,
-} from "./previewAutomationScreen.ts";
-export {
-  PreviewAutomationClientId,
-  PreviewAutomationConnectionId,
-} from "./previewAutomationScreen.ts";
-
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   PREVIEW_VIEWPORT_MAX_AREA,
@@ -26,6 +15,8 @@ import {
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import * as Screen from "./previewAutomationScreen.ts";
+
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
   .check(Schema.isMaxLength(2048));
@@ -50,6 +41,7 @@ export const PREVIEW_AUTOMATION_V1_OPERATIONS = [
   "recordingStart",
   "recordingStop",
 ] as const;
+
 const PREVIEW_AUTOMATION_OPERATIONS = [
   ...PREVIEW_AUTOMATION_V1_OPERATIONS,
   "resize",
@@ -646,7 +638,18 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
   actionTimeline: Schema.Array(PreviewAutomationActionEvent),
   /** Absent when the request skipped the capture because nothing would show or save it. */
-  screenshot: Schema.optional(PreviewAutomationScreenshot),
+  screenshot: Schema.optional(
+    Schema.Struct({
+      mimeType: Schema.Literal("image/png"),
+      data: Schema.String,
+      width: Schema.Int,
+      height: Schema.Int,
+      fullPage: Schema.optional(Schema.Boolean),
+      clipped: Schema.optional(Schema.Boolean),
+      byteLength: Schema.optional(Schema.Int),
+      ...Screen.ScreenshotPlacementFields,
+    }),
+  ),
   treeComplete: Schema.optional(Schema.Boolean),
   refGeneration: Schema.optional(Schema.String),
 });
@@ -670,6 +673,11 @@ export const PreviewAutomationRecordingArtifact = Schema.Struct({
   createdAt: Schema.String,
 });
 export type PreviewAutomationRecordingArtifact = typeof PreviewAutomationRecordingArtifact.Type;
+
+export const PreviewAutomationClientId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+export type PreviewAutomationClientId = typeof PreviewAutomationClientId.Type;
+export const PreviewAutomationConnectionId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+export type PreviewAutomationConnectionId = typeof PreviewAutomationConnectionId.Type;
 
 export const PreviewAutomationHostIdentity = Schema.Struct({
   clientId: PreviewAutomationClientId,
@@ -705,7 +713,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   threadId: ThreadId,
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
-  screenExpectation: Schema.optional(PreviewAutomationScreenExpectation),
+  screenExpectation: Schema.optional(Screen.PreviewAutomationScreenExpectation),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   operation: PreviewAutomationOperation,

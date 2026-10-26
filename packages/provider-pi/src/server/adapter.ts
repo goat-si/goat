@@ -41,9 +41,7 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { providerMessageTextWithAttachmentPaths } from "@goat/provider-core/server/attachmentPrompt";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
-import { openPiCuaGate, writePiCuaGate } from "./cuaGate.ts";
-import { openPiScreenSkillGate, writePiScreenSkillGate } from "./screenSkillGate.ts";
+import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -419,12 +417,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
+
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
       driver: PI_PROVIDER,
       detail,
       ...(payload === undefined ? {} : { payload }),
     });
+
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver: PI_PROVIDER,
@@ -460,29 +460,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
-      const cuaGate =
-        mcpSession?.cuaDriver === undefined
-          ? undefined
-          : {
-              path: yield* provideCacheFs(
-                openPiCuaGate(fileSystem).pipe(Effect.provideService(Scope.Scope, scope)),
-              ),
-              key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
-            };
-      const screenSkillGatePath =
-        mcpSession === undefined
-          ? undefined
-          : yield* provideCacheFs(
-              openPiScreenSkillGate(fileSystem).pipe(Effect.provideService(Scope.Scope, scope)),
-            );
+      const gates = yield* provideCacheFs(
+        openPiTurnGates(fileSystem, mcpSession).pipe(Effect.provideService(Scope.Scope, scope)),
+      );
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
-        cuaGatePath: cuaGate?.path,
-        screenSkillGatePath,
+        cuaGatePath: gates.cua?.path,
+        screenSkillGatePath: gates.screenSkillPath,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -584,12 +572,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
         readonly kind: "turn_start" | "steer";
       }> = [];
+
       const compactRpcRecord = (command: PiCompactCommand): PiRpcRecord =>
         command.customInstructions === undefined
           ? { type: "compact" }
           : { type: "compact", customInstructions: command.customInstructions };
+
       const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
+
       const updateProviderSession =
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (
@@ -604,6 +595,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             providerSession: sessionEntity,
           });
         });
+
       const updateProviderThread =
         /* Provider events include streaming deltas; avoid a span for each update. */
         Effect.fnUntraced(function* (
@@ -620,6 +612,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(retainedNativeTurnIds === undefined ? {} : { retainedNativeTurnIds }),
           });
         });
+
       const itemOrdinal = (turn: ActivePiTurn, nativeItemId: string): number => {
         const existing = turn.itemOrdinals.get(nativeItemId);
         if (existing !== undefined) return existing;
@@ -2417,22 +2410,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (screenSkillGatePath !== undefined || cuaGate !== undefined) {
-              const attached = yield* mcpSessions.read(turnInput.threadId);
-              if (screenSkillGatePath !== undefined)
-                yield* writePiScreenSkillGate(fileSystem, screenSkillGatePath, attached).pipe(
-                  Effect.mapError(() =>
-                    protocolError("Could not update Pi's screen guide for this turn"),
-                  ),
-                );
-              if (cuaGate !== undefined) {
-                yield* writePiCuaGate(fileSystem, cuaGate, attached).pipe(
-                  Effect.mapError(() =>
-                    protocolError("Could not update Pi's computer use access for this turn"),
-                  ),
-                );
-              }
-            }
+            yield* writePiTurnGates(fileSystem, gates, mcpSessions.read(turnInput.threadId)).pipe(
+              Effect.mapError((gate) =>
+                protocolError(`Could not update Pi's ${gate} for this turn`),
+              ),
+            );
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({

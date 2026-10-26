@@ -1,14 +1,18 @@
 import {
   BuiltInSkillName,
+  COMPUTER_USE_LEASE_ROUTE,
   resolveProjectBuiltInSkillEnabled,
   type ScreenBindingHints,
   type TurnCapability,
 } from "@goat/contracts";
 import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
+import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { installScreenCodeSkillWhenActive, screenSkillPath } from "./ScreenCodeSkillInstall.ts";
 
 export const sameScreenBindingHints = (
   left: ScreenBindingHints | undefined,
@@ -82,4 +86,40 @@ export const resolveAttachedScreenSkills = Effect.fn("ScreenSkills.resolveAttach
     ...(input.requested === undefined ? {} : { requested: input.requested }),
     disabled,
   }).active;
+});
+
+/**
+ * Lists goat_screen_run for the turn when its surfaces attach, and returns how to stamp the
+ * turn's built-in skills, installed screen guide and computer use onto its MCP session config.
+ */
+export const prepareScreenTurn = Effect.fn("ScreenSkills.prepareTurn")(function* (
+  input: Omit<Parameters<typeof resolveAttachedScreenSkills>[0], "computerUseAttached"> & {
+    readonly computerUse: ComputerUse.ComputerUseAttachment;
+    readonly capabilities: { readonly add: (capability: "screen") => unknown };
+  },
+) {
+  const computerUseAttached = input.computerUse._tag === "proxied";
+  if (
+    screenSurfaceAttached({
+      browserToolsAvailable: input.browserToolsAvailable,
+      usableThread: input.usableThread,
+      computerUseAttached,
+    })
+  )
+    input.capabilities.add("screen");
+  const activeSkills = yield* resolveAttachedScreenSkills({
+    browserToolsAvailable: input.browserToolsAvailable,
+    usableThread: input.usableThread,
+    computerUseAttached,
+    serverSettings: input.serverSettings,
+    projectId: input.projectId,
+    requested: input.requested,
+  });
+  const skillPath = yield* installScreenCodeSkillWhenActive(activeSkills);
+  return (config: McpProviderSessionConfig) =>
+    ComputerUse.withComputerUse(
+      { ...config, builtInSkills: activeSkills, ...screenSkillPath(skillPath) },
+      input.computerUse,
+      COMPUTER_USE_LEASE_ROUTE,
+    );
 });
