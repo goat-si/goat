@@ -60,8 +60,10 @@ import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
 import {
   type AppServerProbe,
-  issueAppServerCredential,
+  appServerLaunch,
+  appServerStatus,
   probeAppServer,
+  readForwardDescriptor,
   shouldMoveToAppServer,
 } from "./appServer.ts";
 import {
@@ -360,18 +362,10 @@ const RemoteLaunchResult = Schema.Union([
   Schema.Struct({ status: Schema.Literal("pending"), pending: SshRuntimePendingReplacementSchema }),
 ]);
 
-const RemotePairingResult = Schema.Struct({
-  credential: Schema.String,
-});
-
 const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
-const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
 
 const decodeRemoteLaunchOutput = (stdout: string) =>
   decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
-
-const decodeRemotePairingOutput = (stdout: string) =>
-  decodeRemoteJsonOutput(stdout, decodeRemotePairingResult);
 
 function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
@@ -1111,15 +1105,6 @@ fi
 
 `;
 
-const REMOTE_PAIRING_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-DEFAULT_SERVER_HOME="$HOME/.goat"
-@@GOAT_RUNNER_SETUP@@
-PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"
-recheck_selected_before_use
-"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json
-`;
-
 const REMOTE_STOP_SCRIPT = `set -eu
 DEFAULT_SERVER_HOME="$HOME/.goat"
 STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
@@ -1383,20 +1368,6 @@ export function buildRemoteLaunchScript(
   });
 }
 
-export function buildRemotePairingScript(
-  stateKey: string,
-  input?: RemoteGoatRunnerOptions,
-  selection = requestedRuntime(input),
-): string {
-  return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
-      ...selection,
-      mayUpgradeOwnedServer: false,
-    }),
-  });
-}
-
 // GOAT runtime provisioning lives in runtimeProvisioning.ts and embeds the runner built above.
 export const {
   buildRemoteGoatUploadInstallerScript,
@@ -1410,10 +1381,18 @@ export { buildRemoteRuntimeProbeScript, remoteUploadCommand };
 const {
   buildRemoteClientSessionScript,
   buildRemoteMcpSessionScript,
+  buildRemotePairingScript,
   issueRemoteClientSession,
   issueRemoteMcpClientSession,
+  issueRemotePairingToken,
 } = makeRemoteSessions({ buildRemoteRunnerSetupScript, prepareRemoteRuntime });
-export { buildRemoteClientSessionScript, buildRemoteMcpSessionScript, issueRemoteMcpClientSession };
+export {
+  buildRemoteClientSessionScript,
+  buildRemoteMcpSessionScript,
+  buildRemotePairingScript,
+  issueRemoteMcpClientSession,
+  issueRemotePairingToken,
+};
 export { decodeRemoteClientSessionOutput, decodeRemoteMcpSessionOutput } from "./remoteSessions.ts";
 export type {
   RemoteClientSession,
@@ -1617,28 +1596,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
         const app: AppServerProbe = skipAppServer
           ? { kind: "declined", reason: "credential-failed" }
           : yield* restore(probeAppServer(target, input));
-        if (app.kind === "attach") {
-          yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
-            ...sshTargetLogFields(target),
-            remotePort: app.port,
-            remoteServerKind: "app",
-            selectedVersion: app.version,
-            requestedVersion: runner?.archiveVersion?.trim() ?? null,
-            stateKey,
-          });
-          return {
-            status: "ready" as const,
-            remotePort: app.port,
-            remoteServerKind: "app" as const,
-            selectedRuntime: {
-              ...requestedRuntime(runner),
-              version: app.version,
-              source: "app" as const,
-              appServerPort: app.port,
-              mayUpgradeOwnedServer: false,
-            },
-          };
-        }
+        if (app.kind === "attach") return yield* appServerLaunch(target, app, runner);
         const canFoldProbe =
           previousSelection?.reconnectProbe !== undefined &&
           previousSelection.requestedVersion === runner?.archiveVersion?.trim() &&
@@ -1893,95 +1851,6 @@ if probe_output="$(reconnect_probe capture)"; then printf 'GOAT_RECONNECT_PROBE=
   },
 );
 
-export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingToken")(function* (
-  target: DesktopSshEnvironmentTarget,
-  input?: SshAuth.SshAuthOptions,
-  runner?: RemoteGoatRunnerOptions,
-  prepared?: PreparedRemoteRuntime,
-): Effect.fn.Return<
-  {
-    readonly credential: string;
-  },
-  SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
-> {
-  const stateKey = REMOTE_RUNTIME_STATE_KEY;
-  yield* Effect.logDebug("ssh.remoteServer.pairingToken.start", {
-    ...sshTargetLogFields(target),
-    stateKey,
-  });
-  if (prepared?.appServerPort !== undefined) {
-    const body = yield* issueAppServerCredential(
-      target,
-      prepared.appServerPort,
-      { kind: "pairing" },
-      input,
-    );
-    return yield* decodeRemotePairingOutput(body).pipe(
-      Effect.mapError(
-        (cause) =>
-          new SshPairingError({
-            message: "The GOAT app server returned an unreadable pairing credential.",
-            stdout: body,
-            cause,
-          }),
-      ),
-    );
-  }
-  const selected =
-    prepared ??
-    (yield* prepareRemoteRuntime(
-      target,
-      input ?? {},
-      { ...runner, keepExistingRunner: true },
-      stateKey,
-    ));
-  const result = yield* runSshCommand(target, {
-    remoteCommandArgs: ["sh", "-s"],
-    timeoutStage: "pairing",
-    stdin: buildRemotePairingScript(stateKey, selected.runner, {
-      ...selected,
-      mayUpgradeOwnedServer: false,
-    }),
-    ...(isNodeScriptRunner(selected.runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
-    ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
-    ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
-    ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-  });
-  if (!getLastNonEmptyOutputLine(result.stdout)) {
-    return yield* new SshPairingError({
-      message: "SSH pairing did not return a credential.",
-      stdout: result.stdout,
-    });
-  }
-  const parsed = yield* decodeRemotePairingOutput(result.stdout).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SshPairingError({
-          message: "SSH pairing returned unparseable output.",
-          stdout: result.stdout,
-          cause,
-        }),
-    ),
-  );
-  if (parsed.credential.trim().length === 0) {
-    return yield* new SshPairingError({
-      message: "SSH pairing command returned an invalid credential.",
-      stdout: result.stdout,
-    });
-  }
-  yield* Effect.logDebug("ssh.remoteServer.pairingToken.created", {
-    selectedVersion: selected.version,
-    requestedVersion: selected.requestedVersion,
-    source: selected.source,
-    ...sshTargetLogFields(target),
-    stateKey,
-  });
-  return {
-    credential: parsed.credential,
-  };
-});
-
 const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   target: DesktopSshEnvironmentTarget,
   input?: SshAuth.SshAuthOptions & { readonly ownedOnly?: boolean },
@@ -2166,34 +2035,6 @@ const existingTunnelCheck = (entry: SshTunnelEntry, minimumMs: number) => ({
   timeoutMs: Math.max(minimumMs, entry.readiness.probeTimeoutMs * 2),
   probeTimeoutMs: entry.readiness.probeTimeoutMs,
 });
-
-const decodeForwardDescriptor = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      serverVersion: Schema.optionalKey(Schema.String),
-      appServerLive: Schema.optionalKey(Schema.Boolean),
-    }),
-  ),
-);
-/**
- * What the server behind an open forward reports now. A server replaced on the same port
- * (another client's update, a self-update, a manual restart) still answers the forward, so
- * readiness alone would keep reporting the version this client attached to. `appServerLive`
- * is the managed server saying the host's GOAT app server runs beside it.
- */
-const readForwardDescriptor = (entry: SshTunnelEntry) =>
-  Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-    const response = yield* client.get(
-      new URL("/.well-known/goat/environment", entry.httpBaseUrl).toString(),
-    );
-    if (response.status !== 200) return undefined;
-    return yield* decodeForwardDescriptor(yield* response.text);
-  }).pipe(
-    Effect.timeoutOption(`${entry.readiness.probeTimeoutMs} millis`),
-    Effect.map((descriptor) => (descriptor._tag === "Some" ? descriptor.value : undefined)),
-    Effect.orElseSucceed(() => undefined),
-  );
 
 const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
@@ -3478,7 +3319,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const descriptor =
           selectedVersion === null || selectedVersion === ""
             ? undefined
-            : yield* readForwardDescriptor(entry);
+            : yield* readForwardDescriptor(entry.httpBaseUrl, entry.readiness.probeTimeoutMs);
         const liveVersion = descriptor?.serverVersion;
         const moveToAppServer =
           (liveVersion === undefined || liveVersion === selectedVersion) &&
@@ -4411,23 +4252,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const requestedVersion = runner?.archiveVersion?.trim() ?? "";
       // The managed runtime probe below does not see the app server; ask it directly.
       if (entry?.remoteServerKind === "app") {
-        const app = yield* probeAppServer(resolvedTarget, {
-          batchMode: "yes",
-          interactiveAuth: false,
-        });
-        if (app.kind === "attach" && app.port === entry.remotePort) {
-          const providers = observed?.status?.providers;
-          return {
-            kind: "ok",
-            status: {
-              host: target.alias || target.hostname,
-              requestedVersion,
-              runtimeVersion: app.version,
-              state: providers?.ready === false ? "providers_not_ready" : "ready",
-              ...(providers === undefined ? {} : { providers }),
-            },
-          } satisfies SshHostResult;
-        }
+        const app = yield* appServerStatus(
+          resolvedTarget,
+          entry.remotePort,
+          requestedVersion,
+          observed,
+        );
+        if (app !== undefined) return app;
       }
       const output = yield* runSshCommand(resolvedTarget, {
         batchMode: "yes",

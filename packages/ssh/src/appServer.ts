@@ -6,6 +6,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   RuntimeMode,
   type RuntimeSessionRequest,
+  type SshHostResult,
 } from "@goat/contracts";
 import { GOAT_ACTIVITY_PATH, GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import { fromLenientJson } from "@goat/shared/schemaJson";
@@ -24,6 +25,8 @@ import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./error
 import {
   applyScriptPlaceholders,
   type PreparedRemoteRuntime,
+  type RemoteGoatRunnerOptions,
+  requestedRuntime,
   shellSingleQuote,
   sshTargetLogFields,
 } from "./remoteRuntime.ts";
@@ -95,8 +98,9 @@ export type AppServerProbe =
 export const parseAppServerProbe = (stdout: string): AppServerProbe => {
   const lines = stdout.split(/\r?\n/u);
   const index = lines.findIndex((line) => line.startsWith("GOAT_APP_SERVER="));
-  if (index < 0) return { kind: "none" };
-  const [status, , port] = lines[index]!.slice("GOAT_APP_SERVER=".length).split(" ");
+  const marker = lines[index];
+  if (marker === undefined) return { kind: "none" };
+  const [status, , port] = marker.slice("GOAT_APP_SERVER=".length).split(" ");
   if (status === "none") return { kind: "none" };
   if (status !== "live") return { kind: "declined", reason: status ?? "unknown" };
   const remotePort = Number(port);
@@ -231,26 +235,112 @@ const decodeActivity = Schema.decodeUnknownEffect(
  * read them. An attachment whose launch found the app server unusable stays, and so does one that
  * cannot learn the managed server's activity.
  */
-export const shouldMoveToAppServer = (input: {
+export const shouldMoveToAppServer = Effect.fn("ssh/appServer.shouldMove")(function* (input: {
   readonly descriptor: { readonly appServerLive?: boolean } | undefined;
   readonly remoteServerKind: "app" | "external" | "managed" | null;
   readonly selection: Pick<PreparedRemoteRuntime, "appServerDeclined">;
   readonly httpBaseUrl: string;
   readonly timeoutMs: number;
-}): Effect.Effect<boolean, never, HttpClient.HttpClient> =>
-  input.descriptor?.appServerLive !== true ||
-  input.remoteServerKind === "app" ||
-  input.selection.appServerDeclined === true
-    ? Effect.succeed(false)
-    : Effect.gen(function* () {
-        const client = yield* HttpClient.HttpClient;
-        const response = yield* client.get(
-          new URL(GOAT_ACTIVITY_PATH, input.httpBaseUrl).toString(),
-        );
-        if (response.status !== 200) return false;
-        return (yield* decodeActivity(yield* response.text)).activity === "idle";
-      }).pipe(
-        Effect.timeoutOption(`${input.timeoutMs} millis`),
-        Effect.map((idle) => Option.isSome(idle) && idle.value),
-        Effect.orElseSucceed(() => false),
-      );
+}) {
+  if (
+    input.descriptor?.appServerLive !== true ||
+    input.remoteServerKind === "app" ||
+    input.selection.appServerDeclined === true
+  )
+    return false;
+  const client = yield* HttpClient.HttpClient;
+  return yield* client.get(new URL(GOAT_ACTIVITY_PATH, input.httpBaseUrl).toString()).pipe(
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(
+            Effect.flatMap(decodeActivity),
+            Effect.map((answer) => answer.activity === "idle"),
+          )
+        : Effect.succeed(false),
+    ),
+    Effect.timeoutOption(`${input.timeoutMs} millis`),
+    Effect.map((idle) => Option.isSome(idle) && idle.value),
+    Effect.orElseSucceed(() => false),
+  );
+});
+
+const decodeForwardDescriptor = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      serverVersion: Schema.optionalKey(Schema.String),
+      appServerLive: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+);
+
+/**
+ * What the server behind an open forward reports now. A server replaced on the same port
+ * (another client's update, a self-update, a manual restart) still answers the forward, so
+ * readiness alone would keep reporting the version this client attached to. `appServerLive`
+ * is the managed server saying the host's GOAT app server runs beside it.
+ */
+export const readForwardDescriptor = Effect.fn("ssh/appServer.readForwardDescriptor")(function* (
+  httpBaseUrl: string,
+  timeoutMs: number,
+) {
+  const client = yield* HttpClient.HttpClient;
+  return yield* client.get(new URL(GOAT_ENVIRONMENT_PATH, httpBaseUrl).toString()).pipe(
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(Effect.flatMap(decodeForwardDescriptor))
+        : Effect.succeed(undefined),
+    ),
+    Effect.timeoutOption(`${timeoutMs} millis`),
+    Effect.map(Option.getOrUndefined),
+    Effect.orElseSucceed(() => undefined),
+  );
+});
+
+/** The launch result for an attachable app server; nothing on the host is started or written. */
+export const appServerLaunch = Effect.fn("ssh/appServer.launch")(function* (
+  target: DesktopSshEnvironmentTarget,
+  app: Extract<AppServerProbe, { readonly kind: "attach" }>,
+  runner: RemoteGoatRunnerOptions | undefined,
+) {
+  yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
+    ...sshTargetLogFields(target),
+    remotePort: app.port,
+    remoteServerKind: "app",
+    selectedVersion: app.version,
+    requestedVersion: runner?.archiveVersion?.trim() ?? null,
+  });
+  return {
+    status: "ready" as const,
+    remotePort: app.port,
+    remoteServerKind: "app" as const,
+    selectedRuntime: {
+      ...requestedRuntime(runner),
+      version: app.version,
+      source: "app" as const,
+      appServerPort: app.port,
+      mayUpgradeOwnedServer: false,
+    },
+  };
+});
+
+/** Host status for an app attachment on `port`, or none when that app server no longer serves it. */
+export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
+  target: DesktopSshEnvironmentTarget,
+  port: number,
+  requestedVersion: string,
+  observed: SshHostResult | undefined,
+) {
+  const app = yield* probeAppServer(target, { batchMode: "yes", interactiveAuth: false });
+  if (app.kind !== "attach" || app.port !== port) return undefined;
+  const providers = observed?.status?.providers;
+  return {
+    kind: "ok",
+    status: {
+      host: target.alias || target.hostname,
+      requestedVersion,
+      runtimeVersion: app.version,
+      state: providers?.ready === false ? "providers_not_ready" : "ready",
+      ...(providers === undefined ? {} : { providers }),
+    },
+  } satisfies SshHostResult;
+});
