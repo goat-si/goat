@@ -1,6 +1,6 @@
 import { shellSingleQuote as quote } from "../sshRemote/remoteBrowse.ts";
 
-export const REVIEW_DIFF_MAX_BYTES = 100_000;
+const REVIEW_DIFF_MAX_BYTES = 100_000;
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const END = "\nGOAT_REVIEW_DIFF_END\n";
