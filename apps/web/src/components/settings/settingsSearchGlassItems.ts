@@ -12,7 +12,7 @@ export const GLASS_SETTINGS_SEARCH_ITEMS = [
     id: "desktop-system-material",
     title: "System glass",
     to: "/settings/appearance",
-    searchTerms: ["native transparency mica windows accessibility"],
+    searchTerms: ["native transparency mica windows liquid glass macos accessibility"],
     desktopOnly: true,
     requiresDesktopWindowMaterial: true,
   },

@@ -32,7 +32,12 @@ export class WindowMaterialSenderError extends Schema.TaggedError<WindowMaterial
 export class DesktopWindowMaterial extends Context.Service<
   DesktopWindowMaterial,
   {
-    readonly attach: (window: Electron.BrowserWindow) => Effect.Effect<void, never, Scope.Scope>;
+    /** Creation options; a window cannot become transparent after it exists. */
+    readonly windowOptions: Effect.Effect<{ readonly transparent?: true }>;
+    readonly attach: (
+      window: Electron.BrowserWindow,
+      options?: { readonly transparent?: boolean },
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly afterReveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly syncAppearance: (window: Electron.BrowserWindow, dark: boolean) => Effect.Effect<void>;
     readonly getState: (
@@ -45,6 +50,7 @@ type WindowRecord = {
   readonly window: Electron.BrowserWindow;
   readonly semaphore: Semaphore.Semaphore;
   readonly removeListeners: () => void;
+  readonly transparent: boolean;
   state: DesktopWindowMaterialState;
   generation: number;
   revealed: boolean;
@@ -58,6 +64,9 @@ export const make = Effect.gen(function* () {
   const theme = yield* ElectronTheme.ElectronTheme;
   const settingsStore = yield* DesktopClientSettings.DesktopClientSettings;
   const { capability, adapter } = yield* MaterialPlatform.DesktopMaterialPlatform;
+  // macOS glass sits below Chromium's view. In a window created opaque, Chromium never clears
+  // transparent regions between frames, so old titles and row highlights pile up on the glass.
+  const needsTransparentWindow = adapter?.kind === "macos-glass";
   const scope = yield* Scope.Scope;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
@@ -73,6 +82,7 @@ export const make = Effect.gen(function* () {
       enabled: settings.desktopSystemMaterialEnabled,
       glassOpacity: settings.glassOpacity,
       ...accessibility,
+      restartRequired: needsTransparentWindow && !entry.transparent,
       revealed: entry.revealed && !entry.closing,
       fullscreen: entry.window.isFullScreen(),
     });
@@ -228,7 +238,12 @@ export const make = Effect.gen(function* () {
   if (startupRevision === settingsRevision && Option.isSome(initial)) settings = initial.value;
 
   return DesktopWindowMaterial.of({
-    attach: Effect.fn("desktop.windowMaterial.attach")(function* (window) {
+    windowOptions: Effect.sync(() =>
+      needsTransparentWindow && settings.desktopSystemMaterialEnabled
+        ? { transparent: true as const }
+        : {},
+    ),
+    attach: Effect.fn("desktop.windowMaterial.attach")(function* (window, options) {
       if (window.isDestroyed()) return;
       if (windows.has(window.webContents.id)) return;
       const semaphore = yield* Semaphore.make(1);
@@ -256,6 +271,7 @@ export const make = Effect.gen(function* () {
       const entry: WindowRecord = {
         window,
         semaphore,
+        transparent: options?.transparent === true,
         generation: 0,
         revealed: false,
         closing: false,

@@ -87,8 +87,9 @@ it.each([
   {
     platform: "darwin",
     reason: "api-unavailable" as const,
-    copy: "Native glass is not available on macOS in this build.",
+    copy: "System glass is not available on this Mac.",
   },
+  { platform: "darwin", reason: "os-version" as const, copy: "Requires macOS 26 or later." },
   { platform: "win32", reason: "os-version" as const, copy: "Requires Windows 11 22H2 or later." },
 ])(
   "shows the saved preference and unsupported status on $platform",
@@ -138,6 +139,7 @@ it.each([
   { reason: "opaque" as const, copy: "Off at 100% glass opacity." },
   { reason: "fullscreen" as const, copy: "Paused in full screen." },
   { reason: "native-failed" as const, copy: "The system material could not be applied." },
+  { reason: "restart" as const, copy: "Restart GOAT to use Liquid Glass." },
 ])("explains why system glass is inactive: $reason", async ({ reason, copy }) => {
   using fixture = materialBridge();
   await using screen = await render(<Setting />);
@@ -145,7 +147,7 @@ it.each([
   await expect.element(screen.getByText(copy)).toBeVisible();
   await expect.element(screen.getByRole("switch", { name: "System glass" })).toBeEnabled();
 });
-it("labels active macOS glass as a development candidate", async () => {
+it("labels active macOS glass as Liquid Glass", async () => {
   using _fixture = materialBridge(
     materialState({
       capability: { supported: true, material: "macos-glass" },
@@ -155,7 +157,5 @@ it("labels active macOS glass as a development candidate", async () => {
     "darwin",
   );
   await using screen = await render(<Setting />);
-  await expect
-    .element(screen.getByText("Using system glass (development candidate)."))
-    .toBeVisible();
+  await expect.element(screen.getByText("Using Liquid Glass.")).toBeVisible();
 });

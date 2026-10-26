@@ -7,6 +7,7 @@ const input = {
   glassOpacity: 80,
   reducedTransparency: false,
   highContrast: false,
+  restartRequired: false,
   revealed: true,
   fullscreen: false,
 };
@@ -35,6 +36,7 @@ describe("window material policy", () => {
     [{ glassOpacity: 100 }, "opaque", "none"],
     [{ reducedTransparency: true }, "accessibility", "none"],
     [{ highContrast: true }, "accessibility", "none"],
+    [{ restartRequired: true }, "restart", "none"],
     [{ revealed: false }, "unrevealed", "none"],
     [{ fullscreen: true }, "fullscreen", "none"],
     [{ capability: { supported: false, reason: "platform" } }, "unsupported", "none"],

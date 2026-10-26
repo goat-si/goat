@@ -15,7 +15,8 @@ import * as Material from "./DesktopWindowMaterial.ts";
 import * as MaterialPlatform from "./materialPlatform.ts";
 export const makeFixture = Effect.fn("test.materialFixture")(function* (
   options: {
-    enabled?: boolean;
+    enabled?: boolean | undefined;
+    transparent?: boolean | undefined;
     prepare?: Adapters.MaterialAdapter["prepare"];
     failAttach?: boolean;
     failUpdate?: boolean;
@@ -132,7 +133,7 @@ export const makeFixture = Effect.fn("test.materialFixture")(function* (
       },
     ),
   );
-  yield* material.attach(window);
+  yield* material.attach(window, { transparent: options.transparent ?? true });
   return {
     material,
     window,

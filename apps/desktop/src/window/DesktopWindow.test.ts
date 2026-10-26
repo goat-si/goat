@@ -213,6 +213,7 @@ function layerTest(input: {
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
+          windowOptions: Effect.succeed({}),
           attach: () => Effect.void,
           afterReveal: () => Effect.void,
           syncAppearance: () => Effect.void,
@@ -339,6 +340,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
+            windowOptions: Effect.succeed({}),
             attach: () => Effect.void,
             afterReveal: () => Effect.void,
             syncAppearance: () => Effect.void,
