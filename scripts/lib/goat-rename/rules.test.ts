@@ -256,9 +256,19 @@ describe("wp9 compatibility scopes", () => {
 
   it("keeps native identities and operator services", () => {
     expect(
-      findResidue(
+      applyTextRules(
         "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
-        "t3-source-text T3SourceTextView T3MenuDismissTouchGate T3WorkspaceNavigationView T3PresentationSources t3-agent-alert t3-agent-activity",
+        "t3-source-text T3SourceTextView RCTT3SourceTextViewProtocol Java_expo_modules_t3terminal_x t3_menu",
+        TEXT_RULES,
+        KEEP_RULES,
+      ).text,
+    ).toBe(
+      "goat-source-text GoatSourceTextView RCTGoatSourceTextViewProtocol Java_expo_modules_goatterminal_x goat_menu",
+    );
+    expect(
+      findResidue(
+        "apps/mobile/modules/goat-agent-notifications/android/src/main/java/A.kt",
+        'STORE = "t3-agent-notifications"; TAG = "t3-agent-alert"; data["t3_kind"]',
         KEEP_RULES,
       ),
     ).toEqual([]);
@@ -340,10 +350,6 @@ describe("remaining local symbols and compatibility contracts", () => {
       ["apps/desktop/src/app/DesktopEnvironment.ts", '"com.t3tools.T3Code.Development.desktop"'],
       ["apps/server/src/cli/invocation.ts", '"./bin/t3.js"'],
       ["packages/contracts/src/providerSetup.ts", '"t3"'],
-      [
-        "apps/mobile/modules/t3-source-text/ios/T3SourceText.mm",
-        "RCTT3SourceTextViewProtocol T3PresentationSourceView",
-      ],
       ["apps/mobile/src/features/showcase/showcaseAgentActivity.ts", "t3_kind"],
       ["packages/shared/src/goatMcpToolPresentation.ts", "t3_thread_start"],
       ["packages/shared/src/codexAuthHandoff.ts", '"t3code-dev"'],

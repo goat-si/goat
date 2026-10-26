@@ -8,8 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@goat/shared/composerContextReferences";
-import { ComposerEditor as NativeComposerEditor } from "../native/T3ComposerEditor";
-import type { ComposerEditorProps as NativeComposerEditorProps } from "../native/T3ComposerEditor";
+import { ComposerEditor as NativeComposerEditor } from "../native/GoatComposerEditor";
+import type { ComposerEditorProps as NativeComposerEditorProps } from "../native/GoatComposerEditor";
 import {
   appendComposerDraftAttachments,
   createComposerDraftContextHistory,
@@ -268,4 +268,4 @@ export type {
   ComposerEditorHandle,
   ComposerEditorSelection,
   ComposerTextPaste,
-} from "../native/T3ComposerEditor";
+} from "../native/GoatComposerEditor";

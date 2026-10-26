@@ -58,15 +58,13 @@ with a migration that has been verified on real installs, and the rename tooling
   only after the user signs out and back in, so a renamed extension switches capture off for every
   existing user until then. A later rename must keep the old extension working until the new one
   is active.
-- **Mobile native names**: the `t3-*` Expo modules in `apps/mobile/modules/`, the `T3*` native
-  views and classes, the Android notification tags, and the `t3-agent-notifications`
-  SharedPreferences store. None is visible to users. Renaming a module changes the native
-  fingerprint and needs a new store build. Renaming the tags or the store orphans notifications
-  that are already posted and loses saved preferences. The upstream modules, such as
-  `t3-source-text`, would also make every upstream sync conflict. The notification channel ids
-  are already `agent-alerts` and `agent-activity`, so per-channel settings are not affected.
-  Revisit these only when a native rebuild happens for another reason. That rebuild must migrate
-  the tags and the store, match notifications still posted under the legacy tags, and be checked
-  on Android and iOS devices.
+- **Mobile native names: renamed, device verification pending.** The Expo modules
+  (`apps/mobile/modules/goat-*`) and their native views, classes, JNI symbols and resources use
+  GOAT names since #1769 (plan 261026 wp6). The rename changes the native fingerprint, so OTA updates
+  carrying the new names reach only binaries built with them. The Android notification tags, the
+  notification preferences store, the widget-expiry deadline store and the push data key keep their
+  legacy spelling (lines marked `goat-rename: legacy`), so posted notifications and saved
+  preferences stay where they are. Static checks prove the JS and native names agree; the next
+  TestFlight and Android builds verify the rename on devices.
 - **SSH runner `run-t3.sh`.** Clients of every version find and reuse the runner on a remote host
   by this name, so an older client would no longer see the runner a newer one installed.

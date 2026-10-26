@@ -26,7 +26,7 @@ describe("GOAT brand icon check", () => {
       assert.equal(yield* Effect.promise(() => exportGoatIcons(root, true, () => {})), 0);
       const paths = [
         "assets/dev/blueprint-universal-1024.png",
-        "apps/mobile/modules/t3-agent-notifications/android/src/main/res/drawable/agent_activity_mark.xml",
+        "apps/mobile/modules/goat-agent-notifications/android/src/main/res/drawable/agent_activity_mark.xml",
       ];
       for (const path of paths)
         yield* fs.writeFileString(pathApi.join(root, path), `stale ${path}`);

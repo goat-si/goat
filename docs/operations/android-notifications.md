@@ -13,7 +13,7 @@ API 24–25 use a single inexact system alarm to expire cards after process exit
 The native notification tests cover API 24, 26, 33 and 36 (plus API 25 for legacy expiry) using Robolectric. To compile the module, run these tests and run Android lint, use the following command from a generated `apps/mobile/android` project with JDK 21 available. No Firebase, signing or relay secrets are required:
 
 ```sh
-./gradlew :t3-agent-notifications:testDebugUnitTest :t3-agent-notifications:lintRelease -Pandroid.lint.useK2Uast=false
+./gradlew :goat-agent-notifications:testDebugUnitTest :goat-agent-notifications:lintRelease -Pandroid.lint.useK2Uast=false
 ```
 
 Robolectric's API 36 runtime requires JDK 21; module compilation still uses Expo's Java 17 toolchain. The existing Mobile Native Static Analysis job separately runs ktlint and detekt. The native fingerprint check marks this change as requiring a new binary; the production workflow cannot deliver it to an older binary by OTA. Settings disable Android notifications if the installed native module is missing required methods.
@@ -77,7 +77,7 @@ Verify an expanded card with five threads, attention/failure priority, project n
 After Android prebuild, run the native presentation regression tests from `apps/mobile/android`:
 
 ```sh
-./gradlew :t3-agent-notifications:testDebugUnitTest --tests expo.modules.t3agentnotifications.AgentNotificationsTest
+./gradlew :goat-agent-notifications:testDebugUnitTest --tests expo.modules.goatagentnotifications.AgentNotificationsTest
 ```
 
 ## Relay deployment

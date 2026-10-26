@@ -1,0 +1,17 @@
+{
+  "name": "@goat/mobile-terminal-native",
+  "version": "0.0.0",
+  "private": true,
+  "expo-module": {
+    "ios": {
+      "modules": [
+        "GoatTerminalModule"
+      ]
+    },
+    "android": {
+      "modules": [
+        "expo.modules.goatterminal.GoatTerminalModule"
+      ]
+    }
+  }
+}
