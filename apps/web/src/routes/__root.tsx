@@ -248,7 +248,7 @@ function RootRouteView() {
           <SshPasswordPromptDialog />
           <SnapShotCoordinator />
           <ThreadNotificationCoordinator />
-          {primaryEnvironmentAuthenticated ? <DiskPressureNotificationCoordinator /> : null}
+          <DiskPressureNotificationCoordinator />
           <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <CustomSnoozeDialogHost />
