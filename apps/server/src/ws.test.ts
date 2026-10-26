@@ -11,6 +11,7 @@ import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as HubParity from "./hub/HubParity.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
 import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
+import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -93,6 +94,8 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
+import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -523,6 +526,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(OpenCodexSync.OpenCodexSync)({}),
+  Layer.mock(ChildBootstrap.OpenCodexChildBootstrap)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
@@ -590,6 +594,8 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
+  Layer.mock(StorageReclaim.StorageReclaim)({}),
+  Layer.mock(HostPressureMonitor.HostPressureMonitor)({}),
   Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
     current: Effect.succeed(null),
     subscribeChanges: Effect.succeed(Stream.empty),

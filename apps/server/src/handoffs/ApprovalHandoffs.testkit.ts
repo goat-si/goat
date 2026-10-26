@@ -98,7 +98,7 @@ export const withApprovals = <A, E, R>(
         sessionId: person,
         subject: "browser",
         method: "browser-session-cookie",
-        scopes: ["orchestration:operate", "settings:write"],
+        scopes: ["orchestration:operate", "settings:write", "environment:maintain"],
         client: { label: "Laptop", deviceType: "unknown" },
         issuedAt: now,
         expiresAt: DateTime.add(now, { days: 7 }),

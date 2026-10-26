@@ -1,5 +1,4 @@
 import {
-  remoteRead,
   watchReplica,
   replicaWatchInput,
   recoveryInput,
@@ -47,6 +46,8 @@ import {
   watchLocal,
   watchRemote,
   pendingRuns,
+  remoteItem,
+  remoteRead,
 } from "./LaunchWatchService.testkit.ts";
 
 describe("LaunchWatchService", () => {
@@ -1612,23 +1613,6 @@ describe("LaunchWatchService", () => {
       expect(yield* fs.readFileString(file)).toBe(before);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-});
-
-const remoteItem = (position: number, runId: RunId, text: string) => ({
-  position,
-  visibility: "local",
-  sourceThreadId: target,
-  itemId: "item-" + position,
-  runId,
-  messageId: null,
-  createdBy: null,
-  creationSource: null,
-  type: "assistant_message",
-  status: "completed",
-  title: null,
-  text,
-  textTruncated: false,
-  updatedAt: "2026-10-12T00:00:00.000Z",
 });
 
 describe("LaunchWatchService launcherless watches", () => {

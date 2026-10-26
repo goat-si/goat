@@ -35,6 +35,22 @@ export const HostPressure = Schema.Struct({
 });
 export type HostPressure = typeof HostPressure.Type;
 
+/**
+ * This machine's free disk space and the level it shows on its own, held with the same
+ * thresholds and hysteresis as `HostPressure` but ignoring every other signal, so a client can
+ * warn about the disk without a busy CPU raising or clearing it.
+ */
+export const HostDiskPressure = Schema.Struct({
+  level: HostPressureLevel,
+  /** When the disk entered this level (ISO 8601). */
+  since: IsoDateTime,
+  /** A path on the volume that was measured: the GOAT home. */
+  path: TrimmedNonEmptyString,
+  availableBytes: NonNegativeInt,
+  totalBytes: NonNegativeInt,
+});
+export type HostDiskPressure = typeof HostDiskPressure.Type;
+
 export const HostPressureDelivery = Schema.Literals(["wake", "notice", "off"]);
 export type HostPressureDelivery = typeof HostPressureDelivery.Type;
 
@@ -59,8 +75,20 @@ export const HostPressureSettings = Schema.Struct({
   criticalEventLoopDelayMs: Schema.optional(PositiveInt),
   elevatedMemoryFreePercent: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   criticalMemoryFreePercent: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  /**
+   * Disk levels need free space under both limits of that level: the GiB limit keeps a large disk
+   * quiet while hundreds of GiB remain, the percent limit keeps a small one (a 64 GiB cloud
+   * machine) from warning while it is half empty. A host that does not report its disk size is
+   * judged on the GiB limits alone.
+   */
   elevatedDiskFreeGiB: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   criticalDiskFreeGiB: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  elevatedDiskFreePercent: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(100)),
+  ),
+  criticalDiskFreePercent: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(100)),
+  ),
   /** How long a load, CPU, memory or disk reading must hold before the level rises. */
   sustainMs: Schema.optional(PositiveInt),
   /** How long every reading must stay clear before the level falls. */
@@ -86,8 +114,10 @@ export const DEFAULT_HOST_PRESSURE_SETTINGS = {
   criticalEventLoopDelayMs: 5_000,
   elevatedMemoryFreePercent: 10,
   criticalMemoryFreePercent: 5,
-  elevatedDiskFreeGiB: 10,
-  criticalDiskFreeGiB: 2,
+  elevatedDiskFreeGiB: 50,
+  criticalDiskFreeGiB: 15,
+  elevatedDiskFreePercent: 15,
+  criticalDiskFreePercent: 5,
   sustainMs: 3 * 60_000,
   recoverMs: 5 * 60_000,
   notifyCooldownMs: 45 * 60_000,

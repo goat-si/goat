@@ -102,6 +102,7 @@ export * from "./hubParity.ts";
 export * from "./hubSettings.ts";
 export * from "./hubDevice.ts";
 export * from "./hostPressure.ts";
+export * from "./storageUsage.ts";
 export * from "./fleetHealth.ts";
 export * from "./fleetGoal.ts";
 export * from "./fleetResources.ts";

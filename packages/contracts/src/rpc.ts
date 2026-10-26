@@ -396,13 +396,25 @@ import {
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
-import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
+import {
+  HubDeviceChildOptIn,
+  HubDeviceOperationInput,
+  HubDeviceOperationResult,
+} from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  ServerGetStorageUsageInput,
+  StorageCleanInput,
+  StorageCleanResult,
+  StorageReclaimError,
+  StorageUsageReport,
+} from "./storageUsage.ts";
+import { HostDiskPressure } from "./hostPressure.ts";
 import {
   StorageCleanupReport,
   DatabaseStorageStatus,
@@ -627,6 +639,9 @@ export const WS_METHODS = {
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverCompactStorage: "server.compactStorage",
   serverCleanUpStrayProcesses: "server.cleanUpStrayProcesses",
+  serverGetStorageUsage: "server.getStorageUsage",
+  serverCleanUpStorageItems: "server.cleanUpStorageItems",
+  serverSubscribeDiskPressure: "server.subscribeDiskPressure",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -649,6 +664,7 @@ export const WS_METHODS = {
   hubDeviceJoin: "hub.deviceJoin",
   hubDeviceLeave: "hub.deviceLeave",
   hubDeviceRepair: "hub.deviceRepair",
+  hubDeviceChildOptIn: "hub.deviceChildOptIn",
   serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
   serverPlanOpenCodexSync: "server.planOpenCodexSync",
   serverSyncOpenCodex: "server.syncOpenCodex",
@@ -1061,6 +1077,28 @@ const WsServerCleanUpStrayProcessesRpc = Rpc.make(WS_METHODS.serverCleanUpStrayP
   error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
 });
 
+/** What GOAT's own folders hold on that machine; a recent scan unless rescan is set. */
+const WsServerGetStorageUsageRpc = Rpc.make(WS_METHODS.serverGetStorageUsage, {
+  payload: ServerGetStorageUsageInput,
+  success: StorageUsageReport,
+  error: Schema.Union([StorageReclaimError, EnvironmentAuthorizationError]),
+});
+
+/** Deletes exactly the confirmed items whose identity still matches a fresh scan. */
+const WsServerCleanUpStorageItemsRpc = Rpc.make(WS_METHODS.serverCleanUpStorageItems, {
+  payload: StorageCleanInput,
+  success: StorageCleanResult,
+  error: Schema.Union([StorageReclaimError, EnvironmentAuthorizationError]),
+});
+
+/** The disk's own pressure level and free space: now, then on each change. */
+const WsServerSubscribeDiskPressureRpc = Rpc.make(WS_METHODS.serverSubscribeDiskPressure, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(HostDiskPressure),
+  stream: true,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerSettings,
@@ -1233,6 +1271,12 @@ const hubDeviceOperation = (
 const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
 const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
 const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
+/** A person turns an SSH host's OpenCodex Child setup on or off; agents have no equivalent. */
+const WsHubDeviceChildOptInRpc = Rpc.make(WS_METHODS.hubDeviceChildOptIn, {
+  payload: HubDeviceChildOptIn,
+  success: HubDeviceChildOptIn,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
@@ -2475,6 +2519,9 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetDatabaseStorageRpc,
   WsServerCompactStorageRpc,
   WsServerCleanUpStrayProcessesRpc,
+  WsServerGetStorageUsageRpc,
+  WsServerCleanUpStorageItemsRpc,
+  WsServerSubscribeDiskPressureRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
@@ -2501,6 +2548,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsHubDeviceJoinRpc,
   WsHubDeviceLeaveRpc,
   WsHubDeviceRepairRpc,
+  WsHubDeviceChildOptInRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

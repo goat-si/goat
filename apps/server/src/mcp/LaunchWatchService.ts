@@ -12,6 +12,7 @@ import {
   ThreadReplicaRestoreResult,
   type ThreadReplicaRecoveryInput,
   MessageId,
+  type EnvironmentId,
   ModelSelection,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadInterruptResult,
@@ -124,10 +125,8 @@ const TAIL_WINDOW = 40;
 const TAIL_PAGE = 20;
 const TAIL_PAGES = 3;
 
-export class LaunchWatchStoreError extends Data.TaggedError("LaunchWatchStoreError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
+export { LaunchWatchStoreError } from "./launchWatchOrigin.ts";
+import { LaunchWatchStoreError, originFor, makeReplicationChoice } from "./launchWatchOrigin.ts";
 
 export interface LaunchWatchTarget {
   readonly launcherThreadId: ThreadId;
@@ -146,6 +145,7 @@ export type LaunchWatchKey = Omit<LaunchWatchTarget, "launcherThreadId"> &
   );
 
 interface ExternalLaunchWatchInput {
+  readonly sourceEnvironmentId?: EnvironmentId | null;
   /** The outside caller's MCP request namespace; only it can see and re-arm the watch. */
   readonly owner: string;
   readonly host: string | null | undefined;
@@ -166,6 +166,7 @@ export interface LaunchWatchServiceShape {
    */
   readonly register: (
     input: LaunchWatchTarget & {
+      readonly sourceEnvironmentId?: EnvironmentId | null;
       readonly projectId: ProjectId | null;
       readonly title: string | null;
       readonly runId: RunId | null;
@@ -463,7 +464,14 @@ export const make = Effect.gen(function* () {
     timeoutMs: number,
   ) =>
     ssh.callHostTool(
-      { host, tool, arguments: args, writes: false, timeoutMs },
+      {
+        host,
+        tool,
+        arguments: args,
+        writes: false,
+        timeoutMs,
+        environmentId: watch.sourceEnvironmentId ?? null,
+      },
       launcherCeiling(watch),
     );
 
@@ -1810,11 +1818,13 @@ export const make = Effect.gen(function* () {
         const { host, id } = keyOf(input);
         const now = yield* Clock.currentTimeMillis;
         const existing = live(id, now);
+        const sourceEnvironmentId = yield* originFor(existing, input.sourceEnvironmentId);
         const base =
           existing ??
           newLaunchWatch({
             launcherThreadId: input.launcherThreadId,
             host,
+            sourceEnvironmentId,
             threadId: input.threadId,
             projectId: input.projectId,
             title: input.title,
@@ -1830,6 +1840,7 @@ export const make = Effect.gen(function* () {
           (host !== null ? yield* launcherCeiling(base) : undefined);
         const withMeta = {
           ...base,
+          sourceEnvironmentId,
           ...(input.checkpointReplication === undefined
             ? {}
             : { checkpointReplication: input.checkpointReplication }),
@@ -1894,23 +1905,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const withReplicationChoice = Effect.fn("LaunchWatchService.withReplicationChoice")(function* (
-    watch: LaunchWatch,
-  ) {
-    if (watch.launcherThreadId === null) return { ...watch, checkpointReplication: "off" as const };
-    const config = yield* settings.getSettings.pipe(Effect.option);
-    const choice =
-      Option.isSome(config) && watch.host !== null
-        ? config.value.fleet.hosts?.[watch.host]?.checkpointReplication
-        : "off";
-    return {
-      ...watch,
-      checkpointReplication:
-        choice === "off"
-          ? ("off" as const)
-          : (watch.checkpointReplication ?? choice ?? ("off" as const)),
-    };
-  });
+  const withReplicationChoice = makeReplicationChoice(settings);
 
   const find: LaunchWatchServiceShape["find"] = (input) =>
     locked(
@@ -1980,6 +1975,7 @@ export const make = Effect.gen(function* () {
           });
           const now = yield* Clock.currentTimeMillis;
           const existing = live(id, now);
+          const sourceEnvironmentId = yield* originFor(existing, input.sourceEnvironmentId);
           const base =
             existing === undefined
               ? newLaunchWatch({
@@ -1987,6 +1983,7 @@ export const make = Effect.gen(function* () {
                   owner: input.owner,
                   ceiling: input.ceiling,
                   host,
+                  sourceEnvironmentId,
                   threadId: input.threadId,
                   projectId: input.projectId,
                   title: input.title,
@@ -1998,6 +1995,7 @@ export const make = Effect.gen(function* () {
               : // The latest launch's choice wins, as it does for register.
                 {
                   ...existing,
+                  sourceEnvironmentId,
                   notifyWebhook: input.route.notifyWebhook,
                   webhookTarget: input.route.webhookTarget,
                 };

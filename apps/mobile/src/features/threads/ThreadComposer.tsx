@@ -569,7 +569,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       : null,
     pullRequestRepository: project?.repositoryIdentity?.displayName ?? null,
     selectedProviderStatus,
-    serverSettings: props.serverConfig?.settings ?? null,
+    serverConfig: props.serverConfig,
     hasThread: !props.isDraft,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,

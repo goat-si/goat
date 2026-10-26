@@ -29,6 +29,11 @@ const HubDevices = Schema.Record(TrimmedNonEmptyString, HubDeviceSettings);
 export const HubSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   cloudHolder: HubCloudHolder.pipe(Schema.withDecodingDefault(Effect.succeed("hub" as const))),
+  /**
+   * A cloud machine this hub creates gets its OpenCodex and joins as a Child when first used.
+   * On by default, as before the switch existed; off stops new joins and keeps existing links.
+   */
+  autoJoinCloudMachines: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   devices: HubDevices.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type HubSettings = typeof HubSettings.Type;
@@ -36,6 +41,7 @@ export type HubSettings = typeof HubSettings.Type;
 export const HubSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   cloudHolder: Schema.optionalKey(HubCloudHolder),
+  autoJoinCloudMachines: Schema.optionalKey(Schema.Boolean),
   /** Replaces the whole map, as fleet.hosts does. */
   devices: Schema.optionalKey(HubDevices),
 });

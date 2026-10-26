@@ -72,6 +72,7 @@ import {
   readForwardDescriptor,
   shouldMoveToAppServer,
 } from "./appServer.ts";
+import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -186,7 +187,7 @@ interface ReconnectSelection {
   readonly identity: string;
 }
 
-interface SshTunnelEntry {
+export interface SshTunnelEntry {
   readonly master?: SshMasterConnection;
   selectedRuntime: PreparedRemoteRuntime;
   reconnectSelection?: ReconnectSelection;
@@ -205,7 +206,7 @@ interface SshTunnelEntry {
   readonly readiness: SshReadinessBudget;
 }
 
-type SshEnvironmentEffectContext =
+export type SshEnvironmentEffectContext =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
@@ -214,7 +215,7 @@ type SshEnvironmentEffectContext =
   | NetService.NetService
   | SshAuth.SshPasswordPrompt;
 
-type SshEnvironmentEffectError =
+export type SshEnvironmentEffectError =
   | SshCommandError
   | SshInvalidTargetError
   | SshLaunchError
@@ -235,7 +236,7 @@ function sshRunnerLogFields(runner: RemoteGoatRunnerOptions | undefined) {
   return { runner: "archive" };
 }
 
-interface SshAuthOperationInput<T> {
+export interface SshAuthOperationInput<T> {
   readonly keyOnly?: boolean;
   readonly key: string;
   readonly target: DesktopSshEnvironmentTarget;
@@ -274,7 +275,7 @@ export type SshSetupOutcome =
       readonly fix: SshHostFailure["fix"];
     };
 
-export interface SshEnvironmentManagerShape {
+export interface SshEnvironmentManagerShape extends ExistingServerRouteShape {
   readonly readyEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<
@@ -2264,7 +2265,9 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   return tunnelEntry;
 });
 
-const startSshTunnel = (input: Parameters<typeof startSshTunnelAttempt>[0]) =>
+export type StartSshTunnelInput = Parameters<typeof startSshTunnelAttempt>[0];
+
+const startSshTunnel = (input: StartSshTunnelInput) =>
   measureSshReconnectStep("ssh/tunnel.startSshTunnel", startSshTunnelAttempt(input));
 
 const withSshCost = <A, E, R>(
@@ -2632,7 +2635,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remotePort: entry.remotePort,
     });
   });
-
   yield* Scope.addFinalizer(
     managerScope,
     Effect.sync(() => {
@@ -2649,7 +2651,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       return entries;
     }).pipe(
       Effect.flatMap((entries) =>
-        Effect.forEach(entries, closeTunnelEntry, { concurrency: "unbounded" }),
+        Effect.all([
+          Effect.forEach(entries, closeTunnelEntry, { concurrency: "unbounded" }),
+          routes.closeAll(),
+        ]),
       ),
       Effect.ignore,
     ),
@@ -2785,6 +2790,18 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ? { batchMode: "yes", interactiveAuth: false }
       : { authSecret, batchMode: "no", interactiveAuth: true };
   };
+
+  const routes = makeExistingServerRoutes({
+    managerScope,
+    tunnels,
+    resolvedTargets,
+    isClosed: () => closed,
+    authFor: backgroundAuth,
+    withTargetLock,
+    runWithSshAuth,
+    startTunnel: startSshTunnel,
+    shutdownTimeoutMs: TUNNEL_SHUTDOWN_TIMEOUT_MS,
+  });
 
   const createTunnel = Effect.fn("ssh/tunnel.ensureTunnelEntry.create")(function* (input: {
     readonly key: string;
@@ -4086,6 +4103,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           });
           return;
         }
+        yield* routes.closeFor(key);
         const entry = tunnels.get(key) ?? null;
         yield* Effect.logDebug("ssh.environment.disconnect.targetResolved", {
           ...sshTargetLogFields(resolvedTarget),
@@ -4887,6 +4905,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key,
       Effect.gen(function* () {
         if (disconnectSuperseded(ticket)) return;
+        yield* routes.closeFor(key);
         if (forgetOptions.stopRuntime === "if_idle") {
           const stopped = yield* Effect.result(
             stopRemoteServer(resolvedTarget, {
@@ -4935,6 +4954,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     forgetEnvironment: withSharing(forgetEnvironment),
     ensureEnvironment: withSharing(ensureEnvironment),
     disconnectEnvironment: withSharing(disconnectEnvironment),
+    existingEnvironment: withSharing(routes.existingEnvironment),
+    existingEnvironmentOther: withSharing(routes.existingEnvironmentOther),
+    issueExistingMcpSession: withSharing(routes.issueExistingMcpSession),
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
     issueClientSession: withSharing(issueClientSession),

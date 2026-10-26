@@ -1,4 +1,9 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import {
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -159,5 +164,37 @@ describe("built-in skills in the skill menu", () => {
     const menu = getProviderSkillsForSlashMenu(withBuiltInProviderSkills([own], codex, on), true);
     expect(names(menu)).toEqual(["computer-use"]);
     expect(menu[0]?.path).toBe(own.path);
+  });
+});
+
+describe("the goat-discipline built-in skill in the skill menu", () => {
+  const settings = {
+    enableCua: false,
+    disabledBuiltInSkills: [],
+    projectSettingsOverrides: {
+      [ProjectId.make("opted-out")]: { builtInSkills: { "goat-discipline": { enabled: false } } },
+    },
+  };
+  const serving = { devDisciplineSkill: true, projectId: ProjectId.make("ordinary") };
+  const menu = (driver: string, context: Parameters<typeof withBuiltInProviderSkills>[3]) =>
+    getProviderSkillsForSlashMenu(
+      withBuiltInProviderSkills([], { driver: ProviderDriverKind.make(driver) }, settings, context),
+      true,
+    ).map((skill) => skill.name);
+
+  it("lists it on an ordinary turn with computer use off, for providers that carry GOAT instructions", () => {
+    expect(menu("codex", serving)).toEqual(["goat-discipline"]);
+    expect(menu("claudeAgent", serving)).toEqual(["goat-discipline"]);
+    expect(menu("muse", serving)).toEqual([]);
+  });
+
+  it("hides it on a server that does not deliver it", () => {
+    expect(menu("codex", { ...serving, devDisciplineSkill: false })).toEqual([]);
+    expect(menu("codex", undefined)).toEqual([]);
+  });
+
+  it("keeps it out of a project that switched it off and in every other project", () => {
+    expect(menu("codex", { ...serving, projectId: ProjectId.make("opted-out") })).toEqual([]);
+    expect(menu("codex", { ...serving, projectId: null })).toEqual(["goat-discipline"]);
   });
 });

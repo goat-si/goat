@@ -77,6 +77,7 @@ import {
 } from "./settingsFontSizes.ts";
 import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/listing.ts";
 import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings.ts";
+import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 
 export * from "./settingsFontSizes.ts";
 
@@ -1198,6 +1199,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   providerInstances: Schema.optionalKey(
     Schema.Record(ProviderInstanceId, ProjectProviderInstanceOverride),
   ),
+  ...BuiltInSkillProjectOverrideFields,
 } satisfies Record<ProjectScopedServerSettingKey | "providerInstances", unknown>);
 export type ProjectSettingsOverrides = typeof ProjectSettingsOverrides.Type;
 
