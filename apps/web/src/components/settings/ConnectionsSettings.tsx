@@ -27,6 +27,7 @@ import {
   resolveLocalVersionStatusLabel,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { HeadlessServerSetting } from "./HeadlessServerSetting";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
@@ -967,6 +968,7 @@ export function ConnectionsSettings() {
             }
           >
             <LocalEnvironmentSetting />
+            <HeadlessServerSetting />
             {canManageLocalBackend ? (
               <SettingsRow
                 title="Version"
@@ -1376,6 +1378,7 @@ export function ConnectionsSettings() {
             description="Connect an environment to view its settings and access."
           />
           <LocalEnvironmentSetting />
+          <HeadlessServerSetting />
           {canReadRelay || canManageRelay ? (
             <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
           ) : null}

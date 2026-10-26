@@ -15,9 +15,10 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
-import { COMPUTER_USE_PROTOCOL_VERSION } from "@goat/contracts";
 import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import { build } from "vite-plus/pack";
+
+import { writeLinuxHelperManifest } from "./lib/computer-use-helper-linux-manifest.ts";
 
 import serverPackage from "../apps/server/package.json" with { type: "json" };
 
@@ -92,36 +93,11 @@ await NodeFSP.writeFile(
   { mode: 0o755 },
 );
 
-const files: Record<string, string> = {};
-const walk = async (directory: string) => {
-  for (const entry of await NodeFSP.readdir(directory, { withFileTypes: true })) {
-    const path = NodePath.join(directory, entry.name);
-    if (entry.isDirectory()) await walk(path);
-    else files[NodePath.relative(out, path)] = sha256(await NodeFSP.readFile(path));
-  }
-};
-await walk(out);
-await NodeFSP.writeFile(
-  NodePath.join(out, "manifest.json"),
-  JSON.stringify(
-    {
-      name: "goat-computer-use",
-      platform: "linux",
-      arch: values.arch,
-      helperVersion: serverPackage.version,
-      protocol: COMPUTER_USE_PROTOCOL_VERSION,
-      driver: {
-        name: "Cua Driver",
-        license: "MIT",
-        version: release.version,
-        archive: release.archiveName,
-        sha256: release.sha256,
-        source: release.url,
-      },
-      files: Object.fromEntries(Object.entries(files).toSorted(([a], [b]) => a.localeCompare(b))),
-    },
-    null,
-    2,
-  ) + "\n",
-);
+await writeLinuxHelperManifest({
+  out,
+  noticesDirectory: NodePath.join(repoRoot, "apps/desktop/src/cua/notices"),
+  arch: values.arch,
+  helperVersion: serverPackage.version,
+  release,
+});
 process.stdout.write("Built " + launcher + " with Cua Driver " + release.version + ".\n");

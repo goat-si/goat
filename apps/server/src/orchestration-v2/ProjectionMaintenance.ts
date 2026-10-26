@@ -71,6 +71,8 @@ export interface HistoryRetentionResult {
 
 /** Rows one history statement examines; the pass yields to the event loop between pages. */
 export const HISTORY_PAGE_ROWS = 64;
+/** Second trim tier, used only while history is still over budget after week-idle threads. */
+const HISTORY_RECENT_TRIM_IDLE_MS = 86_400_000;
 
 export class ProjectionMaintenanceV2 extends Context.Service<
   ProjectionMaintenanceV2,
@@ -572,18 +574,27 @@ export const layer: Layer.Layer<
       return { saved, trimmed };
     });
 
-    // Oldest first; visit returns false to stop the walk.
+    // Oldest first; visit returns false to stop the walk. With settled set, threads with a run
+    // still queued or under way are skipped: their output may still be read back.
     const idleThreads = Effect.fn("ProjectionMaintenance.idleThreads")(function* (
       idleBeforeMs: number,
       visit: (threadId: string) => Effect.Effect<boolean, SqlError>,
+      settled = false,
     ) {
       const idleBefore = DateTime.formatIso(DateTime.makeUnsafe(idleBeforeMs));
       let afterAt = "";
       let afterId = "";
       while (true) {
         const page = yield* sql<{ readonly thread_id: string; readonly updated_at: string }>`
-            SELECT thread_id, updated_at FROM orchestration_v2_projection_threads
+            SELECT thread_id, updated_at FROM orchestration_v2_projection_threads AS thread
             WHERE updated_at < ${idleBefore} AND (updated_at, thread_id) > (${afterAt}, ${afterId})
+              ${
+                settled
+                  ? sql`AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
+                WHERE run.thread_id = thread.thread_id
+                  AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting'))`
+                  : sql``
+              }
             ORDER BY updated_at, thread_id LIMIT ${HISTORY_PAGE_ROWS}
           `;
         for (const row of page) if (!(yield* visit(row.thread_id))) return;
@@ -603,16 +614,21 @@ export const layer: Layer.Layer<
       let trimmedRows = 0;
       // Payload bytes overstate the pages a trim frees, so the walk re-measures after each thread.
       let current = before;
+      const trimUntilWithinBudget = Effect.fn("ProjectionMaintenance.trimUntilWithinBudget")(
+        function* (threadId: string) {
+          const { saved, trimmed } = yield* trimThread(threadId, current - policy.budgetBytes);
+          reclaimedBytes += saved;
+          trimmedRows += trimmed;
+          if (trimmed > 0) current = yield* historyBytes;
+          return current > policy.budgetBytes;
+        },
+      );
       if (current > policy.budgetBytes)
-        yield* idleThreads(policy.now - ORCHESTRATION_HISTORY_TRIM_IDLE_MS, (threadId) =>
-          Effect.gen(function* () {
-            const { saved, trimmed } = yield* trimThread(threadId, current - policy.budgetBytes);
-            reclaimedBytes += saved;
-            trimmedRows += trimmed;
-            if (trimmed > 0) current = yield* historyBytes;
-            return current > policy.budgetBytes;
-          }),
-        );
+        yield* idleThreads(policy.now - ORCHESTRATION_HISTORY_TRIM_IDLE_MS, trimUntilWithinBudget);
+      // A host that works every day has no week-idle threads, so history grew without bound
+      // (3.5 GB in ten days). Settled threads idle for a day are next, still oldest first.
+      if (current > policy.budgetBytes)
+        yield* idleThreads(policy.now - HISTORY_RECENT_TRIM_IDLE_MS, trimUntilWithinBudget, true);
       return { historyBytes: before, trimmedRows, reclaimedBytes };
     });
 

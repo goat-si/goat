@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import { HttpRouter } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import { reportLayer } from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
@@ -52,6 +53,45 @@ describe("ComputerUseLeaseRoute reports", () => {
         assert.equal(yield* post("control:paused", "good", [one, one]), 204);
         assert.equal(yield* post("control:paused", "good", []), 400);
         assert.equal(yield* post("control:paused", "good", Array(4097).fill(one)), 400);
+      }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+    }),
+  );
+
+  it.effect("a proxy's driver ending and first answer reach the host's connection record", () =>
+    Effect.gen(function* () {
+      const connections = yield* ComputerUseAgentConnections.make;
+      const services = Context.make(McpSessionRegistry.McpSessionRegistry, {
+        resolve: (token: string) =>
+          Effect.succeed(token === "good" ? { thread: { threadId } } : undefined),
+      } as unknown as McpSessionRegistry.McpSessionRegistry["Service"]).pipe(
+        Context.add(
+          ComputerUseLeases.ComputerUseLeases,
+          {} as unknown as ComputerUseLeases.ComputerUseLeases["Service"],
+        ),
+        Context.add(ComputerUseAgentConnections.ComputerUseAgentConnections, connections),
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
+      const post = (driverEnded: unknown, token = "good") =>
+        Effect.promise(async () => {
+          const response = await handler(
+            new Request("http://127.0.0.1" + COMPUTER_USE_LEASE_ROUTE, {
+              method: "POST",
+              headers: { authorization: "Bearer " + token },
+              body: JSON.stringify({ driverEnded }),
+            }),
+            services,
+          );
+          return response.status;
+        });
+      yield* Effect.gen(function* () {
+        const refused = { reason: "helper_refused", exitCode: 77 };
+        assert.equal(yield* post(refused, "stolen"), 401);
+        assert.equal(yield* post({ reason: "not_a_reason" }), 400);
+        for (let ending = 0; ending < ComputerUseAgentConnections.FAILING_AFTER; ending++)
+          assert.equal(yield* post(refused), 204);
+        assert.equal((yield* connections.failure)?.reason, "helper_refused");
+        assert.equal(yield* post(false), 204);
+        assert.isUndefined(yield* connections.failure);
       }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
     }),
   );

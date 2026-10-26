@@ -15,8 +15,66 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
+import { fullTableScans } from "../persistence/fullTableScans.testkit.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { computerUseGrantClients, instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
+
+it.effect(
+  "completed grants and continuations are read through the handoff indexes, never a scan of every turn item",
+  () =>
+    withHarness(({ orchestrator, worker }) =>
+      Effect.gen(function* () {
+        const { owner, environmentId, dependencies } = yield* computerUseGrantClients(orchestrator);
+        yield* Effect.gen(function* () {
+          const service = yield* Handoffs.Handoffs;
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+          const grant = yield* service.create({
+            kind: "approval",
+            title: "Allow computer use on test-host?",
+            reason: "Check the build status window",
+            requestedBy: {
+              threadId,
+              providerInstanceId: instanceId,
+              path: COMPUTER_USE_GRANT_HANDOFF_PATH,
+            },
+            target: { environmentId, path: COMPUTER_USE_GRANT_HANDOFF_PATH },
+            runId: run.id,
+            nodeId: run.rootNodeId!,
+            human: { location: "test-host until 00:30" },
+            args: { purpose: "check", minutes: 30 },
+            expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
+          });
+          yield* worker.drain();
+          yield* service.respond(
+            { threadId, handoffId: grant.handoffId, action: "completed" },
+            owner.sessionId,
+          );
+          const table = "orchestration_v2_projection_turn_items";
+          const grants = yield* fullTableScans(table, leases.grants);
+          assert.deepEqual(
+            grants.result.map((lease) => lease.handoffId),
+            [grant.handoffId],
+          );
+          const active = yield* fullTableScans(table, leases.active(threadId));
+          assert.isTrue(Option.isSome(active.result));
+          const ssh = yield* fullTableScans(table, service.completedSshContinuations);
+          const home = yield* fullTableScans(table, service.completedProviderHomeContinuations);
+          for (const read of [grants, active, ssh, home]) {
+            assert.isAbove(read.reads, 0);
+            assert.deepEqual(read.scans, []);
+          }
+        }).pipe(
+          Effect.provide(
+            Handoffs.layer.pipe(
+              Layer.provideMerge(ComputerUseLeases.layer),
+              Layer.provide(dependencies),
+            ),
+          ),
+        );
+      }),
+    ),
+);
 
 it.effect(
   "computer use grants: settings:write approves, overlapping grants exclude each other, ending early, expiry and an operator's Stop all end the lease",

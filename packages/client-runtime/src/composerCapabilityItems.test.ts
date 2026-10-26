@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   composerCapabilityDetail,
   composerThreadMayRunUnattended,
+  COMPOSER_APP_ITEM_LIMIT,
+  matchComposerAppItems,
   matchComposerCapabilityItems,
   turnCapabilityAvailability,
   type ComposerCapabilityContext,
@@ -129,5 +131,40 @@ describe("composer capability entries", () => {
       state: "available",
       note: "This thread can run unattended, so a person approves computer use first.",
     });
+  });
+});
+
+describe("composer app entries", () => {
+  const apps = [
+    { id: "com.kakao.KakaoTalkMac", name: "KakaoTalk", icon: "data:image/png;base64,AA==" },
+    { id: "com.apple.finder", name: "Finder" },
+    { id: "com.google.Chrome", name: "Google Chrome" },
+  ];
+
+  it("lists running apps by name on a bare @ and narrows by name, word or id", () => {
+    expect(matchComposerAppItems("", ready, apps).map((item) => item.label)).toEqual([
+      "Finder",
+      "Google Chrome",
+      "KakaoTalk",
+    ]);
+    expect(matchComposerAppItems("chr", ready, apps).map((item) => item.app?.id)).toEqual([
+      "com.google.Chrome",
+    ]);
+    expect(matchComposerAppItems("com.kakao", ready, apps).map((item) => item.label)).toEqual([
+      "KakaoTalk",
+    ]);
+    expect(matchComposerAppItems("src/", ready, apps)).toEqual([]);
+    const [kakao] = matchComposerAppItems("kakao", ready, apps);
+    expect(kakao).toMatchObject({ capability: "computer-use", app: apps[0] });
+  });
+
+  it("offers no apps where computer use cannot run, and caps the list", () => {
+    expect(matchComposerAppItems("", { ...ready, interactionMode: "plan" }, apps)).toEqual([]);
+    expect(matchComposerAppItems("", { ...ready, computerUse: null }, apps)).toEqual([]);
+    const many = Array.from({ length: 50 }, (_, index) => ({
+      id: `com.example.app${index}`,
+      name: `App ${String(index).padStart(2, "0")}`,
+    }));
+    expect(matchComposerAppItems("", ready, many)).toHaveLength(COMPOSER_APP_ITEM_LIMIT);
   });
 });

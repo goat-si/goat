@@ -26,12 +26,14 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
+import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
@@ -122,6 +124,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     return;
   }
   const descriptor = driver.value;
+  // The skill's path and per-app notes ride on the driver's answers (ComputerUseGuide.ts).
+  const guide = makeAppGuide(platform, process.env[LEASE_PROXY_ENV.skill]?.trim() || undefined);
   // The X display GOAT started the driver on; every window the driver names must be there (#1358).
   const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
   const placement = Option.isSome(x11Display)
@@ -150,15 +154,31 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           overlay,
         );
         drivers.add(child);
-        child.once("exit", () => drivers.delete(child));
-        return child;
+        const watch = makeDriverWatch();
+        // Fire and forget: a lost report only delays the host's record, never this connection.
+        const send = (body: DriverWatchReport | undefined) =>
+          body === undefined ? undefined : void report(url, authorization, body);
+        child.once("exit", (code) => {
+          drivers.delete(child);
+          send(watch.exited(code ?? undefined));
+        });
+        child.stdout.once("data", () => send(watch.answered()));
+        return { child, watch };
       }),
-      (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
+      ({ child, watch }) =>
+        Effect.sync(() => {
+          watch.stopping();
+          killDriverGroup(platform, child, "SIGTERM");
+        }),
     ).pipe(
-      Effect.flatMap((child) =>
+      Effect.flatMap(({ child, watch }) =>
         Effect.gen(function* () {
           // Ownership is released only after both the process and its pipes close.
           const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          const exited = new Promise<number | undefined>((resolve) => {
+            if (child.exitCode !== null) resolve(child.exitCode);
+            else child.once("exit", (code) => resolve(code ?? undefined));
+          });
           // The helper's input reports, every one of them: a person's may be among a burst.
           const seen = yield* makeHelperInputFeed();
           const channel = child.stdio[3];
@@ -183,7 +203,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
               () => undefined,
             ).pipe(Stream.catchCause(() => Stream.empty)),
+            // Stdout closes just before the exit is reported; a child still running after a
+            // moment is not one that refused its parent.
+            exitCode: Effect.promise(() => exited).pipe(
+              Effect.timeoutOption("1 second"),
+              Effect.map(Option.getOrUndefined),
+            ),
             kill: Effect.promise(() => {
+              watch.stopping();
               child.stdin.end();
               killDriverGroup(platform, child, "SIGKILL");
               return closed;
@@ -207,6 +234,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       Effect.promise(() =>
         report(url, authorization, { controlId, pid: target.pid, windowId: target.windowId }),
       ),
+    onCursor: (cursor: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursor"]>>[0]) =>
+      Effect.promise(() => report(url, authorization, { controlId, cursor })),
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
@@ -230,7 +259,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
       () => undefined,
     ).pipe(Stream.catchCause(() => Stream.empty)),
-    output: (line: string) => Effect.sync(() => void process.stdout.write(line + "\n")),
+    output: (line: string, context?: { readonly tool?: string | undefined }) =>
+      Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
     startDriver: startDriver(drawsOverlay),
     // A handshake child never draws or watches input (#1604): on macOS the helper starts its
     // overlay and input feed only when the proxy opens their channel.

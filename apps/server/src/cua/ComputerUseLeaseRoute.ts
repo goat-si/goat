@@ -28,8 +28,10 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { threadLeaseUpdates } from "./ComputerUseLeaseThreadStream.ts";
+import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -144,8 +146,18 @@ export const reportLayer = HttpRouter.add(
     if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
     const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
     if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
     const value = report.value;
+    if ("driverEnded" in value) {
+      const connections = yield* Effect.serviceOption(
+        ComputerUseAgentConnections.ComputerUseAgentConnections,
+      );
+      if (Option.isSome(connections))
+        yield* connections.value.report(
+          value.driverEnded === false ? false : { reason: value.driverEnded.reason },
+        );
+      return HttpServerResponse.empty({ status: 204 });
+    }
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
     if ("humanInput" in value) {
       const outcome = yield* leases.humanInput(
         threadId,
@@ -224,6 +236,21 @@ const callLayer = HttpRouter.add(
     const call = yield* request.text.pipe(Effect.flatMap(decodeReservation), Effect.option);
     if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    // Unreadable settings keep the default: the person's pointer stays still.
+    const movePointer = yield* ServerSettings.ServerSettingsService.pipe(
+      Effect.flatMap((settings) => settings.getSettings),
+      Effect.map((settings) => settings.cuaMovePointer),
+      Effect.orElseSucceed(() => "never" as const),
+    );
+    if (
+      call.value.action === "reserve" &&
+      movePointer !== "allowed" &&
+      movesPersonPointer(call.value)
+    )
+      return HttpServerResponse.text(
+        encodeAdmission({ status: "refused", detail: "pointer_locked" }),
+        { contentType: "application/json", headers: { "cache-control": "no-store" } },
+      );
     const result = yield* leases.callReservation(threadId, call.value).pipe(
       Effect.orElseSucceed((): ComputerUseCallAdmission => ({
         status: "refused",

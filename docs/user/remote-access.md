@@ -469,8 +469,10 @@ Only SSH keys or a running ssh-agent are used; a host that asks for a password
 is refused. Starting a thread needs a full-access thread or a full-access
 outside agent. To watch the new thread, add the same host under
 **Settings → Connections**, or ask the agent to add it for you. On that machine
-itself, the GOAT desktop app lists these threads under **Headless server** while
-that server is running. Each start
+itself, a thread started while the GOAT app is open runs in the app's own server
+and appears in the app like any other thread. Without the app, GOAT starts a
+background server there, and the app lists its threads under **Headless server**
+while that server is running. Each start
 issues a 12-hour sign-in on that machine, listed with its other clients. A
 machine running an older GOAT
 only accepts approval-required threads in folders that are already projects
@@ -747,3 +749,11 @@ history, and saved connections are kept, and you keep working through direct pai
 
 Switch **Local environment** back on in the same place to restart with your previous local
 settings.
+
+When another GOAT reaches this Mac over SSH while the app is open, it uses the app's own server, so
+its threads and yours are in one place. When the app is closed, it starts a background server here
+(`goat serve` on your `~/.goat` data), and the desktop app lists it as **Headless server**. Once
+you open the app again, other GOATs move to the app's server as soon as the background server has
+no running work; the background server itself keeps running, and its earlier threads stay under
+**Headless server**. To hide it, switch off **Headless server on this Mac** in **Settings →
+Connections**. To stop it starting at all, remove this Mac from the other GOAT's SSH hosts.

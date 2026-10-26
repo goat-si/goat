@@ -29,11 +29,15 @@ import {
 
 export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-advanced-open";
 // Settings search jumps that land on a row inside Advanced.
-const ADVANCED_TARGETS: ReadonlySet<string> = new Set(["computer-use-skill"]);
+const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
+  "computer-use-skill",
+  "computer-use-move-pointer",
+]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  readonly cuaMovePointer?: "never" | "allowed";
 }
 
 interface StatusLine {
@@ -41,6 +45,8 @@ interface StatusLine {
   readonly error?: boolean;
   readonly grant?: CuaPermission;
   readonly retry?: boolean;
+  /** This desktop can run the check that proves capture and the tree, and nothing has. */
+  readonly check?: boolean;
   readonly relaunch?: boolean;
   readonly hint?: string | null;
   readonly hintError?: boolean;
@@ -57,6 +63,16 @@ function hostRejects(status: CuaHostStatus | null): boolean {
   if (status === null) return false;
   if (status.failure || status.display?.capability === "unavailable") return true;
   if (!status.readiness) return false;
+  // A Mac whose helper lost its proof (a restart, an update or a wake) shows that step as not
+  // checked rather than unsupported; it still ends a Ready this session's check gave.
+  const { helper, capture, tree } = status.readiness;
+  if (
+    status.platform === "darwin" &&
+    helper === "authenticated" &&
+    capture === "pending" &&
+    tree === "unavailable"
+  )
+    return true;
   const { steps } = computerUseReadinessSteps({
     readiness: status.readiness,
     platform: status.platform,
@@ -79,7 +95,7 @@ function statusLine(input: Parameters<typeof setupLine>[0]): StatusLine | null {
   if (!notice) return line;
   // A failed action keeps the line's own way forward, such as the grant's Open button.
   if (line?.grant) return { ...line, hint: notice, hintError: true };
-  return { text: notice, error: true, retry: line?.retry ?? false };
+  return { text: notice, error: true, retry: line?.retry ?? false, check: line?.check ?? false };
 }
 
 function setupLine(input: {
@@ -134,7 +150,14 @@ function setupLine(input: {
     (reported.accessibility !== "granted" || reported.screenCapture !== "granted")
   )
     return { text: cuaHostRequirements("darwin", input.hostLabel) };
-  return { text: computerUseStatusText({ enabled: true, status, error }) ?? "" };
+  // GOAT keeps a check's proof only until it, its helper or the computer restarts, so an enabled
+  // host is often unproven with nothing left to retry. The check restarts the driver, so it is
+  // not offered while one serves an agent.
+  const proven = status.readiness?.capture === "ready" && status.readiness.tree === "ready";
+  return {
+    text: computerUseStatusText({ enabled: true, status, error }) ?? "",
+    check: localCheck && status.running !== true && !proven,
+  };
 }
 
 /** Closed by default and remembered; a settings search for a row inside opens it for this visit. */
@@ -173,6 +196,7 @@ export function ComputerUsePanel({
   localMac,
   localCheck,
   disabledSkills,
+  movePointer,
   save,
   bridge,
 }: {
@@ -187,6 +211,7 @@ export function ComputerUsePanel({
   /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
+  movePointer: "never" | "allowed";
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -263,7 +288,27 @@ export function ComputerUsePanel({
         </CollapsibleTrigger>
         <CollapsiblePanel>
           <div className="border-t border-border/50 pt-3 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
-            <ComputerUseReadiness {...readinessInput} />
+            <ComputerUseReadiness
+              {...readinessInput}
+              renderGrantAction={(grant) =>
+                // A switch macOS shows on but refuses is fixed in System Settings, on this Mac.
+                grant === "accessibility" &&
+                localMac &&
+                readinessInput.readiness?.blockers.includes("accessibilityStale")
+                  ? {
+                      action: (
+                        <Button
+                          size="compact"
+                          variant="outline"
+                          onClick={() => void bridge.openGuide("accessibility").catch(() => {})}
+                        >
+                          Open Accessibility settings
+                        </Button>
+                      ),
+                    }
+                  : { action: null }
+              }
+            />
             {localMac && setup.holder ? (
               <div className="space-y-2 px-4 py-3">
                 <CuaGrantTroubleshooting
@@ -286,6 +331,15 @@ export function ComputerUsePanel({
                 ) : null}
               </div>
             ) : null}
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-move-pointer")}
+              settingKey="cuaMovePointer"
+              description="Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks."
+              label="Let agents move my pointer"
+              checked={movePointer === "allowed"}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
+            />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
               canConfigure={canConfigure}
@@ -320,7 +374,7 @@ function ComputerUseStatus({
         ) : null}
         {grant ? (
           <Button
-            size="xs"
+            size="compact"
             variant={setup.opened === grant ? "outline" : "default"}
             disabled={setup.opening}
             aria-label={`${setup.opened === grant ? "Open again" : "Open"}: ${cuaGrantTitle(grant)} in System Settings`}
@@ -331,21 +385,30 @@ function ComputerUseStatus({
         ) : null}
         {line?.retry ? (
           <Button
-            size="xs"
+            size="compact"
             variant="outline"
             disabled={!canConfigure}
             onClick={() => void setup.start()}
           >
             Retry setup
           </Button>
+        ) : line?.check ? (
+          <Button
+            size="compact"
+            variant="outline"
+            disabled={!canConfigure}
+            onClick={() => void setup.start()}
+          >
+            Run check
+          </Button>
         ) : null}
         {line?.relaunch && setup.relaunch ? (
-          <Button size="xs" variant="outline" onClick={setup.relaunch}>
+          <Button size="compact" variant="outline" onClick={setup.relaunch}>
             Quit & reopen
           </Button>
         ) : null}
         {onDetails ? (
-          <Button size="xs" variant="link" onClick={onDetails}>
+          <Button size="compact" variant="link" onClick={onDetails}>
             Details
           </Button>
         ) : null}
@@ -401,7 +464,7 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills";
+  settingKey: "disabledBuiltInSkills" | "cuaMovePointer";
   description: string;
   label: string;
   checked: boolean;

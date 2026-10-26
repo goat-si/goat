@@ -117,6 +117,7 @@ import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
 import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
+import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
@@ -135,6 +136,7 @@ import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ServerHttp from "./http.ts";
+import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
 import {
   guardHttpResponseWriteErrors,
@@ -842,6 +844,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ThreadSearch.layer,
       layerCuaDriver,
       layerLinuxFrameSource,
+      ComputerUseAgentConnections.layer,
       ComputerUseLeases.layer.pipe(
         Layer.provide(layerDesktopTelemetryReceiver),
         Layer.provide(layerLinuxFrameSource),
@@ -977,6 +980,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerRuntimeDrainRoute,
+    RuntimeSessionRoute.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,

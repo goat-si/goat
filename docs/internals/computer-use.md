@@ -93,10 +93,11 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   request ids, a per-request `deadlineMs`, and a frame limit both sides agree on in the hello,
   between 64 KiB and 16 MiB. Screenshots cross as base64 inside one bounded frame and leave
   GOAT's MCP surface as image content.
-- Trust starts at the parent. A release helper serves only a parent signed by GOAT's Developer ID
-  team with the GOAT app identifier its own id extends (`si.goat.desktop` for
-  `si.goat.desktop.computer-use`), and its service half accepts only its own launcher; a dev helper
-  serves any parent. The host checks the helper's first line (protocol and bundle id) and that the
+- Trust starts at the parent. A release helper serves any parent signed by GOAT's Developer ID
+  team, whatever its identifier, and its service half accepts only its own launcher; a dev helper
+  serves any parent. It does not pin the app identifier: the agent's lease proxy runs as the
+  Electron `<name> Helper` (#1548) and the standalone server as the signed CLI runtime, and every
+  one of them runs arbitrary JavaScript as Node, so a pinned identifier only refused real parents. The host checks the helper's first line (protocol and bundle id) and that the
   driver it reports is the helper's own child (#1213), then exchanges the #1207 hello:
   `clientApiVersion` against `serverApiVersion`, with `incompatibleClientVersion` instead of a
   degraded session.
@@ -293,11 +294,14 @@ skill, on by default.
   attaches under exactly the gate that attaches computer use today: never in Plan, a read-only
   sandbox, a cloud task or Muse (`apps/server/src/cua/ComputerUseAttachment.ts`). It appears in the
   composer's `$` menu and in Settings → Integrations → Computer use, where a person turns it off.
-- Every adapter receives it through the runtime instructions path; an adapter whose provider
-  reads skills natively also gets it from a GOAT-managed read-only directory. It replaces the
-  one-paragraph `COMPUTER_USE_INSTRUCTIONS`
-  (`packages/provider-core/src/server/runtimeInstructions.ts`), so there is one source of
-  computer use guidance.
+- Every adapter receives its rules through the runtime instructions path, so Stop, private
+  fields and no blind retry hold even when an agent reads nothing else. The whole guide is also a
+  real skill on the driver's host, `<stateDir>/skills/computer-use/SKILL.md` with
+  `references/apps.md`, written at attach time (`apps/server/src/cua/ComputerUseGuide.ts`), and
+  agents read it on demand (progressive disclosure, agentskills.io). The lease proxy names its path
+  in the MCP initialize instructions and the first answer, and adds an app's notes to the first
+  answer about that app's window, the way Aside's `getApp` returns per-app guidance. App notes live
+  in `computerUseSkillFiles.ts`; add one when a live run shows an app needs a different route.
 
 ## Composer mentions
 
@@ -474,8 +478,14 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split of trycua/cua
 `libs/cua-driver` at 0.37.0 that keeps upstream history, released as
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
-Until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 release archives
-(`packages/shared/src/cuaDriverRelease.ts`). When the driver misbehaves, GOAT does not work around
+GOAT pins the fork's release archives by name, size and SHA-256
+(`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
+attestations. GOAT pins `0.37.0-goat.3`; `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
+the server installer rejects (goat-si/cua-driver#16).
+The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
+embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps
+screencapture off by default when it runs embedded or as the SDK's private worker
+(goat-si/cua-driver#19), so that path has it off as well. When the driver misbehaves, GOAT does not work around
 it: the fix lands in the fork, goes upstream as a pull request, and the problem is reported
 upstream. Upstream is synced on purpose: each range is reviewed for security and behavior,
 checked with `cargo deny`, and taken only after the 0.37.0 protocol-compatibility test and one

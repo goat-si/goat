@@ -29,7 +29,7 @@ it("runs the source-name gate before affected-file selection, on the install-fre
   assert.doesNotMatch(gate, /if:/);
   assert.match(scope, /run-install: false/);
   assert.ok(scope.indexOf("Check upstream name recurrence") < scope.indexOf("Select tasks"));
-  const result = workflow.split("\n  result:\n")[1];
+  const result = workflow.split("\n  result:\n")[1].split(/\n  [a-z-]+:\n/)[0];
   assert.match(result, /needs: \[scope, ci, screenshot-gate\]/);
   const script = result.split("        run: |\n")[1].replace(/^          /gm, "");
   for (const status of ["success", "failure", "skipped", "cancelled"]) {

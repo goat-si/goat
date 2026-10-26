@@ -1,15 +1,27 @@
 import {
+  agentCursorPlacement,
   PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
-import { type RefObject, useState, useSyncExternalStore } from "react";
+import {
+  type RefObject,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useDesktopSessionFrame } from "~/state/previewSessions";
+
+import { AgentCursorMark } from "../AgentBrowserCursor";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
 export function useDocumentVisible(doc: Document = document) {
@@ -113,10 +125,16 @@ function BrowserThumbnail(props: {
 }
 
 /** Why a desktop window shows no picture, said only when a person can do something about it. */
-const NO_PICTURE: Partial<Record<PreviewSessionNoPicture, string>> = {
+/** Why there is no picture, every reason the server or helper gives; "private" draws a lock. */
+const NO_PICTURE: Record<Exclude<PreviewSessionNoPicture, "private">, string> = {
   screenRecordingNotGranted: "Allow Screen Recording for GOAT Computer Use",
   appNotApproved: "This app is not approved for the agent",
   windowGone: "The window is closed",
+  windowUnknown: "Waiting for the agent's window",
+  paused: "Paused",
+  stopped: "Stopped",
+  unsupported: "This computer cannot show a picture",
+  captureFailed: "Could not capture the window",
 };
 
 /**
@@ -138,13 +156,17 @@ function DesktopThumbnail(props: {
   const kept = frame ?? (reason === "private" ? null : last);
   if (kept !== last) setLast(kept);
   const shown = frame ?? (props.stopped ? last : null);
+  const size = event?.type === "frame" ? { width: event.width, height: event.height } : null;
   if (shown !== null)
     return (
-      <img
-        alt=""
-        className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
-        src={shown}
-      />
+      <div className="relative size-full">
+        <img
+          alt=""
+          className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
+          src={shown}
+        />
+        {props.stopped || size === null ? null : <AgentCursor session={session} frame={size} />}
+      </div>
     );
   if (reason === "private") return <Placeholder icon="lock" text="Private" />;
   return (
@@ -156,6 +178,48 @@ function DesktopThumbnail(props: {
   );
 }
 
+/**
+ * Where the agent's cursor is on the window, drawn over its live picture like the helper draws it
+ * on screen, with the browser's cursor mark. Positioned once per frame or resize; it moves without
+ * a repeating animation, and only a move or a new phase marks it active again, never a new frame.
+ */
+function AgentCursor(props: {
+  readonly session: PreviewSession;
+  readonly frame: { readonly width: number; readonly height: number };
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = box.current;
+    if (element === null) return;
+    return observeResize(element, () =>
+      setMeasured({ width: element.clientWidth, height: element.clientHeight }),
+    );
+  }, []);
+  const target = props.session.target;
+  const cursor =
+    target.kind === "desktop" && target.cursor?.windowId === target.windowId
+      ? target.cursor
+      : undefined;
+  const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
+  const key = cursor ? `${cursor.point.fx}:${cursor.point.fy}:${cursor.phase}` : null;
+  const [mark, setMark] = useState({ key, sequence: 0 });
+  if (mark.key !== key) setMark({ key, sequence: mark.sequence + 1 });
+  return (
+    <div ref={box} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      {place === undefined || cursor === undefined ? null : (
+        <AgentCursorMark
+          phase={cursor.phase === "acting" ? "click" : "move"}
+          sequence={mark.sequence}
+          left={place.left}
+          top={place.top}
+          controller={props.session.owner === "agent" ? "agent" : "none"}
+        />
+      )}
+    </div>
+  );
+}
+
 /** What a card shows of its session: its picture, or a quiet placeholder. Never a private screen. */
 export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
@@ -164,7 +228,9 @@ export function PreviewSessionThumbnail(props: {
   /**
    * This desktop draws the browser tab in a <webview> that paints only while on screen. A card
    * streaming it parked would stay empty and hold an agent's snapshot behind a still that never
-   * comes, so the card names it and opening it shows the webview itself.
+   * comes, so the card shows the webview itself over this picture (NativeBrowserPicture), and this
+   * is what shows while it cannot: the panel or floating player holds the tab, or the cards are
+   * popped out of GOAT.
    */
   readonly drawnHere?: boolean | undefined;
   /** The large browser view's stream, for Take over and Hand back. */
@@ -172,6 +238,7 @@ export function PreviewSessionThumbnail(props: {
   readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
 }) {
   const { session } = props;
+  const stackDocument = useContext(StackDocumentContext);
   const large = props.size === "large";
   const stopped = session.status === "stopped";
   // The large browser view may be the controller itself, typing a secret: it keeps its stream,
@@ -197,7 +264,11 @@ export function PreviewSessionThumbnail(props: {
     return (
       <Placeholder
         icon="globe"
-        text={stopped ? undefined : "Open to watch"}
+        text={
+          stopped || stackDocument === null || stackDocument === document
+            ? undefined
+            : "Watch in GOAT"
+        }
         className={stopped ? "opacity-50" : undefined}
       />
     );

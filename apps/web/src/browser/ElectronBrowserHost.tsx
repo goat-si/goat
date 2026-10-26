@@ -1,9 +1,11 @@
 import { parseScopedThreadKey } from "@goat/client-runtime/environment";
+import { isActiveThreadWork } from "@goat/client-runtime/state/thread-inbox";
 import {
   AuthPreviewOperateScope,
   type DesktopPreviewOpenLinkEvent,
   type DesktopPreviewPointerEvent,
   FILL_PREVIEW_VIEWPORT,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { type ComponentProps, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -12,6 +14,7 @@ import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
+import { useThreadShell } from "~/state/entities";
 import { useDesktopHostedPreviewSessions } from "~/components/preview/usePreviewSession";
 import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
@@ -213,6 +216,13 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
+      {sessions
+        .filter(
+          ({ snapshot }) => snapshot.runtime === "server" && snapshot.automationOwner !== undefined,
+        )
+        .map(({ threadRef, runtimeTabId }) => (
+          <AgentTabPainting key={runtimeTabId} threadRef={threadRef} runtimeTabId={runtimeTabId} />
+        ))}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
@@ -240,6 +250,27 @@ export function ElectronBrowserHost() {
       })}
     </div>
   );
+}
+
+/**
+ * An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
+ * parked outside the window composites no frames: the agent's clicks would wait for a frame and
+ * time out. While the tab's thread has work going (a turn, or background subagents that keep
+ * its credential after the turn ends), it keeps painting behind the app; a thread with nothing
+ * left running lets it park, so a page left open costs nothing.
+ */
+function AgentTabPainting(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly runtimeTabId: string;
+}) {
+  const shell = useThreadShell(props.threadRef);
+  const working = shell !== null && isActiveThreadWork(shell);
+  const { runtimeTabId } = props;
+  useEffect(() => {
+    if (!working) return;
+    return acquireBrowserSurfaceActivity(runtimeTabId);
+  }, [runtimeTabId, working]);
+  return null;
 }
 
 function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebview>) {

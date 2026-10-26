@@ -38,6 +38,7 @@ export const prepareThreadAttachment = Effect.fn("ThreadAttachmentTest.prepare")
   const driver = CuaDriver.CuaDriver.of({
     enabled: Effect.succeed(true),
     listedApps: Effect.succeedNone,
+    appCatalog: Effect.succeed([]),
     acquire: Effect.succeedSome(mcp),
     x11Display: Effect.succeed(Option.fromUndefinedOr(x11Display)),
     lastFailure: Effect.succeedNone,

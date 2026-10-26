@@ -14,6 +14,7 @@ import {
   ReleaseVerificationError,
   requireReleaseCommand,
   runReleaseCommand,
+  scanBuildLinks,
   scanReleasePayload,
   unpackReleaseArchive,
   walkReleaseTree,
@@ -257,8 +258,15 @@ const assemble = Command.make(
       yield* Effect.log("Release assets verified; SHA256SUMS written and re-read.");
     }),
 );
+const links = Command.make("links", { dir: Flag.String("dir").pipe(Flag.atLeast(1)) }, ({ dir }) =>
+  Effect.gen(function* () {
+    const problems = yield* scanBuildLinks(dir);
+    if (problems.length) return yield* new ReleaseVerificationError({ problems });
+    yield* Effect.log(`No source repository URLs in ${dir.join(", ")}.`);
+  }),
+);
 const command = Command.make("verify-release-artifacts").pipe(
-  Command.withSubcommands([payload, mac, assemble]),
+  Command.withSubcommands([payload, mac, assemble, links]),
 );
 if (import.meta.main)
   Command.run(command, { version: "0.0.0" }).pipe(

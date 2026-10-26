@@ -1,4 +1,5 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
@@ -25,7 +26,9 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
 import type { HelperEvent } from "./ComputerUseHelper.ts";
+import { makeAppCatalog } from "./appCatalog.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
+import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
 
 // The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
 export const privacyEnvironment = [
@@ -114,6 +117,13 @@ export const fixture = Effect.fn(function* (
     helperAppsFail?: boolean;
     /** The app update puts a new helper generation beside the one already running. */
     updatedHelper?: boolean;
+    /** How the helper answers when started the way agents start it (macOS). */
+    agentRoute?: AgentRouteOutcome;
+    /**
+     * The helper's hello lists captureCheck, and how its capture check of a GOAT window ends:
+     * a picture, an error it answers, or the helper process dying (as CGS_REQUIRE_INIT did).
+     */
+    captureCheck?: "pictured" | { readonly error: string } | "crashed";
     publisher?: DesktopTelemetryPublisher["Service"];
     appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
@@ -170,6 +180,12 @@ export const fixture = Effect.fn(function* (
   let clientsOpen = 0;
   let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
+  /** The helper executables started the way agents start them. */
+  const agentRouteProbes: string[] = [];
+  /** The windows a readiness check asked the helper to capture. */
+  const captureChecks: Array<{ bundleId: string; pid: number; windowId: number }> = [];
+  /** Power and session events, as Electron's powerMonitor raises them. */
+  const powerListeners = new Map<string, Set<() => void>>();
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
@@ -215,11 +231,23 @@ export const fixture = Effect.fn(function* (
         features: {
           canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
           reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
-          canFrame: false,
+          canFrame: options.captureCheck !== undefined,
+          canCheckCapture: options.captureCheck !== undefined,
         },
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
+    },
+    captureCheck: async (bundle, target) => {
+      captureChecks.push({ bundleId: bundle.bundleId, ...target });
+      const outcome = options.captureCheck ?? "pictured";
+      if (outcome === "pictured") return { kind: "pictured", width: 64, height: 40 };
+      if (outcome === "crashed") return { kind: "failed", reason: "exited (code 134)" };
+      return { kind: "failed", reason: outcome.error };
+    },
+    agentRoute: async (mcp) => {
+      agentRouteProbes.push(mcp.command);
+      return options.agentRoute ?? { kind: "answered" };
     },
     helperBundlePath: async ({ busy }) =>
       options.helper === "unusable" || helperLost === "unusable"
@@ -305,7 +333,7 @@ export const fixture = Effect.fn(function* (
               socketPath: "",
               pid: HELPER_PID,
               generation: String(starts),
-              driverVersion: "0.37.0",
+              driverVersion: CUA_DRIVER_VERSION,
               contractVersion: "",
               mcpProtocolVersion: "",
               mcp: {
@@ -318,7 +346,7 @@ export const fixture = Effect.fn(function* (
             socketPath: "/tmp/goat-cu-x/driver.sock",
             pid: 777,
             generation: String(starts),
-            driverVersion: "0.37.0",
+            driverVersion: CUA_DRIVER_VERSION,
             contractVersion: "0.8.0",
             mcpProtocolVersion: "2025-06-18",
             mcp: {
@@ -373,6 +401,11 @@ export const fixture = Effect.fn(function* (
       return path;
     },
     listApps: async () => listedApps,
+    appCatalog: (() => {
+      const catalog = makeAppCatalog(async () => new Map());
+      return (listed: ReadonlyArray<CuaDriverListedApp>, hostBundleIds: ReadonlyArray<string>) =>
+        catalog(listed, hostBundleIds);
+    })(),
     computerUseEnabled: async () => computerUseEnabled,
     readManifest: async (path) => {
       const text = manifests.get(path);
@@ -429,8 +462,8 @@ export const fixture = Effect.fn(function* (
             socketPath: descriptor.socketPath,
             pid: 123,
             generation: String(starts),
-            driverVersion: "0.34.1",
-            contractVersion: "1",
+            driverVersion: CUA_DRIVER_VERSION,
+            contractVersion: "0.8.0",
             mcpProtocolVersion: "1",
             mcp: {
               command: descriptor.command,
@@ -520,7 +553,20 @@ export const fixture = Effect.fn(function* (
       ),
     ),
   );
-  const driver = yield* make(dependencies).pipe(
+  const powerHandled = yield* Queue.unbounded<void>();
+  const powerMonitor = {
+    handled: () => Queue.offerUnsafe(powerHandled, undefined),
+    on: (event: "resume" | "unlock-screen", listener: () => void) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const set = powerListeners.get(event) ?? new Set();
+          set.add(listener);
+          powerListeners.set(event, set);
+        }),
+        () => Effect.sync(() => void powerListeners.get(event)?.delete(listener)),
+      ),
+  };
+  const driver = yield* make(dependencies, powerMonitor).pipe(
     Effect.provideService(DesktopTelemetryPublisher, options.publisher ?? publisher),
     Effect.provide(environment),
   );
@@ -587,6 +633,13 @@ export const fixture = Effect.fn(function* (
     constructors,
     launches,
     helperProbes,
+    agentRouteProbes,
+    captureChecks,
+    /** The machine wakes or its screen unlocks. */
+    power: (event: "resume" | "unlock-screen") =>
+      Effect.sync(() => {
+        for (const listener of powerListeners.get(event) ?? []) listener();
+      }).pipe(Effect.andThen(Queue.take(powerHandled))),
     manifestListings,
     helperAppListings,
     helperLaunches,
@@ -608,6 +661,7 @@ export const fixture = Effect.fn(function* (
 export const VERIFICATION_IDS = [
   "grants",
   "restart",
+  "agentRoute",
   "permissions",
   "identity",
   "capture",
