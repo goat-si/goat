@@ -42,7 +42,7 @@ function makeProject(
 
 function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScope {
   return {
-    key: "github.com/t3tools/t3code",
+    key: "github.com/sample-tools/goat",
     title: "T3 Code",
     representative: projects[0]!,
     projects,
@@ -55,10 +55,12 @@ function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScop
 
 describe("resolveEnvironmentProjectMatch", () => {
   it("follows the same repository onto the target machine", () => {
-    const selected = makeProject("t3code", "mac", { repositoryKey: "github.com/t3tools/t3code" });
+    const selected = makeProject("t3code", "mac", {
+      repositoryKey: "github.com/sample-tools/goat",
+    });
     const target = [
       makeProject("other", "server", { repositoryKey: "github.com/t3tools/other" }),
-      makeProject("t3code-clone", "server", { repositoryKey: "github.com/t3tools/t3code" }),
+      makeProject("t3code-clone", "server", { repositoryKey: "github.com/sample-tools/goat" }),
     ];
     expect(resolveEnvironmentProjectMatch(target, selected)).toBe(target[1]);
   });
@@ -80,7 +82,7 @@ describe("resolveEnvironmentProjectMatch", () => {
 
   it("does not treat a known different repository as a basename or title match", () => {
     const selected = makeProject("t3code", "mac", {
-      repositoryKey: "github.com/t3tools/t3code",
+      repositoryKey: "github.com/sample-tools/goat",
       workspaceRoot: "/Users/me/t3code",
     });
     const fork = makeProject("fork", "server", {

@@ -91,10 +91,13 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
       fs.copyFileSync(path.join(root, "scripts", script), path.join(dir, "scripts", script));
     }
     fs.mkdirSync(path.join(dir, ".github/scripts"), { recursive: true });
-    fs.copyFileSync(
-      path.join(root, ".github/scripts/ci-changes.cjs"),
-      path.join(dir, ".github/scripts/ci-changes.cjs"),
-    );
+    // changed-tests.ts loads goat-ci-imports.cjs to follow imports.
+    for (const script of ["ci-changes.cjs", "goat-ci-imports.cjs"]) {
+      fs.copyFileSync(
+        path.join(root, ".github/scripts", script),
+        path.join(dir, ".github/scripts", script),
+      );
+    }
     fs.writeFileSync(path.join(dir, "package.json"), '{"type":"module"}\n');
     fs.writeFileSync(path.join(dir, ".gitignore"), "ignored/\n");
     execFileSync("git", ["init", "-q"], { cwd: dir });

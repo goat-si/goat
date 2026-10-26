@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["GoatTerminalModule"],
+    "podspecPath": "GoatTerminalNative.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.goatterminal.GoatTerminalModule"]
+  }
+}

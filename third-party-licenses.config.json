@@ -206,7 +206,7 @@
       "bundles": ["mobile"],
       "license": "MIT",
       "name": "react-native-uitextview",
-      "noticeFile": "apps/mobile/modules/t3-source-text/LICENSE",
+      "noticeFile": "apps/mobile/modules/goat-source-text/LICENSE",
       "sourceUrl": "https://github.com/bluesky-social/react-native-uitextview",
       "version": "2.2.0"
     },
@@ -214,7 +214,7 @@
       "bundles": ["mobile"],
       "license": "MIT",
       "name": "Expo text editor implementation",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE",
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE",
       "sourceUrl": "https://github.com/expo/expo"
     },
     {
@@ -265,8 +265,8 @@
       "bundles": ["desktop"],
       "license": "MIT AND MPL-2.0",
       "name": "Cua Driver",
-      "version": "0.37.0-goat.3",
-      "sourceUrl": "https://github.com/goat-si/cua-driver/tree/cua-driver-rs-v0.37.0-goat.3",
+      "version": "0.38.0-goat.1",
+      "sourceUrl": "https://github.com/goat-si/cua-driver/tree/cua-driver-rs-v0.38.0-goat.1",
       "noticeFiles": [
         "apps/desktop/src/cua/notices/LICENSE.md",
         "apps/desktop/src/cua/notices/THIRD_PARTY_NOTICES.md",
@@ -593,11 +593,11 @@
     },
     {
       "name": "@expo/sdk-runtime-versions",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE"
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE"
     },
     {
       "name": "@expo/ws-tunnel",
-      "noticeFile": "apps/mobile/modules/t3-composer-editor/LICENSE"
+      "noticeFile": "apps/mobile/modules/goat-composer-editor/LICENSE"
     },
     {
       "name": "stream-buffers",

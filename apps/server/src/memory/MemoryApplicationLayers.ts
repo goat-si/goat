@@ -7,6 +7,7 @@ import * as Context from "effect/Context";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as NodeCrypto from "node:crypto";
+import { parseAsideMemory } from "../memory/imports/AsideMemoryImporter.ts";
 import { parseClaudeMemory } from "../memory/imports/ClaudeMemoryImporter.ts";
 import { parseCodexMemory } from "../memory/imports/CodexMemoryImporter.ts";
 import {
@@ -352,6 +353,7 @@ export const makeMemoryApplicationLayers = (deps: {
               rootSlot: "default",
               path: path.join(home, ".omo", "memory", "agents"),
             },
+            { format: "aside", rootSlot: "default", path: path.join(home, ".aside", "u") },
           ],
         };
         const reader = yield* preflightMemoryImportStateDirectory(readerConfig.stateDir).pipe(
@@ -381,7 +383,12 @@ export const makeMemoryApplicationLayers = (deps: {
               syncStatus: sync.syncStatus,
             },
             reader.success,
-            { codex: parseCodexMemory, claude: parseClaudeMemory, omo: parseOmoMemory },
+            {
+              codex: parseCodexMemory,
+              claude: parseClaudeMemory,
+              omo: parseOmoMemory,
+              aside: parseAsideMemory,
+            },
             {
               uuid: () => NodeCrypto.randomUUID(),
               now: () => Clock.currentTimeMillis,

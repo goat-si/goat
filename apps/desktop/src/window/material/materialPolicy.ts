@@ -24,6 +24,7 @@ export function resolveWindowMaterial(input: {
   readonly glassOpacity: number;
   readonly reducedTransparency: boolean;
   readonly highContrast: boolean;
+  readonly restartRequired: boolean;
   readonly revealed: boolean;
   readonly fullscreen: boolean;
 }): { readonly applied: DesktopWindowMaterialKind; readonly reason: DesktopWindowMaterialReason } {
@@ -32,6 +33,7 @@ export function resolveWindowMaterial(input: {
   if (input.reducedTransparency || input.highContrast)
     return { applied: "none", reason: "accessibility" };
   if (input.glassOpacity === 100) return { applied: "none", reason: "opaque" };
+  if (input.restartRequired) return { applied: "none", reason: "restart" };
   if (!input.revealed) return { applied: "none", reason: "unrevealed" };
   if (input.fullscreen) return { applied: "none", reason: "fullscreen" };
   return { applied: input.capability.material, reason: "active" };

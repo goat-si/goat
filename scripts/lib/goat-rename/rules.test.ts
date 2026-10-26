@@ -256,9 +256,19 @@ describe("wp9 compatibility scopes", () => {
 
   it("keeps native identities and operator services", () => {
     expect(
-      findResidue(
+      applyTextRules(
         "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
-        "t3-source-text T3SourceTextView T3MenuDismissTouchGate T3WorkspaceNavigationView T3PresentationSources t3-agent-alert t3-agent-activity",
+        "t3-source-text T3SourceTextView RCTT3SourceTextViewProtocol Java_expo_modules_t3terminal_x t3_menu",
+        TEXT_RULES,
+        KEEP_RULES,
+      ).text,
+    ).toBe(
+      "goat-source-text GoatSourceTextView RCTGoatSourceTextViewProtocol Java_expo_modules_goatterminal_x goat_menu",
+    );
+    expect(
+      findResidue(
+        "apps/mobile/modules/goat-agent-notifications/android/src/main/java/A.kt",
+        'STORE = "t3-agent-notifications"; TAG = "t3-agent-alert"; data["t3_kind"]',
         KEEP_RULES,
       ),
     ).toEqual([]);
@@ -337,14 +347,9 @@ describe("remaining local symbols and compatibility contracts", () => {
 
   it("explains persisted metadata, OS identities and protocol samples", () => {
     for (const [path, source] of [
-      ["apps/desktop/src/app/DesktopAppIdentity.ts", "t3codeCommitHash"],
       ["apps/desktop/src/app/DesktopEnvironment.ts", '"com.t3tools.T3Code.Development.desktop"'],
       ["apps/server/src/cli/invocation.ts", '"./bin/t3.js"'],
       ["packages/contracts/src/providerSetup.ts", '"t3"'],
-      [
-        "apps/mobile/modules/t3-source-text/ios/T3SourceText.mm",
-        "RCTT3SourceTextViewProtocol T3PresentationSourceView",
-      ],
       ["apps/mobile/src/features/showcase/showcaseAgentActivity.ts", "t3_kind"],
       ["packages/shared/src/goatMcpToolPresentation.ts", "t3_thread_start"],
       ["packages/shared/src/codexAuthHandoff.ts", '"t3code-dev"'],
@@ -424,6 +429,18 @@ describe("repository hygiene on an upstream checkout", () => {
     }
   });
 
+  it("drops upstream contribution triage", () => {
+    for (const path of [
+      ".agents/skills/contribution-triage/SKILL.md",
+      ".github/TRIAGE_EXEMPTIONS.td",
+      ".github/VOUCHED.td",
+      ".github/triage/PLAYBOOK.md",
+    ]) {
+      expect(isDropped(path, DROP_RULES)).toBe(true);
+    }
+    expect(isDropped(".github/ISSUE_TEMPLATE/via-triage.yml", DROP_RULES)).toBe(false);
+  });
+
   it("drops root Cursor rules only", () => {
     expect(isDropped(".cursor/rules/cursor-cloud.mdc", DROP_RULES)).toBe(true);
     expect(isDropped("apps/web/src/.cursor/x", DROP_RULES)).toBe(false);
@@ -437,14 +454,6 @@ describe("repository hygiene on an upstream checkout", () => {
 });
 
 const keptVisibleCopy = [
-  [
-    ".agents/skills/contribution-triage/SKILL.md",
-    "description: Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review.",
-  ],
-  [
-    ".github/triage/PLAYBOOK.md",
-    "- How is T3 Code running on this machine: `npx t3 serve` in a terminal, the",
-  ],
   [
     "apps/desktop/src/app/DesktopLegacyLocalStorage.ts",
     'const V1_PROFILE_NAMES = ["T3 Code (Alpha)", "t3code"];',
@@ -479,10 +488,6 @@ const keptVisibleCopy = [
   ],
   ["apps/server/src/provider/CodexChatGptAuth.ts", '        : { agent_name_hint: "T3 Code" }),'],
   ["apps/server/src/provider/CodexProvider.ts", 'const CODEX_CLIENT_NAME = "T3 Code";'],
-  [
-    "apps/server/src/telemetry/AnalyticsService.ts",
-    " * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards",
-  ],
   ["docs/internals/overview.md", "## Upstream T3 Code"],
   [
     "docs/internals/remote-updates.md",
@@ -586,10 +591,6 @@ const keptVisibleCopy = [
   [
     "structure/decisions/ADR-0014-desktop-runtime-identity.md",
     "    copy the key of the initial package name (or `T3 Code <stage>`) to the new name. All ciphertext",
-  ],
-  [
-    "structure/decisions/ADR-0022-cua-driver-computer-use.md",
-    "  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697, by",
   ],
   [
     "structure/desktop.md",

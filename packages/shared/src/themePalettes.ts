@@ -365,7 +365,7 @@ export const GOAT_DARK_THEME_COLORS: ThemeColors = {
 
 export const GOAT_CHAT_THEME: ThemeDefinition = {
   id: "goat-chat",
-  label: "T3 Chat",
+  label: "GOAT Chat",
   appearance: "light",
   colors: {
     canvas: "oklch(0.982446 0.010114 325.653)",

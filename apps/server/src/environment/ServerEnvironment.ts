@@ -250,7 +250,7 @@ export const make = Effect.gen(function* () {
         generationHold: true,
         hubDiagnostics: true,
         ...(importRuntime._tag === "Some"
-          ? { importProvider: true, importTurnStartFit: true }
+          ? { importProvider: true, importTurnStartFit: true, asideImport: true }
           : {}),
       },
       repositoryIdentity: true,

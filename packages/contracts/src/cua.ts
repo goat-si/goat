@@ -621,6 +621,11 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   /** It would bring a window forward or move the pointer while another thread holds apps here. */
   "screen_shared",
   /**
+   * Another thread is using the app this call would act on, or one a desktop call could reach
+   * (ADR-0023 D17). Nothing was sent; holderThreadId and app say who and which.
+   */
+  "app_busy",
+  /**
    * A foreground pointer call on a window whose last read offered element tokens the agent has
    * not tried: foreground takes the person's cursor, so tokens and the keyboard come first.
    */
@@ -690,12 +695,19 @@ export const ComputerUseCallReservation = Schema.Union([
     name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     args: Schema.Unknown,
     foregroundGrantId: Schema.optionalKey(TurnItemId),
+    /** The app the proxy judged this call to act on, by the id its scope check uses (#1484). */
+    app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
   }),
   strictTicketValidation,
   Schema.Struct({
     ...ComputerUseCallOwner,
     action: Schema.Literal("release"),
     reservationId: TrimmedNonEmptyString,
+    /**
+     * The driver answered this call. A driver runs one connection's calls in order, so every
+     * earlier call of that connection has ended too (D17).
+     */
+    completed: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
 ]);
@@ -721,6 +733,8 @@ export const ComputerUseCallAdmission = Schema.Union([
     status: Schema.Literal("refused"),
     detail: ComputerUseRefusalDetail,
     holderThreadId: Schema.optionalKey(ThreadId),
+    /** The app in the way, for app_busy. */
+    app: Schema.optionalKey(Schema.String),
   }),
 ]);
 export type ComputerUseCallAdmission = typeof ComputerUseCallAdmission.Type;

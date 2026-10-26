@@ -570,7 +570,7 @@ describe("fix findings handoff", () => {
   const base = {
     number: 42,
     title: "Add the pull requests page",
-    url: "https://github.com/pingdotgg/t3code/pull/42",
+    url: "https://github.com/goat-si/goat/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
     comments: [] as ReadonlyArray<PullRequestComment>,
@@ -658,7 +658,7 @@ describe("findings that cannot be attached", () => {
   const base = {
     number: 42,
     title: "Add the pull requests page",
-    url: "https://github.com/pingdotgg/t3code/pull/42",
+    url: "https://github.com/goat-si/goat/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
     reviewThreads: [] as ReadonlyArray<PullRequestReviewThread>,
@@ -720,7 +720,7 @@ describe("one finding handed over on its own", () => {
   const base = {
     number: 42,
     title: "Add the pull requests page",
-    url: "https://github.com/pingdotgg/t3code/pull/42",
+    url: "https://github.com/goat-si/goat/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
   };
@@ -788,7 +788,7 @@ describe("asking about a change rather than working on it", () => {
   const base = {
     number: 42,
     title: "Add the pull requests page",
-    url: "https://github.com/pingdotgg/t3code/pull/42",
+    url: "https://github.com/goat-si/goat/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
     state: "open" as const,
@@ -868,7 +868,7 @@ describe("a second ask into the same composer", () => {
     const own = buildPullRequestReferenceContext({
       number: 42,
       title: "Add the pull requests page",
-      url: "https://github.com/pingdotgg/t3code/pull/42",
+      url: "https://github.com/goat-si/goat/pull/42",
       headBranch: "feature",
       baseBranch: "main",
       state: "open" as const,
@@ -949,9 +949,9 @@ describe("pull request panel context beside a thread", () => {
     overrides: Partial<ThreadPullRequestLink> = {},
   ): ThreadPullRequestLink => ({
     host: "github.com",
-    repository: "pingdotgg/t3code",
+    repository: "goat-si/goat",
     number,
-    url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+    url: `https://github.com/goat-si/goat/pull/${number}`,
     source: "manual",
     linkedAt: "2026-09-09T00:00:00Z",
     snapshot: null,
@@ -964,7 +964,7 @@ describe("pull request panel context beside a thread", () => {
   ) => ({
     projectId: "proj-a",
     host: "github.com",
-    repository: "pingdotgg/t3code",
+    repository: "goat-si/goat",
     number,
     ...overrides,
   });
@@ -979,9 +979,9 @@ describe("pull request panel context beside a thread", () => {
     ],
     linkedPullRequest: {
       projectId: "proj-a",
-      repository: "pingdotgg/t3code",
+      repository: "goat-si/goat",
       number: 10856,
-      url: "https://github.com/pingdotgg/t3code/pull/10856",
+      url: "https://github.com/goat-si/goat/pull/10856",
     },
   };
 
@@ -997,9 +997,9 @@ describe("pull request panel context beside a thread", () => {
       pullRequests: [link(11101, { source: "created" }), link(11105, { source: "stack" })],
       linkedPullRequest: {
         projectId: "proj-a",
-        repository: "pingdotgg/t3code",
+        repository: "goat-si/goat",
         number: 11105,
-        url: "https://github.com/pingdotgg/t3code/pull/11105",
+        url: "https://github.com/goat-si/goat/pull/11105",
       },
     };
     expect(pullRequestPanelContext(thread, surface(11101))).toBe("thread");
@@ -1026,7 +1026,7 @@ describe("pull request panel context beside a thread", () => {
 
   it("recognizes an unsynced manual link, and matches host and repository case-insensitively", () => {
     const thread = { projectId: "proj-a", pullRequests: [link(7, { host: "GitHub.com" })] };
-    expect(pullRequestPanelContext(thread, surface(7, { repository: "PingDotGG/T3Code" }))).toBe(
+    expect(pullRequestPanelContext(thread, surface(7, { repository: "Goat-SI/Goat" }))).toBe(
       "thread",
     );
     expect(pullRequestPanelContext(thread, surface(7, { host: undefined }))).toBe("thread");
@@ -1044,9 +1044,9 @@ describe("pull request panel context beside a thread", () => {
   it("falls back to the legacy fields only for a thread with no link list", () => {
     const legacy = {
       projectId: "proj-a",
-      repository: "pingdotgg/t3code",
+      repository: "goat-si/goat",
       number: 3,
-      url: "https://github.com/pingdotgg/t3code/pull/3",
+      url: "https://github.com/goat-si/goat/pull/3",
     };
     expect(
       pullRequestPanelContext({ projectId: "proj-a", linkedPullRequest: legacy }, surface(3)),
@@ -1063,9 +1063,9 @@ describe("pull request panel context beside a thread", () => {
   describe("the Pull request entry's target", () => {
     const legacy = (number: number) => ({
       projectId: ProjectId.make("proj-a"),
-      repository: "pingdotgg/t3code",
+      repository: "goat-si/goat",
       number,
-      url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+      url: `https://github.com/goat-si/goat/pull/${number}`,
     });
 
     it("opens a linked pull request the legacy field never named, ahead of the branch PR", () => {
@@ -1084,7 +1084,7 @@ describe("pull request panel context beside a thread", () => {
       const onHost = (host: string) =>
         threadPullRequestPanelTarget({
           projectId: "proj-a",
-          pullRequests: [link(15046, { host, url: `https://${host}/pingdotgg/t3code/pull/15046` })],
+          pullRequests: [link(15046, { host, url: `https://${host}/goat-si/goat/pull/15046` })],
           linkedPullRequest,
         });
       expect(onHost("github.com")).toBe(linkedPullRequest);

@@ -38,7 +38,7 @@ type ThreadProxyOptions<EU, ED> = Omit<
 };
 
 const OWN_ID = "goat-thread-proxy:";
-const WAITING = "Computer use is not available for this turn. A new approval or turn restores it.";
+const WAITING = "Computer use is not available for this turn.";
 
 interface Context {
   readonly controlId: string;
@@ -83,7 +83,16 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   });
   const answerStopped = (id: JsonRpcId, method: string | undefined, reason = terminal ?? waiting) =>
     options.output(
-      refusal(id, method, reason, terminal === undefined ? WAITING : LEASE_END_MESSAGES[reason]),
+      refusal(
+        id,
+        method,
+        reason,
+        terminal !== undefined
+          ? LEASE_END_MESSAGES[reason]
+          : reason === "disabled"
+            ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
+            : WAITING,
+      ),
     );
 
   const output = (context: Context, line: string, reply?: { readonly tool?: string | undefined }) =>
@@ -279,6 +288,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           else if (update.state === "control-ended") {
             seen.add(update.controlId);
             if (current?.controlId === update.controlId) stop(current, update.reason);
+            else if (current === undefined) waiting = update.reason;
           } else if (update.state === "waiting") {
             if (current !== undefined) stop(current, "replaced");
           } else if (current?.controlId === update.controlId) receive(current, update);

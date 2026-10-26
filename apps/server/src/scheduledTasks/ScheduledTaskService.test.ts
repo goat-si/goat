@@ -114,7 +114,7 @@ it.effect("loads only due tasks and skips corrupt due rows without decoding sett
         status: "never",
         scheduleJson: "broken",
       },
-      { id: "running", next: now, enabled: 1, status: "running", scheduleJson: "broken" },
+      { id: "running", next: now, enabled: 1, status: "running" },
     ]) {
       yield* insertRow(sql, { ...row, prompt: secret }, now);
     }
@@ -130,7 +130,7 @@ it.effect("loads only due tasks and skips corrupt due rows without decoding sett
     );
     assert.deepEqual(
       tasks.map((task) => task.id),
-      ["due-earlier", "due-now"],
+      ["due-earlier", "due-now", "running"],
     );
     assert.equal(warnings.length, 6);
     const annotations = warnings.map(
@@ -158,107 +158,105 @@ it.effect("loads only due tasks and skips corrupt due rows without decoding sett
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect(
-  "releases interrupted runs on startup and still executes due tasks, skipping corrupt rows",
-  () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const now = "2026-09-09T12:00:00.000Z";
-      const hugeInterval = '{"type":"interval","everyMs":9000000000000000}';
-      for (const row of [
-        { id: "stuck-valid", next: now, status: "running" },
-        { id: "stuck-corrupt", next: now, status: "running", scheduleJson: "broken" },
-        { id: "stuck-huge", next: now, status: "running", scheduleJson: hugeInterval },
-        { id: null, next: now, status: "running" },
-        { id: "due-bad-date", next: "", status: "never" },
-        { id: "due-healthy", next: now, status: "never" },
-        { id: "due-huge", next: now, status: "never", scheduleJson: hugeInterval },
-        { id: "due-second", next: now, status: "never" },
-        { id: "due-third", next: now, status: "never" },
-      ]) {
-        yield* insertRow(sql, { ...row, enabled: 1 }, now);
-      }
+it.effect("keeps legacy running rows unattributed on startup and still executes due tasks", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    const hugeInterval = '{"type":"interval","everyMs":9000000000000000}';
+    for (const row of [
+      { id: "stuck-valid", next: null, status: "running" },
+      { id: "stuck-corrupt", next: null, status: "running", scheduleJson: "broken" },
+      { id: "stuck-huge", next: null, status: "running", scheduleJson: hugeInterval },
+      { id: null, next: null, status: "running" },
+      { id: "due-bad-date", next: "", status: "never" },
+      { id: "due-healthy", next: now, status: "never" },
+      { id: "due-huge", next: now, status: "never", scheduleJson: hugeInterval },
+      { id: "due-second", next: now, status: "never" },
+      { id: "due-third", next: now, status: "never" },
+    ]) {
+      yield* insertRow(sql, { ...row, enabled: 1 }, now);
+    }
 
-      // it.effect freezes the clock; pin it just past the seeded due time so
-      // the poll sees the rows as due.
-      yield* TestClock.setTime(Date.parse(now) + 1_000);
-      const dispatched = yield* Ref.make(0);
-      const lastDispatched = yield* Deferred.make<void>();
-      const releaseLast = yield* Deferred.make<void>();
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* Layer.build(
-            Layer.provideMerge(
-              ScheduledTaskService.layer,
-              Layer.mergeAll(
-                Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-                  launch: () =>
-                    Ref.updateAndGet(dispatched, (n) => n + 1).pipe(
-                      Effect.andThen((n) =>
-                        n === 4
-                          ? Deferred.succeed(lastDispatched, undefined).pipe(
-                              Effect.andThen(Deferred.await(releaseLast)),
-                            )
-                          : Effect.void,
-                      ),
-                      Effect.andThen(Effect.die(new Error("test launch failure"))),
+    // it.effect freezes the clock; pin it just past the seeded due time so
+    // the poll sees the rows as due.
+    yield* TestClock.setTime(Date.parse(now) + 1_000);
+    const dispatched = yield* Ref.make(0);
+    const lastDispatched = yield* Deferred.make<void>();
+    const releaseLast = yield* Deferred.make<void>();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(
+          Layer.provideMerge(
+            ScheduledTaskService.layer,
+            Layer.mergeAll(
+              Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                launch: () =>
+                  Ref.updateAndGet(dispatched, (n) => n + 1).pipe(
+                    Effect.andThen((n) =>
+                      n === 4
+                        ? Deferred.succeed(lastDispatched, undefined).pipe(
+                            Effect.andThen(Deferred.await(releaseLast)),
+                          )
+                        : Effect.void,
                     ),
-                }),
-                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                  namedProjectsRoot: "/projects",
-                  isScratchProject: () => Effect.succeed(false),
-                }),
-                Layer.mock(ThreadManagementService.ThreadManagementService)({}),
-                Layer.mock(SecretRequests.SecretRequests)({}),
-                NodeCrypto.layer,
-                Scheduler.layer,
-              ),
+                    Effect.andThen(Effect.die(new Error("test launch failure"))),
+                  ),
+              }),
+              Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                namedProjectsRoot: "/projects",
+                isScratchProject: () => Effect.succeed(false),
+              }),
+              Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+              NodeCrypto.layer,
+              Scheduler.layer,
             ),
-          );
-          // The poll loop delays before its first pass, so the frozen test
-          // clock must advance once to trigger it.
-          yield* TestClock.adjust("6 seconds");
-          yield* Deferred.await(lastDispatched);
-          const inflight = yield* sql<{
-            last_run_status: string;
-          }>`SELECT last_run_status FROM scheduled_tasks WHERE task_id = 'due-third'`;
-          assert.equal(inflight[0]?.last_run_status, "running");
-          yield* Deferred.succeed(releaseLast, undefined);
-        }),
-      );
+          ),
+        );
+        // The poll loop delays before its first pass, so the frozen test
+        // clock must advance once to trigger it.
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.await(lastDispatched);
+        const inflight = yield* sql<{
+          last_run_status: string;
+        }>`SELECT last_run_status FROM scheduled_tasks WHERE task_id = 'due-third'`;
+        assert.equal(inflight[0]?.last_run_status, "running");
+        yield* Deferred.succeed(releaseLast, undefined);
+      }),
+    );
 
-      const rows = yield* sql<{
-        task_id: string | null;
-        last_run_status: string;
-        last_run_error: string | null;
-        next_run_at: string | null;
-        run_count: number;
-      }>`SELECT task_id, last_run_status, last_run_error, next_run_at, run_count
+    const rows = yield* sql<{
+      task_id: string | null;
+      last_run_status: string;
+      last_run_error: string | null;
+      next_run_at: string | null;
+      run_count: number;
+    }>`SELECT task_id, last_run_status, last_run_error, next_run_at, run_count
        FROM scheduled_tasks ORDER BY task_id`;
-      const byId = new Map(rows.map((row) => [row.task_id, row]));
-      assert.equal(rows.length, 9);
-      assert.equal(byId.get("stuck-valid")?.last_run_status, "failed");
-      assert.isNotNull(byId.get("stuck-valid")?.next_run_at);
-      assert.equal(byId.get("stuck-corrupt")?.last_run_status, "failed");
-      assert.equal(byId.get(null)?.last_run_status, "failed");
-      const stuckHuge = byId.get("stuck-huge");
-      assert.equal(stuckHuge?.last_run_status, "failed");
-      assert.isNull(stuckHuge?.next_run_at);
-      for (const id of ["stuck-valid", "stuck-corrupt", "stuck-huge", null]) {
-        const row = byId.get(id);
-        assert.equal(row?.last_run_error, "Run was interrupted by a server restart.");
-        assert.equal(row?.run_count, 1);
-      }
-      for (const id of ["due-healthy", "due-huge", "due-second"]) {
-        const row = byId.get(id);
-        assert.equal(row?.last_run_status, "failed");
-        assert.isTrue(row?.last_run_error?.includes("test launch failure") === true);
-        assert.equal(row?.run_count, 1);
-      }
-      assert.isNull(byId.get("due-huge")?.next_run_at);
-      assert.equal(byId.get("due-bad-date")?.last_run_status, "never");
-      assert.equal(byId.get("due-bad-date")?.run_count, 0);
-    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+    const byId = new Map(rows.map((row) => [row.task_id, row]));
+    assert.equal(rows.length, 9);
+    assert.equal(byId.get("stuck-valid")?.last_run_status, "running");
+    assert.isNull(byId.get("stuck-valid")?.next_run_at);
+    assert.equal(byId.get("stuck-corrupt")?.last_run_status, "running");
+    assert.equal(byId.get(null)?.last_run_status, "running");
+    const stuckHuge = byId.get("stuck-huge");
+    assert.equal(stuckHuge?.last_run_status, "running");
+    assert.isNull(stuckHuge?.next_run_at);
+    for (const id of ["stuck-valid", "stuck-corrupt", "stuck-huge", null]) {
+      const row = byId.get(id);
+      assert.equal(row?.last_run_error, null);
+      assert.equal(row?.run_count, 0);
+    }
+    for (const id of ["due-healthy", "due-huge", "due-second"]) {
+      const row = byId.get(id);
+      assert.equal(row?.last_run_status, "running");
+      assert.equal(row?.last_run_error, "The scheduled run outcome could not be recovered.");
+      assert.equal(row?.run_count, 1);
+    }
+    assert.isNull(byId.get("due-huge")?.next_run_at);
+    assert.equal(byId.get("due-bad-date")?.last_run_status, "never");
+    assert.equal(byId.get("due-bad-date")?.run_count, 0);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
 it.effect(
@@ -330,7 +328,7 @@ it.effect(
           assert.equal(victim?.next_run_at, "");
           for (const id of ["run-a", "run-c"]) {
             const row = byId.get(id);
-            assert.equal(row?.last_run_status, "failed");
+            assert.equal(row?.last_run_status, "running");
             assert.equal(row?.run_count, 1);
           }
           yield* Deferred.succeed(releaseLast, undefined);
@@ -400,7 +398,8 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       yield* service.deleteForThread(threadId);
       yield* Deferred.await(removed);
       yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(run);
+      const late = yield* Effect.exit(Fiber.join(run));
+      assert.equal(late._tag, "Failure");
       assert.lengthOf((yield* service.list()).tasks, 0);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),

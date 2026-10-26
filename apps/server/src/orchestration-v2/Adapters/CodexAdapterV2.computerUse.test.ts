@@ -2,32 +2,49 @@ import { assert, describe, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
 
 import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
+import { runMigrations } from "../../persistence/Migrations.ts";
+import * as ComputerUseLeases from "../../cua/ComputerUseLeases.ts";
+import { grant } from "../../cua/ComputerUseLeases.projection.testkit.ts";
+import {
+  prepareThreadAttachment,
+  threadAttachmentLayer,
+  threadDriver,
+} from "../../cua/ComputerUseAttachment.thread.testkit.ts";
 import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 
 describe("Codex computer use attachment", () => {
   it.effect.each(["managed", "user", "override"] as const)(
-    "reloads a live thread when computer use attaches, its control changes after Stop, or it detaches, unless the user defines it (%s)",
+    "keeps a background terminal across Stop and re-approval without reloading (%s)",
     (mode) =>
       Effect.scoped(
         Effect.gen(function* () {
+          yield* runMigrations();
           const f = fixture(`cua-live-${mode}`);
-          const withCua = (control: string) => ({
-            ...f.config,
-            cuaDriver: f.driver(control),
-            ...(mode === "override" ? { cuaDriverOverridesUserConfig: true } : {}),
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          yield* grant(f.config.threadId, "handoff:first", ["fixture.calculator"]);
+          const first = yield* prepareThreadAttachment(f.config);
+          const managed = {
+            command: first.descriptor.command,
+            args: [...first.descriptor.args],
+            env: Object.fromEntries(
+              first.descriptor.environment.map(({ name, value }) => [name, value]),
+            ),
+          };
+          const withCua = (session: typeof first.session) => ({
+            ...session,
+            cuaDriverOverridesUserConfig: mode === "override",
           });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
           yield* sessions.set(f.config);
           f.start();
-          // Turn 1 runs before computer use is enabled.
           yield* f.turnStart(3, 1, false);
           f.turnCompleted(1);
           let id = 4;
-          // Unless the decision overrides it, the user's config is read once for the directory.
           if (mode !== "override") {
             f.entries.push(
               {
@@ -54,50 +71,100 @@ describe("Codex computer use attachment", () => {
             );
             id++;
           }
-          if (mode === "user") {
-            // The user's own cua-driver wins: no reload and no instructions.
-            for (const ordinal of [2, 3, 4]) {
-              yield* f.turnStart(id++, ordinal, false);
-              f.turnCompleted(ordinal);
-            }
-          } else {
-            // Turn 2 attaches control A; turn 3 runs under control B, minted after a Stop.
-            const turns = [
-              [2, f.managed("control:a"), true],
-              [3, f.managed("control:b"), true],
-              // Turn 4: disabled again. The managed entry is switched off, not left behind.
-              [4, { ...f.managed("control:b"), enabled: false }, false],
-            ] as const;
-            for (const [ordinal, cua, computerUse] of turns) {
-              id = f.reload(id, cua);
-              yield* f.turnStart(id++, ordinal, computerUse);
-              f.turnCompleted(ordinal);
-            }
-          }
+          if (mode !== "user") id = f.reload(id, managed);
+          yield* f.turnStart(id++, 2, mode !== "user");
+          f.entries.push({
+            type: "emit_inbound",
+            frame: {
+              method: "item/started",
+              params: {
+                threadId: f.nativeThreadId,
+                turnId: "turn-2",
+                startedAtMs: 1782622441000,
+                item: {
+                  type: "commandExecution",
+                  id: "http-server",
+                  command: "python3 -m http.server 8765",
+                  cwd: "/workspace",
+                  processId: "http-server-process",
+                  source: "unifiedExecStartup",
+                  status: "inProgress",
+                  commandActions: [{ type: "unknown", command: "python3 -m http.server 8765" }],
+                  aggregatedOutput: null,
+                  exitCode: null,
+                  durationMs: null,
+                },
+              },
+            },
+          });
+          f.turnCompleted(2);
+          // The next protocol request must be turn/start, even with a background command alive.
+          // No goal/terminal reads, unsubscribe, resume or deferral note are expected after Stop.
+          yield* f.turnStart(id++, 3, mode !== "user");
+          f.turnCompleted(3);
+          if (mode !== "user") id = f.reload(id, { ...managed, enabled: false });
+          yield* f.turnStart(id, 4, false);
+          f.turnCompleted(4);
           const replay = yield* f.open;
-          for (const [ordinal, attachment] of [
-            f.config,
-            withCua("control:a"),
-            withCua("control:b"),
-            f.config,
-          ].entries()) {
-            yield* sessions.set(attachment);
-            yield* replay.startTurn(ordinal + 1);
-            yield* replay.terminal;
-          }
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(withCua(first.session));
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          yield* leases.stop(f.config.threadId);
+          yield* TestClock.adjust("1 minute");
+          yield* grant(f.config.threadId, "handoff:second", ["fixture.calculator"]);
+          const next = yield* prepareThreadAttachment(f.config);
+          assert.notEqual(next.attachment.control.controlId, first.attachment.control.controlId);
+          yield* sessions.set(withCua(next.session));
+          yield* replay.startTurn(3);
+          yield* replay.terminal;
+          yield* sessions.set(f.config);
+          yield* replay.startTurn(4);
+          yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            mode === "user"
-              ? [undefined]
-              : [
-                  undefined,
-                  f.managed("control:a"),
-                  f.managed("control:b"),
-                  { ...f.managed("control:b"), enabled: false },
-                ],
+            mode === "user" ? [undefined] : [undefined, managed, { ...managed, enabled: false }],
           );
         }),
-      ).pipe(Effect.provide(layerAdapterTest)),
+      ).pipe(Effect.provide(Layer.merge(threadAttachmentLayer, layerAdapterTest))),
+  );
+
+  it.effect.each([
+    { change: "command", driver: { ...threadDriver, command: "/fixture/new-driver" } },
+    { change: "args", driver: { ...threadDriver, args: [...threadDriver.args, "--new-option"] } },
+    { change: "socket", driver: { ...threadDriver, socketPath: "/tmp/new-driver.sock" } },
+  ])("reloads when the underlying driver $change really changes", ({ change, driver }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const f = fixture(`cua-real-driver-${change}`);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const first = yield* prepareThreadAttachment(f.config);
+        const next = yield* prepareThreadAttachment(f.config, driver);
+        const managed = (descriptor: typeof first.descriptor) => ({
+          command: descriptor.command,
+          args: [...descriptor.args],
+          env: Object.fromEntries(descriptor.environment.map(({ name, value }) => [name, value])),
+        });
+        yield* sessions.set(first.session);
+        f.start(managed(first.descriptor));
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        yield* f.turnStart(f.reload(4, managed(next.descriptor)), 2, true);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(next.session);
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [managed(first.descriptor), managed(next.descriptor)],
+        );
+      }),
+    ).pipe(Effect.provide(Layer.merge(threadAttachmentLayer, layerAdapterTest))),
   );
 
   it.effect(
@@ -106,26 +173,26 @@ describe("Codex computer use attachment", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const f = fixture("cua-running-turn");
-          const withCua = (control: string) => ({
+          const withCua = (generation: string) => ({
             ...f.config,
-            cuaDriver: f.driver(control),
+            cuaDriver: f.driver(generation),
             cuaDriverOverridesUserConfig: true,
           });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(withCua("control:a"));
-          f.start(f.managed("control:a"));
-          // Turn 1 is still running when the control changes. Input sent to it (turn 2) goes
+          yield* sessions.set(withCua("driver:a"));
+          f.start(f.managed("driver:a"));
+          // Turn 1 is still running when the driver changes. Input sent to it (turn 2) goes
           // straight to turn/start with the deferral note: no unsubscribe can drop its events.
           yield* f.turnStart(3, 1, true);
           yield* f.turnStart(4, 2, true, true);
           f.turnCompleted(1);
           f.turnCompleted(2);
-          // Once Codex reports the thread idle, the new control reaches it through a reload.
-          yield* f.turnStart(f.reload(5, f.managed("control:b")), 3, true);
+          // Once Codex reports the thread idle, the new driver reaches it through a reload.
+          yield* f.turnStart(f.reload(5, f.managed("driver:b")), 3, true);
           f.turnCompleted(3);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(2);
           yield* replay.terminal;
           yield* replay.terminal;
@@ -133,7 +200,7 @@ describe("Codex computer use attachment", () => {
           yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a"), f.managed("control:b")],
+            [f.managed("driver:a"), f.managed("driver:b")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -150,24 +217,24 @@ describe("Codex computer use attachment", () => {
           const root = `cua-child-${flags.length === 0 ? "running" : "waiting"}`;
           const child = `${root}-agent`;
           const f = fixture(root);
-          const withCua = (control: string) => ({
+          const withCua = (generation: string) => ({
             ...f.config,
-            cuaDriver: f.driver(control),
+            cuaDriver: f.driver(generation),
             cuaDriverOverridesUserConfig: true,
           });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(withCua("control:a"));
-          f.start(f.managed("control:a"));
+          yield* sessions.set(withCua("driver:a"));
+          f.start(f.managed("driver:a"));
           yield* f.turnStart(3, 1, true);
           spawnChild(f, root, child);
           f.status(child, "active", flags);
           f.turnCompleted(1);
-          // Turn 2 under a new control: Codex still reports the child busy, so nothing reloads.
+          // Turn 2 with a new driver: Codex still reports the child busy, so nothing reloads.
           yield* f.turnStart(4, 2, true, true);
           f.status(child, "idle");
           f.turnCompleted(2);
           yield* f.turnStart(
-            f.reload(5, f.managed("control:b"), { threads: [root, child] }),
+            f.reload(5, f.managed("driver:b"), { threads: [root, child] }),
             3,
             true,
           );
@@ -175,7 +242,7 @@ describe("Codex computer use attachment", () => {
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(2);
           yield* replay.terminal;
           yield* replay.startTurn(3);
@@ -183,7 +250,7 @@ describe("Codex computer use attachment", () => {
           assert.isString(name);
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a"), f.managed("control:b")],
+            [f.managed("driver:a"), f.managed("driver:b")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -195,14 +262,14 @@ describe("Codex computer use attachment", () => {
         const root = "cua-child-unreported";
         const child = `${root}-agent`;
         const f = fixture(root);
-        const withCua = (control: string) => ({
+        const withCua = (generation: string) => ({
           ...f.config,
-          cuaDriver: f.driver(control),
+          cuaDriver: f.driver(generation),
           cuaDriverOverridesUserConfig: true,
         });
         const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(withCua("control:a"));
-        f.start(f.managed("control:a"));
+        yield* sessions.set(withCua("driver:a"));
+        f.start(f.managed("driver:a"));
         yield* f.turnStart(3, 1, true);
         spawnChild(f, root, child);
         f.turnCompleted(1);
@@ -214,14 +281,14 @@ describe("Codex computer use attachment", () => {
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         yield* replay.terminal;
-        yield* sessions.set(withCua("control:b"));
+        yield* sessions.set(withCua("driver:b"));
         for (const ordinal of [2, 3]) {
           yield* replay.startTurn(ordinal);
           yield* replay.terminal;
         }
         assert.deepEqual(
           replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-          [f.managed("control:a")],
+          [f.managed("driver:a")],
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
@@ -232,31 +299,31 @@ describe("Codex computer use attachment", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const f = fixture("cua-late-idle");
-          const withCua = (control: string) => ({
+          const withCua = (generation: string) => ({
             ...f.config,
-            cuaDriver: f.driver(control),
+            cuaDriver: f.driver(generation),
             cuaDriverOverridesUserConfig: true,
           });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(withCua("control:a"));
-          f.start(f.managed("control:a"));
+          yield* sessions.set(withCua("driver:a"));
+          f.start(f.managed("driver:a"));
           yield* f.turnStart(3, 1, true);
           // Codex admits turn 2 before publishing turn 1's idle; turn 2's own notifications come later.
           yield* f.turnStart(4, 2, true);
           const turnTwoStarted = f.entries.splice(-2);
           f.turnCompleted(1);
-          // Turn 3 under a new control must not reload: turn 2 is running.
+          // Turn 3 with a new driver must not reload: turn 2 is running.
           yield* f.turnStart(5, 3, true, true);
           f.entries.push(...turnTwoStarted);
           f.turnCompleted(2);
           f.turnCompleted(3);
-          yield* f.turnStart(f.reload(6, f.managed("control:b")), 4, true);
+          yield* f.turnStart(f.reload(6, f.managed("driver:b")), 4, true);
           f.turnCompleted(4);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.startTurn(2);
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(3);
           yield* replay.terminal;
           yield* replay.terminal;
@@ -264,7 +331,7 @@ describe("Codex computer use attachment", () => {
           yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a"), f.managed("control:b")],
+            [f.managed("driver:a"), f.managed("driver:b")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -276,9 +343,9 @@ describe("Codex computer use attachment", () => {
         Effect.gen(function* () {
           const root = "cua-goal-continuation";
           const f = fixture(root);
-          const withCua = (control: string) => ({
+          const withCua = (generation: string) => ({
             ...f.config,
-            cuaDriver: f.driver(control),
+            cuaDriver: f.driver(generation),
             cuaDriverOverridesUserConfig: true,
           });
           const goal = (tokensUsed: number, status = "active") => ({
@@ -299,8 +366,8 @@ describe("Codex computer use attachment", () => {
           const notice = (method: string, params: unknown) =>
             f.entries.push({ type: "emit_inbound", frame: { method, params } });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(withCua("control:a"));
-          f.start(f.managed("control:a"));
+          yield* sessions.set(withCua("driver:a"));
+          f.start(f.managed("driver:a"));
           request(3, "thread/goal/get", { threadId: root }, { goal: null });
           request(
             4,
@@ -314,7 +381,7 @@ describe("Codex computer use attachment", () => {
           f.turnCompleted(1);
           notice("thread/goal/updated", { threadId: root, turnId: null, goal: goal(11) });
           // Codex has started a continuation turn but not yet published it; the person's input
-          // folds into it, so a new control must wait instead of reloading under it.
+          // folds into it, so a new driver must wait instead of reloading under it.
           f.goalGet(7, root, { result: { goal: goal(11) } });
           yield* f.turnStart(8, 3, true, true);
           f.entries.splice(-3);
@@ -335,11 +402,11 @@ describe("Codex computer use attachment", () => {
           while ((yield* replay.goalTokens) !== 11) {}
           yield* TestClock.adjust("5 seconds");
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(3);
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a")],
+            [f.managed("driver:a")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -359,9 +426,9 @@ describe("Codex computer use attachment", () => {
     Effect.gen(function* () {
       const child = root + "-agent";
       const f = fixture(root);
-      const withCua = (control: string) => ({
+      const withCua = (generation: string) => ({
         ...f.config,
-        cuaDriver: f.driver(control),
+        cuaDriver: f.driver(generation),
         cuaDriverOverridesUserConfig: true,
       });
       const goalNotice = (goal: ReturnType<typeof childGoal> | null) =>
@@ -373,8 +440,8 @@ describe("Codex computer use attachment", () => {
               : { method: "thread/goal/updated", params: { threadId: child, turnId: null, goal } },
         });
       const sessions = yield* McpProviderSessions.McpProviderSessions;
-      yield* sessions.set(withCua("control:a"));
-      f.start(f.managed("control:a"));
+      yield* sessions.set(withCua("driver:a"));
+      f.start(f.managed("driver:a"));
       yield* f.turnStart(3, 1, true);
       spawnChild(f, root, child);
       f.status(child, "active");
@@ -400,11 +467,11 @@ describe("Codex computer use attachment", () => {
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(2);
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a")],
+            [f.managed("driver:a")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -424,7 +491,7 @@ describe("Codex computer use attachment", () => {
           f.status(child, "idle");
           f.turnCompleted(1);
           yield* f.turnStart(
-            f.reload(4, f.managed("control:b"), { threads: [root, child] }),
+            f.reload(4, f.managed("driver:b"), { threads: [root, child] }),
             2,
             true,
           );
@@ -432,12 +499,12 @@ describe("Codex computer use attachment", () => {
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(2);
           yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a"), f.managed("control:b")],
+            [f.managed("driver:a"), f.managed("driver:b")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -477,11 +544,11 @@ describe("Codex computer use attachment", () => {
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.terminal;
-          yield* sessions.set(withCua("control:b"));
+          yield* sessions.set(withCua("driver:b"));
           yield* replay.startTurn(2);
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a")],
+            [f.managed("driver:a")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
@@ -493,35 +560,31 @@ describe("Codex computer use attachment", () => {
         const root = "cua-child-failed";
         const child = root + "-agent";
         const f = fixture(root);
-        const withCua = (control: string) => ({
+        const withCua = (generation: string) => ({
           ...f.config,
-          cuaDriver: f.driver(control),
+          cuaDriver: f.driver(generation),
           cuaDriverOverridesUserConfig: true,
         });
         const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(withCua("control:a"));
-        f.start(f.managed("control:a"));
+        yield* sessions.set(withCua("driver:a"));
+        f.start(f.managed("driver:a"));
         yield* f.turnStart(3, 1, true);
         spawnChild(f, root, child);
         f.status(child, "active");
         // Codex keeps a loaded child whose turn failed in systemError until it runs again.
         f.status(child, "systemError");
         f.turnCompleted(1);
-        yield* f.turnStart(
-          f.reload(4, f.managed("control:b"), { threads: [root, child] }),
-          2,
-          true,
-        );
+        yield* f.turnStart(f.reload(4, f.managed("driver:b"), { threads: [root, child] }), 2, true);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         yield* replay.terminal;
-        yield* sessions.set(withCua("control:b"));
+        yield* sessions.set(withCua("driver:b"));
         yield* replay.startTurn(2);
         yield* replay.terminal;
         assert.deepEqual(
           replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-          [f.managed("control:a"), f.managed("control:b")],
+          [f.managed("driver:a"), f.managed("driver:b")],
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
@@ -531,28 +594,28 @@ describe("Codex computer use attachment", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const f = fixture("cua-goals-off");
-        const withCua = (control: string) => ({
+        const withCua = (generation: string) => ({
           ...f.config,
-          cuaDriver: f.driver(control),
+          cuaDriver: f.driver(generation),
           cuaDriverOverridesUserConfig: true,
         });
         const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(withCua("control:a"));
-        f.start(f.managed("control:a"));
+        yield* sessions.set(withCua("driver:a"));
+        f.start(f.managed("driver:a"));
         yield* f.turnStart(3, 1, true);
         f.turnCompleted(1);
         const off = { error: { code: -32600, message: "goals feature is disabled" } };
-        yield* f.turnStart(f.reload(4, f.managed("control:b"), { goal: off }), 2, true);
+        yield* f.turnStart(f.reload(4, f.managed("driver:b"), { goal: off }), 2, true);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         yield* replay.terminal;
-        yield* sessions.set(withCua("control:b"));
+        yield* sessions.set(withCua("driver:b"));
         yield* replay.startTurn(2);
         yield* replay.terminal;
         assert.deepEqual(
           replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-          [f.managed("control:a"), f.managed("control:b")],
+          [f.managed("driver:a"), f.managed("driver:b")],
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
@@ -566,18 +629,18 @@ describe("Codex computer use attachment", () => {
           const f = fixture("cua-fork");
           const forked = "cua-fork-copy";
           const target = ThreadId.make(`thread-${forked}`);
-          const attachment = (threadId: ThreadId, control?: string) => ({
+          const attachment = (threadId: ThreadId, generation?: string) => ({
             ...f.config,
             threadId,
-            ...(control === undefined
+            ...(generation === undefined
               ? {}
-              : { cuaDriver: f.driver(control), cuaDriverOverridesUserConfig: true }),
+              : { cuaDriver: f.driver(generation), cuaDriverOverridesUserConfig: true }),
           });
           const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(attachment(f.config.threadId, "control:a"));
-          yield* sessions.set(attachment(target, "control:a"));
-          f.start(f.managed("control:a"));
-          const params = f.threadParams(f.managed("control:a"));
+          yield* sessions.set(attachment(f.config.threadId, "driver:a"));
+          yield* sessions.set(attachment(target, "driver:a"));
+          f.start(f.managed("driver:a"));
+          const params = f.threadParams(f.managed("driver:a"));
           f.entries.push(
             {
               type: "expect_outbound",
@@ -592,7 +655,7 @@ describe("Codex computer use attachment", () => {
           // Resuming the fork this client holds changes nothing in Codex.
           f.resume(4, params, undefined, forked);
           // With computer use removed, the quiet fork reloads with the managed driver switched off.
-          const off = f.threadParams({ ...f.managed("control:a"), enabled: false });
+          const off = f.threadParams({ ...f.managed("driver:a"), enabled: false });
           const turn = f.reload(5, undefined, { threads: [forked], params: off });
           yield* f.turnStart(turn, 1, false, false, forked);
           f.turnCompleted(1, forked);
@@ -615,9 +678,9 @@ describe("Codex computer use attachment", () => {
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
             [
-              f.managed("control:a"),
-              f.managed("control:a"),
-              { ...f.managed("control:a"), enabled: false },
+              f.managed("driver:a"),
+              f.managed("driver:a"),
+              { ...f.managed("driver:a"), enabled: false },
             ],
           );
         }),
@@ -628,33 +691,33 @@ describe("Codex computer use attachment", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const f = fixture("cua-root-failed");
-        const withCua = (control: string) => ({
+        const withCua = (generation: string) => ({
           ...f.config,
-          cuaDriver: f.driver(control),
+          cuaDriver: f.driver(generation),
           cuaDriverOverridesUserConfig: true,
         });
         const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(withCua("control:a"));
-        f.start(f.managed("control:a"));
+        yield* sessions.set(withCua("driver:a"));
+        f.start(f.managed("driver:a"));
         yield* f.turnStart(3, 1, true);
         f.turnCompleted(1);
         // Codex resumes a thread cold only from idle: a failed root would keep its old config.
         f.status("cua-root-failed", "systemError");
         yield* f.turnStart(4, 2, true, true);
         f.turnCompleted(2);
-        yield* f.turnStart(f.reload(5, f.managed("control:b")), 3, true);
+        yield* f.turnStart(f.reload(5, f.managed("driver:b")), 3, true);
         f.turnCompleted(3);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
         yield* replay.terminal;
-        yield* sessions.set(withCua("control:b"));
+        yield* sessions.set(withCua("driver:b"));
         for (const ordinal of [2, 3]) {
           yield* replay.startTurn(ordinal);
           yield* replay.terminal;
         }
         assert.deepEqual(
           replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-          [f.managed("control:a"), f.managed("control:b")],
+          [f.managed("driver:a"), f.managed("driver:b")],
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),

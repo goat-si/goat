@@ -8,8 +8,8 @@ import {
   webhookTaskInput,
   pullRequestBody,
   requestFor,
-  withService,
-} from "./ScheduledTaskService.webhook.testkit.ts";
+  withWebhookService as withService,
+} from "./ScheduledRunFixture.testkit.ts";
 
 it.effect(
   "rejects webhooks without claiming or dispatching while held and accepts after release",

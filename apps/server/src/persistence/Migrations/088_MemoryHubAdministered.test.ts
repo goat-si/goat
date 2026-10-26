@@ -52,6 +52,7 @@ it.effect("082 participates in the migration ledger and preserves its flag on re
       [105, "ScheduledTaskWebhookSecretRef"],
       [106, "RemoteReportFences"],
       [107, "HubProvisionedLinks"],
+      [108, "ScheduledTaskRuns"],
     ]);
     yield* sql`INSERT INTO memory_hub_administration_state VALUES(1,1)`;
     assert.deepStrictEqual(yield* runMigrations(), []);

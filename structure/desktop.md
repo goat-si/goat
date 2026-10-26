@@ -22,7 +22,8 @@ for a rolled-back build:
   Secret Service; Windows keeps its key in the profile). A differing key already under the new
   name is logged as a conflict and left alone. Marker: `safe-storage-key-migrated` in the profile.
   On macOS Electron's item is service `<name> Safe Storage` with account `<name> Key`, and a
-  packaged build's initial name is the staged package name `t3code` on every channel.
+  packaged build's initial name is the staged package name `goat` on every channel. Packaged
+  builds also try `t3code`, the staged name before the Linux package rename.
 - `apps/desktop/src/app/DesktopRendererOriginMigration.ts` copies localStorage and every IndexedDB
   database from the legacy origin before the first window, never replacing existing data. Main
   relays bounded chunks between a page on each origin; it must never hold the whole origin, which

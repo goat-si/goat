@@ -26,7 +26,7 @@ import {
   snoozeWakeLabel,
 } from "@goat/client-runtime/state/thread-settled";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
-import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
+import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import {
   childThreadRequestsTitle,

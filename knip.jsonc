@@ -11,7 +11,6 @@
       "entry": [
         // CodeRabbit loads its configuration by filename.
         ".coderabbit.config.ts",
-        ".github/scripts/thread-transfer-report.cjs",
       ],
       "vite": { "entry": [".github/**/*.test.cjs"] },
       "vitest": { "entry": [".github/**/*.test.cjs"] },
@@ -138,7 +137,7 @@
         "@goat/mobile-terminal-native",
       ],
     },
-    "apps/mobile/modules/t3-source-text": {
+    "apps/mobile/modules/goat-source-text": {
       // React Native codegen discovers component specifications by filename.
       "entry": ["src/*NativeComponent.ts!"],
     },

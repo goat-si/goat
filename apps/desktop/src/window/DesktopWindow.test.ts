@@ -145,6 +145,8 @@ function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly materialWindowOptions?: { readonly transparent?: true };
+  readonly materialAttachOptions?: unknown[];
 }) {
   let desktopSettings = input.desktopSettings ?? DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
@@ -213,7 +215,11 @@ function layerTest(input: {
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
-          attach: () => Effect.void,
+          windowOptions: Effect.succeed(input.materialWindowOptions ?? {}),
+          attach: (_window, options) =>
+            Effect.sync(() => {
+              input.materialAttachOptions?.push(options);
+            }),
           afterReveal: () => Effect.void,
           syncAppearance: () => Effect.void,
         }),
@@ -339,6 +345,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial)({
+            windowOptions: Effect.succeed({}),
             attach: () => Effect.void,
             afterReveal: () => Effect.void,
             syncAppearance: () => Effect.void,
@@ -690,6 +697,32 @@ describe("DesktopWindow", () => {
         assert.equal(createdWindowOptions[0]?.height, 780);
         assert.equal(createdWindowOptions[0]?.x, 1400);
         assert.equal(createdWindowOptions[0]?.y, 80);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("creates the main window with the material's options and attaches with them", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createdWindowOptions: Electron.BrowserWindowConstructorOptions[] = [];
+      const materialAttachOptions: unknown[] = [];
+      const layer = layerTest({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createdWindowOptions,
+        materialWindowOptions: { transparent: true },
+        materialAttachOptions,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        assert.equal(createdWindowOptions[0]?.transparent, true);
+        assert.deepEqual(materialAttachOptions, [{ transparent: true }]);
       }).pipe(Effect.provide(layer));
     }),
   );

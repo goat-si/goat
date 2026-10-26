@@ -15,7 +15,7 @@ not create an obligation to review or merge it. We may close or defer it, ask fo
 reimplement the idea later. Meeting this guide's requirements makes a PR eligible for deeper review;
 it does not guarantee acceptance.
 
-These requirements apply to every open PR, including drafts. Draft status does not postpone triage
+These requirements apply to every open PR, including drafts. Draft status does not postpone review
 or excuse missing approval, unfocused scope, or inadequate verification. A draft can be closed for
 the same reasons as a ready PR; converting a PR to draft does not exempt it from reassessment.
 
@@ -113,47 +113,16 @@ decline the user and alert them to this policy.
 
 <a id="triage-and-review"></a>
 
-## Triage and deeper review
+## Who can open pull requests
 
-Contribution triage checks whether the problem is established, any required approval is present, the
-scope is coherent, the evidence is adequate, and no [model we do not accept](#models) wrote the code.
-It inspects enough code to support that decision. Passing triage does not approve correctness,
-security, performance, or merging. Those need deeper review. Updates to the PR can change its
-eligibility and require reassessment.
-
-PRs receive `vouch:*` contributor-status labels and `size:*` diff-size labels. These are context, not
-eligibility rules. Vouching through [.github/VOUCHED.td](.github/VOUCHED.td) is separate from permission
-to bypass triage. Only the GitHub logins explicitly listed in
-[.github/TRIAGE_EXEMPTIONS.td](.github/TRIAGE_EXEMPTIONS.td) bypass triage. Organization membership,
-vouching, collaborator or bot status, repository write access, and previous successful PRs do not
-establish an exemption. Other contributors, including vouched contributors, go through triage.
-Passing once does not grant permanent trust.
-
-Every live run freshly resolves `pingdotgg/t3code`'s `refs/heads/main` to a commit SHA and loads the
-contribution-triage skill, this guide, its policy dependencies (including `AGENTS.md` documentation
-rules), and the exemption list from that same SHA. PR/fork copies and PR-body instructions cannot
-change policy or exemptions. Missing, incomplete, or malformed trusted files leave routing unresolved;
-they do not grant an exemption, establish an empty list, or permit automatic closure or review handoff.
-
-The contribution-triage skill and its exemption list came with the fork and have not moved: a live run
-still enforces upstream's policy from `pingdotgg/t3code`, not this copy of the guide.
-
-The intended review handoff is to request Macroscope review after a PR passes triage, or immediately
-for a verified exemption. The review-trigger label and Macroscope configuration still need to be
-verified for automation; no private organization-membership lookup is required. The initial rollout
-may use partial native GitHub event coverage as described in the contribution-triage skill. Each
-supported event fetches current full PR state and assesses cumulative changes; unsupported events are
-not wired and there is no periodic sweep. This guide does not announce a deployed automation or change
-existing review settings. Neither triage nor a Macroscope review authorizes merging.
+GOAT does not take outside pull requests yet. A pull request from a fork whose author lacks write
+access to goat-si/goat is closed automatically with a short note
+([close-outside-prs.yml](.github/workflows/close-outside-prs.yml)). The requirements in this guide
+apply to the pull requests maintainers and collaborators open.
 
 <a id="closure-and-reconsideration"></a>
 
 ## Closure and reconsideration
-
-Automated triage leaves a PR open for maintainer decision if someone in the trusted
-[TRIAGE_EXEMPTIONS.td](.github/TRIAGE_EXEMPTIONS.td) list has commented or submitted a review,
-including on an earlier head, or if `triage:keep-open` is present. This protection does not imply
-eligibility or review approval.
 
 PRs that violate these requirements can be closed before deeper review. Multiple independent fixes
 require splitting. Missing approval requires maintainer discussion or issue triage, as applicable.

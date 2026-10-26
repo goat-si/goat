@@ -26,6 +26,7 @@ const emptyOutput = {
   remember: "",
   rememberQuote: "",
   notesChangeRequested: "",
+  additionalTasks: [],
 } satisfies ChannelReceptionModelOutput;
 
 const decodeModelOutput = Schema.decodeUnknownSync(ChannelReceptionModelOutput);
@@ -78,6 +79,15 @@ describe("channel reception note request conversion", () => {
         title: "Forget a note",
         instruction: "Remove it.",
         notesChangeRequested: " forget the Korean note ",
+        additionalTasks: [
+          {
+            title: "  Fix CI  ",
+            instruction: "  Re-run and fix failing suite.  ",
+            projectId: " project-2 ",
+            host: " mini ",
+          },
+          { title: "  ", instruction: "ignored", projectId: "", host: "" },
+        ],
       }),
     ).toEqual({
       replyText: "Okay.",
@@ -86,6 +96,14 @@ describe("channel reception note request conversion", () => {
         title: "Forget a note",
         instruction: "Remove it.",
         notesChangeRequested: "forget the Korean note",
+        additionalTasks: [
+          {
+            title: "Fix CI",
+            instruction: "Re-run and fix failing suite.",
+            projectId: "project-2",
+            host: "mini",
+          },
+        ],
       },
     });
     expect(
@@ -285,12 +303,23 @@ describe("channel reception turns", () => {
       title: "Check the disk",
       instruction: "Find what fills the disk.",
       notesChangeRequested: " forget the Friday rule ",
+      additionalTasks: [
+        {
+          title: " Clean logs ",
+          instruction: " Rotate logs. ",
+          projectId: " project-1 ",
+          host: "",
+        },
+      ],
     });
     expect(result.action).toEqual({
       type: "run_turn",
       title: "Check the disk",
       instruction: "Find what fills the disk.",
       notesChangeRequested: "forget the Friday rule",
+      additionalTasks: [
+        { title: "Clean logs", instruction: "Rotate logs.", projectId: "project-1" },
+      ],
     });
     expect(Option.isNone(toChannelReceptionResult({ ...emptyOutput, action: "run_turn" }))).toBe(
       true,

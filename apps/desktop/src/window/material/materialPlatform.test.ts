@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -30,12 +29,12 @@ const select = Effect.fn("test.materialPlatform")(function* (
   options: {
     platform?: NodeJS.Platform;
     isPackaged?: boolean;
-    isDevelopment?: boolean;
     arch?: string;
-    flag?: string;
     version?: string | null;
     native?: Parameters<typeof fakeObjcRuntime>[0];
     realLoader?: boolean;
+    enabled?: boolean;
+    transparent?: boolean;
     prepare?: Adapters.MaterialAdapter["prepare"];
   } = {},
 ) {
@@ -45,8 +44,7 @@ const select = Effect.fn("test.materialPlatform")(function* (
     Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
       platform: options.platform ?? "darwin",
       processArch: options.arch ?? "arm64",
-      isPackaged: options.isPackaged ?? false,
-      isDevelopment: options.isDevelopment ?? true,
+      isPackaged: options.isPackaged ?? true,
     } as DesktopEnvironment.DesktopEnvironment["Service"]),
     Effect.provideService(Platform.MacosVersion, {
       get: Effect.succeed(options.version === undefined ? "27.2" : options.version),
@@ -62,13 +60,6 @@ const select = Effect.fn("test.materialPlatform")(function* (
               }),
             }),
         Adapters.layer,
-        ConfigProvider.layer(
-          ConfigProvider.fromEnv({
-            env: {
-              GOAT_DESKTOP_MAC_GLASS_CANDIDATE: options.flag ?? "1",
-            },
-          }),
-        ),
       ),
     ),
   );
@@ -90,16 +81,13 @@ const select = Effect.fn("test.materialPlatform")(function* (
             },
     },
     platform: options.platform ?? "darwin",
+    enabled: options.enabled,
+    transparent: options.transparent,
   });
-  return { ...fixture, ...native, selection, loads, prepares: () => prepares };
+  return { ...fixture, ...native, selection, loads: () => loads, prepares: () => prepares };
 });
 
 const rejected = [
-  { name: "packaged plus dev URL and flag", isPackaged: true },
-  { name: "packaged without dev URL", isPackaged: true, isDevelopment: false },
-  { name: "unpackaged non-development", isDevelopment: false },
-  { name: "no flag", flag: "" },
-  { name: "non-exact flag", flag: "true" },
   { name: "Linux", platform: "linux" as const },
   { name: "x64", arch: "x64" },
   { name: "macOS 25", version: "25.4", reason: "os-version" },
@@ -112,16 +100,13 @@ describe("assembled material platform and window service", () => {
     Effect.gen(function* () {
       const f = yield* select({
         platform: "win32",
-        isPackaged: true,
-        isDevelopment: false,
         arch: "x64",
-        flag: "",
       });
       yield* f.material.afterReveal(f.window);
       assert.deepEqual(f.selection.capability, { supported: true, material: "windows-mica" });
       assert.equal((yield* f.material.getState(1)).applied, "windows-mica");
       assert.equal(f.model.material, "mica");
-      assert.equal(f.loads, 0);
+      assert.equal(f.loads(), 0);
       assert.equal(f.model.handleReads, 0);
       f.close();
       assert.equal(f.model.material, "none");
@@ -143,7 +128,7 @@ describe("assembled material platform and window service", () => {
               : "api-unavailable",
       });
       assert.isNull(f.selection.adapter);
-      assert.equal(f.loads, 0);
+      assert.equal(f.loads(), 0);
       assert.equal(f.prepares(), 0);
       assert.equal(f.state.allocations, 0);
       assert.equal(f.state.mutations, 0);
@@ -168,14 +153,57 @@ describe("assembled material platform and window service", () => {
     { name: "missing class", missingClass: "NSGlassEffectView" },
     { name: "missing selector", missingSelector: "setTintColor:" },
     { name: "not main thread", mainThread: false },
-  ])("$name is api-unavailable before window mutation", (native) =>
+  ])("$name fails the first attach before window mutation", (native) =>
     Effect.gen(function* () {
       const f = yield* select({ native });
       yield* f.material.afterReveal(f.window);
-      assert.deepEqual(f.selection.capability, { supported: false, reason: "api-unavailable" });
-      assert.equal(f.loads, 1);
+      assert.equal((yield* f.material.getState(1)).reason, "native-failed");
+      assert.equal(f.loads(), 1);
       assert.equal(f.state.allocations, 0);
       assert.equal(f.state.mutations, 0);
+      assert.equal(f.model.handleReads, 0);
+    }),
+  );
+
+  it.effect("supported macOS loads ffi-rs only once the user turns system glass on", () =>
+    Effect.gen(function* () {
+      const f = yield* select({ enabled: false });
+      yield* f.material.afterReveal(f.window);
+      assert.deepEqual(f.selection.capability, { supported: true, material: "macos-glass" });
+      assert.equal((yield* f.material.getState(1)).reason, "off");
+      assert.equal(f.loads(), 0);
+      assert.equal(f.model.handleReads, 0);
+      yield* f.commit({ desktopSystemMaterialEnabled: true });
+      assert.equal((yield* Queue.take(f.states)).reason, "off");
+      assert.equal((yield* Queue.take(f.states)).applied, "macos-glass");
+      assert.equal(f.loads(), 1);
+      assert.equal(f.state.liveViews.size, 1);
+      assert.equal(f.model.shadowInvalidations, 1);
+    }),
+  );
+
+  it.effect("glass turned on in a window created opaque waits for a restart", () =>
+    Effect.gen(function* () {
+      const f = yield* select({ enabled: false, transparent: false });
+      yield* f.material.afterReveal(f.window);
+      assert.deepEqual(yield* f.material.windowOptions, {});
+      yield* f.commit({ desktopSystemMaterialEnabled: true });
+      assert.equal((yield* Queue.take(f.states)).reason, "off");
+      assert.equal((yield* Queue.take(f.states)).reason, "restart");
+      assert.equal(f.loads(), 0);
+      assert.deepEqual(yield* f.material.windowOptions, { transparent: true });
+      assert.equal(f.loads(), 1);
+      assert.equal(f.model.handleReads, 0);
+    }),
+  );
+
+  it.effect("a Mac whose AppKit probe fails keeps an opaque window and reports native-failed", () =>
+    Effect.gen(function* () {
+      const f = yield* select({ transparent: false, native: { mismatch: "init" } });
+      assert.deepEqual(yield* f.material.windowOptions, {});
+      yield* f.material.afterReveal(f.window);
+      assert.equal((yield* f.material.getState(1)).reason, "native-failed");
+      assert.equal(f.state.allocations, 0);
       assert.equal(f.model.handleReads, 0);
     }),
   );
@@ -207,7 +235,7 @@ describe("assembled material platform and window service", () => {
   );
 
   it.effect(
-    "eligible arm64 attaches with initial tint, updates in place, and closes synchronously",
+    "packaged arm64 attaches with initial tint, updates in place, and closes synchronously",
     () =>
       Effect.gen(function* () {
         const f = yield* select();

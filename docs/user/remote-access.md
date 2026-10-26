@@ -750,10 +750,12 @@ history, and saved connections are kept, and you keep working through direct pai
 Switch **Local environment** back on in the same place to restart with your previous local
 settings.
 
-When another GOAT reaches this Mac over SSH while the app is open, it uses the app's own server, so
+When another GOAT reaches this computer over SSH while the app is open, it uses the app's own server, so
 its threads and yours are in one place. When the app is closed, it starts a background server here
 (`goat serve` on your `~/.goat` data), and the desktop app lists it as **Headless server**. Once
 you open the app again, other GOATs move to the app's server as soon as the background server has
 no running work; the background server itself keeps running, and its earlier threads stay under
-**Headless server**. To hide it, switch off **Headless server on this Mac** in **Settings →
-Connections**. To stop it starting at all, remove this Mac from the other GOAT's SSH hosts.
+**Headless server**. On Windows, other GOATs always use the background server, so their threads
+appear only under **Headless server**. To hide it, switch off **Headless server on this computer**
+in **Settings → Connections**. To stop it starting at all, remove this computer from the other
+GOAT's SSH hosts.

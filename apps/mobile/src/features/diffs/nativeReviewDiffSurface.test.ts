@@ -14,18 +14,18 @@ describe("isPendingNativeViewRegistration", () => {
 
     expect(
       isPendingNativeViewRegistration(
-        new Error("Unable to find the 'T3ReviewDiffSurface' view for this native tag"),
+        new Error("Unable to find the 'GoatReviewDiffSurface' view for this native tag"),
       ),
     ).toBe(true);
     expect(
       isPendingNativeViewRegistration(
-        new Error("Unable to find the 'T3ReviewDiffView' view for this native tag"),
+        new Error("Unable to find the 'GoatReviewDiffView' view for this native tag"),
       ),
     ).toBe(false);
     expect(
       isPendingNativeViewRegistration(
         new Error(
-          "Unable to find the class expo.modules.t3reviewdiff.T3ReviewDiffView view with tag 1150",
+          "Unable to find the class expo.modules.goatreviewdiff.GoatReviewDiffView view with tag 1150",
         ),
       ),
     ).toBe(true);

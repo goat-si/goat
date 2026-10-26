@@ -273,13 +273,13 @@ export type MemoryProviderCapabilities = typeof MemoryProviderCapabilities.Type;
 
 export const MemoryImportFormat = Schema.Literals(["codex", "claude", "omo"]);
 export type MemoryImportFormat = typeof MemoryImportFormat.Type;
+export const MemoryImportSourceFormat = Schema.Literals(["codex", "claude", "omo", "aside"]);
+export type MemoryImportSourceFormat = typeof MemoryImportSourceFormat.Type;
 
 /**
  * The import format named in revision provenance. Decoders accept any format token
- * so a revision from a newer import source never blocks sync or reads. Writers still
- * record only `MemoryImportFormat` values until every peer of a space decodes this
- * (the next hub protocol version); `parserVersion` and `sourceLocator` name the
- * real source meanwhile. A known value encodes byte-for-byte as before.
+ * so a newer source never blocks sync or reads. Writers record `MemoryImportFormat`
+ * values until the next hub protocol version; `parserVersion` and `sourceLocator` name the
  */
 export const MemoryProvenanceImportFormat = Schema.String.check(
   Schema.makeFilter((s) => /^[a-z][a-z0-9-]{0,31}$/.test(s)),
@@ -2063,7 +2063,7 @@ export class MemoryImportRpcError extends Schema.TaggedError<MemoryImportRpcErro
 
 export const MemoryImportSource = struct({
   sourceId: MemoryImportSourceId,
-  format: MemoryImportFormat,
+  format: MemoryImportSourceFormat,
   parserVersion: canonical,
   profile: canonical,
   label: canonical,
@@ -2132,7 +2132,7 @@ const importSelector = struct({
 
 export const MemoryImportProviderInput = bounded(
   Schema.Union([
-    struct({ ...space, action: Schema.Literal("discover"), format: MemoryImportFormat }),
+    struct({ ...space, action: Schema.Literal("discover"), format: MemoryImportSourceFormat }),
     struct({
       ...space,
       action: Schema.Literal("preview"),

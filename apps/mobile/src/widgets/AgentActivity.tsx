@@ -240,7 +240,7 @@ export function AgentActivity(
   // inherits.
   const renderLogo = (height: number, color: Foreground, modifiers: typeof linkModifiers = []) => (
     <HStack modifiers={[frame({ width: height, height }), foregroundStyle(color), ...modifiers]}>
-      <Image assetName="T3Mark" modifiers={[resizable()]} />
+      <Image assetName="GoatMark" modifiers={[resizable()]} />
     </HStack>
   );
 

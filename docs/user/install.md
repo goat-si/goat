@@ -135,6 +135,11 @@ The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new `.deb` and install it the same way.
 
+Older releases installed the app under an earlier package name. The `goat`
+package replaces it on the next update and keeps your settings, threads and
+saved logins. To go back to one of those releases, remove the current package
+first with `sudo apt remove goat`, then install the older `.deb`.
+
 ### The `goat` command
 
 The desktop app includes the `goat` command-line tool. To run it from any

@@ -145,6 +145,28 @@ it.effect("marks success, retries after a store failure, and skips unkeyed platf
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("packaged builds also copy the key of the pre-rename package name", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const input = (userDataPath: string) => ({
+      userDataPath,
+      legacyRuntimeName: "T3 Code Alpha",
+      runtimeName: "GOAT Alpha",
+    });
+
+    const packaged = memoryStore({ t3code: "package-key" });
+    const packagedMigration = yield* makeWith(async () => packaged.store, "linux", "goat", true);
+    yield* packagedMigration.run(input(yield* fs.makeTempDirectoryScoped()));
+    assert.equal(packaged.keys.get("GOAT Alpha"), "package-key");
+
+    // A dev run is never the pre-rename package, so its key is left alone.
+    const dev = memoryStore({ t3code: "package-key" });
+    const devMigration = yield* makeWith(async () => dev.store, "linux", "Electron");
+    yield* devMigration.run(input(yield* fs.makeTempDirectoryScoped()));
+    assert.isFalse(dev.keys.has("GOAT Alpha"));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it("addresses the Keychain item Electron itself reads and writes", () => {
   // Items found on a real macOS install: pre-#127 GOAT created "t3code Safe Storage" / "t3code Key"
   // and Electron 44 created "GOAT Alpha Safe Storage" / "GOAT Alpha Key". A lookup under any other

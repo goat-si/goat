@@ -5,8 +5,13 @@
  * @module channelTaskWrites
  */
 import {
+  type ChannelBindingId,
   type ChannelBotRef,
+  type ChannelConversationId,
+  type ChannelInputId,
+  type ChannelReceptionAction,
   type ChannelReplyAddress,
+  type ChannelRequester,
   type ChannelTask,
   type ChannelTaskChip,
   ChannelTaskEvent,
@@ -17,7 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { deliveryIdFor, taskEventIdFor } from "./channelIds.ts";
+import { deliveryIdFor, taskEventIdFor, taskIdFor } from "./channelIds.ts";
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 
 const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
@@ -198,3 +203,151 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
   });
   return prepared.next;
 });
+
+/** Builds the ledger task(s) and initial events a `create_task` or `run_turn` reception commits. */
+export const makeCreatedTasks = (input: {
+  readonly action: Extract<ChannelReceptionAction, { readonly type: "create_task" | "run_turn" }>;
+  readonly inputId: ChannelInputId;
+  readonly conversationId: ChannelConversationId;
+  readonly originBindingId: ChannelBindingId;
+  readonly originAddress: ChannelReplyAddress;
+  readonly requester: ChannelRequester;
+  readonly notesChangeRequested?: ChannelTask["notesChangeRequested"] | undefined;
+  readonly includePrimary?: boolean | undefined;
+  readonly bot?: ChannelBotRef | undefined;
+  readonly deliveries?: Array<ChannelLedger.ChannelOutboxInsert> | undefined;
+  readonly now: string;
+}): ReadonlyArray<{ readonly task: ChannelTask; readonly event: ChannelTaskEvent }> => {
+  const specs: ReadonlyArray<{
+    readonly index: number;
+    readonly title: ChannelTask["title"];
+    readonly instruction: string;
+    readonly kind?: ChannelTask["kind"] | undefined;
+    readonly projectId?: ChannelTask["projectId"] | undefined;
+    readonly host?: ChannelTask["host"] | undefined;
+    readonly notesChangeRequested?: ChannelTask["notesChangeRequested"] | undefined;
+  }> = [
+    ...(input.includePrimary === false
+      ? []
+      : [
+          {
+            index: 0,
+            title: input.action.title,
+            instruction: input.action.instruction,
+            ...(input.action.type === "run_turn" ? { kind: "turn" as const } : {}),
+            ...(input.action.type !== "create_task" || input.action.projectId === undefined
+              ? {}
+              : { projectId: input.action.projectId }),
+            ...(input.action.type !== "create_task" || input.action.host === undefined
+              ? {}
+              : { host: input.action.host }),
+            ...(input.notesChangeRequested === undefined
+              ? {}
+              : { notesChangeRequested: input.notesChangeRequested }),
+          },
+        ]),
+    ...(input.action.additionalTasks ?? []).map((spec, idx) => ({ ...spec, index: idx + 1 })),
+  ];
+  return specs.map((spec) => {
+    const taskId = taskIdFor(input.inputId, spec.index);
+    const task: ChannelTask = {
+      taskId,
+      ...(spec.kind === undefined ? {} : { kind: spec.kind }),
+      conversationId: input.conversationId,
+      originBindingId: input.originBindingId,
+      originAddress: input.originAddress,
+      originInputId: input.inputId,
+      requester: input.requester,
+      title: spec.title,
+      instruction: spec.instruction,
+      status: "received",
+      version: 1,
+      generation: 1,
+      ...(spec.projectId === undefined ? {} : { projectId: spec.projectId }),
+      ...(spec.host === undefined ? {} : { host: spec.host }),
+      ...(spec.notesChangeRequested === undefined
+        ? {}
+        : { notesChangeRequested: spec.notesChangeRequested }),
+      openQuestions: [],
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+    if (input.bot !== undefined && input.deliveries !== undefined) {
+      input.deliveries.push(chipDelivery(task, input.bot));
+    }
+    return {
+      task,
+      event: makeTaskEvent(
+        { ...task, version: 0 },
+        {
+          type: "task.created",
+          payload: {
+            title: task.title,
+            instruction: task.instruction,
+            originInputId: input.inputId,
+            ...(task.notesChangeRequested === undefined
+              ? {}
+              : { notesChangeRequested: task.notesChangeRequested }),
+          },
+        },
+        input.now,
+        { eventId: taskEventIdFor(taskId, 1) },
+      ),
+    };
+  });
+};
+
+const movedNarration = (payload: { fromHost: string; host: string; replicaCapturedAt: string }) =>
+  `${payload.fromHost} stopped answering, so this continues on ${payload.host} from the copy of its work taken at ${payload.replicaCapturedAt}. Whatever it does on ${payload.fromHost} after that stays there.`;
+
+/** Base narration text and outbound kind for a pending task event, or undefined when silent. */
+export const narrationFor = (
+  task: ChannelTask,
+  event: ChannelLedger.ChannelPendingEvent["event"],
+) => {
+  switch (event.type) {
+    case "task.dispatch.claimed":
+      return event.payload.target.placementReason === undefined
+        ? undefined
+        : {
+            kind: "receipt" as const,
+            text: task.title + " → " + event.payload.target.placementReason,
+          };
+    case "task.completed":
+      if (task.kind === "turn") {
+        return {
+          kind: "result" as const,
+          text: event.payload.summary.trim() === "" ? "Done." : event.payload.summary,
+        };
+      }
+      return {
+        kind: "result" as const,
+        text:
+          "Done: " +
+          task.title +
+          (event.payload.summary.trim() === "" ? "" : "\n" + event.payload.summary),
+      };
+    case "task.failed":
+      return {
+        kind: "failure" as const,
+        text:
+          "Couldn't finish: " + task.title + ": " + (event.payload.summary ?? event.payload.reason),
+      };
+    case "task.progress":
+      return event.payload.milestone === true
+        ? { kind: "receipt" as const, text: event.payload.summary }
+        : undefined;
+    case "task.moved":
+      return { kind: "receipt" as const, text: movedNarration(event.payload) };
+    case "task.cancelled":
+      return { kind: "failure" as const, text: "Stopped: " + task.title };
+    case "task.question.opened":
+      return {
+        kind: "question" as const,
+        text: event.payload.question.text,
+        options: event.payload.question.options,
+      };
+    default:
+      return undefined;
+  }
+};

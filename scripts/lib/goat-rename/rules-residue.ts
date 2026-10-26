@@ -34,12 +34,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D10: startup repairs old saved theme IDs; it does not name the current product.",
   ),
   keep(
-    "upstream-policy-cli",
-    [".github/triage/PLAYBOOK.md"],
-    /`(?:npx )?t3(?: triage| serve)?`/g,
-    "#99/R6 retains upstream's support playbook and commands.",
-  ),
-  keep(
     "legacy-env-adoption-comment",
     [
       "apps/desktop/scripts/dev-electron.mjs",
@@ -61,34 +55,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ],
     /legacy T3 env names/g,
     "D3/D5: explains the compatibility input, not the running product.",
-  ),
-  keep(
-    "legacy-desktop-key-owner",
-    ["apps/desktop/src/app/DesktopSafeStorageSiblingKeys.ts"],
-    /\bt3code\b/g,
-    "ADR-0014: initial package name owns the existing encryption key.",
-  ),
-  keep(
-    "native-frozen-additions",
-    [
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ChipIcons.kt",
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
-      "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ContextChip.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/java/expo/modules/t3nativecontrols/T3FoldPostureModule.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/java/expo/modules/t3nativecontrols/T3WorkspaceNavigationModule.kt",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_menu.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_new_thread.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_settings.xml",
-      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_usage.xml",
-      "apps/mobile/modules/t3-native-controls/expo-module.config.json",
-      "apps/mobile/modules/t3-native-controls/ios/T3NativeControls.podspec",
-      "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
-      "apps/mobile/modules/t3-native-controls/ios/T3SegmentedControlView.swift",
-      "apps/mobile/modules/t3-native-controls/ios/T3SidebarTabBarView.swift",
-      "apps/mobile/src/native/AndroidHingeObserver.android.tsx",
-    ],
-    /\b(?:T3ChipIcons|T3FoldPosture(?:Module|View)?|T3NativeControlIcons|T3SegmentedControlView|T3SidebarTabBarView|t3_menu|t3_new_thread|t3_settings|t3_usage)\b/g,
-    "ADR-0014: native classes, resource bundles and drawable ids share the frozen native fingerprint.",
   ),
   keep(
     "upstream-native-dependency-provenance",
@@ -224,12 +190,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ["packages/shared/src/testing/testTempSandbox.ts"],
     /t3code-/g,
     "ADR-0014/D13: temp guard accounts for installed desktop control socket identities.",
-  ),
-  keep(
-    "legacy-home-explanation",
-    ["scripts/dev-runner.ts"],
-    /legacy T3 home/g,
-    "D8: seed source can still be the pre-rename home.",
   ),
   keep(
     "legacy-root-explanation",

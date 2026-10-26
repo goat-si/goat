@@ -1,0 +1,18 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["GoatNativeControlsModule", "GoatKeyboardCommandsModule"],
+    "appDelegateSubscribers": [
+      "GoatWorkspaceOrientationSubscriber",
+      "GoatMenuDismissTouchGateSubscriber"
+    ]
+  },
+  "android": {
+    "modules": [
+      "expo.modules.goatnativecontrols.GoatNativeControlsModule",
+      "expo.modules.goatnativecontrols.GoatWorkspaceNavigationModule",
+      "expo.modules.goatnativecontrols.GoatKeyboardCommandsModule",
+      "expo.modules.goatnativecontrols.GoatFoldPostureModule"
+    ]
+  }
+}

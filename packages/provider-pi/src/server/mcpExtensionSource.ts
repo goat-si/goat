@@ -383,8 +383,8 @@ function createStdioMcpClient(spec: StdioMcpSpec) {
 }
 
 // A process launched by an adapter without the gate keeps its launch-time behavior. Once the
-// gate exists, "on" keeps the launch driver and "driver" names a newer one beside it (a new
-// control after Stop, #1564); anything else, including a missing or unreadable file, closes it.
+// gate exists, "on" selects the launch driver and "driver" names a different one beside it;
+// anything else, including a missing or unreadable file, closes it.
 async function readCuaGate(): Promise<"on" | "driver" | "off"> {
   const path = env(CUA_GATE_ENV);
   if (path === undefined) return "on";
@@ -672,7 +672,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   const cuaToolNames: string[] = [];
   let closeCua: () => void = () => undefined;
   let cuaClient: ReturnType<typeof createStdioMcpClient> | undefined;
-  let cuaDriverKey = JSON.stringify(cua);
+  const launchedCuaDriverKey = JSON.stringify(cua);
+  let cuaDriverKey = launchedCuaDriverKey;
   if (cua !== undefined) {
     cuaClient = createStdioMcpClient(cua);
     closeCua = () => cuaClient?.close();
@@ -725,9 +726,9 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     if (computerUse) {
       const gate = await readCuaGate();
       let open = gate !== "off";
-      if (gate === "driver") {
-        // The same driver tools under the control GOAT minted since launch: swap the connection.
-        const next = await readCuaDriver();
+      if (gate === "driver" || (gate === "on" && cuaDriverKey !== launchedCuaDriverKey)) {
+        // A different driver fingerprint requires a fresh connection.
+        const next = gate === "on" ? cua : await readCuaDriver();
         if (next === undefined) open = false;
         else if (JSON.stringify(next) !== cuaDriverKey) {
           closeCua();

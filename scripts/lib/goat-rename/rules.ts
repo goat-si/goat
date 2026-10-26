@@ -17,6 +17,7 @@ import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
 import { META_KEEP_RULES, META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
+import { MOBILE_KEEP_RULES, MOBILE_PATH_RULES, MOBILE_TEXT_RULES } from "./rules-mobile.ts";
 import {
   CONNECT_CONTRAST_RULES,
   RELAY_KEEP_RULES,
@@ -42,8 +43,6 @@ export const isExempt = (path: string): boolean =>
   // The relay is GOAT Connect's; its migrations are snapshots upstream also edits.
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
-  path === ".github/TRIAGE_EXEMPTIONS.td" ||
-  path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
   path.startsWith("devlog/") ||
   path.startsWith("scripts/lib/goat-rename/") ||
@@ -51,9 +50,7 @@ export const isExempt = (path: string): boolean =>
   path.startsWith("packages/contracts/src/legacyT3Names.") ||
   /(^|\/)(LICENSE[^/]*|THIRD_PARTY_NOTICES[^/]*|UPSTREAM\.md)$/.test(path) ||
   // Disabled upstream workflows; GOAT runs only goat-*.yml.
-  (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-")) ||
-  // AUR packaging is published only by the disabled upstream workflow.
-  path.startsWith("packaging/aur/");
+  (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-"));
 
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
@@ -148,6 +145,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   ...WIRE_TEXT_RULES,
   ...INTERNAL_TEXT_RULES,
   ...RELAY_TEXT_RULES,
+  ...MOBILE_TEXT_RULES,
   {
     id: "pull-request-context-tag",
     category: "local-names",
@@ -530,6 +528,7 @@ export const PATH_RULES: readonly PathRule[] = [
   },
   ...LEFTOVER_PATH_RULES,
   ...RELAY_PATH_RULES,
+  ...MOBILE_PATH_RULES,
   {
     // Builds since v0.1.1 read goat.json first and fall back to t3.json (plan 261013 D9).
     id: "repo-project-file",
@@ -542,10 +541,36 @@ export const PATH_RULES: readonly PathRule[] = [
 /** Upstream paths GOAT drops. Reasons: devlog/_plan/261021_repo_hygiene.md. */
 export const DROP_RULES: readonly DropRule[] = [
   {
+    id: "disabled-upstream-workflows",
+    category: "hygiene",
+    find: /^\.github\/workflows\/(?:ci|deploy-relay|desktop-macos-preview(?:-publish)?|issue-labels|mobile-eas-(?:preview|production)|mobile-fingerprint-check|mobile-showcase-screenshots|pr-size|pr-vouch|publish-aur|thread-transfer-report|web-preview|windows-tests)\.yml$/,
+    reason:
+      "Upstream workflows GOAT keeps disabled on GitHub; GOAT runs goat-ci, goat-nightly and marketing-pages.",
+  },
+  {
+    id: "disabled-workflow-scripts",
+    category: "hygiene",
+    find: /^\.github\/scripts\/(?:vercel-deployment-output\.test\.cjs|thread-transfer-report(?:\.test)?\.cjs|stage-preview-bundle(?:\.test)?\.py)$/,
+    reason: "Used only by the dropped upstream workflows.",
+  },
+  {
+    id: "aur-packaging",
+    category: "hygiene",
+    find: /^packaging\/aur\//,
+    reason: "GOAT publishes no AUR package.",
+  },
+  {
     id: "vercel-configs",
     category: "hygiene",
     find: /^apps\/(?:web|marketing)\/vercel\.ts$/,
     reason: "GOAT deploys no hosted web app and publishes marketing to GitHub Pages.",
+  },
+  {
+    id: "upstream-contribution-triage",
+    category: "hygiene",
+    find: /^(?:\.agents\/skills\/contribution-triage\/|\.github\/(?:TRIAGE_EXEMPTIONS|VOUCHED)\.td$|\.github\/triage\/PLAYBOOK\.md$)/,
+    reason:
+      "Upstream's contribution triage and the support playbook its CLI fetches; GOAT closes outside PRs with close-outside-prs.yml and embeds its own goat triage playbook.",
   },
   {
     id: "cursor-rules",
@@ -560,6 +585,7 @@ export const DROP_RULES: readonly DropRule[] = [
 export const KEEP_RULES: readonly KeepRule[] = [
   ...META_KEEP_RULES,
   ...RELAY_KEEP_RULES,
+  ...MOBILE_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
   ...OWNER_KEEP_RULES,
   ...RESIDUE_KEEP_RULES,
@@ -667,12 +693,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Retained Pi extension event filtering, replay commit provenance and provider preflight URL are provider protocol/fixture inputs (D12/D17).",
   },
-  {
-    id: "upstream-test-release-urls",
-    pattern: /t3-code-v2-beta/g,
-    scope: (path) => path.endsWith("NightlyMobileBeta.tsx"),
-    reason: "Upstream Play beta group URL is an external service identity (D12).",
-  },
 
   {
     id: "encoded-payloads",
@@ -695,7 +715,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "installed-native-and-helper-state",
     pattern:
-      /t3-chrome-headless-shell|t3-snap-shot-|t3_capture_|t3_\$\{|t3-(?:capture|permission-check|kde-bus)|t3_chats|t3_pull_requests|t3-preview-|t3-context-content|t3-showcase-(?:scene|ready)|t3_subscription_widget_enabled/g,
+      /t3-chrome-headless-shell|t3-snap-shot-|t3_capture_|t3_\$\{|t3-(?:capture|permission-check|kde-bus)|t3-preview-|t3-context-content/g,
     scope: (path) =>
       path.startsWith("native/") ||
       path.startsWith("apps/mobile/modules/") ||
@@ -767,8 +787,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     // t3code.desktop and the deb package `t3code`. Pinned launchers and URL handlers follow the
     // entry name, and a renamed package installs beside the old one instead of upgrading it.
     id: "installed-desktop-metadata",
-    pattern:
-      /t3codeCommitHash|t3codeWebAuthn|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+    pattern: /LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
     scope: (path) =>
       /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
         path,
@@ -795,13 +814,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
       /\.t3(?:code)?\b|t3-(?:composer-attachments|composer-paste|favicon-thumbnail|acp-registry-icons-v1)|t3\.pullRequests\.[a-z]+|refs\/t3\/review-guide|t3code\/pr-|t3-runtime-archive|t3-theme/g,
     reason:
       "Existing homes, attachment/cache files, review refs, pull-request preferences and saved HTML artifacts must survive upgrades (D8/D10/D17).",
-  },
-  {
-    id: "operator-span-names",
-    pattern: /t3\.runtime\.[A-Za-z.]+/g,
-    scope: (path) => path.startsWith("packages/ssh/"),
-    reason:
-      "SSH acquisition observability names feed operator dashboards; coordinate with service-name follow-up.",
   },
   {
     id: "legacy-cli-package",

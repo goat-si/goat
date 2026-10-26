@@ -1,3 +1,12 @@
+import {
+  waitForSpan,
+  drainPendingDispatch,
+  webhookTaskInput,
+  requestFor,
+  pullRequestBody,
+} from "./ScheduledRunFixture.testkit.ts";
+import * as EffectScheduler from "effect/Scheduler";
+import { withWebhookService as withService } from "./ScheduledRunFixture.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Effect's Crypto has no createHmac
 import { assert, it } from "@effect/vitest";
 import { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
@@ -6,22 +15,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
-import * as EffectScheduler from "effect/Scheduler";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "node:crypto";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import { renderWebhookPrompt } from "./webhookTemplate.ts";
-
-import {
-  waitForSpan,
-  drainPendingDispatch,
-  webhookTaskInput,
-  pullRequestBody,
-  requestFor,
-  withService,
-} from "./ScheduledTaskService.webhook.testkit.ts";
 
 it.effect(
   "preserves omitted dedupe settings, releases duplicate claims, and retains coalesced claims",
@@ -1083,8 +1082,8 @@ it.effect("keeps replay keys when dispatch succeeds but completion bookkeeping f
           },
         }),
       );
-      yield* sql`CREATE TRIGGER fail_completion BEFORE UPDATE ON scheduled_tasks
-      WHEN NEW.last_run_status = 'succeeded' BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
+      yield* sql`CREATE TRIGGER fail_completion BEFORE UPDATE OF dispatch_bookkept_at ON scheduled_task_runs
+      WHEN NEW.dispatch_bookkept_at IS NOT NULL BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
       yield* waitForSpan(
         service.triggerWebhook(requestFor(task)),
         "ScheduledTaskService.runWebhookDelivery",
@@ -1441,14 +1440,13 @@ it.effect.each([false, true])(
             const window = yield* service.triggerWebhook(
               requestFor(task, { headers: { group: "old" }, bodyText: '{"value":"old"}' }),
             );
-            yield* sql`CREATE TRIGGER fail_old_completion BEFORE UPDATE ON scheduled_tasks
-        WHEN NEW.last_run_status = 'succeeded' BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
+            yield* sql`CREATE TRIGGER fail_old_completion BEFORE DELETE ON scheduled_task_webhook_pending BEGIN SELECT RAISE(FAIL, 'completion unavailable'); END`;
             yield* TestClock.adjust("10 seconds");
             yield* drainPendingDispatch(workers);
             yield* Queue.take(launches);
             yield* sql`DROP TRIGGER fail_old_completion`;
             assert.equal(
-              (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE state = 'running'`)
+              (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE state = 'completed'`)
                 .length,
               1,
             );
@@ -1469,7 +1467,7 @@ it.effect.each([false, true])(
               before!.last_run_webhook_delivery_id,
               window._tag === "accepted" ? window.deliveryId : "",
             );
-            assert.equal(before!.run_count, 0);
+            assert.equal(before!.run_count, 2);
             if (corrupt)
               yield* sql`UPDATE scheduled_tasks SET model_selection_json = 'broken' WHERE task_id = ${task.id}`;
             const restartedWorkers = new Map<string, Effect.Effect<void>>();
@@ -1480,8 +1478,8 @@ it.effect.each([false, true])(
                     run_count: number;
                     last_run_status: string;
                   }>`SELECT run_count, last_run_status FROM scheduled_tasks WHERE task_id = ${task.id}`;
-                  assert.equal(recovered!.run_count, 1);
-                  assert.equal(recovered!.last_run_status, "failed");
+                  assert.equal(recovered!.run_count, 2);
+                  assert.equal(recovered!.last_run_status, "running");
                   if (corrupt)
                     yield* sql`UPDATE scheduled_tasks SET model_selection_json = ${before!.model_selection_json} WHERE task_id = ${task.id}`;
                   yield* drainPendingDispatch(restartedWorkers);

@@ -14,15 +14,13 @@ describe("findPromptLinkProject", () => {
     const projects = [
       {
         id: "fork",
-        repositoryIdentity: identity("github.com/pingdotgg/t3code", "github.com/me/t3code"),
+        repositoryIdentity: identity("github.com/goat-si/goat", "github.com/me/t3code"),
       },
       { id: "none", repositoryIdentity: null },
-      { id: "recent", repositoryIdentity: identity("github.com/PingDotGG/T3Code") },
-      { id: "older", repositoryIdentity: identity("github.com/pingdotgg/t3code") },
+      { id: "recent", repositoryIdentity: identity("github.com/Goat-SI/Goat") },
+      { id: "older", repositoryIdentity: identity("github.com/goat-si/goat") },
     ];
-    expect(findPromptLinkProject(projects, { owner: "pingdotgg", name: "t3code" })?.id).toBe(
-      "recent",
-    );
+    expect(findPromptLinkProject(projects, { owner: "goat-si", name: "goat" })?.id).toBe("recent");
     expect(findPromptLinkProject(projects, { owner: "me", name: "t3code" })?.id).toBe("fork");
     expect(findPromptLinkProject(projects, { owner: "gitlab", name: "x" })).toBeUndefined();
   });

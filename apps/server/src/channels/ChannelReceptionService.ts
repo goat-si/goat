@@ -120,13 +120,15 @@ import {
   answerForwardIdsFor,
   deliveryIdFor,
   taskEventIdFor,
-  taskIdFor,
   turnSteerIdsFor,
 } from "./channelIds.ts";
-import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
-
-const movedNarration = (payload: { fromHost: string; host: string; replicaCapturedAt: string }) =>
-  `${payload.fromHost} stopped answering, so this continues on ${payload.host} from the copy of its work taken at ${payload.replicaCapturedAt}. Whatever it does on ${payload.fromHost} after that stays there.`;
+import {
+  botAddress,
+  chipDelivery,
+  makeCreatedTasks,
+  narrationFor,
+  prepareTransition,
+} from "./channelTaskWrites.ts";
 
 /** How long a reception pass may take before the sender gets a failure note instead. */
 const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
@@ -1371,9 +1373,7 @@ const make = Effect.gen(function* () {
 
       let replyText = decision.replyText;
       let finalDecision = decision;
-      let createdTask:
-        | { readonly task: ChannelTask; readonly event: ReturnType<typeof makeTaskEvent> }
-        | undefined;
+      let createdTasks: ReturnType<typeof makeCreatedTasks> = [];
       const taskEvents: Array<ChannelLedger.ChannelTaskEventWrite> = [];
       const deliveries: Array<ChannelLedger.ChannelOutboxInsert> = [];
       const action = decision.action;
@@ -1417,56 +1417,24 @@ const make = Effect.gen(function* () {
           replyText = CHANNEL_COPY.agentCannotCreateWork;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else if (joining === undefined) {
-          const taskId = taskIdFor(inputId, 0);
           // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
             action.notesChangeRequested !== undefined &&
             quotedFromInput(action.notesChangeRequested, message.text)
               ? action.notesChangeRequested
               : undefined;
-          const task: ChannelTask = {
-            taskId,
-            ...(action.type === "run_turn" ? { kind: "turn" as const } : {}),
+          createdTasks = makeCreatedTasks({
+            action,
+            inputId,
             conversationId,
             originBindingId: stored.snapshot.bindingId,
             originAddress: origin,
-            originInputId: inputId,
             requester,
-            title: action.title,
-            instruction: action.instruction,
-            status: "received",
-            version: 1,
-            generation: 1,
-            ...(action.type !== "create_task" || action.projectId === undefined
-              ? {}
-              : { projectId: action.projectId }),
-            // The dispatcher checks the host again before anything runs there.
-            ...(action.type !== "create_task" || action.host === undefined
-              ? {}
-              : { host: action.host }),
             ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
-            openQuestions: [],
-            createdAt: now,
-            updatedAt: now,
-          };
-          createdTask = {
-            task,
-            event: makeTaskEvent(
-              { ...task, version: 0 },
-              {
-                type: "task.created",
-                payload: {
-                  title: task.title,
-                  instruction: task.instruction,
-                  originInputId: inputId,
-                  ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
-                },
-              },
-              now,
-              { eventId: taskEventIdFor(taskId, 1) },
-            ),
-          };
-          if (bot !== undefined) deliveries.push(chipDelivery(task, bot));
+            bot,
+            deliveries,
+            now,
+          });
           const running = yield* ledger.countBusyTasks({
             ownerId: requester.ownerId,
             principalId: requester.principalId,
@@ -1534,6 +1502,20 @@ const make = Effect.gen(function* () {
             taskEvents.push(prepared.write);
             deliveries.push(...prepared.deliveries);
             finalDecision = { replyText, action: { type: "follow_up", taskId: followTaskId } };
+            if (action.type === "run_turn" && (action.additionalTasks?.length ?? 0) > 0) {
+              createdTasks = makeCreatedTasks({
+                action,
+                inputId,
+                conversationId,
+                originBindingId: stored.snapshot.bindingId,
+                originAddress: origin,
+                requester,
+                includePrimary: false,
+                bot,
+                deliveries,
+                now,
+              });
+            }
           } else {
             finalDecision = { replyText, action: { type: "report_only" } };
           }
@@ -1703,7 +1685,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const relatedTask = createdTask?.task;
+      const relatedTask = createdTasks[0]?.task;
       deliveries.unshift(
         replyDelivery({
           causeKey: "reply:" + inputId,
@@ -1724,7 +1706,7 @@ const make = Effect.gen(function* () {
         receptionId,
         replyText,
         decision: finalDecision,
-        ...(createdTask === undefined ? {} : { createdTask }),
+        ...(createdTasks[0] === undefined ? {} : { createdTask: createdTasks[0], createdTasks }),
         taskEvents,
         deliveries,
         now,
@@ -1737,58 +1719,6 @@ const make = Effect.gen(function* () {
       }
       yield* wake.wake;
     });
-
-  const narrationFor = (task: ChannelTask, event: ChannelLedger.ChannelPendingEvent["event"]) => {
-    switch (event.type) {
-      case "task.dispatch.claimed":
-        return event.payload.target.placementReason === undefined
-          ? undefined
-          : {
-              kind: "receipt" as const,
-              text: task.title + " → " + event.payload.target.placementReason,
-            };
-      case "task.completed":
-        // A turn's summary is GOAT Bot's own answer, written for the person on the bot's model.
-        if (task.kind === "turn") {
-          return {
-            kind: "result" as const,
-            text: event.payload.summary.trim() === "" ? "Done." : event.payload.summary,
-          };
-        }
-        return {
-          kind: "result" as const,
-          text:
-            "Done: " +
-            task.title +
-            (event.payload.summary.trim() === "" ? "" : "\n" + event.payload.summary),
-        };
-      case "task.failed":
-        return {
-          kind: "failure" as const,
-          text:
-            "Couldn't finish: " +
-            task.title +
-            ": " +
-            (event.payload.summary ?? event.payload.reason),
-        };
-      case "task.progress":
-        return event.payload.milestone === true
-          ? { kind: "receipt" as const, text: event.payload.summary }
-          : undefined;
-      case "task.moved":
-        return { kind: "receipt" as const, text: movedNarration(event.payload) };
-      case "task.cancelled":
-        return { kind: "failure" as const, text: "Stopped: " + task.title };
-      case "task.question.opened":
-        return {
-          kind: "question" as const,
-          text: event.payload.question.text,
-          options: event.payload.question.options,
-        };
-      default:
-        return undefined;
-    }
-  };
 
   const narrate: ChannelReceptionService["Service"]["narrate"] = (pending, owner) =>
     Effect.gen(function* () {

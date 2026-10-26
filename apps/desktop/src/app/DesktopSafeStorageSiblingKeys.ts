@@ -3,6 +3,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import type { DesktopAppStageLabel } from "@goat/contracts";
+import { LEGACY_PACKAGED_RUNTIME_NAME } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -56,10 +57,10 @@ interface SiblingDecryption {
 const STAGE_LABELS: readonly DesktopAppStageLabel[] = ["Nightly", "Alpha", "Dev"];
 /**
  * Initial runtime names that keyed safeStorage in builds that set the runtime name too late.
- * Packaged builds take it from the staged package.json `name`, which is `t3code` on every
- * channel (scripts/build-desktop-artifact.ts).
+ * Packaged builds take it from the staged package.json `name`, which is `goat` on every channel
+ * (scripts/build-desktop-artifact.ts), and the pre-rename name before that.
  */
-const PRODUCT_NAMES = ["t3code", "GOAT", "GOAT (Nightly)"];
+const PRODUCT_NAMES = ["goat", "GOAT", "GOAT (Nightly)", LEGACY_PACKAGED_RUNTIME_NAME];
 
 /**
  * Runtime names that may hold a sibling channel's key, most likely first. Each existing item a

@@ -9,11 +9,13 @@
  */
 import {
   CHANNEL_RECEPTION_MAX_READS,
+  CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS,
   CHANNEL_RECEPTION_MAX_OPTIONS,
   CHANNEL_HOST_WORKSPACE_LABEL,
   ChannelReceptionReadKind,
   ChannelReceptionResult,
   type ChannelReceptionInput,
+  type ChannelReceptionTaskSpec,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -49,6 +51,14 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   remember: Schema.String,
   rememberQuote: Schema.String,
   notesChangeRequested: Schema.String,
+  additionalTasks: Schema.Array(
+    Schema.Struct({
+      title: Schema.String,
+      instruction: Schema.String,
+      projectId: Schema.String,
+      host: Schema.String,
+    }),
+  ),
 });
 export type ChannelReceptionModelOutput = typeof ChannelReceptionModelOutput.Type;
 
@@ -76,10 +86,35 @@ export function toChannelReceptionResult(
   });
 }
 
+function normalizeAdditionalTasks(
+  entries: ChannelReceptionModelOutput["additionalTasks"],
+): ReadonlyArray<ChannelReceptionTaskSpec> {
+  return entries
+    .flatMap((entry): ReadonlyArray<ChannelReceptionTaskSpec> => {
+      const title = entry.title.trim();
+      const instruction = entry.instruction.trim();
+      if (title === "" || instruction === "") return [];
+      const projectId = entry.projectId.trim();
+      const host = entry.host.trim();
+      return [
+        {
+          title: title as ChannelReceptionTaskSpec["title"],
+          instruction: instruction as ChannelReceptionTaskSpec["instruction"],
+          ...(projectId === ""
+            ? {}
+            : { projectId: projectId as NonNullable<ChannelReceptionTaskSpec["projectId"]> }),
+          ...(host === "" ? {} : { host: host as NonNullable<ChannelReceptionTaskSpec["host"]> }),
+        },
+      ];
+    })
+    .slice(0, CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS);
+}
+
 function toActionResult(
   output: ChannelReceptionModelOutput,
 ): Option.Option<ChannelReceptionResult> {
   const replyText = output.replyText.trim();
+  const additionalTasks = normalizeAdditionalTasks(output.additionalTasks);
   switch (output.action) {
     case "create_task":
       return decodeResult({
@@ -93,6 +128,7 @@ function toActionResult(
           ...(output.notesChangeRequested.trim() === ""
             ? {}
             : { notesChangeRequested: output.notesChangeRequested.trim() }),
+          ...(additionalTasks.length === 0 ? {} : { additionalTasks }),
         },
       });
     case "move_task":
@@ -110,6 +146,7 @@ function toActionResult(
           ...(output.notesChangeRequested.trim() === ""
             ? {}
             : { notesChangeRequested: output.notesChangeRequested.trim() }),
+          ...(additionalTasks.length === 0 ? {} : { additionalTasks }),
         },
       });
     case "stop_work":
@@ -355,8 +392,12 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "Style: one to three short sentences, warm and plain, outcome first. No internal ids unless the person needs them. replyText, title, question, and instruction use the person's language, even when a note or fact is in another language.",
     "",
     "Choose exactly one action:",
-    "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below.",
-    "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). To change or forget a note this way, copy the exact words asking for it into notesChangeRequested.",
+    "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below. When the person asks for several independent coding tasks in one message, put the first in title/instruction/projectId/host and up to " +
+      CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
+      " more in additionalTasks (each with title, instruction, projectId, and host); otherwise leave additionalTasks empty.",
+    "- run_turn: you look into it yourself with tools and answer when done. Fill title (short, in the person's language) and instruction (the question, the context from this conversation, and what the answer should cover). When the message also asks for independent coding tasks alongside your turn (including while joining a running turn), put up to " +
+      CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS +
+      " coding tasks in additionalTasks. To change or forget a note this way, copy the exact words asking for it into notesChangeRequested.",
     "- follow_up: the message belongs to running work listed below. Fill taskId; say in replyText that you passed it on.",
     '- stop_work: the person asks to stop work. Fill taskId for one listed task; leave it empty for "stop everything" or "cancel all". The server stops what they may stop and writes the reply.',
     ...(readsAllowed
@@ -370,7 +411,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- clarify: only when the message is too unclear to start any work, or it could mean several listed tasks or recent threads equally well. Fill question and put the same question in replyText. When the answer is one of a few concrete choices, such as a task, a recent thread, or a project listed below, put two to four of them in options, recommended first, each worded as the person's short reply. Otherwise leave options empty. Set clarifyAbout to project when the question asks which project to use, else other.",
     "- report_only: direct answers, remembering a note, small talk, and always for task updates.",
     "",
-    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, notesChangeRequested. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, empty remember and rememberQuote unless the new message asks to keep something, and an empty notesChangeRequested unless a create_task changes or forgets a note at the person's request.",
+    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question, options, clarifyAbout, reads, remember, rememberQuote, notesChangeRequested, additionalTasks. Use other for clarifyAbout unless the action is clarify about a project, an empty string for text keys the action does not use, an empty list for options unless the action is clarify, an empty list for reads unless the action is read, an empty list for additionalTasks unless create_task or run_turn starts additional coding tasks, empty remember and rememberQuote unless the new message asks to keep something, and an empty notesChangeRequested unless a create_task or run_turn changes or forgets a note at the person's request.",
     "",
     "This machine (where you and new work run unless a host is set):",
     hostFacts === "" ? "(not available)" : hostFacts,

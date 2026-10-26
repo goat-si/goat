@@ -23,7 +23,7 @@ export class MacosObjcRuntime extends Context.Service<
   { readonly load: Effect.Effect<ObjcRuntime, NativeMaterialError> }
 >()("@goat/desktop/electron/MacosObjcRuntime") {}
 
-// Importing this module is safe on shipping paths; only the eligible platform loads ffi-rs.
+// Importing this module is safe; ffi-rs loads only when a supported Mac first attaches glass.
 async function loadRuntime(): Promise<ObjcRuntime> {
   const { DataType, load, open } = await import("ffi-rs");
   const library = "goat-material-objc";

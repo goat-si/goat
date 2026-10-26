@@ -33,24 +33,41 @@ describe("ChannelChildWork admission", () => {
   it.effect("admits up to the descendant budget, then refuses at capacity", () =>
     Effect.gen(function* () {
       const taskId = yield* seedWorker;
-      const first = yield* admit("one");
-      const second = yield* admit("two");
-      assert.strictEqual(first._tag, "admitted");
-      assert.strictEqual(second._tag, "admitted");
-      const third = yield* Effect.flip(admit("three"));
-      assert.strictEqual(third.reason, "at_capacity");
+      for (let i = 1; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE; i += 1) {
+        const admitted = yield* admit("delegate-" + i);
+        assert.strictEqual(admitted._tag, "admitted");
+      }
+      const overflow = yield* Effect.flip(admit("delegate-overflow"));
+      assert.strictEqual(overflow.reason, "at_capacity");
+      // Thread launches use their own capacity bucket, so 4 threads still fit while delegates are full.
+      for (let i = 1; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS; i += 1) {
+        const threadAdmitted = yield* admit("thread-" + i, { surface: "thread_launch" });
+        assert.strictEqual(threadAdmitted._tag, "admitted");
+      }
+      const threadOverflow = yield* Effect.flip(
+        admit("thread-overflow", { surface: "thread_launch" }),
+      );
+      assert.strictEqual(threadOverflow.reason, "at_capacity");
       const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
-      assert.strictEqual((yield* store.listForTask(taskId)).length, 2);
+      assert.strictEqual(
+        (yield* store.listForTask(taskId)).length,
+        ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE +
+          ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS,
+      );
     }).pipe(Effect.provide(makeLayer())),
   );
 
   it.effect("serializes racing admissions so the budget cannot be overrun", () =>
     Effect.gen(function* () {
       yield* seedWorker;
+      const keys = Array.from(
+        { length: ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE + 2 },
+        (_, index) => String(index),
+      );
       const outcomes = yield* Effect.forEach(
-        ["a", "b", "c", "d"],
+        keys,
         (key) => Effect.result(admit("concurrent " + key)),
-        { concurrency: 4 },
+        { concurrency: keys.length },
       );
       const admitted = outcomes.filter((outcome) => outcome._tag === "Success");
       const refused = outcomes.filter(
@@ -60,7 +77,7 @@ describe("ChannelChildWork admission", () => {
           outcome.failure.reason === "at_capacity",
       );
       assert.strictEqual(admitted.length, ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE);
-      assert.strictEqual(refused.length, 4 - ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE);
+      assert.strictEqual(refused.length, 2);
     }).pipe(Effect.provide(makeLayer())),
   );
 
@@ -69,14 +86,15 @@ describe("ChannelChildWork admission", () => {
       yield* seedWorker;
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const first = yield* admit("one");
-      const second = yield* admit("two");
       assert.strictEqual(first._tag, "admitted");
-      assert.strictEqual(second._tag, "admitted");
+      for (let i = 2; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE; i += 1) {
+        assert.strictEqual((yield* admit("slot-" + i))._tag, "admitted");
+      }
       if (first._tag !== "admitted") return yield* Effect.die("expected admission");
       yield* Effect.scoped(childWork.claimLaunch(first.record, { threadId: childThread }));
       yield* childWork.markTerminal(first.record, "completed");
-      const third = yield* admit("three");
-      assert.strictEqual(third._tag, "admitted");
+      const next = yield* admit("after-settle");
+      assert.strictEqual(next._tag, "admitted");
     }).pipe(Effect.provide(makeLayer())),
   );
 
@@ -129,6 +147,9 @@ describe("ChannelChildWork admission", () => {
       const second = yield* admit("reserved two");
       if (first._tag !== "admitted" || second._tag !== "admitted")
         return yield* Effect.die("expected admissions");
+      for (let i = 3; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE; i += 1) {
+        assert.strictEqual((yield* admit("reserved-" + i))._tag, "admitted");
+      }
       yield* childWork.releaseReserved(first.record);
       const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
       assert.strictEqual((yield* store.get(taskId, first.record.childWorkId))?.state, "released");
@@ -196,6 +217,9 @@ describe("ChannelChildWork reconcile", () => {
       const second = yield* admit("local two");
       if (first._tag === "not_channel_owned" || second._tag === "not_channel_owned")
         return yield* Effect.die("expected ownership");
+      for (let i = 3; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE; i += 1) {
+        yield* admit("local " + i);
+      }
       yield* childWork.markBound(first.record, { threadId: childThread });
       yield* childWork.markBound(second.record, { threadId: ThreadId.make("child-2") });
       // child-2 has no runs at all: still starting, so the slot stays held.
@@ -229,7 +253,9 @@ describe("ChannelChildWork reconcile", () => {
         "unknown",
       );
       // Unknown keeps the slot: only PR-D's resolve-or-fence may release it.
-      yield* admit("second remote", { surface: "delegate_remote" });
+      for (let i = 2; i <= ChannelChildWork.CHANNEL_CHILD_WORK_MAX_ACTIVE; i += 1) {
+        yield* admit("remote " + i, { surface: "delegate_remote" });
+      }
       const refused = yield* Effect.flip(admit("third remote", { surface: "delegate_remote" }));
       assert.strictEqual(refused.reason, "at_capacity");
     }).pipe(Effect.provide(makeLayer())),

@@ -89,13 +89,14 @@ export const proxyCallAdmission = (
   ) {
     const detail = decision.status === "refused" ? decision.detail : "unauthorized";
     const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
+    const app = decision.status === "refused" ? decision.app : undefined;
     return {
       refused: refusal(
         id,
         message.method,
         detail,
-        reservationRefusal(detail, holder),
-        undefined,
+        reservationRefusal(detail, holder, app),
+        app,
         holder,
       ),
       reservationId: undefined,

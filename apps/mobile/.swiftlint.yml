@@ -1,14 +1,14 @@
 included:
   - ios/T3Code
-  - modules/t3-composer-editor/ios
-  - modules/t3-native-controls/ios
-  - modules/t3-terminal/ios
-  - modules/t3-review-diff/ios
+  - modules/goat-composer-editor/ios
+  - modules/goat-native-controls/ios
+  - modules/goat-terminal/ios
+  - modules/goat-review-diff/ios
 
 excluded:
   - ios/Pods
   - ios/build
-  - modules/t3-terminal/Vendor
+  - modules/goat-terminal/Vendor
 
 reporter: xcode
 

@@ -168,6 +168,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         protocolVersion: 1,
         importProvider: true,
         importTurnStartFit: true,
+        asideImport: true,
         refusedReverts: true,
         resolutionInputs: true,
         retainedLocalSpace: true,

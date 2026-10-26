@@ -32,9 +32,8 @@ export function shouldShowNightlyMobileBeta(input: {
 /** True when the beta mobile app has a GOAT TestFlight link to point at. */
 export const HAS_MOBILE_BETA_LINK = Boolean(GOAT_IOS_TESTFLIGHT_URL);
 
-// Google banned the Play testing group, so new testers can't join it. CI mirrors
-// the Play-signed beta APK to this release instead (mobile-android-apk.yml).
-const ANDROID_APK_RELEASE_URL = "https://github.com/pingdotgg/t3code/releases/tag/android-nightly";
+/** Where GOAT publishes the beta Android APK. GOAT publishes none yet, so the Android button stays hidden. */
+const GOAT_ANDROID_APK_URL: string | null = null;
 
 const ROW_ID = "nightly-mobile-beta";
 /** QR code plus a copy button for one beta link. */
@@ -58,6 +57,7 @@ function BetaLinkQr({ url, label }: { url: string; label: string }) {
  */
 export function NightlyMobileBetaRow() {
   const testflightUrl = GOAT_IOS_TESTFLIGHT_URL;
+  const androidApkUrl = GOAT_ANDROID_APK_URL;
   if (!testflightUrl) return null;
   return (
     <SettingsRow
@@ -81,23 +81,25 @@ export function NightlyMobileBetaRow() {
               </div>
             </PopoverPopup>
           </Popover>
-          <Popover>
-            <PopoverTrigger render={<Button size="sm" variant="outline" />}>
-              <AndroidIcon />
-              Android
-            </PopoverTrigger>
-            <PopoverPopup align="end">
-              <div className="flex flex-col gap-3">
-                <div className="space-y-1">
-                  <PopoverTitle>Android beta APK</PopoverTitle>
-                  <p className="max-w-56 text-xs text-muted-foreground">
-                    Scan with your phone, then download and install the APK.
-                  </p>
+          {androidApkUrl ? (
+            <Popover>
+              <PopoverTrigger render={<Button size="sm" variant="outline" />}>
+                <AndroidIcon />
+                Android
+              </PopoverTrigger>
+              <PopoverPopup align="end">
+                <div className="flex flex-col gap-3">
+                  <div className="space-y-1">
+                    <PopoverTitle>Android beta APK</PopoverTitle>
+                    <p className="max-w-56 text-xs text-muted-foreground">
+                      Scan with your phone, then download and install the APK.
+                    </p>
+                  </div>
+                  <BetaLinkQr url={androidApkUrl} label="Android beta APK link" />
                 </div>
-                <BetaLinkQr url={ANDROID_APK_RELEASE_URL} label="Android beta APK link" />
-              </div>
-            </PopoverPopup>
-          </Popover>
+              </PopoverPopup>
+            </Popover>
+          ) : null}
         </div>
       }
     />

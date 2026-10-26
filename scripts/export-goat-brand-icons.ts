@@ -163,11 +163,11 @@ export async function renderGoatIconOutputs(
     `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="10" fill="${BRAND_CHANNEL_ICON_BACKGROUND.stable}"/>${layerMark}</svg>`,
   );
   text(
-    "apps/mobile/assets/widget/T3Mark.svg",
+    "apps/mobile/assets/widget/GoatMark.svg",
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${GOAT_MARK_VIEWBOX}">${goatMarkSvgElements("black")}</svg>`,
   );
   text(
-    "apps/mobile/modules/t3-agent-notifications/android/src/main/res/drawable/agent_activity_mark.xml",
+    "apps/mobile/modules/goat-agent-notifications/android/src/main/res/drawable/agent_activity_mark.xml",
     `<!-- Generated from packages/shared/src/goatMark.ts. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"

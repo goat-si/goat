@@ -206,10 +206,10 @@ export const RELAY_KEEP_RULES: readonly KeepRule[] = [
     reason: "Saved connection routes and profiles hold this kind (LEGACY_CONNECT_ROUTE_KIND).",
   },
   {
-    id: "relay:mobile-native-pending",
+    id: "relay:mobile-stored-names",
     pattern: /\bt3_kind\b|\bt3-agent-(?:activity|alerts?)\b/g,
     scope: inRelay,
     reason:
-      "Installed Android builds read these push keys and tags; they move with the mobile native rename (wp6).",
+      "Installed Android builds read this push key and these notification tags; they keep their spelling.",
   },
 ];

@@ -192,9 +192,7 @@ TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
 refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
 
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
-[ci.yml](../../.github/workflows/ci.yml) for its current jobs.
-The [manual Windows lane](../../.github/workflows/windows-tests.yml) is available for focused
-Windows investigation while that suite is not a required gate.
+[goat-ci.yml](../../.github/workflows/goat-ci.yml) for its current jobs.
 
 ### Windows hosts
 

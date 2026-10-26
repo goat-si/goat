@@ -12,19 +12,20 @@ import { normalizeThreadPullRequestKey } from "./threadPullRequests.ts";
 
 describe("parseChangeRequestUrl", () => {
   it("reads a GitHub pull request, lower-casing the repository", () => {
-    expect(parseChangeRequestUrl("https://github.com/T3Tools/T3Code/pull/123")).toEqual({
+    expect(parseChangeRequestUrl("https://github.com/Sample-Tools/Goat/pull/123")).toEqual({
       host: "github.com",
-      repository: "t3tools/t3code",
+      repository: "sample-tools/goat",
       number: 123,
     });
   });
 
   it("reads a GitCafe pull request at its canonical /pull/ path and the older /pulls/ path", () => {
     for (const path of ["pull", "pulls"]) {
-      expect(
-        parseChangeRequestUrl(`https://git.cafe/PingDotGG/T3Code/${path}/23897`),
-        path,
-      ).toEqual({ host: "git.cafe", repository: "pingdotgg/t3code", number: 23897 });
+      expect(parseChangeRequestUrl(`https://git.cafe/Goat-SI/Goat/${path}/23897`), path).toEqual({
+        host: "git.cafe",
+        repository: "goat-si/goat",
+        number: 23897,
+      });
     }
     expect(parseChangeRequestUrl("https://staging.git.cafe/team/repo/pull/7/files")).toEqual({
       host: "staging.git.cafe",
@@ -105,28 +106,30 @@ describe("parseChangeRequestUrl", () => {
   });
 
   it("survives trailing segments, a trailing slash and a query string", () => {
-    expect(parseChangeRequestUrl("https://github.com/t3tools/t3code/pull/123/files?w=1")).toEqual({
+    expect(
+      parseChangeRequestUrl("https://github.com/sample-tools/goat/pull/123/files?w=1"),
+    ).toEqual({
       host: "github.com",
-      repository: "t3tools/t3code",
+      repository: "sample-tools/goat",
       number: 123,
     });
-    expect(parseChangeRequestUrl("https://github.com/t3tools/t3code/pull/123/")).toEqual({
+    expect(parseChangeRequestUrl("https://github.com/sample-tools/goat/pull/123/")).toEqual({
       host: "github.com",
-      repository: "t3tools/t3code",
+      repository: "sample-tools/goat",
       number: 123,
     });
   });
 
   it("claims nothing it cannot be sure of", () => {
     for (const link of [
-      "https://github.com/t3tools/t3code/issues/123",
-      "https://git.cafe/pingdotgg/t3code/issues/23897",
-      "https://git.cafe/pingdotgg/t3code/pull/abc",
-      "https://git.cafe/pingdotgg/t3code",
-      "https://github.com/t3tools/t3code/commit/0a1b2c3",
-      "https://github.com/t3tools/t3code",
-      "https://github.com/t3tools/t3code/pull/abc",
-      "https://gitlab.com/t3tools/t3code/-/issues/12",
+      "https://github.com/sample-tools/goat/issues/123",
+      "https://git.cafe/goat-si/goat/issues/23897",
+      "https://git.cafe/goat-si/goat/pull/abc",
+      "https://git.cafe/goat-si/goat",
+      "https://github.com/sample-tools/goat/commit/0a1b2c3",
+      "https://github.com/sample-tools/goat",
+      "https://github.com/sample-tools/goat/pull/abc",
+      "https://gitlab.com/sample-tools/goat/-/issues/12",
       "https://blog.example.test/2026/updates/pull/3",
       "https://scm.example.test/tfs/Collection/Project/_git/Repo",
       "https://scm.example.test/tfs/Collection/Project/pullrequest/123",
@@ -134,7 +137,7 @@ describe("parseChangeRequestUrl", () => {
       "https://scm.example.test/tfs/Collection/Project/_git/Repo/pullrequest/0",
       "https://scm.example.test/tfs/Collection/Project/_git/Repo/pullrequest/9007199254740992",
       "ftp://scm.example.test/tfs/Collection/Project/_git/Repo/pullrequest/123",
-      "javascript:alert(1)//github.com/t3tools/t3code/pull/1",
+      "javascript:alert(1)//github.com/sample-tools/goat/pull/1",
       "not a url",
     ]) {
       expect(parseChangeRequestUrl(link), link).toBeNull();

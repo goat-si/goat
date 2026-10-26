@@ -9,7 +9,7 @@ describe("native device stream document", () => {
     const configuration = JSON.stringify({ deviceId, ticket: "<ticket>" });
     const html = deviceStreamDocument(
       configuration,
-      "var T3DeviceStream={start(input){return input}};",
+      "var GoatDeviceStream={start(input){return input}};",
     );
     const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
     expect(html.match(/<script>/g)).toHaveLength(1);
@@ -21,7 +21,7 @@ describe("native device stream document", () => {
     const postMessage = vi.fn();
     const html = deviceStreamDocument(
       "{}",
-      'var T3DeviceStream={start(){throw new Error("startup")}};',
+      'var GoatDeviceStream={start(){throw new Error("startup")}};',
     );
     NodeVM.runInNewContext(html.match(/<script>([\s\S]*)<\/script>/)![1]!, {
       window: { addEventListener() {}, ReactNativeWebView: { postMessage } },
