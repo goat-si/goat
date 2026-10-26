@@ -767,8 +767,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     // t3code.desktop and the deb package `t3code`. Pinned launchers and URL handlers follow the
     // entry name, and a renamed package installs beside the old one instead of upgrading it.
     id: "installed-desktop-metadata",
-    pattern:
-      /t3codeCommitHash|t3codeWebAuthn|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+    pattern: /LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
     scope: (path) =>
       /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
         path,

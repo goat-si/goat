@@ -337,7 +337,6 @@ describe("remaining local symbols and compatibility contracts", () => {
 
   it("explains persisted metadata, OS identities and protocol samples", () => {
     for (const [path, source] of [
-      ["apps/desktop/src/app/DesktopAppIdentity.ts", "t3codeCommitHash"],
       ["apps/desktop/src/app/DesktopEnvironment.ts", '"com.t3tools.T3Code.Development.desktop"'],
       ["apps/server/src/cli/invocation.ts", '"./bin/t3.js"'],
       ["packages/contracts/src/providerSetup.ts", '"t3"'],
