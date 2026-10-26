@@ -1,4 +1,5 @@
 import {
+  CUA_STALE_ACCESSIBILITY_ADVICE,
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
@@ -43,6 +44,14 @@ import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
+import { agentRouteFailure } from "./agentRouteProbe.ts";
+import {
+  captureCheckFailure,
+  PROOF_RESET_DETAIL,
+  resetProofOn,
+  type ProofResetSource,
+} from "./readinessProof.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import {
   describeDegraded,
   failedCall,
@@ -103,7 +112,7 @@ const settle = (promise: Promise<unknown>) =>
     () => undefined,
   );
 
-const VERIFICATION_STEPS = 6;
+const VERIFICATION_STEPS = 7;
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -111,6 +120,7 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("desktop.cua.make")(function* (
   native: DesktopCuaDriverDependencies = dependencies,
+  power?: ProofResetSource,
 ) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
@@ -122,6 +132,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   // The server learns the helper's readiness from these reports; only a helper build sends them.
   let helperState = initialHelperReadiness;
   let helperGeneration = 0;
+  /** The helper bundle a passing check proved; another one starting voids that proof. */
+  let provenBundle: string | undefined;
   let helperSeen = false;
   let lastReadiness: string | undefined;
   let watches = 0;
@@ -130,6 +142,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   // Whether the running helper's agent connections report a person's input.
   let helperReportsInput = false;
   let helperCanFrame = false;
+  /** Whether the probed helper answers captureCheck; an older build gets the driver's screenshot only. */
+  let helperCanCheckCapture = false;
   /**
    * What a helper said it can do when it started, read from its hello: an agent turn's start and a
    * readiness check's both start one (#1532), and either is the build that runs next.
@@ -140,6 +154,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           readonly canWatch?: boolean;
           readonly reportsInput?: boolean;
           readonly canFrame?: boolean;
+          readonly canCheckCapture?: boolean;
         }
       | undefined,
   ) => {
@@ -147,6 +162,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     // Only macOS agents run through a connection helper that sees a person's input.
     helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
     helperCanFrame = session?.canFrame === true;
+    helperCanCheckCapture = session?.canCheckCapture === true;
   };
   const followers = yield* makeHelperFollowers({
     publisher,
@@ -162,7 +178,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         version: 1,
         type: "cuaReadiness",
         generation: helperGeneration,
-        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
+        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME, environment.platform),
         signals: helperSignals(helperCanWatch, helperReportsInput),
         frames: helperCanFrame,
         // handleAppsRequest below answers app listing requests on every platform.
@@ -361,7 +377,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         return undefined;
       const apps = cuaRequestableApps(listed, hosts);
       // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
-      return apps.length <= 1000 ? apps : undefined;
+      if (apps.length > 1000) return undefined;
+      // Names and icons are for people; a catalog that fails leaves the approval list intact.
+      const catalog = yield* Effect.tryPromise(() =>
+        native.appCatalog(listed, hosts, environment.platform),
+      ).pipe(Effect.option);
+      return { apps, catalog: Option.getOrUndefined(catalog) };
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (!closed)
       for (const requestId of batch.requestIds)
@@ -371,7 +392,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           requestId,
           ...(apps === undefined
             ? { status: "unavailable" as const }
-            : { status: "listed" as const, apps }),
+            : {
+                status: "listed" as const,
+                apps: apps.apps,
+                ...(apps.catalog === undefined ? {} : { catalog: apps.catalog }),
+              }),
         });
   });
 
@@ -398,6 +423,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     if (engine.kind === "helper") {
       helperSeen = true;
       helperGeneration += 1;
+      // Another installed generation starts: what the last check proved was about the old one.
+      if (provenBundle !== undefined && provenBundle !== engine.bundle.bundlePath) {
+        provenBundle = undefined;
+        yield* noteHelper((state) => withoutProof(state, PROOF_RESET_DETAIL.generation));
+      }
       const { environment: driverEnvironment } = cuaDriverHostOptions(
         engine.bundle.driverPath,
         engine.bundle.bundleId,
@@ -556,6 +586,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     record("restart", undefined);
+    // Agents start the macOS helper from GOAT's own Node runtime, not from this process; only a
+    // handshake under that parent proves its parent check admits them (#1548).
+    const agentRoute =
+      selected.kind === "helper" && environment.platform === "darwin"
+        ? agentRouteFailure(
+            yield* Effect.promise(() => native.agentRoute(connection.value.mcp)),
+            COMPUTER_USE_HELPER_NAME,
+          )
+        : undefined;
+    if (!record("agentRoute", agentRoute)) return done();
 
     const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
@@ -658,15 +698,32 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           Effect.orElseSucceed(() => false),
         )
       : false;
-    const captureFailure = captured
-      ? undefined
-      : (degradedDetail ??
+    // The driver's screenshot is not the live picture's capture: that runs in the helper itself,
+    // and once aborted the helper on its first frame while this step passed (exit 134).
+    const helperCapture =
+      captured && selected.kind === "helper" && helperCanCheckCapture
+        ? captureCheckFailure(
+            yield* Effect.promise(() =>
+              native.captureCheck(selected.bundle, {
+                pid: native.processId,
+                windowId: windowId.value,
+              }),
+            ),
+            COMPUTER_USE_HELPER_NAME,
+          )
+        : undefined;
+    const captureFailure = !captured
+      ? (degradedDetail ??
         (Option.isSome(image)
           ? "The screenshot was blank. Check Screen Recording, then try again."
-          : "The driver returned no screenshot. Check Screen Recording, then try again."));
+          : "The driver returned no screenshot. Check Screen Recording, then try again."))
+      : helperCapture;
     if (!record("capture", captureFailure)) {
       const proof: HelperProof = {
-        capture: Option.isSome(image) && degradedDetail === undefined ? "blank" : "unavailable",
+        capture:
+          captured || Option.isNone(image) || degradedDetail !== undefined
+            ? "unavailable"
+            : "blank",
         screenLocked,
         details: captureFailure === undefined ? [] : [captureFailure],
       };
@@ -682,9 +739,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const treeFailure =
       elements > 0
         ? undefined
-        : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
+        : (degradedDetail ??
+          `The driver could not read GOAT's window. Check Accessibility.${environment.platform === "darwin" ? " " + CUA_STALE_ACCESSIBILITY_ADVICE : ""}`);
     record("accessibility", treeFailure);
     if (!identityHolds()) return done();
+    if (selected.kind === "helper") provenBundle = selected.bundle.bundlePath;
     yield* noteChecked((current) =>
       withProof(current, {
         capture: "ready",
@@ -701,7 +760,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const early = result.steps.find(
         (step) =>
           !step.ok &&
-          (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
+          (step.id === "restart" ||
+            step.id === "agentRoute" ||
+            step.id === "permissions" ||
+            step.id === "identity"),
       );
       return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
     }),
@@ -886,6 +948,19 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.forkScoped,
       );
       yield* followers.listen;
+      if (power !== undefined && environment.platform === "darwin")
+        yield* resetProofOn(power, (event) =>
+          mutex.withPermits(1)(
+            Effect.suspend(() => {
+              provenBundle = undefined;
+              return noteHelper((state) =>
+                state.confirmed || state.capture !== "pending"
+                  ? withoutProof(state, PROOF_RESET_DETAIL[event])
+                  : state,
+              );
+            }),
+          ),
+        );
       yield* Effect.forever(
         Queue.take(crashes).pipe(
           Effect.flatMap((entry) =>
@@ -908,4 +983,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   });
 });
 
-export const layer = Layer.effect(DesktopCuaDriver, make());
+export const layer = Layer.effect(
+  DesktopCuaDriver,
+  Effect.gen(function* () {
+    const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
+    return yield* make(dependencies, { on: powerMonitor.onSimpleEvent });
+  }),
+);

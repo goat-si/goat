@@ -90,6 +90,44 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
 
   it.effect.each([
     {
+      name: "the helper refuses the process agents start it from",
+      outcome: { kind: "refused", exitCode: 77, stderr: "not signed by GOAT's team" } as const,
+      detail: /refused the process GOAT starts it from for agents/,
+    },
+    {
+      name: "the helper exits before answering",
+      outcome: { kind: "failed", reason: "exited before answering (code 134)" } as const,
+      detail: /did not start the way agents start it: exited before answering \(code 134\)/,
+    },
+  ])("fails the agent route step when $name, before reading permissions", ({ outcome, detail }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          agentRoute: outcome,
+        });
+        const result = yield* test.verify;
+        assert.isFalse(result.verified);
+        assert.deepEqual(
+          result.steps.map((step) => [step.id, step.ok]),
+          [
+            ["grants", true],
+            ["restart", true],
+            ["agentRoute", false],
+          ],
+        );
+        assert.match(result.steps.at(-1)?.detail ?? "", detail);
+        assert.deepEqual(test.agentRouteProbes, [
+          `${HELPER_BUNDLE}/Contents/MacOS/GOAT Computer Use`,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect.each([
+    {
       name: "Electron is the parent",
       identity: { bundle: "codes.t3.host-test", parent: HOST_PID },
     },

@@ -9,9 +9,13 @@ import type {
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
+  matchComposerAppItems,
   matchComposerCapabilityItems,
 } from "@goat/client-runtime/composerCapabilityItems";
-import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
+import {
+  appCapabilityContextRecord,
+  turnCapabilityContextRecord,
+} from "@goat/shared/turnCapabilities";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -51,6 +55,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigation } from "@react-navigation/native";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
+import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useComposerPathSearch, useComposerPullRequestSearch } from "../../state/queries";
@@ -359,6 +364,12 @@ export function useComposerCommandMenu({
       mayRunUnattended: composerThreadMayRunUnattended(currentThreadId, currentShell?.source),
     },
   });
+  // The host's running apps for `@Finder` entries, asked for only while the @ list is open.
+  const computerUseApps = useEnvironmentQuery(
+    trigger?.kind === "path" && environmentId !== null
+      ? serverEnvironment.computerUseApps({ environmentId, input: {} })
+      : null,
+  ).data?.apps;
   const pathSearch = useComposerPathSearch({
     environmentId,
     cwd: trigger?.kind === "path" ? projectCwd : null,
@@ -525,6 +536,7 @@ export function useComposerCommandMenu({
         : [];
       return [
         ...matchComposerCapabilityItems(trigger.query, capabilityContext),
+        ...matchComposerAppItems(trigger.query, capabilityContext, computerUseApps ?? []),
         ...threadItems,
         ...pathSearch.entries.map((entry) => {
           const parts = entry.path.split("/");
@@ -566,7 +578,10 @@ export function useComposerCommandMenu({
         );
         return;
       }
-      const record = turnCapabilityContextRecord(item.capability);
+      const record =
+        item.app === undefined
+          ? turnCapabilityContextRecord(item.capability)
+          : appCapabilityContextRecord(item.app);
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
       if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {

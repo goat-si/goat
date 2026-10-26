@@ -44,7 +44,7 @@ import {
 import type { ContextChipKind } from "./ContextChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { CapabilityContextChip } from "./CapabilityContextChip";
-import { turnCapabilityForContextId } from "@goat/shared/turnCapabilities";
+import { appIdForContextId, turnCapabilityForContextId } from "@goat/shared/turnCapabilities";
 import {
   ContextChipPopover,
   ContextChipShell,
@@ -486,7 +486,13 @@ export function ComposerContextReferenceChip(props: {
   const capability =
     props.kind === "capability" ? turnCapabilityForContextId(props.contextId) : undefined;
   if (capability !== undefined)
-    return <CapabilityContextChip capability={capability} label={props.label} />;
+    return (
+      <CapabilityContextChip
+        capability={capability}
+        label={props.label}
+        app={appIdForContextId(props.contextId) !== undefined}
+      />
+    );
   return composerContextPresentationRegistry.render(props.kind, records.get(props.contextId), {
     label: props.label,
   });

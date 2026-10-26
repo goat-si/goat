@@ -147,8 +147,8 @@ GOAT dev에서 브랜치를 만든다: `cd "$GOAT" && node scripts/worktree-add.
   `requiredFiles`(`:66-79`)와 텔레메트리 환경 변수(`:85-91`), SDK catalog(`pnpm-workspace.yaml:58`),
   `third-party-licenses.config.json`의 `Cua Driver` 버전·`sourceUrl`, `apps/desktop/src/cua/notices/`. 위치는
   [20_cua_baseline](./20_cua_baseline.md)의 표.
-- SDK 후보는 [20.001](./20.001_cua_chase_fork_bootstrap.md)에서 정한 포크 SDK 게시 방식으로 설치한다. 그 결정 전에는 pin을 바꾸지 않는다.
-- URL(`:64`)은 아직 릴리스가 없으므로 그대로 둔다. macOS와 Windows helper 빌드는 pin으로 검증한
+- SDK는 포크가 npm에 게시하지 않으므로 호환되는 upstream npm `@trycua/cua-driver`를 유지한다. SDK는 드라이버 버전이 아니라 contract 필드를 비교하므로, 후보의 contract·capability·tools-list schema·MCP 버전이 바뀌지 않았는지만 확인한다 ([20_cua_fork_delta](./20_cua_fork_delta.md)).
+- URL(`:64`)은 포크 릴리스 태그를 가리키며 버전에서 만들어진다. macOS와 Windows helper 빌드는 pin으로 검증한
   `node_modules/.cache/goat/cua-driver/<archiveName>`을 먼저 쓰므로 후보 아카이브를 그 이름으로 둔다
   (`scripts/build-computer-use-helper.ts:259-284`, `scripts/build-computer-use-helper-windows.ts:172-195`). Linux는
   `--driver-archive <file>`을 받는다 (`scripts/build-computer-use-helper-linux.ts:44`).

@@ -5,15 +5,29 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as Acp from "effect-acp/compat";
+import { AcpRequestError } from "effect-acp/errors";
 import type { CloudRelay } from "./relay.ts";
+import { DevinCloudCliError } from "./cli.ts";
 import { DRIVER } from "./capabilities.ts";
 
 const MAX_SUMMARY = 64_000;
 const MAX_PROGRESS = 2_000;
 const MAX_EARLY_SESSIONS = 8;
 const MAX_MESSAGES = 64;
+const UNKNOWN_PROMPT = "Could not confirm the cloud prompt outcome; no automatic resubmission.";
+// ACP's authRequired. The CLI may answer it after forwarding the prompt, so the outcome stays unknown.
+const SIGN_IN_AGAIN =
+  "Devin asked you to sign in again (run `devin auth login`). GOAT could not confirm whether this prompt reached Devin, so it was not resent.";
+const isAcpRequestError = Schema.is(AcpRequestError);
+const isDevinCloudCliError = Schema.is(DevinCloudCliError);
+const isSignInRequired = (error: unknown) =>
+  isDevinCloudCliError(error) &&
+  isAcpRequestError(error.cause) &&
+  error.cause.code === -32000 &&
+  error.cause.method === "session/prompt";
 export type TaskInput = Pick<
   Adapter.ProviderAdapterV2TurnInput,
   | "threadId"
@@ -526,11 +540,8 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
           }),
         );
       }).pipe(
-        Effect.catch(() =>
-          uncertain(
-            "Could not confirm the cloud prompt outcome; no automatic resubmission.",
-            bound,
-          ),
+        Effect.catch((error) =>
+          uncertain(isSignInRequired(error) ? SIGN_IN_AGAIN : UNKNOWN_PROMPT, bound),
         ),
       );
     }),

@@ -37,9 +37,16 @@ describe("DesktopCuaDriver grants for setup", () => {
           message: "GOAT Computer Use at /Helpers cannot be used (EACCES).",
         });
 
-        // A build without the helper still runs as GOAT, so GOAT's grants are the ones to set up.
-        const app = yield* fixture({ platform: "darwin", denyPermissions: true });
+        // A development build without the helper still runs as GOAT, so GOAT's grants are the ones
+        // to set up. A packaged macOS build without it has no computer use at all (#1618).
+        const app = yield* fixture({
+          platform: "darwin",
+          denyPermissions: true,
+          isPackaged: false,
+        });
         const own = yield* app.grants;
+        const packaged = yield* fixture({ platform: "darwin", denyPermissions: true });
+        assert.equal((yield* packaged.grants).principal, "unusable");
         assert.equal(own.principal, "app");
         assert.isFalse(own.principal === "app" && own.accessibility);
         assert.isEmpty(app.helperProbes);

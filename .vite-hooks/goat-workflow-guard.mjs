@@ -23,9 +23,10 @@ const goatCiTrustedRunner =
 // The gate jobs take the epyc-light runners, which carry no epyc label, so they never queue behind
 // the ci matrix. Only those jobs may use them, and they may use nothing else on EPYC.
 const goatCiLightRunner = goatCiTrustedRunner.replace('"epyc"]', '"epyc-light"]');
-const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result"]);
-// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates.
-const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result"]);
+const goatCiGateJobs = new Set(["scope", "screenshot-gate", "result", "republish"]);
+// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates, and republish repeats the
+// real goat-ci-result for an ignored event.
+const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result", "republish"]);
 // No Actions artifacts anywhere: goat-si is on the free plan and a full artifact
 // quota fails every upload. goat-nightly hands off through a staging draft release.
 const actions = new Set(["actions/checkout@v6", "voidzero-dev/setup-vp@v1"]);
@@ -133,7 +134,7 @@ function validateWorkflow(source, yaml) {
     !Object.hasOwn(workflow.jobs, "ci") ||
     Object.keys(workflow.jobs).some((name) => !goatCiJobs.has(name))
   ) {
-    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result");
+    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result, republish");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (!isMapping(job)) return refuse(`jobs.${name} must be a mapping`);

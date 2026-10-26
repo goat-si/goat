@@ -105,6 +105,7 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
       noInteractiveDesktop: "Windows Session 0",
       otherUserAtConsole: "Another user",
       restartRequired: "Restart the helper or GOAT",
+      accessibilityStale: "switch GOAT Computer Use off and on again",
     } as const;
     expect(blocker?.id).toBe(id);
     expect(blocker?.remedy).toContain(remedies[id]);
@@ -281,19 +282,22 @@ it("tells Windows users about the security prompt, administrator apps and a bloc
   expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
 });
 
-it("calls an unchecked Windows desktop not checked, not unsupported or waiting for consent (#1520)", () => {
-  // What the Windows helper reports after it authenticated but before a check read a window.
+it("calls an unchecked desktop not checked, not unsupported or waiting for consent (#1520)", () => {
+  // What a desktop helper reports after it authenticated but before a check read a window; a
+  // Mac reports the same after GOAT restarted, for example for an update.
   const unchecked = { ...ready, capture: "pending", tree: "unavailable" } as const;
-  const step = view(unchecked, "win32").steps[2];
-  expect(step?.state).toBe("pending");
-  expect(step?.detail.join(" ")).not.toContain("consent");
-  expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
-  // A remote client cannot run the check, so the text names where it runs.
-  expect(step?.detail.join(" ")).toContain("in the GOAT desktop app on this computer");
-  // A tree that a check really could not read still says so.
-  expect(view({ ...ready, tree: "unavailable" }, "win32").steps[2]?.state).toBe("unsupported");
-  // macOS keeps its consent wording.
-  expect(view(unchecked, "darwin").steps[2]?.detail.join(" ")).toContain("consent");
+  for (const platform of ["win32", "darwin"] as const) {
+    const result = view(unchecked, platform);
+    const step = result.steps[2];
+    expect(step?.state).toBe("pending");
+    expect(step?.detail.join(" ")).not.toContain("consent");
+    expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
+    // A remote client cannot run the check, so the text names where it runs.
+    expect(step?.detail.join(" ")).toContain("on this computer");
+    expect(result.ready).toBe(false);
+    // A tree that a check really could not read still says so.
+    expect(view({ ...ready, tree: "unavailable" }, platform).steps[2]?.state).toBe("unsupported");
+  }
 });
 
 it("uses host-specific names and reports the Linux display server", () => {
@@ -482,4 +486,20 @@ it("keeps the accessibility wording on macOS and Windows when the tree is unread
     expect(lines.join(" ")).toContain("The accessibility tree is unavailable.");
     expect(lines.join(" ")).not.toContain("agents cannot read app controls");
   }
+});
+
+// A host whose agent connections keep failing reports it as the tools' failure (the server's
+// withAgentConnections), so Settings, the readiness card and mobile all show it as blocked.
+it("agent connections that keep failing block the tools step with the host's reason", () => {
+  const failing = computerUseReadinessSteps({
+    readiness: ready,
+    platform: "darwin",
+    tools: "unavailable",
+    failure:
+      "GOAT Computer Use refused the agent connections on this host: it did not trust the process that launched it. Restarting the agent session will not fix it; GOAT needs an update.",
+  });
+  expect(failing.steps[3]?.state).toBe("blocked");
+  expect(failing.steps[3]?.detail.join(" ")).toContain("will not fix it");
+  expect(failing.ready).toBe(false);
+  expect(failing.startsWithNextTurn).toBe(false);
 });

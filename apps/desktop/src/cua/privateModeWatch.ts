@@ -70,6 +70,12 @@ export function makePrivateModeFollower(deps: {
   return {
     setWatching: (next: boolean) => {
       watching = next;
+      // A stopped watch never reports the field losing focus, so what it reported ends here;
+      // otherwise the server would keep the host paused with no one left to clear it.
+      if (!next && active !== undefined) {
+        report(false, active);
+        active = undefined;
+      }
       return settle();
     },
     /** The helper session of a generation that just started. */

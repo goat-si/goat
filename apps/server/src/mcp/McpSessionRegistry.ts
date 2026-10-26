@@ -372,6 +372,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           reauthorize: (required) =>
             Effect.gen(function* () {
               const resolved = yield* resolveHash(tokenHash);
+              const missingScope = required.find(
+                (scope) => !resolved?.grantedScopes?.includes(scope),
+              );
               const denied =
                 !resolved ||
                 (required.some((scope) => scope === "memory:read" || scope === "memory:write") &&
@@ -382,18 +385,19 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
                     (required.includes("memory:write") &&
                       request.memoryPolicy.grant !== "read_write"))) ||
                 (request.isLiveCaller && !(yield* request.isLiveCaller)) ||
-                required.some((scope) => !resolved.grantedScopes?.includes(scope)) ||
+                missingScope !== undefined ||
                 (request.readOnly && required.includes("memory:write"));
               // A permit taken under replaced authority must not pass under the
               // replacement's grants: the token is the same, the generation is not.
               // Checked last, after every suspension above.
-              if (denied || (yield* liveRecord(tokenHash))?.generation !== generation)
+              const generationChanged = (yield* liveRecord(tokenHash))?.generation !== generation;
+              if (denied || generationChanged)
                 return yield* new EnvironmentAuthorizationError({
-                  message: "The provider credential no longer grants this operation.",
-                  requiredScope:
-                    required.find((scope) => !resolved?.grantedScopes?.includes(scope)) ??
-                    required[0] ??
-                    "memory:read",
+                  message:
+                    resolved !== undefined && !generationChanged && missingScope !== undefined
+                      ? `The calling thread's MCP credential is missing required scope: ${missingScope}.`
+                      : "The calling thread's MCP credential is no longer active or its authority changed.",
+                  requiredScope: missingScope ?? required[0] ?? "memory:read",
                 });
             }),
           requestNamespace: providerSessionId,

@@ -16,7 +16,14 @@ import type * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Settings from "../serverSettings.ts";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import { availability, type CallerProfile, callerProfile } from "./toolAvailability.ts";
+import * as ComputerUseAgentConnections from "../cua/ComputerUseAgentConnections.ts";
+import { makeHostConditions } from "./hostConditions.ts";
+import {
+  availability,
+  type CallerProfile,
+  callerProfile,
+  type HostConditions,
+} from "./toolAvailability.ts";
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -44,6 +51,8 @@ const callerListing = (
 interface Listing {
   readonly listed: AgentToolListing;
   readonly agents: AgentToolListing;
+  /** What this host knows now (hostConditions.ts); absent means nothing to add. */
+  readonly host?: HostConditions;
 }
 
 /**
@@ -56,12 +65,13 @@ const listedTools = (
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
   profile: CallerProfile | undefined,
+  host: HostConditions,
 ): ReadonlyArray<unknown> =>
   tools.flatMap((tool) => {
     if (!isRecord(tool) || typeof tool.name !== "string") return [tool];
     const entry = resolveAgentSurfaceEntry(tool.name);
     if (entry === undefined) return [tool];
-    if (!availability(entry, scope, true, profile).now) return [];
+    if (!availability(entry, scope, true, profile, host).now) return [];
     const core = "listing" in entry && entry.listing === "core";
     if (listing === "core" && !core) return [];
     if (!core) return [tool];
@@ -87,7 +97,7 @@ const filterMessage = (
     ...message,
     result: {
       ...message.result,
-      tools: listedTools(message.result.tools, scope, listing.listed, profile),
+      tools: listedTools(message.result.tools, scope, listing.listed, profile, listing.host ?? {}),
       _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing.agents },
     },
   });
@@ -176,7 +186,12 @@ export const withCallerListing = (
     const response = yield* httpEffect;
     return HttpServerResponse.setBody(
       response,
-      yield* filterToolsListBody(response.body, scope, { listed, agents }, profile),
+      yield* filterToolsListBody(
+        response.body,
+        scope,
+        { listed, agents, host: yield* yield* makeHostConditions },
+        profile,
+      ),
     );
   });
 
@@ -204,6 +219,24 @@ export const listingSetting = (
  * refuses. A save that changes neither is skipped.
  */
 export const listingChanges = (
+  settings: Option.Option<Settings.ServerSettingsService["Service"]>,
+) => Stream.merge(settingsListingChanges(settings), hostConditionChanges);
+
+/**
+ * Agent computer use failing on this host or working again (ComputerUseAgentConnections): the
+ * listing of goat_computer_use_request follows it.
+ */
+const hostConditionChanges = Stream.unwrap(
+  Effect.gen(function* () {
+    const connections = yield* Effect.serviceOption(
+      ComputerUseAgentConnections.ComputerUseAgentConnections,
+    );
+    if (Option.isNone(connections)) return Stream.empty;
+    return Stream.fromSubscription(yield* connections.value.changes);
+  }),
+);
+
+const settingsListingChanges = (
   settings: Option.Option<Settings.ServerSettingsService["Service"]>,
 ) => {
   if (Option.isNone(settings)) return Stream.empty;

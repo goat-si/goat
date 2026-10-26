@@ -88,7 +88,7 @@ const opened = (environmentId: EnvironmentId) => ({
   card: usePreviewSessionStack.getState().expanded,
 });
 
-it("an agent tab this desktop draws opens in the floating player, which paints it", async () => {
+it("an agent tab this desktop draws opens as the large card, which shows its webview", async () => {
   setup();
   await using screen = await render(
     <Agent environmentId={desktopEnvironment} previewState={previewState()} />,
@@ -97,9 +97,9 @@ it("an agent tab this desktop draws opens in the floating player, which paints i
   await screen.rerender(
     <Agent environmentId={desktopEnvironment} previewState={previewState({ tab_1: agentTab })} />,
   );
-  expect(opened(desktopEnvironment)).toEqual({
-    floating: { kind: "browser", tabId: "tab_1" },
-    card: null,
+  expect(opened(desktopEnvironment)).toMatchObject({
+    floating: undefined,
+    card: { kind: "browser", tabId: "tab_1", environmentId: desktopEnvironment },
   });
 });
 

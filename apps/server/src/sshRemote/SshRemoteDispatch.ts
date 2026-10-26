@@ -41,7 +41,6 @@ import { discoverSshHosts } from "@goat/ssh/config";
 import { SshPairingError, SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Crypto from "effect/Crypto";
@@ -56,7 +55,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
+import { resolveSshCliRunner } from "./sshCliRunner.ts";
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import { resolveAttachmentPath, resolveAttachmentPathById } from "../attachmentStore.ts";
 import { ATTACHMENT_UPLOAD_ROUTE_PREFIX } from "../assets/AttachmentUpload.ts";
@@ -214,7 +213,7 @@ export interface SshLaunchResult {
   readonly runId: string | null;
   readonly workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy;
   readonly runtimeMode: RuntimeMode;
-  readonly remoteServerKind: "external" | "managed" | null;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
   readonly notes: ReadonlyArray<string>;
 }
 
@@ -1451,10 +1450,10 @@ const make = Effect.gen(function* () {
     target: DesktopSshEnvironmentTarget,
   ) {
     yield* readyCloudTarget(target, false);
+    const attached = yield* manager.attachedServerKind?.(target) ?? Effect.succeed(null);
     const result = yield* withRuntime(
       manager.runRemoteScript(target, {
-        script:
-          'if [ -f "$HOME/.goat/userdata/environment-id" ]; then cat "$HOME/.goat/userdata/environment-id"; fi',
+        script: SshTunnel.hostEnvironmentIdScript(attached),
         timeoutMs: 15_000,
       }),
     ).pipe(
@@ -2195,45 +2194,7 @@ const make = Effect.gen(function* () {
   });
 });
 
-/**
- * Resolve local archive/mirror configuration before building the remote runner.
- * The server owns the host's runtime like the desktop does: it installs its own
- * release on a stopped host and refreshes an older compatible server once it
- * answers idle. Replacement only happens through the server's own drain, so
- * another client attached to it is never cut off mid-turn.
- */
-export const resolveSshCliRunner = (baseDir: string) =>
-  Effect.gen(function* () {
-    const archiveDirectory = yield* Config.String("GOAT_SSH_RUNTIME_ARCHIVE_DIR").pipe(
-      Config.withDefault(baseDir + "/runtime/archives"),
-    );
-    const bundledArchiveDirectory = yield* Config.String(
-      "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR",
-    ).pipe(
-      Config.withDefault(""),
-      Effect.map((value) => value.trim() || undefined),
-    );
-    const releaseBaseUrl = yield* Config.String("GOAT_RELEASE_BASE_URL").pipe(
-      Config.withDefault(""),
-      Effect.map((value) => value.trim() || undefined),
-    );
-    const nodeScriptPath = yield* Config.String("GOAT_DEV_REMOTE_SERVER_ENTRY_PATH").pipe(
-      Config.withDefault(""),
-    );
-    return {
-      ...(nodeScriptPath.trim()
-        ? { nodeScriptPath: nodeScriptPath.trim(), nodeEngineRange: packageJson.engines.node }
-        : {}),
-      archiveVersion: packageJson.version,
-      ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
-      archiveDirectory,
-      ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
-      ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
-      hostDownload: true,
-      publishedFallback: true,
-      refreshOwnedRuntimeOnFirstConnection: true,
-    } satisfies SshTunnel.RemoteGoatRunnerOptions;
-  });
+export { resolveSshCliRunner };
 
 const layerManager = Layer.unwrap(
   Effect.gen(function* () {

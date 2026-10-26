@@ -341,6 +341,7 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
           <CapabilityContextChip
             capability={record.capability}
             label={record.label}
+            app={record.app !== undefined}
             copyMarkdown={context.copyMarkdown}
           />
         ) : (

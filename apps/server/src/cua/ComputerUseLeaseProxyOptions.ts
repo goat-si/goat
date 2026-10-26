@@ -5,6 +5,7 @@
  * @module ComputerUseLeaseProxyOptions
  */
 import type {
+  ComputerUseAgentCursor,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
@@ -24,6 +25,11 @@ export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
   readonly lines: Stream.Stream<string>;
   readonly kill: Effect.Effect<void>;
+  /**
+   * The child's exit code once it has exited on its own, or undefined when it is unknown. Read
+   * after its output ends, to tell a helper that refused its parent (77) from one that restarted.
+   */
+  readonly exitCode?: Effect.Effect<number | undefined>;
   /**
    * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
    * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
@@ -50,7 +56,11 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly bundleIds: boolean;
   /** Lines the provider writes. The proxy stops when this ends. */
   readonly input: Stream.Stream<string>;
-  readonly output: (line: string) => Effect.Effect<void>;
+  /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
+  readonly output: (
+    line: string,
+    context?: { readonly tool?: string | undefined },
+  ) => Effect.Effect<void>;
   /** The server's view of this thread's control, newest last. Ending or failing ends it. */
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */
@@ -69,6 +79,12 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly manifestStamp?: () => string | undefined;
   /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
   readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
+  /** Installs the same synchronous receipt hook used by the lease stream reader. */
+  readonly onLeaseUpdateReceiver?: (
+    receive: (update: ComputerUseLeaseUpdate | undefined) => void,
+  ) => void;
+  /** A cancelled request settled without an output line; its id can be reused now. */
+  readonly onCancelledRequestSettled?: (key: string) => void;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -81,6 +97,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * true when the server took it. Reported only on a change, observations included.
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
+  /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
+  readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

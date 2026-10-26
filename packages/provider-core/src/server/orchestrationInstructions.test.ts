@@ -25,6 +25,14 @@ describe("GOAT provider instructions", () => {
     assert.notInclude(GOAT_ORCHESTRATION_INSTRUCTIONS, "t3-thread://");
   });
 
+  it("routes extra checkouts and child lanes through GOAT-managed worktrees", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "GOAT-managed worktrees");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`worktree.handoff`");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '`workspaceStrategy:{type:"worktree"}`');
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '`isolation:"worktree"`');
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Do not create ad-hoc worktrees or clones");
+  });
+
   it("keeps the always-injected text within its budget", () => {
     const injected = bytes(goatOrchestrationSystemPrompt(true) + GOAT_BROWSER_TOOL_INSTRUCTIONS);
     assert.isAtMost(

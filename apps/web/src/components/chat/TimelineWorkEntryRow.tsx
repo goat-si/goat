@@ -22,7 +22,13 @@ import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
-import { computerUseRun, computerUseRunStatus } from "@goat/client-runtime/work-log/computer-use";
+import {
+  computerUseAppName,
+  computerUseAppToolIcon,
+  computerUseObservedApp,
+  computerUseRun,
+  computerUseRunStatus,
+} from "@goat/client-runtime/work-log/computer-use";
 import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { memo, use, useState, type KeyboardEvent } from "react";
 import {
@@ -288,12 +294,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     (workEntrySignalsSevereFailure(workEntry) || !workLogEntryIsToolLike(workEntry));
   const entryIconName =
     showWarningIndicator || showDestructiveRowStyle ? "circle-alert" : workEntryIconName(workEntry);
+  const isReasoning = workEntry.itemType === "reasoning";
+  const computerUse = computerUseRun(workEntry.projectedItem?.item);
+  // A pid-only call names its app in its observation's output, which the wire item carries.
+  const wireItem = workEntry.projectedItem?.item;
+  const observedApp =
+    computerUse && wireItem?.type === "dynamic_tool"
+      ? computerUseObservedApp(wireItem.output)
+      : null;
+  const computerUseApp = computerUse ? computerUseAppName(computerUse.app, observedApp) : null;
   const entryToolIcon =
     showWarningIndicator || showDestructiveRowStyle
       ? undefined
-      : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
-  const isReasoning = workEntry.itemType === "reasoning";
-  const computerUse = computerUseRun(workEntry.projectedItem?.item);
+      : (workEntry.toolIcon ??
+        workEntry.toolSource?.icon ??
+        (computerUse ? computerUseAppToolIcon(computerUse.app, observedApp) : undefined));
   const questionHeading = workEntry.questionAnswer
     ? getQuestionTextPreview(workEntry.questionAnswer)
     : "";
@@ -451,8 +466,14 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       icon={
         <span
           className={iconWrapperClass}
-          role={showFailedIndicator ? "img" : undefined}
-          aria-label={showFailedIndicator ? "Tool call failed" : undefined}
+          role={showFailedIndicator || computerUseApp !== null ? "img" : undefined}
+          aria-label={
+            showFailedIndicator
+              ? computerUseApp === null
+                ? "Tool call failed"
+                : `${computerUseApp}: tool call failed`
+              : (computerUseApp ?? undefined)
+          }
         >
           <ToolActivityIconView
             icon={entryToolIcon}
@@ -574,8 +595,11 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           >
             <ChevronRightIcon
               className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-90",
+                "size-3 shrink-0 text-icon-muted transition-transform duration-200",
+                // Like Codex: the chevron appears on hover or focus and stays while open.
+                expanded
+                  ? "rotate-90 opacity-70"
+                  : "opacity-0 group-hover/timeline-row:opacity-70 group-focus-within/timeline-row:opacity-70 pointer-coarse:opacity-70",
               )}
             />
           </span>

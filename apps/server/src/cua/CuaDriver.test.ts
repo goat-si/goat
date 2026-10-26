@@ -43,6 +43,7 @@ const served = (config: CuaDriverMcpConfiguration) =>
       { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
       { name: "CUA_TELEMETRY_ENABLED", value: "false" },
       { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
+      { name: "CUA_DRIVER_DISABLE_SCREENCAPTURE", value: "1" },
       { name: "DO_NOT_TRACK", value: "1" },
       { name: "CUA_TELEMETRY", value: "0" },
     ],

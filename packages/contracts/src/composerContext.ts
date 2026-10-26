@@ -235,10 +235,22 @@ export const TURN_CAPABILITIES = ["computer-use", "browser"] as const;
 export const TurnCapability = Schema.Literals(TURN_CAPABILITIES);
 export type TurnCapability = typeof TurnCapability.Type;
 
+/**
+ * The app an `@Finder`-style chip names: computer use for this turn, aimed at that app. `id` is
+ * the id the host's driver admits (a bundle id, or an executable path where there is none).
+ */
+export const CapabilityContextApp = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPOSER_CONTEXT_LABEL_MAX_CHARS)),
+});
+export type CapabilityContextApp = typeof CapabilityContextApp.Type;
+
 export const CapabilityContextRecord = Schema.Struct({
   ...recordBase,
   kind: Schema.Literal("capability"),
   capability: TurnCapability,
+  /** Set by an app chip, which always asks for computer-use; older readers ignore it. */
+  app: Schema.optionalKey(CapabilityContextApp),
 });
 export type CapabilityContextRecord = typeof CapabilityContextRecord.Type;
 

@@ -14,6 +14,7 @@ import {
 } from "@goat/client-runtime/work-log/command-label";
 import {
   formatCommandActionsLabel,
+  commandVerb,
   liveActivityToolStatus,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
@@ -144,7 +145,12 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
       formatPath: (path) => formatWorkspaceRelativePath(path, workspaceRoot),
     });
   }
-  if (entry.command?.trim()) return commandDisplayText(entry.command);
+  if (entry.command?.trim()) {
+    const command = commandDisplayText(entry.command);
+    return entry.itemType === "command_execution"
+      ? `${commandVerb(liveActivityToolStatus(entry.toolLifecycleStatus, false))} ${command}`
+      : command;
+  }
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     const searchLabel =
@@ -262,17 +268,7 @@ export function liveWorkEntryLabel(
   }
   const command = entry.command?.trim();
   if (command) {
-    const verb =
-      status === "inProgress"
-        ? "Running"
-        : status === "failed"
-          ? "Failed"
-          : status === "declined"
-            ? "Declined"
-            : status === "stopped"
-              ? "Stopped"
-              : "Ran";
-    return `${verb} ${commandProgramName(command) ?? "command"}`;
+    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
   return workEntryDisplayLabel(entry, workspaceRoot);
 }

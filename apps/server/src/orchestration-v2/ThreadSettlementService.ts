@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -36,6 +37,8 @@ export interface SettlementPullRequest {
   readonly mergedAt?: string | null;
 }
 
+const PULL_REQUEST_RECHECK_MS = 2 * 60 * 1_000;
+const LOOKUP_CONCURRENCY = 8;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
@@ -305,25 +308,86 @@ export const make = Effect.gen(function* () {
   // so this keeps the settle action to one run per settlement.
   const settleActionRunAt = new Map<ThreadId, number>();
 
+  const evaluated = new Map<ThreadId, { key: string; expiresAt: number }>();
+  const lookupCache = new Map<string, { value: SettlementPullRequest | null; expiresAt: number }>();
+  const lookupPermits = yield* Semaphore.make(LOOKUP_CONCURRENCY);
+  let mergeGeneration = 0;
+
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
     mergedPullRequest: PullRequestService.PullRequestMergeEvent | null,
     threadId?: ThreadId,
   ) {
     if ((yield* automationHold.current) !== null) return;
+    if (mergedPullRequest !== null) {
+      mergeGeneration++;
+      lookupCache.clear();
+    }
+    const generation = mergeGeneration;
     const settings = yield* settingsService.getSettings;
     if (!autoSettlementConfigured(settings)) {
       return;
     }
     const threads = yield* projections.getSettlementCandidates(threadId);
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    if (threadId === undefined) {
+      const live = new Set(threads.map((thread) => thread.id));
+      for (const id of evaluated.keys()) if (!live.has(id)) evaluated.delete(id);
+      for (const [key, entry] of lookupCache) {
+        if (entry.expiresAt <= nowMs) lookupCache.delete(key);
+      }
+    }
     if (threads.length === 0) return;
     const projectShells = yield* projectStore.listShells();
-    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const projects = new Map(projectShells.map((project) => [project.id, project]));
     // A merge event re-sweeps every candidate, not just the threads linked to
     // the merged pull request: most threads carry no link and settle from
     // their branch lookup, which would otherwise wait for the next minute's
     // sweep on a possibly stale cached answer.
-    const candidates = threads.filter((thread) => isAutoSettlementCandidate(thread, nowMs));
+    const settingsKey = autoSettlementSettingsKey(settings);
+    const keys = new Map<ThreadId, string>();
+    const candidates = threads.filter((thread) => {
+      if (!isAutoSettlementCandidate(thread, nowMs)) {
+        evaluated.delete(thread.id);
+        return false;
+      }
+      const { settings: projectSettings } = resolveProjectSettings(settings, thread.projectId);
+      // Time can make an unchanged thread settle. Include that decision so the
+      // minute sweep still observes inactivity deadlines without repeating I/O.
+      const due = resolveAutoSettlementAt({
+        thread,
+        pullRequest: null,
+        nowMs,
+        autoSettleAfterDays: projectSettings.sidebarAutoSettleAfterDays,
+        autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
+        autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
+      });
+      const key = JSON.stringify([
+        thread,
+        projects.get(thread.projectId)?.workspaceRoot,
+        settingsKey,
+        due,
+        generation,
+      ]);
+      keys.set(thread.id, key);
+      const previous = evaluated.get(thread.id);
+      return mergedPullRequest !== null || previous?.key !== key || previous.expiresAt <= nowMs;
+    });
+    const rememberEvaluation = (
+      thread: (typeof candidates)[number],
+      expiresAt = nowMs + PULL_REQUEST_RECHECK_MS,
+    ) => {
+      const key = keys.get(thread.id);
+      if (key === undefined || generation !== mergeGeneration) return;
+      const needsLookup =
+        visibleThreadPullRequests(thread.pullRequests ?? []).length === 0 &&
+        (thread.branch !== null ||
+          thread.linkedPullRequest != null ||
+          thread.branchPullRequest != null);
+      evaluated.set(thread.id, {
+        key,
+        expiresAt: needsLookup ? expiresAt : Infinity,
+      });
+    };
 
     const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
@@ -349,6 +413,7 @@ export const make = Effect.gen(function* () {
           snapshotAt: thread.updatedAt,
           settledAt,
         });
+        rememberEvaluation(thread);
         return null;
       },
       (effect, thread) =>
@@ -370,7 +435,11 @@ export const make = Effect.gen(function* () {
       { concurrency: 8 },
     ))
       .filter((thread) => thread !== null)
-      .filter((thread) => visibleThreadPullRequests(thread.pullRequests ?? []).length === 0);
+      .filter((thread) => {
+        if (visibleThreadPullRequests(thread.pullRequests ?? []).length === 0) return true;
+        rememberEvaluation(thread);
+        return false;
+      });
     const lookupCwdByThreadId = new Map<string, string>();
     yield* Effect.forEach(
       lookupCandidates,
@@ -507,14 +576,39 @@ export const make = Effect.gen(function* () {
     });
 
     yield* Effect.forEach(
-      groups.values(),
-      (group) =>
+      groups.entries(),
+      ([key, group]) =>
         Effect.gen(function* () {
-          const pullRequest = yield* pullRequestFor(group);
+          const cached = lookupCache.get(key);
+          const pullRequest =
+            cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
+              ? cached.value
+              : yield* pullRequestFor(group).pipe(lookupPermits.withPermits(1));
+          if (pullRequest !== undefined && generation === mergeGeneration) {
+            lookupCache.set(key, {
+              value: pullRequest,
+              expiresAt:
+                cached !== undefined && cached.expiresAt > nowMs && mergedPullRequest === null
+                  ? cached.expiresAt
+                  : DateTime.toEpochMillis(yield* DateTime.now) + PULL_REQUEST_RECHECK_MS,
+            });
+          }
           if (pullRequest === undefined) return;
-          yield* Effect.forEach(group, (thread) => settleThread(thread, pullRequest), {
-            discard: true,
-          });
+
+          yield* Effect.forEach(
+            group,
+            (thread) =>
+              settleThread(thread, pullRequest).pipe(
+                Effect.map((remaining) => {
+                  if (remaining !== null)
+                    rememberEvaluation(thread, lookupCache.get(key)?.expiresAt);
+                  return remaining;
+                }),
+              ),
+            {
+              discard: true,
+            },
+          );
         }).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)

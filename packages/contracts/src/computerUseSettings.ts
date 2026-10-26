@@ -1,6 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+/** Whether agents may move the person's hardware pointer on this host. */
+export const CuaMovePointer = Schema.Literals(["never", "allowed"]);
+export type CuaMovePointer = typeof CuaMovePointer.Type;
+
 /** Computer use fields of `ServerSettings`. */
 export const CuaSettingsFields = {
   enableCua: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -17,6 +21,12 @@ export const CuaSettingsFields = {
    * still send it decode.
    */
   cuaFullAccessAutoAdmit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * "never" (the default) keeps the person's pointer still: a call that would move it (foreground
+   * pointer delivery, a desktop move_cursor) is refused, and agents use element tokens, the
+   * keyboard or background clicks. "allowed" lets full access foreground calls move it.
+   */
+  cuaMovePointer: CuaMovePointer.pipe(Schema.withDecodingDefault(Effect.succeed("never" as const))),
 };
 
 /** Computer use fields of `ServerSettingsPatch`. */
@@ -24,4 +34,5 @@ export const CuaSettingsPatchFields = {
   enableCua: Schema.optionalKey(Schema.Boolean),
   disabledBuiltInSkills: Schema.optionalKey(Schema.Array(Schema.String)),
   cuaFullAccessAutoAdmit: Schema.optionalKey(Schema.Boolean),
+  cuaMovePointer: Schema.optionalKey(CuaMovePointer),
 };

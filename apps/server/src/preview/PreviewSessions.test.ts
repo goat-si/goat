@@ -62,6 +62,21 @@ describe("preview sessions", () => {
     expect(desktop.lease?.scope).toEqual(["com.apple.calculator"]);
   });
 
+  it("carries the agent's cursor on the target window, and only while the agent acts", () => {
+    const cursor = { windowId: 3, point: { fx: 0.25, fy: 0.75 }, phase: "acting" } as const;
+    const targeted = { ...control, target: { pid: 7, windowId: 3 }, cursor };
+    expect(desktopSession(base, targeted, active, detected)!.target).toEqual({
+      kind: "desktop",
+      pid: 7,
+      windowId: 3,
+      cursor,
+      title: "com.apple.calculator",
+    });
+    const paused = { _tag: "paused", reason: "takeover" } as const;
+    // A person holds the screen, or the control ended: the agent's cursor is not shown.
+    expect(desktopSession(base, targeted, paused, detected)!.target).not.toHaveProperty("cursor");
+  });
+
   it("shows a turn blocked on a missing grant as permission-needed, with nothing to stop (#1399)", () => {
     const session = blockedSession(base, threadId, {
       reason: "permissionsNotGranted",

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- In-memory streams exercise the helper/MCP ownership boundary.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodeStream from "node:stream";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -8,7 +9,7 @@ import { makeMcpHelperHost } from "./McpHelperHost.ts";
 const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
 const options = {
   bundle: helperBundle("/Helpers/GOAT Computer Use.app", BUNDLE_ID),
-  driverVersion: "0.37.0",
+  driverVersion: CUA_DRIVER_VERSION,
   capabilityManifestPath: "/state/verify-manifest.yaml",
   environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
 };
