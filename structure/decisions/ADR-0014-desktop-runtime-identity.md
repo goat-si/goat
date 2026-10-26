@@ -60,7 +60,7 @@ with a migration that has been verified on real installs, and the rename tooling
   is active.
 - **Mobile native names: renamed, device verification pending.** The Expo modules
   (`apps/mobile/modules/goat-*`) and their native views, classes, JNI symbols and resources use
-  GOAT names since #GOATPR (plan 261026 wp6). The rename changes the native fingerprint, so OTA updates
+  GOAT names since #1769 (plan 261026 wp6). The rename changes the native fingerprint, so OTA updates
   carrying the new names reach only binaries built with them. The Android notification tags, the
   notification preferences store, the widget-expiry deadline store and the push data key keep their
   legacy spelling (lines marked `goat-rename: legacy`), so posted notifications and saved
