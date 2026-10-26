@@ -105,8 +105,8 @@ export const CUA_DRIVER_PROBED_SESSION_NAMES = ["DBUS_SESSION_BUS_ADDRESS"] as c
  * launcher that reviewed the file it just wrote.
  * `display` carries the screen a server started over SSH must reach (DISPLAY, XAUTHORITY, the
  * D-Bus session bus), all on the embedded allowlist. The privacy switches always win.
- * npm SDK 0.37.0 rejects CUA_DRIVER_DISABLE_SCREENCAPTURE at construction, so only direct
- * launches (including the native helper) can disable screencapture with this SDK pin.
+ * npm SDK 0.37.0 rejects CUA_DRIVER_DISABLE_SCREENCAPTURE at construction, so it is dropped here;
+ * an embedded driver keeps screencapture off when the variable is unset (goat-si/cua-driver#19).
  * `withheld` names the daemon must not inherit when `display` does not set them.
  */
 export function cuaDriverHostOptions(

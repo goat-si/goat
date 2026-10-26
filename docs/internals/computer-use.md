@@ -483,8 +483,9 @@ GOAT pins the fork's release archives by name, size and SHA-256
 attestations. GOAT pins `0.37.0-goat.3`; `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
 the server installer rejects (goat-si/cua-driver#16).
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
-embedded allowlist rejects that name, so the in-process dev path omits it and cannot disable
-screencapture. When the driver misbehaves, GOAT does not work around
+embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps
+screencapture off by default when it runs embedded or as the SDK's private worker
+(goat-si/cua-driver#19), so that path has it off as well. When the driver misbehaves, GOAT does not work around
 it: the fix lands in the fork, goes upstream as a pull request, and the problem is reported
 upstream. Upstream is synced on purpose: each range is reviewed for security and behavior,
 checked with `cargo deny`, and taken only after the 0.37.0 protocol-compatibility test and one
