@@ -29,7 +29,9 @@ function follower(runs, { number, sha, ownRunId, ownCreatedAt }) {
       run.event === "pull_request" &&
       run.head_sha === sha &&
       String(run.id) !== String(ownRunId) &&
-      Date.parse(run.created_at) > Date.parse(ownCreatedAt) &&
+      // Created after this run; within one second the larger id is the later run.
+      (Date.parse(run.created_at) > Date.parse(ownCreatedAt) ||
+        (Date.parse(run.created_at) === Date.parse(ownCreatedAt) && run.id > Number(ownRunId))) &&
       (run.display_title.endsWith(ignoredRunSuffix(number)) ||
         run.display_title.endsWith(realRunSuffix(number))),
   );
@@ -48,8 +50,8 @@ async function request(method, url, token, fetchImpl, wait) {
         "x-github-api-version": "2022-11-28",
       },
     }).catch(() => ({ ok: false, status: 0 }));
-    if (response.ok)
-      return response.status === 204 || response.status === 201 ? null : response.json();
+    // cancel answers 202 and rerun 201, both without a body this script reads.
+    if (response.ok) return method === "GET" ? response.json() : null;
     const transient = response.status === 0 || response.status >= 500;
     if (!transient || attempt >= 3)
       throw new Error(method + " " + url + " returned " + response.status);
