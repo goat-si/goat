@@ -201,20 +201,4 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Existing hosted services, schema URLs and the ADR-0014 frozen GNOME uuid retain their upstream domain (D12/D14).",
   },
-  {
-    id: "external-chat-service",
-    pattern: /T3 Chat|t3\.chat/g,
-    scope: (path) =>
-      [
-        "apps/web/index.html",
-        "apps/web/src/index.css",
-        "packages/shared/src/themePalettes.ts",
-        "packages/contracts/src/previewAutomation.ts",
-        "packages/contracts/src/agentSurface/registry.ts",
-        "apps/server/src/preview/ServerBrowserAddress.ts",
-        "apps/server/src/preview/ServerBrowserPage.ts",
-        "apps/web/src/components/preview/browserAddress.ts",
-      ].includes(path),
-    reason: "Theme attribution and example URLs name the external T3 Chat service (D12).",
-  },
 ];

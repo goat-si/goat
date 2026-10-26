@@ -372,9 +372,8 @@ describe("desktop release runtime supply", () => {
             if (bundled) assert.include(built.stdout, "/fixture/workspace/ssh-runtime-archives");
           }
         }
-        assert.equal(callers.length, 7);
-        assert.equal(callers.filter((caller) => caller.startsWith("release.yml:")).length, 6);
-        assert.include(callers, "desktop-macos-preview-publish.yml:build");
+        assert.equal(callers.length, 6);
+        assert.isTrue(callers.every((caller) => caller.startsWith("release.yml:")));
       }),
   );
 

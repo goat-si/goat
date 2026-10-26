@@ -23,6 +23,31 @@ const rule = (
 ): TextRule => ({ id: `leftover:${id}`, category: "leftovers", find, replace, scope });
 
 export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
+  // The pink chat theme (id goat-chat) is GOAT's; its label and notes no longer name T3 Chat.
+  rule(
+    "chat-theme-label",
+    (path) =>
+      [
+        "packages/shared/src/themePalettes.ts",
+        "apps/web/index.html",
+        "apps/web/src/index.css",
+        "apps/web/src/themeBoot.test.ts",
+      ].includes(path),
+    /\bT3 Chat\b/g,
+    "GOAT Chat",
+  ),
+  // Example public host in browser-address help and tests.
+  rule(
+    "example-chat-host",
+    (path) =>
+      [
+        "packages/contracts/src/previewAutomation.ts",
+        "packages/shared/src/hostClassification.test.ts",
+        "apps/web/src/components/preview/openPreviewSession.test.ts",
+      ].includes(path),
+    /\bt3\.chat\b/g,
+    "example.com",
+  ),
   // Keys in the packaged desktop package.json; the same build writes and reads them.
   rule("build-keys", () => true, /\bt3code(CommitHash|WebAuthn)\b/g, "goat$1"),
   // Local console tags; the relay never reads them.

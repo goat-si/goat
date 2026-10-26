@@ -125,10 +125,10 @@ jobs:
     # Release builds wait for the three producers; standalone previews do not.
     timeout-minutes: ${{ (inputs.ssh_runtime_bundle || inputs.platform == 'win') && 70 || 30 }}
     env:
-      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ inputs.clerk_publishable_key }}
-      T3CODE_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
-      T3CODE_RELAY_URL: ${{ inputs.relay_url }}
+      GOAT_CLERK_PUBLISHABLE_KEY: ${{ inputs.clerk_publishable_key }}
+      GOAT_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
+      GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
+      GOAT_RELAY_URL: ${{ inputs.relay_url }}
     steps:
       # This repository is public, so Git needs no credentials. checkout's
       # credential cleanup runs submodule foreach even with submodules disabled,
@@ -206,7 +206,7 @@ jobs:
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
+          tracing_token="$(sed -n 's/^GOAT_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
           echo "::add-mask::$tracing_token"
           cat "$config_path" >> "$GITHUB_ENV"
 
@@ -513,7 +513,7 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           GOAT_DESKTOP_MAC_PASSKEYS: ${{ inputs.mac_passkeys }}
           MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
-          T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+          GOAT_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}

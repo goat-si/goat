@@ -44,7 +44,6 @@ export const isExempt = (path: string): boolean =>
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
   path === ".github/TRIAGE_EXEMPTIONS.td" ||
-  path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
   path.startsWith("devlog/") ||
   path.startsWith("scripts/lib/goat-rename/") ||
@@ -52,9 +51,7 @@ export const isExempt = (path: string): boolean =>
   path.startsWith("packages/contracts/src/legacyT3Names.") ||
   /(^|\/)(LICENSE[^/]*|THIRD_PARTY_NOTICES[^/]*|UPSTREAM\.md)$/.test(path) ||
   // Disabled upstream workflows; GOAT runs only goat-*.yml.
-  (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-")) ||
-  // AUR packaging is published only by the disabled upstream workflow.
-  path.startsWith("packaging/aur/");
+  (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-"));
 
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
@@ -544,6 +541,25 @@ export const PATH_RULES: readonly PathRule[] = [
 
 /** Upstream paths GOAT drops. Reasons: devlog/_plan/261021_repo_hygiene.md. */
 export const DROP_RULES: readonly DropRule[] = [
+  {
+    id: "disabled-upstream-workflows",
+    category: "hygiene",
+    find: /^\.github\/workflows\/(?:ci|deploy-relay|desktop-macos-preview(?:-publish)?|issue-labels|mobile-eas-(?:preview|production)|mobile-fingerprint-check|mobile-showcase-screenshots|pr-size|pr-vouch|publish-aur|thread-transfer-report|web-preview|windows-tests)\.yml$/,
+    reason:
+      "Upstream workflows GOAT keeps disabled on GitHub; GOAT runs goat-ci, goat-nightly and marketing-pages.",
+  },
+  {
+    id: "disabled-workflow-scripts",
+    category: "hygiene",
+    find: /^\.github\/scripts\/(?:vercel-deployment-output\.test\.cjs|thread-transfer-report(?:\.test)?\.cjs|stage-preview-bundle(?:\.test)?\.py)$/,
+    reason: "Used only by the dropped upstream workflows.",
+  },
+  {
+    id: "aur-packaging",
+    category: "hygiene",
+    find: /^packaging\/aur\//,
+    reason: "GOAT publishes no AUR package.",
+  },
   {
     id: "vercel-configs",
     category: "hygiene",
