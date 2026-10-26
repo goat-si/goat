@@ -10,8 +10,8 @@
  */
 import type {
   ComputerUseAgentCursor,
-  ComputerUseCursorEvent,
-  ComputerUseCursorReport,
+  AgentCursorEvent,
+  AgentCursorReport,
   ComputerUseOverlayCommand,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -31,47 +31,53 @@ const cursorOf = (command: ComputerUseOverlayCommand): ComputerUseAgentCursor | 
 
 /** Retains the last observed point for a positionless in-flight phase on the same owner. */
 export const scopedCursorReport = (
-  event: ComputerUseCursorEvent,
-  previous?: ComputerUseCursorReport,
-): ComputerUseCursorReport => {
-  const sameOwner = previous !== undefined &&
+  event: AgentCursorEvent,
+  previous?: AgentCursorReport,
+): AgentCursorReport => {
+  const sameOwner =
+    previous !== undefined &&
     previous.identity.environmentId === event.identity.environmentId &&
     previous.identity.runId === event.identity.runId &&
     previous.identity.turnId === event.identity.turnId &&
     previous.identity.targetId === event.identity.targetId &&
     previous.identity.generation === event.identity.generation;
-  const point = event.op === "show" && event.point && event.windowId !== undefined
-    ? { windowId: event.windowId, point: event.point, phase: event.phase }
-    : event.op === "show" && sameOwner && previous.cursor !== null
-      ? { ...previous.cursor, phase: event.phase }
-      : null;
+  const point =
+    event.op === "show" && event.point && event.windowId !== undefined
+      ? { windowId: event.windowId, point: event.point, phase: event.phase }
+      : event.op === "show" && sameOwner && previous.cursor !== null
+        ? { ...previous.cursor, phase: event.phase }
+        : null;
   return { identity: event.identity, phase: event.phase, cursor: point };
 };
 
 /** A sliding report queue keeps the newest scoped tombstone when intermediate positions coalesce. */
 export const makeScopedAgentCursorReports = Effect.fn("agentCursorReports.scoped")(function* (
-  send: (report: ComputerUseCursorReport) => Effect.Effect<boolean>,
+  send: (report: AgentCursorReport) => Effect.Effect<boolean>,
 ) {
-  const latest = yield* Queue.sliding<ComputerUseCursorReport>(1);
-  let previous: ComputerUseCursorReport | undefined;
+  const latest = yield* Queue.sliding<AgentCursorReport>(1);
+  let previous: AgentCursorReport | undefined;
   yield* Stream.fromQueue(latest).pipe(
     Stream.runForEach((report) =>
       send(report).pipe(Effect.ignore, Effect.andThen(Effect.sleep(REPORT_INTERVAL))),
     ),
     Effect.forkScoped,
   );
-  return (event: ComputerUseCursorEvent) => Effect.suspend(() => {
-    if (previous !== undefined &&
-      event.identity.environmentId === previous.identity.environmentId &&
-      event.identity.runId === previous.identity.runId &&
-      event.identity.turnId === previous.identity.turnId &&
-      event.identity.targetId === previous.identity.targetId &&
-      event.identity.generation === previous.identity.generation &&
-      event.identity.sequence <= previous.identity.sequence) return Effect.void;
-    const report = scopedCursorReport(event, previous);
-    previous = report;
-    return Queue.offer(latest, report).pipe(Effect.asVoid);
-  });
+  return (event: AgentCursorEvent) =>
+    Effect.suspend(() => {
+      if (
+        previous !== undefined &&
+        event.identity.environmentId === previous.identity.environmentId &&
+        event.identity.runId === previous.identity.runId &&
+        event.identity.turnId === previous.identity.turnId &&
+        event.identity.targetId === previous.identity.targetId &&
+        event.identity.generation === previous.identity.generation &&
+        event.identity.sequence <= previous.identity.sequence
+      )
+        return Effect.void;
+      const report = scopedCursorReport(event, previous);
+      previous = report;
+      return Queue.offer(latest, report).pipe(Effect.asVoid);
+    });
 });
 
 /**
@@ -111,7 +117,7 @@ const makeAgentCursorReports = Effect.fn("agentCursorReports.make")(function* (
 export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer")(function* (
   send: ((cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>) | undefined,
   sink: () => ((command: ComputerUseOverlayCommand) => Effect.Effect<void>) | undefined,
-  sendScoped?: (report: ComputerUseCursorReport) => Effect.Effect<boolean>,
+  sendScoped?: (report: AgentCursorReport) => Effect.Effect<boolean>,
 ) {
   const report = yield* makeAgentCursorReports(send);
   const scopedReport = sendScoped ? yield* makeScopedAgentCursorReports(sendScoped) : undefined;

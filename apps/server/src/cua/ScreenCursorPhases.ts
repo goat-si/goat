@@ -1,9 +1,9 @@
-import type { ComputerUseCursorEvent, AgentCursorOwner, ScreenTargetRef } from "@goat/contracts";
+import type { AgentCursorEvent, AgentCursorOwner, ScreenTargetRef } from "@goat/contracts";
 import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 type Owner = Omit<AgentCursorOwner, "sequence">;
-type Sink = (event: ComputerUseCursorEvent) => void;
+type Sink = (event: AgentCursorEvent) => void;
 type State = { owner: Owner; sequence: number; pending: Set<number>; ended: boolean };
 
 /** Host-owned phase port. A guest can request a host call but cannot publish cursor state. */

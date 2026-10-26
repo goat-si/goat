@@ -4,13 +4,13 @@ import {
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
   type PreviewStreamHostSetup,
   type PreviewViewportSetting,
-  ComputerUseCursorState,
+  AgentCursorSnapshot,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const decodeCursorState = Schema.decodeUnknownOption(ComputerUseCursorState);
-type CursorState = typeof ComputerUseCursorState.Type;
+const decodeCursorState = Schema.decodeUnknownOption(AgentCursorSnapshot);
+type CursorState = typeof AgentCursorSnapshot.Type;
 const sameCursorOwner = (a: CursorState, b: CursorState) =>
   a.identity.environmentId === b.identity.environmentId &&
   a.identity.runId === b.identity.runId &&
@@ -250,11 +250,19 @@ export function createPreviewStreamClient(
     const old = cursorOwner;
     if (old !== null) {
       if (sameCursorOwner(old, next)) {
-        if (next.identity.sequence <= old.identity.sequence ||
-            ((old.phase === "hidden" || old.phase === "yielded") &&
-              next.phase !== "hidden" && next.phase !== "yielded")) return false;
-      } else if (old.phase !== "hidden" && old.phase !== "yielded" &&
-                 next.identity.generation <= old.identity.generation) return false;
+        if (
+          next.identity.sequence <= old.identity.sequence ||
+          ((old.phase === "hidden" || old.phase === "yielded") &&
+            next.phase !== "hidden" &&
+            next.phase !== "yielded")
+        )
+          return false;
+      } else if (
+        old.phase !== "hidden" &&
+        old.phase !== "yielded" &&
+        next.identity.generation <= old.identity.generation
+      )
+        return false;
     }
     cursorOwner = next;
     return true;
@@ -394,7 +402,8 @@ export function createPreviewStreamClient(
           control?.generation !== nextControl.generation ||
           nextControl.private === true ||
           nextControl.controller === "you"
-        ) clearCursor();
+        )
+          clearCursor();
         control = nextControl;
         events.onControl?.(nextControl);
       }

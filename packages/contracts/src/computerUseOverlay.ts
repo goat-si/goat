@@ -57,13 +57,13 @@ export const AgentCursorOwner = Schema.Struct({
 });
 export type AgentCursorOwner = typeof AgentCursorOwner.Type;
 
-export const ComputerUseCursorState = Schema.Struct({
+export const AgentCursorSnapshot = Schema.Struct({
   identity: AgentCursorOwner,
   phase: AgentCursorState,
 });
-export type ComputerUseCursorState = typeof ComputerUseCursorState.Type;
+export type AgentCursorSnapshot = typeof AgentCursorSnapshot.Type;
 
-export const ComputerUseCursorEvent = Schema.Union([
+export const AgentCursorEvent = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("show"),
     identity: AgentCursorOwner,
@@ -79,7 +79,7 @@ export const ComputerUseCursorEvent = Schema.Union([
     reason: ComputerUseOverlayHideReason,
   }),
 ]);
-export type ComputerUseCursorEvent = typeof ComputerUseCursorEvent.Type;
+export type AgentCursorEvent = typeof AgentCursorEvent.Type;
 
 export const ComputerUseOverlayCommand = Schema.Union([
   Schema.Struct({
@@ -120,9 +120,9 @@ export const ComputerUseAgentCursor = Schema.Struct({
 });
 export type ComputerUseAgentCursor = typeof ComputerUseAgentCursor.Type;
 
-export const ComputerUseCursorReport = Schema.Struct({
+export const AgentCursorReport = Schema.Struct({
   identity: AgentCursorOwner,
   cursor: Schema.NullOr(ComputerUseAgentCursor),
   phase: AgentCursorState,
 });
-export type ComputerUseCursorReport = typeof ComputerUseCursorReport.Type;
+export type AgentCursorReport = typeof AgentCursorReport.Type;

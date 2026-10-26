@@ -6,7 +6,7 @@ import {
   DesktopBrowserCommand,
   DesktopBrowserEvent,
   type DesktopBrowserCommand as DesktopBrowserCommandType,
-  type ComputerUseCursorState,
+  type AgentCursorSnapshot,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -48,11 +48,16 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
-      pointer: { readonly phase: "move" | "click"; readonly x: number; readonly y: number; readonly cursor?: ComputerUseCursorState },
+      pointer: {
+        readonly phase: "move" | "click";
+        readonly x: number;
+        readonly y: number;
+        readonly cursor?: AgentCursorSnapshot;
+      },
     ) => Effect.Effect<void>;
     /** Never fails. A failed write means a broken channel; the next backend starts with no turns. */
     readonly turn: (threadId: string, active: boolean) => Effect.Effect<void>;
-    readonly cursorState?: (key: DesktopTabKey, cursor: ComputerUseCursorState) => Effect.Effect<void>;
+    readonly cursorState?: (key: DesktopTabKey, cursor: AgentCursorSnapshot) => Effect.Effect<void>;
   }
 >()("goat/preview/DesktopBrowserChannel") {}
 

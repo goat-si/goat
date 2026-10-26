@@ -2,7 +2,7 @@ import type {
   ComputerUseLeaseThreadUpdate,
   ComputerUsePrimitiveRequest,
   ComputerUsePrimitiveCancel,
-  ComputerUseCursorLeaseUpdate,
+  AgentCursorLeaseUpdate,
   ThreadId,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -172,18 +172,18 @@ export const withPrimitiveRequests = <A, R>(
   states: Stream.Stream<A, never, R>,
   primitives:
     | Stream.Stream<
-        ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate
+        ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | AgentCursorLeaseUpdate
       >
     | undefined,
 ): Stream.Stream<
-  A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate,
+  A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | AgentCursorLeaseUpdate,
   never,
   R
 > =>
   primitives === undefined
     ? states
     : Stream.callback<
-        A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate,
+        A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | AgentCursorLeaseUpdate,
         never,
         R
       >(
@@ -192,11 +192,9 @@ export const withPrimitiveRequests = <A, R>(
             type State = { readonly kind: "state"; readonly value: A } | { readonly kind: "end" };
             const stateQueue = yield* Queue.bounded<State>(16);
             const primitiveQueue = yield* Queue.unbounded<
-              | ComputerUsePrimitiveRequest
-              | ComputerUsePrimitiveCancel
-              | ComputerUseCursorLeaseUpdate
+              ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | AgentCursorLeaseUpdate
             >();
-            const cursorQueue = yield* Queue.sliding<ComputerUseCursorLeaseUpdate>(1);
+            const cursorQueue = yield* Queue.sliding<AgentCursorLeaseUpdate>(1);
             yield* states.pipe(
               Stream.runForEach((value) => Queue.offer(stateQueue, { kind: "state", value })),
               Effect.ensuring(Queue.offer(stateQueue, { kind: "end" })),
@@ -214,7 +212,7 @@ export const withPrimitiveRequests = <A, R>(
             let pendingPrimitive:
               | ComputerUsePrimitiveRequest
               | ComputerUsePrimitiveCancel
-              | ComputerUseCursorLeaseUpdate
+              | AgentCursorLeaseUpdate
               | undefined;
             for (;;) {
               const readyState = Option.getOrUndefined(yield* Queue.poll(stateQueue));

@@ -18,8 +18,8 @@ import {
 import { needsHumanFields } from "./humanStepResult.ts";
 import {
   ComputerUseAgentCursor,
-  ComputerUseCursorEvent,
-  ComputerUseCursorReport,
+  AgentCursorEvent,
+  AgentCursorReport,
 } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
 import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
@@ -224,7 +224,7 @@ export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
  * the overlay hides it. The preview draws it over the window's live picture.
  */
 export const ComputerUseLeaseCursor = Schema.Union([
-  Schema.Struct({ controlId: TrimmedNonEmptyString, report: ComputerUseCursorReport }),
+  Schema.Struct({ controlId: TrimmedNonEmptyString, report: AgentCursorReport }),
   Schema.Struct({
     controlId: TrimmedNonEmptyString,
     cursor: Schema.NullOr(ComputerUseAgentCursor),
@@ -578,13 +578,13 @@ export const ComputerUsePrimitiveCancel = Schema.Struct({
 export type ComputerUsePrimitiveCancel = typeof ComputerUsePrimitiveCancel.Type;
 
 /** Host-origin cursor state on the authenticated proxy stream; never forwarded to the driver. */
-export const ComputerUseCursorLeaseUpdate = Schema.Struct({
+export const AgentCursorLeaseUpdate = Schema.Struct({
   state: Schema.Literal("cursor-state"),
   controlId: TrimmedNonEmptyString,
   connectionGeneration: TrimmedNonEmptyString,
-  event: ComputerUseCursorEvent,
+  event: AgentCursorEvent,
 });
-export type ComputerUseCursorLeaseUpdate = typeof ComputerUseCursorLeaseUpdate.Type;
+export type AgentCursorLeaseUpdate = typeof AgentCursorLeaseUpdate.Type;
 
 export const ComputerUsePrimitiveReply = strictPrimitive(
   Schema.Struct({
@@ -673,7 +673,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
   ComputerUsePrimitiveRequest,
   ComputerUsePrimitiveCancel,
-  ComputerUseCursorLeaseUpdate,
+  AgentCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
@@ -700,7 +700,7 @@ export const ComputerUseLeaseThreadUpdate = Schema.Union([
   }),
   ComputerUsePrimitiveRequest,
   ComputerUsePrimitiveCancel,
-  ComputerUseCursorLeaseUpdate,
+  AgentCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseThreadUpdate = typeof ComputerUseLeaseThreadUpdate.Type;
 

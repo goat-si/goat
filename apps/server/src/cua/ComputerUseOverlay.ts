@@ -18,7 +18,7 @@
  */
 import type {
   ComputerUseOverlayCommand,
-  ComputerUseCursorEvent,
+  AgentCursorEvent,
   ComputerUseOverlayHideReason,
   ComputerUseOverlayPoint,
   ComputerUsePauseReason,
@@ -79,7 +79,7 @@ export interface OverlayState {
   /** Window ids of calls in flight that return a window screenshot. */
   readonly snapshots: ReadonlyMap<string, number>;
   readonly shown: ComputerUseOverlayCommand | undefined;
-  readonly scoped: ComputerUseCursorEvent | undefined;
+  readonly scoped: AgentCursorEvent | undefined;
   readonly legacyTargetActive: boolean;
   readonly directActing: ReadonlySet<string>;
 }
@@ -101,8 +101,14 @@ export const initialOverlayState: OverlayState = {
 };
 
 export type OverlayEvent =
-  | { readonly type: "cursor"; readonly event: ComputerUseCursorEvent }
-  | { readonly type: "call"; readonly id: string; readonly name: string; readonly args: unknown; readonly codeMode?: boolean }
+  | { readonly type: "cursor"; readonly event: AgentCursorEvent }
+  | {
+      readonly type: "call";
+      readonly id: string;
+      readonly name: string;
+      readonly args: unknown;
+      readonly codeMode?: boolean;
+    }
   | {
       readonly type: "reply";
       readonly id: string;
@@ -190,17 +196,25 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
       const previous = state.scoped?.identity;
       const next = event.event.identity;
       if (previous !== undefined) {
-        const sameOwner = previous.environmentId === next.environmentId &&
-          previous.runId === next.runId && previous.turnId === next.turnId &&
-          previous.targetId === next.targetId && previous.generation === next.generation;
-        if (sameOwner
-          ? next.sequence <= previous.sequence ||
-            (state.scoped?.op === "hide" && event.event.op === "show")
-          : state.scoped?.op !== "hide" && next.generation <= previous.generation)
+        const sameOwner =
+          previous.environmentId === next.environmentId &&
+          previous.runId === next.runId &&
+          previous.turnId === next.turnId &&
+          previous.targetId === next.targetId &&
+          previous.generation === next.generation;
+        if (
+          sameOwner
+            ? next.sequence <= previous.sequence ||
+              (state.scoped?.op === "hide" && event.event.op === "show")
+            : state.scoped?.op !== "hide" && next.generation <= previous.generation
+        )
           return state;
       }
-      return { ...state, scoped: event.event,
-        legacyTargetActive: state.directActing.size > 0 ? state.legacyTargetActive : false };
+      return {
+        ...state,
+        scoped: event.event,
+        legacyTargetActive: state.directActing.size > 0 ? state.legacyTargetActive : false,
+      };
     }
     case "call": {
       const args = record(event.args);
@@ -223,7 +237,9 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         ...state,
         target: { ...window, ...(point ? { point } : {}) },
         acting: new Set(state.acting).add(event.id),
-        directActing: event.codeMode ? state.directActing : new Set(state.directActing).add(event.id),
+        directActing: event.codeMode
+          ? state.directActing
+          : new Set(state.directActing).add(event.id),
         legacyTargetActive: event.codeMode !== true,
       };
     }

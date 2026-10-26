@@ -1,11 +1,11 @@
-import type { ComputerUseCursorLeaseUpdate } from "@goat/contracts";
+import type { AgentCursorLeaseUpdate } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import type { OverlayEvent } from "./ComputerUseOverlay.ts";
 
 /** Cursor drawing cannot hold the lease reader or change driver admission. */
 export const forwardProxyCursors = (input: {
-  readonly events: Stream.Stream<ComputerUseCursorLeaseUpdate> | undefined;
+  readonly events: Stream.Stream<AgentCursorLeaseUpdate> | undefined;
   readonly controlId: string;
   readonly connectionId: () => string | undefined;
   readonly active: () => boolean;

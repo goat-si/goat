@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ComputerUseCursorState } from "./computerUseOverlay.ts";
+import { AgentCursorSnapshot } from "./computerUseOverlay.ts";
 
 const TabKey = {
   threadId: TrimmedNonEmptyString,
@@ -25,7 +25,7 @@ export const DesktopBrowserCommand = Schema.Union([
     phase: Schema.Literals(["move", "click"]),
     x: Schema.Finite,
     y: Schema.Finite,
-    cursor: Schema.optionalKey(ComputerUseCursorState),
+    cursor: Schema.optionalKey(AgentCursorSnapshot),
   }),
   /** Whether an agent turn runs on the thread, so the tabs it uses stay focused between steps. */
   Schema.Struct({
@@ -33,7 +33,7 @@ export const DesktopBrowserCommand = Schema.Union([
     threadId: TrimmedNonEmptyString,
     active: Schema.Boolean,
   }),
-  Schema.Struct({ type: Schema.Literal("cursor-state"), ...TabKey, cursor: ComputerUseCursorState }),
+  Schema.Struct({ type: Schema.Literal("cursor-state"), ...TabKey, cursor: AgentCursorSnapshot }),
 ]);
 export type DesktopBrowserCommand = typeof DesktopBrowserCommand.Type;
 
@@ -45,20 +45,18 @@ export interface DesktopPreviewPointerEvent {
   y: number;
   sequence: number;
   createdAt: string;
-  cursor?: typeof ComputerUseCursorState.Type;
+  cursor?: typeof AgentCursorSnapshot.Type;
 }
 
 export interface DesktopPreviewCursorStateEvent {
   readonly type: "cursor-state";
   readonly tabId: string;
-  readonly cursor: typeof ComputerUseCursorState.Type;
+  readonly cursor: typeof AgentCursorSnapshot.Type;
   readonly sequence: number;
   readonly createdAt: string;
 }
 
-export type DesktopPreviewCursorEvent =
-  | DesktopPreviewPointerEvent
-  | DesktopPreviewCursorStateEvent;
+export type DesktopPreviewCursorEvent = DesktopPreviewPointerEvent | DesktopPreviewCursorStateEvent;
 
 /**
  * A screenshot of a server tab starting or settling. Chromium answers one with the guest's next

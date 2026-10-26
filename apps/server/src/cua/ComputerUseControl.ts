@@ -1,6 +1,6 @@
 import type {
   ComputerUseAgentCursor,
-  ComputerUseCursorReport,
+  AgentCursorReport,
   ComputerUseControlEnd,
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
@@ -30,7 +30,7 @@ export interface ComputerUseControl {
   /** Where the helper draws the agent's cursor on that window, for the preview to draw too. */
   readonly cursor?: ComputerUseAgentCursor;
   /** Latest scoped report, including a terminal identity-bearing tombstone. */
-  readonly cursorReport?: ComputerUseCursorReport;
+  readonly cursorReport?: AgentCursorReport;
 }
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
@@ -75,8 +75,13 @@ export const markActed = <C extends ComputerUseControl & { readonly ended?: unkn
  * may show it, and unmarked if it sat idle between turns, since that turn has not asked for the
  * screen yet. A stopped card keeps its mark while idle.
  */
-export const nextTurn = <C extends ComputerUseControl>({ idle, acted, cursor, cursorReport, ...rest }: C) =>
-  idle !== true && acted === true ? { ...rest, acted } : rest;
+export const nextTurn = <C extends ComputerUseControl>({
+  idle,
+  acted,
+  cursor,
+  cursorReport,
+  ...rest
+}: C) => (idle !== true && acted === true ? { ...rest, acted } : rest);
 
 /**
  * Whether a person sees a card for this control in this state: its agent acted through it, and
@@ -121,22 +126,25 @@ export type Cursor = ComputerUseAgentCursor | null;
 export type CursorTargetReport =
   | { readonly pid: number; readonly windowId: number }
   | { readonly cursor: Cursor }
-  | { readonly report: ComputerUseCursorReport };
+  | { readonly report: AgentCursorReport };
 
-const sameOwner = (a: ComputerUseCursorReport, b: ComputerUseCursorReport) =>
+const sameOwner = (a: AgentCursorReport, b: AgentCursorReport) =>
   a.identity.environmentId === b.identity.environmentId &&
   a.identity.runId === b.identity.runId &&
   a.identity.turnId === b.identity.turnId &&
   a.identity.targetId === b.identity.targetId &&
   a.identity.generation === b.identity.generation;
 
-export const staleCursorReport = (record: ComputerUseControl, report: ComputerUseCursorReport) => {
+export const staleCursorReport = (record: ComputerUseControl, report: AgentCursorReport) => {
   const previous = record.cursorReport;
   if (previous === undefined) return false;
   if (sameOwner(previous, report))
-    return report.identity.sequence <= previous.identity.sequence ||
+    return (
+      report.identity.sequence <= previous.identity.sequence ||
       ((previous.phase === "hidden" || previous.phase === "yielded") &&
-        report.phase !== "hidden" && report.phase !== "yielded");
+        report.phase !== "hidden" &&
+        report.phase !== "yielded")
+    );
   if (previous.phase === "hidden" || previous.phase === "yielded") return false;
   return report.identity.generation <= previous.identity.generation;
 };
@@ -161,7 +169,7 @@ const withCursor = <C extends ComputerUseControl>(record: C, cursor: Cursor): C 
   return (next === undefined ? rest : { ...rest, cursor: next }) as C;
 };
 
-const withReport = <C extends ComputerUseControl>(record: C, report: ComputerUseCursorReport): C => {
+const withReport = <C extends ComputerUseControl>(record: C, report: AgentCursorReport): C => {
   const cursor =
     report.phase !== "hidden" &&
     report.phase !== "yielded" &&
@@ -181,7 +189,8 @@ export const targeted = <C extends ComputerUseControl>(
   record: C,
   report: CursorTargetReport,
 ): C | undefined => {
-  if ("report" in report) return staleCursorReport(record, report.report) ? undefined : withReport(record, report.report);
+  if ("report" in report)
+    return staleCursorReport(record, report.report) ? undefined : withReport(record, report.report);
   if ("cursor" in report) return withCursor(record, report.cursor);
   if (record.target?.pid === report.pid && record.target.windowId === report.windowId) return;
   const { cursorReport: _report, ...rest } = record;

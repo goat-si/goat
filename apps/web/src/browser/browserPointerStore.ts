@@ -1,5 +1,5 @@
 import type {
-  ComputerUseCursorState,
+  AgentCursorSnapshot,
   DesktopPreviewCursorEvent,
   DesktopPreviewCursorStateEvent,
   DesktopPreviewPointerEvent,
@@ -8,24 +8,28 @@ import { create } from "zustand";
 
 interface BrowserPointerData {
   readonly byTabId: Record<string, DesktopPreviewPointerEvent>;
-  readonly ownerByTabId: Record<string, ComputerUseCursorState>;
+  readonly ownerByTabId: Record<string, AgentCursorSnapshot>;
   readonly detached: ReadonlySet<string>;
 }
 
-const sameOwner = (a: ComputerUseCursorState, b: ComputerUseCursorState) =>
+const sameOwner = (a: AgentCursorSnapshot, b: AgentCursorSnapshot) =>
   a.identity.environmentId === b.identity.environmentId &&
   a.identity.runId === b.identity.runId &&
   a.identity.turnId === b.identity.turnId &&
   a.identity.targetId === b.identity.targetId &&
   a.identity.generation === b.identity.generation;
 
-const newer = (previous: ComputerUseCursorState | undefined, next: ComputerUseCursorState) =>
+const newer = (previous: AgentCursorSnapshot | undefined, next: AgentCursorSnapshot) =>
   previous === undefined ||
   (sameOwner(previous, next)
     ? next.identity.sequence > previous.identity.sequence &&
-      !((previous.phase === "hidden" || previous.phase === "yielded") &&
-        next.phase !== "hidden" && next.phase !== "yielded")
-    : previous.phase === "hidden" || previous.phase === "yielded" ||
+      !(
+        (previous.phase === "hidden" || previous.phase === "yielded") &&
+        next.phase !== "hidden" &&
+        next.phase !== "yielded"
+      )
+    : previous.phase === "hidden" ||
+      previous.phase === "yielded" ||
       next.identity.generation > previous.identity.generation);
 
 const isCursorState = (event: DesktopPreviewCursorEvent): event is DesktopPreviewCursorStateEvent =>
@@ -88,14 +92,16 @@ export const useBrowserPointerStore = create<BrowserPointerStoreState>()((set) =
   ownerByTabId: {},
   detached: new Set(),
   apply: (event) => set((state) => reduceBrowserPointer(state, event)),
-  clear: (tabId) => set((state) => {
-    const { [tabId]: _removed, ...byTabId } = state.byTabId;
-    return { byTabId, detached: new Set(state.detached).add(tabId) };
-  }),
-  attach: (tabId) => set((state) => {
-    if (!state.detached.has(tabId)) return state;
-    const detached = new Set(state.detached);
-    detached.delete(tabId);
-    return { detached };
-  }),
+  clear: (tabId) =>
+    set((state) => {
+      const { [tabId]: _removed, ...byTabId } = state.byTabId;
+      return { byTabId, detached: new Set(state.detached).add(tabId) };
+    }),
+  attach: (tabId) =>
+    set((state) => {
+      if (!state.detached.has(tabId)) return state;
+      const detached = new Set(state.detached);
+      detached.delete(tabId);
+      return { detached };
+    }),
 }));

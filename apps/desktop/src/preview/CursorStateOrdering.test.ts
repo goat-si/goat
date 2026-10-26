@@ -1,12 +1,9 @@
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, type ComputerUseCursorState } from "@goat/contracts";
+import { EnvironmentId, type AgentCursorSnapshot } from "@goat/contracts";
 
 import { acceptsCursorState } from "./CursorStateOrdering.ts";
 
-const state = (
-  sequence: number,
-  phase: ComputerUseCursorState["phase"],
-): ComputerUseCursorState => ({
+const state = (sequence: number, phase: AgentCursorSnapshot["phase"]): AgentCursorSnapshot => ({
   identity: {
     environmentId: EnvironmentId.make("env"),
     runId: "run",

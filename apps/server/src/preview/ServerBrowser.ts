@@ -17,7 +17,7 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type BrowserProfile,
-  type ComputerUseCursorState,
+  type AgentCursorSnapshot,
   type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
   type PreviewAutomationDialogInput,
@@ -91,7 +91,13 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
-import type { EncoderWindow, Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTypes.ts";
+import type {
+  EncoderWindow,
+  Recording,
+  ServerDownload,
+  ServerTab,
+  ViewerState,
+} from "./ServerBrowserTypes.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
@@ -185,9 +191,9 @@ export type ServerBrowserViewerOutput =
       readonly x: number;
       readonly y: number;
       readonly sequence: number;
-      readonly cursor?: ComputerUseCursorState;
+      readonly cursor?: AgentCursorSnapshot;
     }
-  | { readonly _tag: "cursor-state"; readonly cursor: ComputerUseCursorState }
+  | { readonly _tag: "cursor-state"; readonly cursor: AgentCursorSnapshot }
   | {
       readonly _tag: "fileChooser";
       readonly id: string;
@@ -250,11 +256,13 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
-    readonly onAuthorityChange?: (listener: (change: {
-      readonly kind: "stop" | "private" | "takeover" | "handBack";
-      readonly threadId: string;
-      readonly tabId: string;
-    }) => void) => () => void;
+    readonly onAuthorityChange?: (
+      listener: (change: {
+        readonly kind: "stop" | "private" | "takeover" | "handBack";
+        readonly threadId: string;
+        readonly tabId: string;
+      }) => void,
+    ) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -267,7 +275,7 @@ export class ServerBrowser extends Context.Service<
     readonly cursorState?: (input: {
       readonly threadId: string;
       readonly tabId: string;
-      readonly cursor: ComputerUseCursorState;
+      readonly cursor: AgentCursorSnapshot;
     }) => Effect.Effect<boolean>;
   }
 >()("goat/preview/ServerBrowser") {}
@@ -323,11 +331,13 @@ const make = Effect.gen(function* () {
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
-  const authorityListeners = new Set<(change: {
-    kind: "stop" | "private" | "takeover" | "handBack";
-    threadId: string;
-    tabId: string;
-  }) => void>();
+  const authorityListeners = new Set<
+    (change: {
+      kind: "stop" | "private" | "takeover" | "handBack";
+      threadId: string;
+      tabId: string;
+    }) => void
+  >();
   const notifyAuthority = (change: {
     kind: "stop" | "private" | "takeover" | "handBack";
     threadId: string;
@@ -746,9 +756,13 @@ const make = Effect.gen(function* () {
       if (tab.control.generation !== observedGeneration) {
         observedGeneration = tab.control.generation;
         notifyAuthority({
-          kind: tab.control.isPrivate ? "private"
-            : tab.control.isAgentStopped ? "stop"
-              : tab.control.controller !== null ? "takeover" : "handBack",
+          kind: tab.control.isPrivate
+            ? "private"
+            : tab.control.isAgentStopped
+              ? "stop"
+              : tab.control.controller !== null
+                ? "takeover"
+                : "handBack",
           threadId: tab.threadId,
           tabId: tab.tabId,
         });
@@ -1519,8 +1533,11 @@ const make = Effect.gen(function* () {
   const assertScreenExpectation = (tab: ServerTab, request: PreviewAutomationRequest) => {
     const expected = request.screenExpectation;
     if (!expected) return;
-    if (!request.tabIdExplicit || request.tabId !== tab.tabId ||
-        expected.browserInstanceId !== SERVER_HOST_CLIENT_ID)
+    if (
+      !request.tabIdExplicit ||
+      request.tabId !== tab.tabId ||
+      expected.browserInstanceId !== SERVER_HOST_CLIENT_ID
+    )
       throw new BrowserControlInterrupted("Exact browser tab changed.");
     tab.control.assertObservedGeneration(expected.controlGeneration);
     if (originOf(tab.page.url()) !== expected.origin)
@@ -1636,9 +1653,10 @@ const make = Effect.gen(function* () {
     const input = request.input;
     switch (request.operation) {
       case "status": {
-        const tab = request.tabId === undefined
-          ? latestThreadTab(request.threadId, request.agentSessionId)
-          : tabs.get(tabKey(request.threadId, request.tabId));
+        const tab =
+          request.tabId === undefined
+            ? latestThreadTab(request.threadId, request.agentSessionId)
+            : tabs.get(tabKey(request.threadId, request.tabId));
         if (tab) assertScreenExpectation(tab, request);
         const status = await statusWithTitle(tab, request.agentSessionId);
         if (tab) assertScreenExpectation(tab, request);
@@ -1857,8 +1875,13 @@ const make = Effect.gen(function* () {
     assertScreenExpectation(tab, request);
     const actionGate = (): ServerBrowserPage.DispatchGate => {
       const base = gateFor(tab, request.screenExpectation?.controlGeneration);
-      return Object.assign(() => { assertScreenExpectation(tab, request); base(); },
-        base.linger ? { linger: base.linger } : {});
+      return Object.assign(
+        () => {
+          assertScreenExpectation(tab, request);
+          base();
+        },
+        base.linger ? { linger: base.linger } : {},
+      );
     };
     switch (request.operation) {
       case "back":
@@ -2031,9 +2054,11 @@ const make = Effect.gen(function* () {
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
       try: () => {
-        if (request.screenExpectation &&
-            (request.screenExpectation.connectionId !== connectionId ||
-             request.screenExpectation.browserInstanceId !== SERVER_HOST_CLIENT_ID))
+        if (
+          request.screenExpectation &&
+          (request.screenExpectation.connectionId !== connectionId ||
+            request.screenExpectation.browserInstanceId !== SERVER_HOST_CLIENT_ID)
+        )
           throw new BrowserControlInterrupted("Exact browser connection changed.");
         return answerCall(request.timeoutMs, (deadlineMs) =>
           runOperation(request, deadlineMs).finally(() => markUsed(request)),
@@ -2552,17 +2577,27 @@ const make = Effect.gen(function* () {
         else tab.control.resumeAgents();
         return true;
       }),
-    cursorState: (input) => Effect.sync(() => {
-      const tab = tabs.get(tabKey(input.threadId, input.tabId));
-      if (!tab) return false;
-      const terminal = input.cursor.phase === "hidden" || input.cursor.phase === "yielded";
-      if (!terminal && (tab.control.agentId === null || tab.control.isPrivate || tab.control.controller !== null))
-        return false;
-      for (const viewer of tab.viewers) viewer.push({ _tag: "cursor-state", cursor: input.cursor });
-      if (tab.desktop)
-        runFork(desktopChannel.cursorState?.({ threadId: tab.threadId, tabId: tab.tabId }, input.cursor) ?? Effect.void);
-      return true;
-    }),
+    cursorState: (input) =>
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(input.threadId, input.tabId));
+        if (!tab) return false;
+        const terminal = input.cursor.phase === "hidden" || input.cursor.phase === "yielded";
+        if (
+          !terminal &&
+          (tab.control.agentId === null || tab.control.isPrivate || tab.control.controller !== null)
+        )
+          return false;
+        for (const viewer of tab.viewers)
+          viewer.push({ _tag: "cursor-state", cursor: input.cursor });
+        if (tab.desktop)
+          runFork(
+            desktopChannel.cursorState?.(
+              { threadId: tab.threadId, tabId: tab.tabId },
+              input.cursor,
+            ) ?? Effect.void,
+          );
+        return true;
+      }),
   });
 });
 

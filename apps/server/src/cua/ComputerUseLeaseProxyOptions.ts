@@ -14,8 +14,8 @@ import type {
   ComputerUseOverlayCommand,
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
-  ComputerUseCursorLeaseUpdate,
-  ComputerUseCursorReport,
+  AgentCursorLeaseUpdate,
+  AgentCursorReport,
 } from "@goat/contracts";
 import { DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
@@ -191,7 +191,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
   readonly primitiveCancelled?: (requestId: string) => boolean;
   readonly onPrimitiveSettled?: (requestId: string) => void;
-  readonly cursorEvents?: Stream.Stream<ComputerUseCursorLeaseUpdate>;
+  readonly cursorEvents?: Stream.Stream<AgentCursorLeaseUpdate>;
   readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
   readonly onDriverStarted?: (current: {
     readonly connectionId: string;
@@ -246,7 +246,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
-  readonly onCursorReport?: (report: ComputerUseCursorReport) => Effect.Effect<boolean>;
+  readonly onCursorReport?: (report: AgentCursorReport) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

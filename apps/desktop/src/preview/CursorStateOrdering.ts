@@ -1,4 +1,4 @@
-import type { ComputerUseCursorState, DesktopPreviewCursorEvent } from "@goat/contracts";
+import type { AgentCursorSnapshot, DesktopPreviewCursorEvent } from "@goat/contracts";
 
 export type AgentPointer = {
   readonly key: { readonly threadId: string; readonly tabId: string };
@@ -8,14 +8,14 @@ export type AgentPointer = {
       readonly phase: "move" | "click";
       readonly x: number;
       readonly y: number;
-      readonly cursor?: ComputerUseCursorState;
+      readonly cursor?: AgentCursorSnapshot;
     }
-  | { readonly type: "cursor-state"; readonly cursor: ComputerUseCursorState }
+  | { readonly type: "cursor-state"; readonly cursor: AgentCursorSnapshot }
 );
 
 export function acceptsCursorState(
-  previous: ComputerUseCursorState | undefined,
-  next: ComputerUseCursorState,
+  previous: AgentCursorSnapshot | undefined,
+  next: AgentCursorSnapshot,
 ): boolean {
   if (previous === undefined) return true;
   const sameOwner =

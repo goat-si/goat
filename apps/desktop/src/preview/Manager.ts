@@ -3169,7 +3169,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   let pointerSequence = 0;
-  const cursorOwners = new Map<string, import("@goat/contracts").ComputerUseCursorState>();
+  const cursorOwners = new Map<string, import("@goat/contracts").AgentCursorSnapshot>();
   const emitAgentPointer = Effect.fn("PreviewManager.emitAgentPointer")(function* (
     pointer: AgentPointer,
   ) {

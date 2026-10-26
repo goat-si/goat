@@ -5,8 +5,8 @@ import type {
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
   ComputerUsePrimitiveCancel,
-  ComputerUseCursorLeaseUpdate,
-  ComputerUseCursorEvent,
+  AgentCursorLeaseUpdate,
+  AgentCursorEvent,
   ScreenRunError,
   ThreadId,
 } from "@goat/contracts";
@@ -48,9 +48,9 @@ interface Registration {
   readonly instanceId: string;
   readonly kind: "control" | "thread";
   readonly controlId?: string;
-  readonly queue: Queue.Queue<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>;
+  readonly queue: Queue.Queue<ComputerUsePrimitiveRequest | AgentCursorLeaseUpdate>;
   readonly cancellations: Queue.Queue<ComputerUsePrimitiveCancel>;
-  readonly cursors: Queue.Queue<ComputerUseCursorLeaseUpdate>;
+  readonly cursors: Queue.Queue<AgentCursorLeaseUpdate>;
   readonly controls: Map<string, Control>;
 }
 
@@ -113,7 +113,7 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
           readonly status: "registered";
           readonly registrationId: string;
           readonly requests: Stream.Stream<
-            ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate
+            ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | AgentCursorLeaseUpdate
           >;
         }
     >;
@@ -135,7 +135,7 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
     readonly cancel: (runId: string, turnId: string) => Effect.Effect<void>;
     readonly cursor: (input: {
       readonly threadId: ThreadId;
-      readonly event: ComputerUseCursorEvent;
+      readonly event: AgentCursorEvent;
     }) => Effect.Effect<boolean>;
   }
 >()("goat/cua/ComputerUsePrimitiveChannel") {}
@@ -292,11 +292,9 @@ export const make = Effect.gen(function* () {
       )
         return { status: "conflict" as const };
       const now = yield* Clock.currentTimeMillis;
-      const queue = yield* Queue.dropping<
-        ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate
-      >(16);
+      const queue = yield* Queue.dropping<ComputerUsePrimitiveRequest | AgentCursorLeaseUpdate>(16);
       const cancellations = yield* Queue.unbounded<ComputerUsePrimitiveCancel>();
-      const cursors = yield* Queue.sliding<ComputerUseCursorLeaseUpdate>(1);
+      const cursors = yield* Queue.sliding<AgentCursorLeaseUpdate>(1);
       const value = attachment(input, now);
       if (value === undefined) return { status: "unauthorized" as const };
       if (value.registration !== undefined) return { status: "conflict" as const };
@@ -350,7 +348,7 @@ export const make = Effect.gen(function* () {
       const registered = attachment?.registration;
       const binding = registered?.controls.get(current.controlId)?.binding;
       if (!registered || !binding) return false;
-      const update: ComputerUseCursorLeaseUpdate = {
+      const update: AgentCursorLeaseUpdate = {
         state: "cursor-state",
         controlId: current.controlId,
         connectionGeneration: binding.connectionId,

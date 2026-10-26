@@ -20,7 +20,7 @@ import {
   ComputerUseLeaseUpdate,
   ComputerUseLeaseThreadUpdate,
   type ComputerUsePrimitiveRequest,
-  type ComputerUseCursorLeaseUpdate,
+  type AgentCursorLeaseUpdate,
   type ComputerUsePrimitiveReply,
   COMPUTER_USE_PRIMITIVE_REPLY_ROUTE,
   COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE,
@@ -442,7 +442,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>();
     const threadUpdates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
     const primitiveRequests = yield* Queue.dropping<ComputerUsePrimitiveRequest, Cause.Done>(16);
-    const cursorEvents = yield* Queue.sliding<ComputerUseCursorLeaseUpdate, Cause.Done>(1);
+    const cursorEvents = yield* Queue.sliding<AgentCursorLeaseUpdate, Cause.Done>(1);
     const pendingPrimitives = new Set<string>();
     const cancelledPrimitives = new Set<string>();
     const earlyCancels = new Set<string>();

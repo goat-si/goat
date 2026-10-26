@@ -16,7 +16,7 @@ import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
-import type { ComputerUseCursorEvent } from "@goat/contracts";
+import type { AgentCursorEvent } from "@goat/contracts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const invocation = {
@@ -35,7 +35,7 @@ const invocation = {
 it.live(
   "a live cell host call publishes thinking for its bound target and hidden at finishTurn",
   () => {
-    const events: ComputerUseCursorEvent[] = [];
+    const events: AgentCursorEvent[] = [];
     const targetRef = {
       id: "target",
       kind: "tab" as const,

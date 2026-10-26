@@ -177,7 +177,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : undefined;
-  const publish = (event: import("@goat/contracts").ComputerUseCursorEvent) => {
+  const publish = (event: import("@goat/contracts").AgentCursorEvent) => {
     const targetId = event.identity.targetId;
     const route = routes.get(targetId);
     if (route === undefined || publisher === undefined) return;
