@@ -60,7 +60,7 @@ describe("mobile slash commands", () => {
     },
   );
 
-  it("still applies the T3 plan command for supported providers", () => {
+  it("still applies the GOAT plan command for supported providers", () => {
     const items = buildComposerSlashCommandItems({
       query: "plan",
       atMessageStart: true,

@@ -15,6 +15,7 @@ import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+import { META_KEEP_RULES, META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
 import {
   CONNECT_CONTRAST_RULES,
@@ -37,8 +38,6 @@ export const isExempt = (path: string): boolean =>
   // The relay is GOAT Connect's; its migrations are snapshots upstream also edits.
   (path.startsWith("infra/") &&
     (!path.startsWith("infra/relay/") || path.startsWith("infra/relay/migrations/"))) ||
-  path.startsWith(".devcontainer/") ||
-  path.startsWith(".github/ISSUE_TEMPLATE/") ||
   path === ".github/TRIAGE_EXEMPTIONS.td" ||
   path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
@@ -502,6 +501,8 @@ export const TEXT_RULES: readonly TextRule[] = [
   // Last, so they see text the env, package and identifier rules already renamed.
   ...LEFTOVER_TEXT_RULES,
   ...OWNER_TEXT_RULES,
+  ...META_TEXT_RULES,
+  ...TITLE_TEXT_RULES,
   ...SAMPLE_TEXT_RULES,
 ];
 
@@ -550,6 +551,7 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  ...META_KEEP_RULES,
   ...RELAY_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
   ...OWNER_KEEP_RULES,

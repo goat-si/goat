@@ -658,7 +658,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
 
   const hostEnvironment = yield* HostProcess.Environment;
   // A dev server started inside a worktree defaults to that worktree's own
-  // (gitignored) `.t3` — see @goat/shared/devHome for why this must
+  // (gitignored) `.goat` — see @goat/shared/devHome for why this must
   // outrank an ambient GOAT_HOME. `--home-dir` still wins.
   const worktreeHome = yield* resolveWorktreeHome(yield* HostProcess.WorkingDirectory);
   // Trim before choosing: `--home-dir ""` is not a selection, and treating it
@@ -844,7 +844,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   goatHome: Flag.String("home-dir").pipe(
     Flag.withDescription(
-      "Explicit GOAT data directory; runtime state is stored under userdata (equivalent to GOAT_HOME). Inside a git worktree this defaults to that worktree's own .t3 so dev state stays off the shared home.",
+      "Explicit GOAT data directory; runtime state is stored under userdata (equivalent to GOAT_HOME). Inside a git worktree this defaults to that worktree's own .goat so dev state stays off the shared home.",
     ),
     Flag.optional,
     Flag.map(Option.getOrUndefined),

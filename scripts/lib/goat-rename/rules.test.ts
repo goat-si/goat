@@ -239,12 +239,14 @@ describe("wp9 compatibility scopes", () => {
       "apps/marketing/a.ts",
       "infra/ingest/a.ts",
       "infra/relay/migrations/0001_init.sql",
-      ".devcontainer/devcontainer.json",
       "assets/icon.svg",
     ]) {
       expect(isExempt(path)).toBe(true);
     }
     expect(isExempt("apps/server/src/a.ts")).toBe(false);
+    // GOAT runs these, so the rules rewrite them and the check reads them.
+    expect(isExempt(".devcontainer/devcontainer.json")).toBe(false);
+    expect(isExempt(".github/ISSUE_TEMPLATE/config.yml")).toBe(false);
   });
 
   it("keeps legacy test input only inside test scopes", () => {
@@ -463,14 +465,6 @@ const keptVisibleCopy = [
   [
     "apps/server/scripts/acp-mock-agent.ts",
     '            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],',
-  ],
-  [
-    "apps/server/scripts/threadTitleEvaluationCases.ts",
-    '    request: "How can we improve title generation in T3 Code?",',
-  ],
-  [
-    "apps/server/scripts/threadTitleEvaluationCases.ts",
-    '      { role: "user", text: "How can we improve title gen further in T3 Code?" },',
   ],
   [
     "apps/server/src/cloud/bootService.ts",
