@@ -38,6 +38,9 @@ describe("GOAT meta", () => {
     expect(apply(path, renamed)).toBe(renamed);
     expect(findResidue(path, renamed, KEEP_RULES)).toEqual([]);
     expect(apply(".devcontainer/on-create.sh", "T3 Code devcontainer")).toBe("GOAT devcontainer");
+    expect(apply(".devcontainer/on-create.sh", "optional: enable T3 Connect cloud features")).toBe(
+      "optional: upstream Connect identifiers (unused by GOAT)",
+    );
   });
 
   it("points issue forms and contribution links at GOAT", () => {
@@ -76,11 +79,20 @@ describe("GOAT meta", () => {
   });
 
   it("says in .env.example that the upstream values enable nothing in GOAT", () => {
-    const upstream =
-      "# Optional: T3 Connect source builds\n# `cp .env.example .env` enables T3 Connect against the production deployment.";
+    const upstream = [
+      "# Optional: T3 Connect source builds",
+      "# `cp .env.example .env` enables T3 Connect against the production deployment.",
+      "# These are the same public identifiers baked into official release builds, not",
+      "# secrets. Remove or comment them out to build with cloud features disabled.",
+    ].join("\n");
     const renamed = apply(".env.example", upstream);
     expect(renamed).toBe(
-      "# Optional: public T3 Connect configuration from upstream's production deployment.\n# GOAT Connect is off in every build, so copying this file to .env enables nothing yet.",
+      [
+        "# Optional: public T3 Connect configuration from upstream's production deployment.",
+        "# GOAT Connect is off in every build, so copying this file to .env enables nothing yet.",
+        "# These public identifiers are not secrets. They remain for upstream compatibility;",
+        "# GOAT does not use them to enable cloud features.",
+      ].join("\n"),
     );
     expect(apply(".env.example", renamed)).toBe(renamed);
     expect(findResidue(".env.example", renamed, KEEP_RULES)).toEqual([]);

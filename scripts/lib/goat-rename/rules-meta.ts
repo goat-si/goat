@@ -66,7 +66,7 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     "devcontainer-connect-notice",
     inDevcontainer,
     /optional: enable T3 Connect cloud features/g,
-    "optional: Connect config (GOAT Connect is coming soon)",
+    "optional: upstream Connect identifiers (unused by GOAT)",
   ),
   // Issue forms and contribution links that GitHub shows on GOAT's own repository.
   rule("issue-triage-command", inIssueTemplates, /\b(?:npx )?t3 (?=triage\b)/g, "goat "),
@@ -88,6 +88,18 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     at(".env.example"),
     /^# `cp \.env\.example \.env` enables T3 Connect against the production deployment\.$/g,
     "# GOAT Connect is off in every build, so copying this file to .env enables nothing yet.",
+  ),
+  rule(
+    "env-example-identifiers",
+    at(".env.example"),
+    /^# These are the same public identifiers baked into official release builds, not$/g,
+    "# These public identifiers are not secrets. They remain for upstream compatibility;",
+  ),
+  rule(
+    "env-example-disabled",
+    at(".env.example"),
+    /^# secrets\. Remove or comment them out to build with cloud features disabled\.$/g,
+    "# GOAT does not use them to enable cloud features.",
   ),
   // Comments and docs about GOAT's own project file, launcher, homes and runtime paths.
   rule(
