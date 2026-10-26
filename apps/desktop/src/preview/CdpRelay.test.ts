@@ -146,12 +146,222 @@ describe("CDP relay extra sessions", () => {
     const extra = (written.find((m) => m["id"] === 3)!["result"] as { sessionId: string })
       .sessionId;
     expect(written.find((m) => m["id"] === 4)).toHaveProperty("error");
-    relay.receive(JSON.stringify({ id: 5, method: "Page.startScreencast", sessionId: extra }));
+    relay.receive(JSON.stringify({ id: 5, method: "DOM.enable", sessionId: extra }));
     await settle();
-    expect(send).toHaveBeenLastCalledWith("Page.startScreencast", {}, undefined);
+    expect(send).toHaveBeenLastCalledWith("DOM.enable", {}, undefined);
     written.length = 0;
-    relay.event("Page.screencastFrame", { data: "x" }, undefined);
+    relay.event("Page.loadEventFired", { timestamp: 1 }, undefined);
     expect(written.map((m) => m["sessionId"])).toEqual(["goat-preview-page", extra]);
+  });
+});
+
+/** Opens `count` extra page sessions, as Playwright's `newCDPSession` does. */
+const openPageSessions = async (
+  relay: ReturnType<typeof createCdpRelayConnection>,
+  written: Array<Record<string, unknown>>,
+  count: number,
+) => {
+  relay.receive(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: {} }));
+  relay.receive(JSON.stringify({ id: 2, method: "Target.attachToBrowserTarget" }));
+  await settle();
+  const browser = (written.find((m) => m["id"] === 2)!["result"] as { sessionId: string })
+    .sessionId;
+  const ids = Array.from({ length: count }, (_, index) => 100 + index);
+  for (const id of ids)
+    relay.receive(
+      JSON.stringify({
+        id,
+        method: "Target.attachToTarget",
+        params: { targetId: "GUEST-TARGET", flatten: true },
+        sessionId: browser,
+      }),
+    );
+  await settle();
+  const pages = ids.map(
+    (id) => (written.find((m) => m["id"] === id)!["result"] as { sessionId: string }).sessionId,
+  );
+  return { browser, pages };
+};
+
+const makeScreencastRelay = async (count: number) => {
+  const send = vi.fn(async (_method: string, _params: Record<string, unknown>) => ({}));
+  const written: Array<Record<string, unknown>> = [];
+  const relay = createCdpRelayConnection(makeTarget(send), (raw) => written.push(JSON.parse(raw)));
+  const { browser, pages } = await openPageSessions(relay, written, count);
+  let nextId = 1000;
+  const command = async (
+    method: string,
+    sessionId: string,
+    params: Record<string, unknown> = {},
+  ) => {
+    relay.receive(JSON.stringify({ id: ++nextId, method, params, sessionId }));
+    await settle();
+  };
+  /** The screencast commands the page received, in order. */
+  const screencast = () =>
+    send.mock.calls
+      .filter(([method]) => method.startsWith("Page.") && method.includes("creencast"))
+      .map(([method, params]) => [method, params]);
+  /** Sessions a frame event reached. */
+  const frameTo = (frame: Record<string, unknown>) => {
+    written.length = 0;
+    relay.event("Page.screencastFrame", frame, "");
+    return written.map((message) => message["sessionId"]);
+  };
+  return { relay, send, written, browser, pages, command, screencast, frameTo };
+};
+
+const small = { format: "jpeg", quality: 60, maxWidth: 800, maxHeight: 600 };
+const large = { format: "jpeg", quality: 80, maxWidth: 1600, maxHeight: 1200 };
+
+describe("CDP relay screencasts", () => {
+  it("keeps one screencast at the largest size while any viewer wants it", async () => {
+    const { pages, command, screencast, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    await command("Page.startScreencast", second, large);
+    expect(screencast()).toEqual([
+      ["Page.startScreencast", small],
+      ["Page.stopScreencast", {}],
+      ["Page.startScreencast", large],
+    ]);
+
+    await command("Page.stopScreencast", first);
+    expect(screencast()).toHaveLength(3);
+    expect(frameTo({ sessionId: 2, data: "x" })).toEqual([second]);
+
+    await command("Page.stopScreencast", second);
+    expect(screencast().at(-1)).toEqual(["Page.stopScreencast", {}]);
+    expect(frameTo({ sessionId: 2, data: "x" })).toEqual([]);
+  });
+
+  it("shrinks to the remaining viewers' size when the largest one leaves", async () => {
+    const { pages, command, screencast } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    await command("Page.startScreencast", second, large);
+    await command("Page.stopScreencast", second);
+    expect(screencast().slice(-2)).toEqual([
+      ["Page.stopScreencast", {}],
+      ["Page.startScreencast", small],
+    ]);
+  });
+
+  it("acks a frame to the page only once every viewer has", async () => {
+    const { pages, command, send, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    await command("Page.startScreencast", second, small);
+    const acks = () => send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck");
+
+    expect(frameTo({ sessionId: 4, data: "x" })).toEqual([first, second]);
+    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    expect(acks()).toEqual([]);
+    await command("Page.screencastFrameAck", second, { sessionId: 4 });
+    expect(acks()).toEqual([["Page.screencastFrameAck", { sessionId: 4 }, undefined]]);
+    // Chromium counts acks per screencast, so a surplus one would let frames outrun the viewers.
+    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    expect(acks()).toHaveLength(1);
+  });
+
+  it("releases the frames a viewer owed when it detaches without stopping", async () => {
+    const { pages, browser, command, send, screencast, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    await command("Page.startScreencast", second, small);
+    frameTo({ sessionId: 4, data: "x" });
+    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    await command("Target.detachFromTarget", browser, { sessionId: second });
+    expect(send).toHaveBeenCalledWith("Page.screencastFrameAck", { sessionId: 4 }, undefined);
+    await command("Target.detachFromTarget", browser, { sessionId: first });
+    expect(screencast().at(-1)).toEqual(["Page.stopScreencast", {}]);
+  });
+
+  it("acks nothing for a frame from a screencast that has since restarted", async () => {
+    const { pages, command, send, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    const acks = () => send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck");
+    await command("Page.startScreencast", first, small);
+    frameTo({ sessionId: 4, data: "old" });
+    await command("Page.startScreencast", second, large);
+    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    expect(acks()).toEqual([]);
+
+    expect(frameTo({ sessionId: 5, data: "new" })).toEqual([first, second]);
+    await command("Page.screencastFrameAck", first, { sessionId: 5 });
+    await command("Page.screencastFrameAck", second, { sessionId: 5 });
+    expect(acks()).toEqual([["Page.screencastFrameAck", { sessionId: 5 }, undefined]]);
+  });
+
+  it("releases the frame a viewer owed when it stops", async () => {
+    const { pages, command, send, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    await command("Page.startScreencast", second, small);
+    frameTo({ sessionId: 4, data: "x" });
+    await command("Page.screencastFrameAck", second, { sessionId: 4 });
+    await command("Page.stopScreencast", first);
+    expect(send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck")).toEqual([
+      ["Page.screencastFrameAck", { sessionId: 4 }, undefined],
+    ]);
+  });
+
+  it("keeps the other viewers' screencast when a larger start fails", async () => {
+    const { pages, command, send, written, screencast, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    send.mockImplementation(async (method, params) => {
+      if (method === "Page.startScreencast" && params["maxWidth"] === large.maxWidth)
+        throw new Error("Screencast refused");
+      return {};
+    });
+    await command("Page.startScreencast", second, large);
+    expect(written.at(-1)).toEqual({
+      id: expect.any(Number),
+      error: expect.objectContaining({ message: "Screencast refused" }),
+      sessionId: second,
+    });
+    expect(screencast().slice(-3)).toEqual([
+      ["Page.stopScreencast", {}],
+      ["Page.startScreencast", large],
+      ["Page.startScreencast", small],
+    ]);
+    expect(frameTo({ sessionId: 6, data: "x" })).toEqual([first]);
+  });
+
+  it("keeps the acks owed for a frame that beats its start's reply", async () => {
+    const { pages, command, send, frameTo } = await makeScreencastRelay(1);
+    let replyToStart: (value: {}) => void = () => {};
+    send.mockImplementationOnce(() => new Promise<{}>((resolve) => (replyToStart = resolve)));
+    await command("Page.startScreencast", pages[0]!, small);
+    expect(frameTo({ sessionId: 1, data: "x" })).toEqual([pages[0]]);
+    replyToStart({});
+    await settle();
+    await command("Page.screencastFrameAck", pages[0]!, { sessionId: 1 });
+    expect(send).toHaveBeenLastCalledWith("Page.screencastFrameAck", { sessionId: 1 }, undefined);
+  });
+
+  it("restarts the remaining viewers' screencast on their next command after a refused restart", async () => {
+    const { pages, command, send, screencast, frameTo } = await makeScreencastRelay(2);
+    const [first, second] = pages as [string, string];
+    await command("Page.startScreencast", first, small);
+    send.mockImplementation(async (method) => {
+      if (method === "Page.startScreencast") throw new Error("Screencast refused");
+      return {};
+    });
+    await command("Page.startScreencast", second, large);
+    expect(frameTo({ sessionId: 2, data: "x" })).toEqual([first]);
+    send.mockImplementation(async () => ({}));
+    await command("Page.startScreencast", first, small);
+    expect(screencast().at(-1)).toEqual(["Page.startScreencast", small]);
+  });
+
+  it("stops the page's screencast when the relay closes", async () => {
+    const { relay, pages, command, screencast } = await makeScreencastRelay(1);
+    await command("Page.startScreencast", pages[0]!, small);
+    relay.close();
+    await settle();
+    expect(screencast().at(-1)).toEqual(["Page.stopScreencast", {}]);
   });
 });
 
