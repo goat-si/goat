@@ -9,6 +9,7 @@ import {
   DEFAULT_HOST_PRESSURE_SETTINGS,
   FLEET_LOCAL_HOST_KEY,
   type HostCapacitySnapshot,
+  type HostDiskUsage,
   type HostPlacementCandidate,
   type HostPlacementRanking,
   type HostPlacementRequirements,
@@ -110,6 +111,37 @@ export const diskOnlySample = (sample: PressureSample): PressureSample => ({
   diskPath: sample.diskPath,
   eventLoopDelayMs: null,
 });
+
+/**
+ * Of the volumes GOAT fills (its home, and worktree folders a person moved to another drive), the
+ * one the disk level comes from: the highest level on these thresholds, the first one on a tie.
+ */
+export function mostPressedDisk(
+  disks: ReadonlyArray<HostDiskUsage>,
+  settings: ResolvedPressureSettings,
+): HostDiskUsage | null {
+  let chosen: HostDiskUsage | null = null;
+  let rank = -1;
+  for (const disk of disks) {
+    const { level } = classify(
+      {
+        loadPerCore: null,
+        cpuUtilization: null,
+        memoryFreeRatio: null,
+        diskAvailableBytes: disk.availableBytes,
+        diskTotalBytes: disk.totalBytes,
+        diskPath: disk.path,
+        eventLoopDelayMs: null,
+      },
+      settings,
+    );
+    if (RANK[level] > rank) {
+      chosen = disk;
+      rank = RANK[level];
+    }
+  }
+  return chosen;
+}
 
 /**
  * Free bytes at or below which a disk is at a level: under both the GiB limit and the share of

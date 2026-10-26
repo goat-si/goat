@@ -87,6 +87,7 @@ export const layer = (tempRoot: string) =>
         }),
         Layer.succeed(HostResources.HostResources, {
           read: Effect.succeed({ disk: null } as unknown as HostCapacitySnapshot),
+          diskAt: () => Effect.succeed(null),
         }),
         ProcessRunner.layer,
       ),

@@ -1,11 +1,16 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import type { HostCapacitySnapshot, HostDiskUsage } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerConfig from "../../config.ts";
+import * as HostResources from "../../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as HostPressureMonitor from "./HostPressureMonitor.ts";
 import type { PressureSample } from "./pressureModel.ts";
@@ -98,4 +103,59 @@ describe("HostPressureMonitor", () => {
       });
     }).pipe(Effect.provide(layer(samples)));
   });
+
+  it.effect(
+    "takes the disk level from a worktrees folder on a fuller volume than the GOAT home",
+    () =>
+      Effect.gen(function* () {
+        const GIB = 1024 ** 3;
+        const fs = yield* FileSystem.FileSystem;
+        // Settings > Storage > Worktree location on another drive, such as a Dev Drive.
+        const worktrees = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "pressure-worktrees-" }),
+        );
+        const home: HostDiskUsage = {
+          path: "/goat-home",
+          availableBytes: 900 * GIB,
+          totalBytes: 1000 * GIB,
+        };
+        const fuller: HostDiskUsage = {
+          path: worktrees,
+          availableBytes: 20 * GIB,
+          totalBytes: 1000 * GIB,
+        };
+        const snapshot: HostCapacitySnapshot = {
+          sampledAt: 0,
+          cpuUtilization: 0.1,
+          cpuCount: 8,
+          availableMemoryBytes: 8 * GIB,
+          totalMemoryBytes: 16 * GIB,
+          loadAvg: null,
+          disk: home,
+        };
+        const live = HostPressureMonitor.layer.pipe(
+          Layer.provide(
+            Layer.mock(HostResources.HostResources)({
+              read: Effect.succeed(snapshot),
+              diskAt: (path) => Effect.succeed(path === worktrees ? fuller : home),
+            }),
+          ),
+          Layer.provide(
+            ServerSettings.ServerSettingsService.layerTest({ worktreesDirectory: worktrees }),
+          ),
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "pressure-monitor-" })),
+          Layer.provide(NodeServices.layer),
+        );
+        const disk = yield* Effect.gen(function* () {
+          const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+          yield* every30s(7);
+          return yield* monitor.disk.pipe(Stream.runHead);
+        }).pipe(Effect.provide(live));
+        expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
+          level: "elevated",
+          path: worktrees,
+          availableBytes: 20 * GIB,
+        });
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

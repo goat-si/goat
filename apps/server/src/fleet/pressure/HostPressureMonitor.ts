@@ -1,19 +1,25 @@
 import type { HostDiskPressure, HostPressure } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
+import * as ServerConfig from "../../config.ts";
 import { EventLoopMonitor } from "../../observability/EventLoopMonitor.ts";
 import * as HostResources from "../../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { managedWorktreesDirectories } from "../../worktreesDirectory.ts";
 import {
   diskOnlySample,
   initialPressureState,
+  mostPressedDisk,
   resolvePressureSettings,
   sampleFromCapacity,
   stepPressure,
@@ -114,10 +120,20 @@ export const make = Effect.fn("HostPressureMonitor.make")(function* (
   });
 });
 
-/** Host metrics plus the event-loop stall recorded since the previous reading. */
+/**
+ * Host metrics plus the event-loop stall recorded since the previous reading. The disk is the
+ * most pressed of GOAT's home volume and the volumes of its worktree folders, which Settings can
+ * put on another drive.
+ */
 const liveRead = Effect.gen(function* () {
   const resources = yield* HostResources.HostResources;
   const loop = yield* EventLoopMonitor;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const config = yield* ServerConfig.ServerConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
+  const platform = yield* HostProcess.Platform;
   const seenStallAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   // @effect-diagnostics-next-line returnEffectInGen:off - the read effect is the result.
   return Effect.gen(function* () {
@@ -125,7 +141,25 @@ const liveRead = Effect.gen(function* () {
     const stall = yield* loop.latestStall;
     const fresh = stall !== undefined && stall.atMs > (yield* Ref.get(seenStallAt));
     if (stall !== undefined) yield* Ref.set(seenStallAt, stall.atMs);
-    return sampleFromCapacity(snapshot, fresh ? stall.delayMs : null);
+    const settings = yield* settingsService.getSettings.pipe(Effect.option);
+    const disks = snapshot.disk === null ? [] : [snapshot.disk];
+    if (settings._tag === "Some")
+      for (const folder of managedWorktreesDirectories(
+        settings.value,
+        config.worktreesDir,
+        path,
+        home,
+        platform,
+      )) {
+        if (!(yield* fs.exists(folder).pipe(Effect.orElseSucceed(() => false)))) continue;
+        const disk = yield* resources.diskAt(folder);
+        if (disk !== null) disks.push(disk);
+      }
+    const disk = mostPressedDisk(
+      disks,
+      resolvePressureSettings(settings._tag === "Some" ? settings.value.fleet.pressure : undefined),
+    );
+    return sampleFromCapacity({ ...snapshot, disk }, fresh ? stall.delayMs : null);
   });
 });
 
