@@ -434,7 +434,7 @@ const nodeSnapshot = (config: MemoryImportReaderConfig, input: SnapshotOperation
               total = Buffer.byteLength(input.config),
               objectBytes = 0,
               sourceBytes = 0;
-            const files = (result.files = []);
+            const files: NonNullable<typeof result.files> = (result.files = []);
             const walk = async (
               parent: string,
               out: string,

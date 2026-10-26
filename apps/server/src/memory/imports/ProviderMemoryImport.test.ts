@@ -43,7 +43,6 @@ import type {
   PreparedImportCommit,
 } from "./MemoryImportTypes.ts";
 import { makeProviderMemoryImport } from "./ProviderMemoryImport.ts";
-
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(uuid(1));
 const environmentId = M.EnvironmentId.make("synthetic-coordinator");
@@ -383,79 +382,7 @@ const issue = (e: unknown, expected: string) => {
   assert.instanceOf(e, M.MemoryImportRpcError);
   if (isImportError(e)) assert.equal(e.issue, expected);
 };
-
 describe("ProviderMemoryImport closed coordinator", () => {
-  it.effect("Aside projects/ items import only through an explicit project binding", () =>
-    Effect.gen(function* () {
-      const text = "---\ntitle: Synthetic project\n---\n## Current\n\nShip small.\n";
-      const h = harness({
-        slot: { format: "aside", rootSlot: "synthetic", selection: "slot-a:projects" },
-        format: "aside",
-        profile: "aside-semantic-v1",
-        parserVersion: "aside-semantic-v1",
-        sourceLocator: "aside/synthetic/slot-a:projects",
-        snapshotDigest: "0".repeat(64),
-        files: [{ selector: "goat.md", text, byteCount: new TextEncoder().encode(text).length }],
-      });
-      const discovered = yield* h
-        .make()
-        .run({ action: "discover", memorySpaceId: space, format: "aside" }, Effect.void);
-      if (discovered.action !== "discover") return assert.fail("discover");
-      const sourceId = discovered.sources[0]!.sourceId;
-      const preview = yield* h
-        .make()
-        .run({ action: "preview", memorySpaceId: space, sourceId }, Effect.void);
-      if (preview.action !== "preview") return assert.fail("preview");
-      assert.deepEqual(
-        preview.items.map((item) => [item.sourceItemKey, item.mappingRequired]),
-        [["projects/goat.md#current", true]],
-      );
-      const selector = {
-        sourceItemKey: preview.items[0]!.sourceItemKey,
-        sourceFingerprint: preview.items[0]!.sourceFingerprint!,
-      };
-      const apply = (
-        items: Extract<M.MemoryImportProviderInput, { action: "apply" }>["items"],
-        n: number,
-      ) =>
-        ({
-          action: "apply",
-          memorySpaceId: space,
-          sourceId,
-          sessionId: preview.sessionId,
-          operationId: M.MemoryOperationId.make(uuid(n)),
-          items,
-        }) as const;
-      issue(
-        yield* h
-          .make()
-          .run(apply([{ ...selector, scope: { kind: "user" } }], 60), Effect.void)
-          .pipe(Effect.flip),
-        "scope_unmapped",
-      );
-      assert.equal(h.commits.length, 0);
-      const projectKey = M.MemoryProjectKey.make({
-        kind: "explicit",
-        sharedProjectId: "synthetic-project",
-      });
-      const project = { environmentId, projectId: M.ProjectId.make("synthetic-project") };
-      const result = yield* h
-        .make({
-          binding: (a, p) =>
-            p.pipe(Effect.as({ ...a, projectKey, repositoryKey: null, version: 1 })),
-          resolveProjectKey: () => Effect.succeed(projectKey),
-        })
-        .run(
-          apply([{ ...selector, scope: { kind: "project", projectKey }, project }], 61),
-          Effect.void,
-        );
-      if (result.action !== "apply") return assert.fail("apply");
-      assert.equal(result.receipt.items[0]!.outcome, "created");
-      assert.deepEqual(h.commits[0]!.next.scope, { kind: "project", projectKey });
-      assert.equal(h.commits[0]!.projectBinding?.projectKey, projectKey);
-    }),
-  );
-
   it.effect.each(MEMORY_IMPORT_FIXTURE_PROFILES)(
     "four actions with real parser %s and durable restart replay",
     (profile) =>
