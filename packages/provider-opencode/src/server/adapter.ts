@@ -87,7 +87,6 @@ import {
   openCodeToolTurnItem,
 } from "./toolItems.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
-
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
 export const OPENCODE_SDK_PROTOCOL = "opencode-sdk.sse" as const;

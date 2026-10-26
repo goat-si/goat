@@ -18,7 +18,10 @@ import { type McpSchema, Tool } from "effect/ai";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { serveEnforcingCatalogOverHttp, toolkits as standardToolkits } from "./agentSurface.testkit.ts";
+import {
+  serveEnforcingCatalogOverHttp,
+  toolkits as standardToolkits,
+} from "./agentSurface.testkit.ts";
 import { ScreenToolkit } from "./toolkits/screen/tools.ts";
 
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -30,6 +33,15 @@ const CALLER = ThreadId.make("thread:availability-caller");
 const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
 const resources = [...new Set(entries.map((entry) => entry.resource))];
 const NOT_SERVED = "This GOAT server does not serve it.";
+
+it("withholds goat_screen_run from an outside client before reporting surface availability", () => {
+  const entry = agentSurfaceRegistry["surface.screen_run"];
+  expect(availability(entry, callers.outside, true)).toEqual({
+    now: false,
+    reason: "Needs an agent running inside a GOAT thread.",
+  });
+  expect(availability(entry, callers.thread, true)).toEqual({ now: true });
+});
 
 const callers: Readonly<Record<"thread" | "outside", McpInvocationScope>> = {
   thread: {

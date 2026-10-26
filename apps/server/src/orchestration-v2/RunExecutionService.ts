@@ -1,6 +1,6 @@
 import { continuationOrigin } from "./ContinuationChain.ts";
 import { runTurnCapabilities } from "./TurnCapabilities.ts";
-import { screenBindingHintsFromOrigin } from "@goat/shared/turnCapabilities";
+import { runScreenBindingHints } from "./McpPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
@@ -598,18 +598,10 @@ export function runMemoryPrepareInput(input: {
 export const runPrepareInput = (
   input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnCapabilities>[0],
 ) => {
-  const origin = continuationOrigin(input);
   return {
     ...runMemoryPrepareInput(input),
     turnCapabilities: runTurnCapabilities(input),
-    ...(origin === undefined
-      ? {}
-      : {
-          screenBindingHints: screenBindingHintsFromOrigin({
-            text: origin.message.text,
-            records: origin.message.context?.records ?? [],
-          }),
-        }),
+    ...runScreenBindingHints(input),
   };
 };
 

@@ -5,7 +5,8 @@ import type { ScreenHostContext, ScreenHostDispatcher } from "./ScreenHostBridge
 const unavailable = (kind: "app" | "tab"): ScreenRunError => ({
   code: "unavailable",
   effectStarted: false,
-  nextStep: kind === "app" ? "Start desktop control and try again." : "Open a preview host and try again.",
+  nextStep:
+    kind === "app" ? "Start desktop control and try again." : "Open a preview host and try again.",
 });
 
 export const createScreenDispatchRouter = (hosts: {
@@ -26,13 +27,16 @@ export const createScreenDispatchRouter = (hosts: {
     return availability;
   }),
   dispatch: (call: ScreenHostCall, context: ScreenHostContext) => {
-    const kind = call.targetRef?.kind ?? (
-      call.method === "list_apps" || call.method === "list_windows" || call.method === "bind_app"
+    const kind =
+      call.targetRef?.kind ??
+      (call.method === "list_apps" ||
+      call.method === "list_windows" ||
+      call.method === "bind_app" ||
+      call.method === "launch_app"
         ? "app"
         : call.method === "list_tabs" || call.method === "bind_tab" || call.method === "open_tab"
           ? "tab"
-          : undefined
-    );
+          : undefined);
     if (kind === undefined) return Effect.fail({ ...unavailable("app"), code: "target_missing" });
     const host = kind === "app" ? hosts.app : hosts.tab;
     return host ? host.dispatch(call, context) : Effect.fail(unavailable(kind));

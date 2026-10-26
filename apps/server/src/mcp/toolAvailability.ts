@@ -76,9 +76,9 @@ export const availability = (
   if (!served) return { now: false, reason: "This GOAT server does not serve it." };
   if (entry.resource === "computer_use" && host.computerUseFailure !== undefined)
     return { now: false, reason: host.computerUseFailure };
-  if (entry.resource === "surface") return { now: true };
   if (entry.requires === "thread" && scope.thread === undefined)
     return { now: false, reason: "Needs an agent running inside a GOAT thread." };
+  if (entry.resource === "surface") return { now: true };
   if (entry.requires === "client" && scope.thread !== undefined)
     return { now: false, reason: "Only an outside MCP client can call it." };
   if (entry.effect !== "read" && scope.client?.access === "read-only")

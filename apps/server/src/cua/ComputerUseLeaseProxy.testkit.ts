@@ -117,6 +117,7 @@ export const harness = Effect.fn(function* (
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
     readonly driverCutoffGate?: Deferred.Deferred<void>;
+    readonly primitiveCancelled?: (requestId: string) => boolean;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
     readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
     /** Decorates each line for the provider, as the CLI's app guide does. */
@@ -181,6 +182,9 @@ export const harness = Effect.fn(function* (
     bundleIds: true,
     input: Stream.fromQueue(input),
     primitiveRequests: Stream.fromQueue(primitiveInput),
+    ...(options.primitiveCancelled === undefined
+      ? {}
+      : { primitiveCancelled: options.primitiveCancelled }),
     primitiveReply: (reply) => Queue.offer(primitiveOutput, reply).pipe(Effect.asVoid),
     onDriverStarted: (current) => Queue.offer(driverStarted, current).pipe(Effect.asVoid),
     onDriverCutoff: (current) =>

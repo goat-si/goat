@@ -169,7 +169,8 @@ designated requirement, never a pid or path alone. The driver would remain the h
 `goat_screen_run` executes one bounded JavaScript cell in the server-owned
 `apps/server/src/screenCode/` service. The child QuickJS guest has GOAT's `screen` Target API,
 without Node, filesystem, process, environment, arbitrary network or page-script access. A live
-turn can run later cells with computation values intact; reset clears those values, not a tab,
+turn can run later cells with computation values intact while its child remains live. An explicit
+reset clears those values, not a tab,
 app, grant or approval. Process and WASM limits bound accidental guest work, but are not an OS
 sandbox against same-user code.
 
@@ -179,10 +180,12 @@ before dispatch. A preview tile gives no authority to a cell. A tab mention is a
 not a grant. A user tab must be claimed for input; turn cleanup releases that claim without
 closing the tab. Temporary agent tabs close unless kept or handed over.
 
-The lifecycle contract requires Stop, takeover, private mode, lease expiry and turn end to fence
+Stop, takeover, private mode, lease expiry, a new user message, turn end, and a cell failure that
+closes the child discard computation values. The lifecycle contract requires those events to fence
 later effects. A dispatched call whose result is lost or times out has an unknown outcome; another
-cell must observe again before deciding what to do. The cell never replays that input. Verify these
-cutoffs after the concurrent lifecycle integration. For user-facing controls, see
+cell must observe again before deciding what to do. The cell never replays that input. At most four
+screen-code children can run on one host; a fifth request receives `live_children_limit` until a
+slot is released. For user-facing controls, see
 [Computer use](../user/computer-use.md).
 
 ## Transcript fidelity

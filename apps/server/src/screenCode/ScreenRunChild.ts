@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off preferSchemaOverJson:off - This isolated child uses a hard wall deadline and JSON pipe frames.
+// @effect-diagnostics globalDate:off globalTimers:off preferSchemaOverJson:off - This isolated child uses a hard wall deadline and JSON pipe frames.
 import * as NodeReadline from "node:readline";
 import { newQuickJSWASMModuleFromVariant, newVariant } from "quickjs-emscripten-core";
 import BellardSync from "@jitl/quickjs-wasmfile-release-sync";
@@ -8,7 +8,6 @@ import {
   ScreenRunCell,
   ScreenHostReply,
   type ScreenHostCall,
-  type ScreenRunLimits,
   type ScreenRunResult,
   ScreenRunError,
 } from "@goat/contracts";
@@ -35,9 +34,20 @@ const methods = [
   "bring_to_front",
   "launch_app",
   "end_foreground",
-  "list_tabs", "bind_tab", "open_tab", "claim_tab", "keep_tab",
-  "navigate_tab", "reload_tab", "back_tab", "forward_tab", "close_tab",
-  "observe", "select", "select_text", "wait_for",
+  "list_tabs",
+  "bind_tab",
+  "open_tab",
+  "claim_tab",
+  "keep_tab",
+  "navigate_tab",
+  "reload_tab",
+  "back_tab",
+  "forward_tab",
+  "close_tab",
+  "observe",
+  "select",
+  "select_text",
+  "wait_for",
 ] as const;
 
 type ChildResult = Pick<
@@ -76,6 +86,7 @@ export async function runScreenChild(
     }) as Parameters<typeof newQuickJSWASMModuleFromVariant>[0],
   );
   if (module.getWasmMemory() !== wasmMemory) throw new Error("QuickJS ignored fixed WASM memory");
+  let currentLimits = limits;
   let runtime = module.newRuntime();
   let vm = runtime.newContext();
   runtime.setMemoryLimit(limits.heapBytes);
@@ -89,6 +100,10 @@ export async function runScreenChild(
   let linesOut: string[] = [];
   let truncated: string[] = [];
   const pending = new Map<number, ReturnType<typeof vm.newPromise>>();
+  const boundedMessage = (value: string) => {
+    const bytes = new TextEncoder().encode(value);
+    return bytes.length <= 1024 ? value : new TextDecoder().decode(bytes.slice(0, 1021));
+  };
   const emit = (frame: unknown) => output.write(`${JSON.stringify(frame)}\n`);
   const initialize = () => {
     const host = vm.newFunction("__host", (methodHandle, argsHandle) => {
@@ -98,9 +113,9 @@ export async function runScreenChild(
       if (
         !admitted ||
         !methods.includes(method as (typeof methods)[number]) ||
-        ++callCount > limits.callsPerCell ||
-        pending.size >= limits.pendingCalls ||
-        screenBytes(argsJson) > limits.argBytes
+        ++callCount > currentLimits.callsPerCell ||
+        pending.size >= currentLimits.pendingCalls ||
+        screenBytes(argsJson) > currentLimits.argBytes
       ) {
         const error = vm.newString("screen call refused");
         promise.reject(error);
@@ -139,7 +154,7 @@ export async function runScreenChild(
     const log = vm.newFunction("__log", (valueHandle) => {
       const line = vm.getString(valueHandle);
       const size = screenBytes(line);
-      if (consoleBytes + size <= limits.consoleBytes && linesOut.length < 64) {
+      if (consoleBytes + size <= currentLimits.consoleBytes && linesOut.length < 64) {
         linesOut.push(line);
         consoleBytes += size;
       } else if (!truncated.includes("console")) truncated.push("console");
@@ -158,7 +173,7 @@ export async function runScreenChild(
       });
       const __call = async (method, arg) => JSON.parse(await __host(method, JSON.stringify([arg])));
       const __target = (binding) => {
-        const ref = binding.targetRef;
+        const ref = binding.targetRef ?? binding;
         const call = (method, arg = {}) => __call(method, { ...arg, targetRef: ref });
         const common = {
           targetRef: ref,
@@ -205,13 +220,13 @@ export async function runScreenChild(
         tab: async (query = {}) => __target(await __call('bind_tab', query)),
         openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
         ${methods
-        .map(
-          (method) =>
-            `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,
-        )
-        .join(
-          ",",
-        )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});`;
+          .map(
+            (method) =>
+              `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,
+          )
+          .join(
+            ",",
+          )} }); globalThis.console = Object.freeze({log: (...args) => __log(args.map(String).join(" "))});`;
     const evaluated = vm.evalCode(setup);
     vm.unwrapResult(evaluated).dispose();
   };
@@ -227,7 +242,10 @@ export async function runScreenChild(
     runtime.setMaxStackSize(limits.stackBytes);
     initialize();
   };
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const finish = (result: ChildResult) => {
+    clearTimeout(deadlineTimer);
+    deadlineTimer = undefined;
     admitted = false;
     for (const promise of pending.values()) promise.dispose();
     pending.clear();
@@ -262,64 +280,119 @@ export async function runScreenChild(
       }
       if (frame.t !== "cell" || cellId) throw new Error("Unexpected child frame");
       const cell = Schema.decodeUnknownSync(ScreenRunCell)(frame);
-      if (screenBytes(cell.source) > limits.sourceBytes) throw new Error("Source cap exceeded");
+      currentLimits = screenRunLimits(cell.limits);
+      if (screenBytes(cell.source) > currentLimits.sourceBytes)
+        throw new Error("Source cap exceeded");
       if (cell.resetValues) reset();
+      runtime.setMemoryLimit(currentLimits.heapBytes);
+      runtime.setMaxStackSize(currentLimits.stackBytes);
       cellId = cell.cellId;
       nextCallId = 0;
       callCount = 0;
       consoleBytes = 0;
       linesOut = [];
       truncated = [];
-      deadline = Date.now() + limits.cellWallMs;
+      deadline = Date.now() + currentLimits.cellWallMs;
       admitted = true;
       runtime.setInterruptHandler(() => Date.now() >= deadline);
+      deadlineTimer = setTimeout(() => {
+        if (cellId === cell.cellId)
+          finish({
+            t: "result",
+            cellId,
+            status: "deadline",
+            console: linesOut,
+            truncated,
+            unawaitedCallIds: [...pending.keys()],
+          });
+      }, currentLimits.cellWallMs);
       try {
         const evaluation = vm.evalCode(`(async () => {\n${cell.source}\n})()`);
         const handle = vm.unwrapResult(evaluation);
         const settled = vm.resolvePromise(handle);
         handle.dispose();
         runtime.executePendingJobs();
-        void settled.then(
-          (outcome) => {
-            if (cellId !== cell.cellId) {
-              (outcome.error ?? outcome.value)?.dispose();
-              return;
-            }
-            if (outcome.error) {
-              const dumped = vm.dump(outcome.error);
-              outcome.error.dispose();
-              let error: ScreenRunResult["error"];
-              if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
-                try {
-                  const candidate: unknown = JSON.parse(dumped);
-                  if (Schema.is(ScreenRunError)(candidate)) error = candidate;
-                } catch { /* An ordinary guest exception has no host error receipt. */ }
+        void settled
+          .then(
+            (outcome) => {
+              if (cellId !== cell.cellId) {
+                (outcome.error ?? outcome.value)?.dispose();
+                return;
               }
-              finish({ t: "result", cellId, status: Date.now() >= deadline ? "deadline" : "failed",
-                ...(error ? { error } : {}), console: linesOut, truncated });
-              return;
-            }
-            const resultHandle = vm.unwrapResult(outcome);
-            const value = vm.dump(resultHandle) as unknown;
-            resultHandle.dispose();
-            const json = JSON.stringify(value);
-            const bounded =
-              json === undefined || screenBytes(json) > limits.returnBytes ? undefined : value;
-            if (json !== undefined && bounded === undefined) truncated.push("value");
-            finish({
-              t: "result",
-              cellId,
-              status: pending.size ? "failed" : "completed",
-              ...(pending.size ? { unawaitedCallIds: [...pending.keys()] } : {}),
-              ...(bounded === undefined
-                ? {}
-                : { value: bounded as NonNullable<ScreenRunResult["value"]> }),
-              console: linesOut,
-              truncated,
-            });
-          },
-          () => finish({ t: "result", cellId, status: "failed", console: linesOut, truncated }),
-        );
+              if (outcome.error) {
+                const dumped = vm.dump(outcome.error);
+                outcome.error.dispose();
+                let error: ScreenRunResult["error"];
+                if (typeof dumped === "string" && screenBytes(dumped) <= 16 * 1024) {
+                  try {
+                    const candidate: unknown = JSON.parse(dumped);
+                    if (Schema.is(ScreenRunError)(candidate)) error = candidate;
+                  } catch {
+                    /* An ordinary guest exception has no host error receipt. */
+                  }
+                }
+                if (!error) {
+                  const guest =
+                    typeof dumped === "object" && dumped !== null
+                      ? (dumped as Record<string, unknown>)
+                      : {};
+                  error = {
+                    name: typeof guest.name === "string" ? guest.name.slice(0, 80) : "Error",
+                    message:
+                      typeof guest.message === "string"
+                        ? boundedMessage(guest.message)
+                        : boundedMessage(String(dumped)),
+                  };
+                }
+                finish({
+                  t: "result",
+                  cellId,
+                  status:
+                    Date.now() >= deadline
+                      ? "deadline"
+                      : "message" in error && /out of memory|allocation failed/i.test(error.message)
+                        ? "resource_exhausted"
+                        : "failed",
+                  ...(error ? { error } : {}),
+                  ...(pending.size ? { unawaitedCallIds: [...pending.keys()] } : {}),
+                  console: linesOut,
+                  truncated,
+                });
+                return;
+              }
+              const resultHandle = vm.unwrapResult(outcome);
+              const value = vm.dump(resultHandle) as unknown;
+              resultHandle.dispose();
+              const json = JSON.stringify(value);
+              const bounded =
+                json === undefined || screenBytes(json) > currentLimits.returnBytes
+                  ? undefined
+                  : value;
+              if (json !== undefined && bounded === undefined) truncated.push("value");
+              finish({
+                t: "result",
+                cellId,
+                status: pending.size ? "failed" : "completed",
+                ...(pending.size ? { unawaitedCallIds: [...pending.keys()] } : {}),
+                ...(bounded === undefined
+                  ? {}
+                  : { value: bounded as NonNullable<ScreenRunResult["value"]> }),
+                console: linesOut,
+                truncated,
+              });
+            },
+            () => finish({ t: "result", cellId, status: "failed", console: linesOut, truncated }),
+          )
+          .catch(() => {
+            if (cellId === cell.cellId)
+              finish({
+                t: "result",
+                cellId,
+                status: Date.now() >= deadline ? "deadline" : "failed",
+                console: linesOut,
+                truncated,
+              });
+          });
       } catch {
         finish({
           t: "result",

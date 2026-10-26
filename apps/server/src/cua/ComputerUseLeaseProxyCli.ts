@@ -125,8 +125,8 @@ type DriverReport = {
 type ReportIdentity = Omit<DriverReport, "kind" | "controlId">;
 type PendingReports = { readonly cutoff?: ReportIdentity; readonly ready?: ReportIdentity };
 
-const postPrimitive = (url: string, authorization: string, token: string, body: object) =>
-  Effect.promise(async () => {
+export const postPrimitive = (url: string, authorization: string, token: string, body: object) =>
+  Effect.tryPromise(async () => {
     const response = await fetch(url, {
       method: "POST",
       headers: { authorization, "x-goat-proxy-channel": token, "content-type": "application/json" },
@@ -412,8 +412,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ),
     onCursor: (cursor: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursor"]>>[0]) =>
       Effect.promise(() => report(url, authorization, { controlId, cursor })),
-    onCursorReport: (cursorReport: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursorReport"]>>[0]) =>
-      Effect.promise(() => report(url, authorization, { controlId, report: cursorReport })),
+    onCursorReport: (
+      cursorReport: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursorReport"]>>[0],
+    ) => Effect.promise(() => report(url, authorization, { controlId, report: cursorReport })),
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
@@ -441,7 +442,22 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>();
     const threadUpdates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
     const primitiveRequests = yield* Queue.dropping<ComputerUsePrimitiveRequest, Cause.Done>(16);
-    const cursorEvents = yield* Queue.bounded<ComputerUseCursorLeaseUpdate, Cause.Done>(64);
+    const cursorEvents = yield* Queue.sliding<ComputerUseCursorLeaseUpdate, Cause.Done>(1);
+    const pendingPrimitives = new Set<string>();
+    const cancelledPrimitives = new Set<string>();
+    const earlyCancels = new Set<string>();
+    const settledPrimitives = new Set<string>();
+    const takeCancel = (requestId: string) => {
+      if (settledPrimitives.has(requestId)) return;
+      if (pendingPrimitives.has(requestId)) cancelledPrimitives.add(requestId);
+      else {
+        earlyCancels.add(requestId);
+        if (earlyCancels.size > 64) {
+          const oldest = earlyCancels.values().next().value;
+          if (oldest !== undefined) earlyCancels.delete(oldest);
+        }
+      }
+    };
     const decodeControl = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseLeaseUpdate));
     const decodeThread = Schema.decodeUnknownOption(
       Schema.fromJsonString(ComputerUseLeaseThreadUpdate),
@@ -474,12 +490,12 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           const offerPrimitive = Effect.fn("ComputerUseLeaseProxyCli.offerPrimitive")(function* (
             update: ComputerUsePrimitiveRequest,
           ) {
-            if (
-              reporter !== undefined &&
-              !reporter.failed &&
-              (yield* Queue.offer(primitiveRequests, update))
-            )
-              return;
+            if (reporter !== undefined && !reporter.failed) {
+              pendingPrimitives.add(update.requestId);
+              if (earlyCancels.delete(update.requestId)) cancelledPrimitives.add(update.requestId);
+              if (yield* Queue.offer(primitiveRequests, update)) return;
+              pendingPrimitives.delete(update.requestId);
+            }
             const {
               requestId,
               registrationId,
@@ -504,18 +520,26 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
                 status: "not_started",
               },
             );
+            cancelledPrimitives.delete(update.requestId);
+            earlyCancels.delete(update.requestId);
           });
           if (launch.mode === "control") {
             const decoded = decodeControl(line);
             if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
             if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
-            else if (decoded.value.state === "cursor-state") yield* Queue.offer(cursorEvents, decoded.value);
+            else if (decoded.value.state === "primitive-cancel")
+              takeCancel(decoded.value.requestId);
+            else if (decoded.value.state === "cursor-state")
+              yield* Queue.offer(cursorEvents, decoded.value);
             else yield* Queue.offer(updates, decoded.value);
           } else {
             const decoded = decodeThread(line);
             if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
             if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
-            else if (decoded.value.state === "cursor-state") yield* Queue.offer(cursorEvents, decoded.value);
+            else if (decoded.value.state === "primitive-cancel")
+              takeCancel(decoded.value.requestId);
+            else if (decoded.value.state === "cursor-state")
+              yield* Queue.offer(cursorEvents, decoded.value);
             else yield* Queue.offer(threadUpdates, decoded.value);
           }
         }),
@@ -533,6 +557,17 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       Effect.forkScoped,
     );
     const common = {
+      primitiveCancelled: (requestId: string) => cancelledPrimitives.has(requestId),
+      onPrimitiveSettled: (requestId: string) => {
+        pendingPrimitives.delete(requestId);
+        cancelledPrimitives.delete(requestId);
+        earlyCancels.delete(requestId);
+        settledPrimitives.add(requestId);
+        if (settledPrimitives.size > 64) {
+          const oldest = settledPrimitives.values().next().value;
+          if (oldest !== undefined) settledPrimitives.delete(oldest);
+        }
+      },
       cursorEvents: Stream.fromQueue(cursorEvents),
       connectionId: proxyInstanceId,
       ...(reporter === undefined

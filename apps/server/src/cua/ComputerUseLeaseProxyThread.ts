@@ -300,7 +300,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const take = Effect.fn("ComputerUseLeaseProxyThread.takeUpdate")(
     (update: ComputerUseLeaseThreadUpdate) =>
       Effect.suspend(() => {
-        if (update.state === "primitive-request") return Effect.void;
+        if (update.state === "primitive-request" || update.state === "primitive-cancel")
+          return Effect.void;
         if (terminal === undefined) {
           if (update.state === "ended") finishNow(update.reason);
           else if (update.state === "control-ended") {
@@ -347,6 +348,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           )
             return;
           yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
+          options.onPrimitiveSettled?.(request.requestId);
         }),
       ),
       Effect.forkScoped,

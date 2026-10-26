@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import type {
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
+  ComputerUsePrimitiveCancel,
   ComputerUseCursorLeaseUpdate,
   ComputerUseCursorEvent,
   ScreenRunError,
@@ -48,6 +49,8 @@ interface Registration {
   readonly kind: "control" | "thread";
   readonly controlId?: string;
   readonly queue: Queue.Queue<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>;
+  readonly cancellations: Queue.Queue<ComputerUsePrimitiveCancel>;
+  readonly cursors: Queue.Queue<ComputerUseCursorLeaseUpdate>;
   readonly controls: Map<string, Control>;
 }
 
@@ -109,7 +112,9 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
       | {
           readonly status: "registered";
           readonly registrationId: string;
-          readonly requests: Stream.Stream<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>;
+          readonly requests: Stream.Stream<
+            ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate
+          >;
         }
     >;
     readonly closeStream: (input: {
@@ -146,10 +151,18 @@ export const make = Effect.gen(function* () {
         status: pending.sent ? "unknown_outcome" : "not_started",
       }),
     );
-  const clear = (control: Control) => {
+  const cancelDelivered = (registration: Registration, pending: Pending) => {
+    if (pending.sent)
+      Queue.offerUnsafe(registration.cancellations, {
+        state: "primitive-cancel",
+        requestId: pending.request.requestId,
+      });
+  };
+  const clear = (registration: Registration, control: Control) => {
     control.binding = undefined;
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
+      cancelDelivered(registration, pending);
       settle(pending);
     }
   };
@@ -159,10 +172,17 @@ export const make = Effect.gen(function* () {
     attachment.registration = undefined;
     for (const control of registration.controls.values()) {
       control.binding = undefined;
-      for (const pending of control.pending.values()) settle(pending);
+      for (const pending of control.pending.values()) {
+        cancelDelivered(registration, pending);
+        settle(pending);
+      }
       control.pending.clear();
     }
-    return Queue.shutdown(registration.queue);
+    return Effect.all([
+      Queue.shutdown(registration.queue),
+      Queue.shutdown(registration.cancellations),
+      Queue.shutdown(registration.cursors),
+    ]).pipe(Effect.asVoid);
   };
   const tokenMatches = (expected: string, given: string) => {
     const a = Buffer.from(expected);
@@ -203,10 +223,11 @@ export const make = Effect.gen(function* () {
     function* () {
       for (const [threadId, attachment] of attachments) {
         const current = Option.getOrUndefined(yield* leases.currentControl(threadId));
-        for (const [controlId, record] of attachment.registration?.controls ?? [])
+        const registered = attachment.registration;
+        for (const [controlId, record] of registered?.controls ?? [])
           if (controlId !== current?.controlId) {
-            clear(record);
-            attachment.registration?.controls.delete(controlId);
+            if (registered) clear(registered, record);
+            registered?.controls.delete(controlId);
           }
         if (attachment.controlId === undefined) continue;
         if (current === undefined) continue;
@@ -271,7 +292,11 @@ export const make = Effect.gen(function* () {
       )
         return { status: "conflict" as const };
       const now = yield* Clock.currentTimeMillis;
-      const queue = yield* Queue.dropping<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>(16);
+      const queue = yield* Queue.dropping<
+        ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate
+      >(16);
+      const cancellations = yield* Queue.unbounded<ComputerUsePrimitiveCancel>();
+      const cursors = yield* Queue.sliding<ComputerUseCursorLeaseUpdate>(1);
       const value = attachment(input, now);
       if (value === undefined) return { status: "unauthorized" as const };
       if (value.registration !== undefined) return { status: "conflict" as const };
@@ -282,14 +307,22 @@ export const make = Effect.gen(function* () {
         kind: input.kind,
         ...(input.controlId === undefined ? {} : { controlId: input.controlId }),
         queue,
+        cancellations,
+        cursors,
         controls: new Map(),
       };
       value.registration = registered;
-      const requests = Stream.fromQueue(queue).pipe(
+      const requests = Stream.merge(
+        Stream.merge(Stream.fromQueue(queue), Stream.fromQueue(cancellations)),
+        Stream.fromQueue(cursors),
+      ).pipe(
         Stream.filter((request) => {
+          if (request.state === "primitive-cancel") return true;
           if (request.state === "cursor-state")
-            return registered.controls.get(request.controlId)?.binding?.connectionId ===
-              request.connectionGeneration;
+            return (
+              registered.controls.get(request.controlId)?.binding?.connectionId ===
+              request.connectionGeneration
+            );
           const pending = registered.controls
             .get(request.controlId)
             ?.pending.get(request.requestId);
@@ -311,20 +344,26 @@ export const make = Effect.gen(function* () {
     }),
     cursor: Effect.fn("ComputerUsePrimitiveChannel.cursor")(function* (input) {
       const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-      if (current === undefined || !(yield* active(input.threadId, current.controlId))) return false;
+      if (current === undefined || !(yield* active(input.threadId, current.controlId)))
+        return false;
       const attachment = attachments.get(input.threadId);
       const registered = attachment?.registration;
       const binding = registered?.controls.get(current.controlId)?.binding;
       if (!registered || !binding) return false;
-      const offered = yield* Queue.offer(registered.queue, {
+      const update: ComputerUseCursorLeaseUpdate = {
         state: "cursor-state",
         controlId: current.controlId,
         connectionGeneration: binding.connectionId,
         event: input.event,
-      });
+      };
+      const offered = yield* Queue.offer(
+        input.event.op === "hide" ? registered.queue : registered.cursors,
+        update,
+      );
       // A dropped terminal marker would leave the helper showing an old owner. Closing the
       // stream cuts off that proxy and removes its helper overlay instead.
-      if (!offered && attachment) yield* close(attachment) ?? Effect.void;
+      if (!offered && input.event.op === "hide" && attachment)
+        yield* close(attachment) ?? Effect.void;
       return offered;
     }),
     reportControlReady: Effect.fn("ComputerUsePrimitiveChannel.reportControlReady")(
@@ -343,7 +382,7 @@ export const make = Effect.gen(function* () {
           Math.max(record.maxAcceptedGeneration, record.maxCutoffGeneration)
         )
           return false;
-        clear(record);
+        clear(registered, record);
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
         return true;
@@ -369,7 +408,7 @@ export const make = Effect.gen(function* () {
           return false;
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
-          clear(record);
+          clear(registered, record);
         return true;
       },
     ),
@@ -434,6 +473,7 @@ export const make = Effect.gen(function* () {
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
+            if (record.pending.has(request.requestId)) cancelDelivered(registered, pending);
             record.pending.delete(request.requestId);
           }),
         ),
@@ -469,6 +509,7 @@ export const make = Effect.gen(function* () {
             for (const [id, pending] of record.pending)
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
+                if (value.registration) cancelDelivered(value.registration, pending);
                 settle(pending);
               }
       }),

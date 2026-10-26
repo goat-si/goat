@@ -4,10 +4,54 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
-import { makePrimitiveReporter } from "./ComputerUseLeaseProxyCli.ts";
+import { makePrimitiveReporter, postPrimitive } from "./ComputerUseLeaseProxyCli.ts";
 
 describe("primitive report sequencer", () => {
+  it.effect("a failed primitive reply POST returns zero and a later POST still succeeds", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        if (++calls === 1) throw new Error("connection reset");
+        return new Response(null, { status: 204 });
+      });
+      const url = "http://goat.test/api/computer-use/primitive-reply";
+      assert.equal(yield* postPrimitive(url, "Bearer fixture", "channel:fixture", {}), 0);
+      assert.equal(yield* postPrimitive(url, "Bearer fixture", "channel:fixture", {}), 204);
+    }),
+  );
+  it.effect("a rejected ready POST retries and keeps the reporter alive", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Queue.unbounded<number>();
+      let count = 0;
+      using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        const attempt = ++count;
+        Queue.offerUnsafe(attempts, attempt);
+        if (attempt === 1) throw new Error("connection reset");
+        return new Response(null, { status: 204 });
+      });
+      const registration = yield* Deferred.make<string>();
+      const reporter = yield* makePrimitiveReporter({
+        url: "http://goat.test/api/computer-use/lease",
+        authorization: "Bearer fixture",
+        token: "channel:fixture",
+        registration,
+      });
+      yield* reporter.enqueue({
+        kind: "ready",
+        controlId: "A",
+        connectionId: "driver:0",
+        driverGeneration: 0,
+      });
+      yield* reporter.run.pipe(Effect.forkScoped);
+      yield* Deferred.succeed(registration, "registration:fixture");
+      assert.equal(yield* Queue.take(attempts), 1);
+      yield* TestClock.adjust("250 millis");
+      assert.equal(yield* Queue.take(attempts), 2);
+      assert.isFalse(reporter.failed);
+    }).pipe(Effect.scoped),
+  );
   it.effect("missing registration header leaves the primitive reporter closed", () =>
     Effect.gen(function* () {
       const registration = yield* Deferred.make<string>();

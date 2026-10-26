@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   ScreenHostCall,
+  DEFAULT_SCREEN_RUN_LIMITS,
   ScreenHostReply,
   ScreenImage,
   ScreenRunLimits,
@@ -58,7 +59,13 @@ describe("screen code wire contracts", () => {
     expect(() => decodeReply({ ...reply, bytes: "AAAA" })).toThrow();
     const decodeCell = Schema.decodeUnknownSync(ScreenRunCell);
     expect(() =>
-      decodeCell({ t: "cell", cellId: "cell:1", source: "한".repeat(22_000), resetValues: false }),
+      decodeCell({
+        t: "cell",
+        cellId: "cell:1",
+        source: "한".repeat(22_000),
+        resetValues: false,
+        limits: DEFAULT_SCREEN_RUN_LIMITS,
+      }),
     ).toThrow();
   });
 

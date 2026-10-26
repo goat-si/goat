@@ -53,6 +53,26 @@ const call = (callId: number): ScreenHostCall => ({
   deadlineMillis: 1,
 });
 
+it.effect("a cut before the first host call refuses that call", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    let dispatched = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
+        Effect.sync(() => {
+          dispatched++;
+          return { category: "confirmed" as const };
+        }),
+    });
+    bridge.cutCellNow("r", "t", "c");
+    const reply = yield* bridge.handle(call(1), context());
+    expect(reply?.outcome).toBe("error");
+    if (reply?.outcome === "error") expect(reply.error?.code).toBe("stopped");
+    expect(dispatched).toBe(0);
+  }),
+);
+
 it.effect("preview calls require live reauthorization on every dispatch", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();
@@ -124,7 +144,11 @@ it.effect("the host retains bounded images and guest replies contain metadata on
     const collected = yield* bridge.takeCellImages("r", "t", "c");
     expect(JSON.stringify(one)).not.toContain("MTIzNA");
     expect(JSON.stringify(two)).not.toContain("MTIzNA");
-    expect(one?.value).toMatchObject({ observationId: "o", tree: "button Save", image: { imageRef: "i1" } });
+    expect(one?.value).toMatchObject({
+      observationId: "o",
+      tree: "button Save",
+      image: { imageRef: "i1" },
+    });
     expect(collected.images.map((image) => image.imageRef)).toEqual(["i2"]);
     expect(collected.imageMetadata[0]?.omitted).toBe(true);
   }),
@@ -186,10 +210,17 @@ it.effect("discard and finishTurn release cell and target state", () =>
 it.effect("trusted host call phases end when the cell is cut", () =>
   Effect.gen(function* () {
     const events: string[] = [];
-    const bridge = new ScreenHostBridge(new ScreenCursorPhases((event) => events.push(event.phase)));
-    bridge.setDispatcher({ availability: () => Effect.succeed([]),
-      dispatch: () => Effect.succeed({ value: true, category: "confirmed", evidence: ["done"] }) });
-    const reply = yield* bridge.handle(call(1), context(() => Effect.void));
+    const bridge = new ScreenHostBridge(
+      new ScreenCursorPhases((event) => events.push(event.phase)),
+    );
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () => Effect.succeed({ value: true, category: "confirmed", evidence: ["done"] }),
+    });
+    const reply = yield* bridge.handle(
+      call(1),
+      context(() => Effect.void),
+    );
     expect(reply?.outcome).toBe("ok");
     yield* bridge.cutCell("r", "t", "c", "stopped");
     expect(events).toEqual(["thinking", "resting", "hidden"]);

@@ -50,25 +50,89 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
       tool: "click",
       args: { pid: 123, window_id: 4 },
     });
-  return { channel, rawRegistered: registered, registered: {
-    ...registered,
-    requests: registered.requests.pipe(Stream.filter((item): item is ComputerUsePrimitiveRequest =>
-      item.state === "primitive-request")),
-  }, report, request };
+  return {
+    channel,
+    rawRegistered: registered,
+    registered: {
+      ...registered,
+      requests: registered.requests.pipe(
+        Stream.filter(
+          (item): item is ComputerUsePrimitiveRequest => item.state === "primitive-request",
+        ),
+      ),
+    },
+    report,
+    request,
+  };
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("cancel after delivery emits a proxy marker for the admitted request", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      yield* f.channel.cancel("run:one", "cell:one");
+      assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+      const marker = Option.getOrThrow(yield* Stream.runHead(f.rawRegistered.requests));
+      assert.deepEqual(marker, { state: "primitive-cancel", requestId: request.requestId });
+    }),
+  );
+
+  it.effect("cursor bursts do not close registration or block a following primitive", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      for (let sequence = 1; sequence <= 64; sequence++)
+        assert.isTrue(
+          yield* f.channel.cursor({
+            threadId,
+            event: {
+              op: "show",
+              phase: "thinking",
+              identity: {
+                environmentId: EnvironmentId.make("environment"),
+                runId: "run",
+                turnId: "turn",
+                targetId: "target",
+                generation: 1,
+                sequence,
+              },
+            },
+          }),
+        );
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      assert.equal(
+        Option.getOrThrow(yield* Stream.runHead(f.registered.requests)).state,
+        "primitive-request",
+      );
+      yield* f.channel.cancel("run:one", "cell:one");
+      assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+    }),
+  );
   it.effect("routes a scoped cursor state to the live proxy without a driver call", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
       assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
-      const event = { op: "show" as const, phase: "thinking" as const, identity: {
-        environmentId: EnvironmentId.make("environment"), runId: "run", turnId: "turn",
-        targetId: "target", generation: 1, sequence: 1,
-      } };
+      const event = {
+        op: "show" as const,
+        phase: "thinking" as const,
+        identity: {
+          environmentId: EnvironmentId.make("environment"),
+          runId: "run",
+          turnId: "turn",
+          targetId: "target",
+          generation: 1,
+          sequence: 1,
+        },
+      };
       assert.isTrue(yield* f.channel.cursor({ threadId, event }));
       assert.deepEqual(Option.getOrThrow(yield* Stream.runHead(f.rawRegistered.requests)), {
-        state: "cursor-state", controlId, connectionGeneration: "driver:1", event,
+        state: "cursor-state",
+        controlId,
+        connectionGeneration: "driver:1",
+        event,
       });
     }),
   );
@@ -76,11 +140,18 @@ describe("ComputerUsePrimitiveChannel", () => {
     Effect.gen(function* () {
       const f = yield* fixture();
       assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
-      const result = yield* f.channel.request({
-        threadId, runId: "run:one", turnId: "cell:one", callId: 2,
-        deadlineMillis: 30_000, tool: "click", args: {},
-        expectedConnectionGeneration: "driver:0",
-      }).pipe(Effect.result);
+      const result = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 2,
+          deadlineMillis: 30_000,
+          tool: "click",
+          args: {},
+          expectedConnectionGeneration: "driver:0",
+        })
+        .pipe(Effect.result);
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.equal(result.failure.code, "stale_reference");

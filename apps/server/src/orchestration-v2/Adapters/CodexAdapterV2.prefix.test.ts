@@ -6,6 +6,21 @@ import { framePendingReports } from "../../remoteReports/reportFrame.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 
 describe("CodexAdapterV2 injected prefix", () => {
+  it.effect(
+    "includes goat_screen_run in Codex context when the attached turn carries screen code",
+    () =>
+      Effect.gen(function* () {
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-screen-code",
+          codexInput: [{ type: "text", text: "inspect the browser" }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          hasGoatMcp: true,
+          screenCode: true,
+        });
+        assert.include(JSON.stringify(params.additionalContext), "goat_screen_run");
+      }),
+  );
   it.effect("stays byte-identical across turns that carry different notices", () =>
     Effect.gen(function* () {
       // Provider prompt caches key on this prefix; a notice that leaks into it breaks every cache.

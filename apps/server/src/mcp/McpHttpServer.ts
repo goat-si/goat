@@ -59,10 +59,10 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
-import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
@@ -132,6 +132,14 @@ import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
 import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
 import { ScreenRunTool, ScreenToolkit, validScreenRunPayload } from "./toolkits/screen/tools.ts";
 import { screenRunMcpResult } from "./toolkits/screen/result.ts";
+import { unauthorized } from "./mcpUnauthorized.ts";
+import {
+  normalizeMcpHttpResponse,
+  looksLikeProviderToken,
+  credentialRefusalMessage,
+  refusedToolCallId,
+} from "./mcpAuthResponse.ts";
+export { credentialRefusalMessage } from "./mcpAuthResponse.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -153,45 +161,6 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-
-const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
-  HttpServerRequest.toURL(request).pipe(
-    Option.map((url) => `${url.origin}/.well-known/oauth-protected-resource/mcp`),
-  );
-
-/** Launched agents cannot open OAuth browsers; OAuth would mint credentials outliving their session. */
-const unauthorized = (input: {
-  readonly request: HttpServerRequest.HttpServerRequest;
-  readonly presentedToken: boolean;
-  readonly offerOAuth: boolean;
-  readonly message?: string;
-}) => {
-  const metadataUrl = input.offerOAuth
-    ? Option.getOrUndefined(mcpResourceMetadataUrl(input.request))
-    : undefined;
-  const challenge = [
-    "Bearer",
-    [
-      ...(metadataUrl === undefined ? [] : [`resource_metadata="${metadataUrl}"`]),
-      ...(input.presentedToken ? ['error="invalid_token"'] : []),
-    ].join(", "),
-  ]
-    .filter((part) => part.length > 0)
-    .join(" ");
-  return HttpServerResponse.jsonUnsafe(
-    {
-      error: "invalid_mcp_credential",
-      message: input.message ?? GENERIC_REFUSAL,
-    },
-    {
-      status: 401,
-      headers: {
-        "cache-control": "no-store",
-        "www-authenticate": challenge,
-      },
-    },
-  );
-};
 
 export class McpClientAuthenticator extends Context.Service<
   McpClientAuthenticator,
@@ -215,87 +184,6 @@ type McpAuthMiddleware = (
   Types.unhandled,
   HttpServerRequest.HttpServerRequest
 >;
-
-const normalizeMcpHttpResponse = (
-  response: HttpServerResponse.HttpServerResponse,
-): HttpServerResponse.HttpServerResponse => {
-  const bodyIsEmpty =
-    response.body._tag === "Empty" ||
-    (response.body._tag === "Uint8Array" && response.body.contentLength === 0) ||
-    (response.body._tag === "Raw" && response.body.contentLength === 0);
-  return response.status === 200 && bodyIsEmpty
-    ? HttpServerResponse.setStatus(response, 202)
-    : response;
-};
-
-// Session tokens are `<payload>.<signature>`; registry tokens are a bare base64url secret.
-const looksLikeProviderToken = (token: string) => token.length > 0 && !token.includes(".");
-
-const GENERIC_REFUSAL = "A valid GOAT MCP credential is required.";
-const RETRY_AT_NEXT_TURN =
-  "GOAT re-authenticates the thread with a fresh credential when its next turn starts; retry this tool then.";
-
-/** What the agent reads when its thread credential is refused. Names no thread or id. */
-export const credentialRefusalMessage = (
-  reason: McpSessionRegistry.McpCredentialRefusalReason,
-): string => {
-  switch (reason) {
-    case "expired":
-      return `GOAT refused this call: this thread's GOAT credential expired after GOAT stopped holding its provider session. ${RETRY_AT_NEXT_TURN}`;
-    case "revoked":
-      return `GOAT refused this call: GOAT closed the provider session this thread's GOAT credential belonged to. ${RETRY_AT_NEXT_TURN}`;
-    case "earlier_server":
-      return `GOAT refused this call: this thread's GOAT credential was issued before the GOAT server restarted or updated. ${RETRY_AT_NEXT_TURN}`;
-    case "missing":
-    case "unknown":
-      return GENERIC_REFUSAL;
-  }
-};
-
-const MAX_REFUSED_BODY_BYTES = 1024 * 1024;
-/** An unauthenticated caller must not hold the read open; a slow body falls back to 401. */
-const REFUSED_BODY_DEADLINE = "5 seconds";
-const decodeToolCallRequest = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      jsonrpc: Schema.Literal("2.0"),
-      method: Schema.Literal("tools/call"),
-      id: Schema.Union([Schema.String, Schema.Number]),
-    }),
-  ),
-);
-
-/**
- * MCP clients turn a 401 into their own generic text ("Authentication
- * required" in Codex), so a refused tool call is answered as an error result
- * the agent can read. Only for a registry-shaped token, never a session token
- * that may still sign in through OAuth, and nothing is executed.
- */
-const refusedToolCallId = (request: HttpServerRequest.HttpServerRequest) =>
-  Effect.gen(function* () {
-    const declared = request.headers["content-length"];
-    if (
-      request.method !== "POST" ||
-      (declared !== undefined && !(Number(declared) <= MAX_REFUSED_BODY_BYTES))
-    )
-      return undefined;
-    // Chunked bodies declare no length, so the read itself stops at the bound.
-    let size = 0;
-    const chunks = yield* request.stream.pipe(
-      Stream.takeWhile((chunk) => (size += chunk.byteLength) <= MAX_REFUSED_BODY_BYTES),
-      Stream.runCollect,
-      Effect.timeoutOption(REFUSED_BODY_DEADLINE),
-      Effect.option,
-      Effect.map(Option.flatten),
-    );
-    if (Option.isNone(chunks) || size > MAX_REFUSED_BODY_BYTES) return undefined;
-    return Option.getOrUndefined(
-      Option.map(
-        decodeToolCallRequest(Buffer.concat(chunks.value).toString("utf8")),
-        (call) => call.id,
-      ),
-    );
-  });
 
 const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;

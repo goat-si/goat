@@ -117,6 +117,7 @@ export const ScreenRunCell = Schema.Struct({
   cellId: id,
   source: utf8Text(64 * 1024),
   resetValues: Schema.Boolean,
+  limits: ScreenRunLimits,
 });
 export type ScreenRunCell = typeof ScreenRunCell.Type;
 
@@ -270,6 +271,12 @@ export const ScreenRunError = Schema.Struct({
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 
+export const ScreenGuestError = Schema.Struct({
+  name: text(80),
+  message: utf8Text(1024),
+});
+export type ScreenGuestError = typeof ScreenGuestError.Type;
+
 export const ScreenHostCall = strict(
   Schema.Struct({
     t: Schema.Literal("call"),
@@ -319,7 +326,7 @@ export const ScreenRunResult = Schema.Struct({
   turnId: id,
   cellId: id,
   status: Schema.Literals(["completed", "failed", "stopped", "deadline", "resource_exhausted"]),
-  error: Schema.optionalKey(ScreenRunError),
+  error: Schema.optionalKey(Schema.Union([ScreenRunError, ScreenGuestError])),
   value: Schema.optionalKey(boundedJson(64 * 1024)),
   console: Schema.Array(utf8Text(16 * 1024)).check(Schema.isMaxLength(64)),
   journal: Schema.Array(ScreenJournalEntry).check(Schema.isMaxLength(64)),

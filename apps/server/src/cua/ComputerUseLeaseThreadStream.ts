@@ -1,6 +1,7 @@
 import type {
   ComputerUseLeaseThreadUpdate,
   ComputerUsePrimitiveRequest,
+  ComputerUsePrimitiveCancel,
   ComputerUseCursorLeaseUpdate,
   ThreadId,
 } from "@goat/contracts";
@@ -169,27 +170,52 @@ export const threadLeaseUpdates = (input: {
 /** Lease state owns the next slot; primitive traffic cannot delay Stop behind its burst. */
 export const withPrimitiveRequests = <A, R>(
   states: Stream.Stream<A, never, R>,
-  primitives: Stream.Stream<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate> | undefined,
-): Stream.Stream<A | ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate, never, R> =>
+  primitives:
+    | Stream.Stream<
+        ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate
+      >
+    | undefined,
+): Stream.Stream<
+  A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate,
+  never,
+  R
+> =>
   primitives === undefined
     ? states
-    : Stream.callback<A | ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate, never, R>(
+    : Stream.callback<
+        A | ComputerUsePrimitiveRequest | ComputerUsePrimitiveCancel | ComputerUseCursorLeaseUpdate,
+        never,
+        R
+      >(
         (output) =>
           Effect.gen(function* () {
             type State = { readonly kind: "state"; readonly value: A } | { readonly kind: "end" };
             const stateQueue = yield* Queue.bounded<State>(16);
-            const primitiveQueue = yield* Queue.bounded<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>(16);
+            const primitiveQueue = yield* Queue.unbounded<
+              | ComputerUsePrimitiveRequest
+              | ComputerUsePrimitiveCancel
+              | ComputerUseCursorLeaseUpdate
+            >();
+            const cursorQueue = yield* Queue.sliding<ComputerUseCursorLeaseUpdate>(1);
             yield* states.pipe(
               Stream.runForEach((value) => Queue.offer(stateQueue, { kind: "state", value })),
               Effect.ensuring(Queue.offer(stateQueue, { kind: "end" })),
               Effect.forkScoped,
             );
             yield* primitives.pipe(
-              Stream.runForEach((request) => Queue.offer(primitiveQueue, request)),
+              Stream.runForEach((request) =>
+                request.state === "cursor-state" && request.event.op !== "hide"
+                  ? Queue.offer(cursorQueue, request)
+                  : Queue.offer(primitiveQueue, request),
+              ),
               Effect.forkScoped,
             );
             let firstState = true;
-            let pendingPrimitive: ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate | undefined;
+            let pendingPrimitive:
+              | ComputerUsePrimitiveRequest
+              | ComputerUsePrimitiveCancel
+              | ComputerUseCursorLeaseUpdate
+              | undefined;
             for (;;) {
               const readyState = Option.getOrUndefined(yield* Queue.poll(stateQueue));
               if (readyState !== undefined) {
@@ -210,11 +236,21 @@ export const withPrimitiveRequests = <A, R>(
                 firstState = false;
                 continue;
               }
+              const critical = Option.getOrUndefined(yield* Queue.poll(primitiveQueue));
+              if (critical !== undefined) {
+                yield* Queue.offer(output, critical);
+                continue;
+              }
+              const cursor = Option.getOrUndefined(yield* Queue.poll(cursorQueue));
+              if (cursor !== undefined) {
+                yield* Queue.offer(output, cursor);
+                continue;
+              }
               const selected = yield* Effect.raceFirst(
                 Queue.take(stateQueue).pipe(
                   Effect.map((value) => ({ kind: "state" as const, value })),
                 ),
-                Queue.take(primitiveQueue).pipe(
+                Effect.raceFirst(Queue.take(primitiveQueue), Queue.take(cursorQueue)).pipe(
                   Effect.map((value) => ({ kind: "primitive" as const, value })),
                 ),
               );

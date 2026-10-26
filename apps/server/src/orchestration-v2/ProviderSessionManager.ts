@@ -5,7 +5,6 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
-  BuiltInSkillName,
   COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
@@ -13,6 +12,7 @@ import {
   type MemoryTaskGrantCeiling,
   type RunId,
   type ScreenBindingHints,
+  type TurnCapability,
   type NodeId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
@@ -20,8 +20,6 @@ import {
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
   type ProviderInteractionMode,
-  type TurnCapability,
-  resolveProjectBuiltInSkillEnabled,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -61,7 +59,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import { withTurnAgentAccess } from "./TurnCapabilities.ts";
-import { type PrepareReuse, selectPrepareInput } from "./McpPrepareInput.ts";
+import { type PrepareReuse, openPrepareInput, selectPrepareInput } from "./McpPrepareInput.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "../cua/ComputerUsePrimitiveChannel.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
@@ -69,7 +67,6 @@ import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
-import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import * as EventSink from "./EventSink.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -78,6 +75,8 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
+import { resolveAttachedScreenSkills, sameScreenBindingHints } from "./ScreenSkills.ts";
+import { installScreenCodeSkill } from "./ScreenCodeSkillInstall.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -184,60 +183,7 @@ export interface ProviderMemoryPrepareInput {
   readonly screenBindingHints?: ScreenBindingHints;
 }
 
-const sameScreenBindingHints = (
-  left: ScreenBindingHints | undefined,
-  right: ScreenBindingHints | undefined,
-): boolean => {
-  if (left === undefined || right === undefined) return left === right;
-  return (
-    left.browserRequested === right.browserRequested &&
-    left.computerRequested === right.computerRequested &&
-    left.appIds.length === right.appIds.length &&
-    left.appIds.every((id, index) => id === right.appIds[index]) &&
-    left.tabs.length === right.tabs.length &&
-    left.tabs.every((tab, index) => {
-      const other = right.tabs[index];
-      return other !== undefined &&
-        tab.mentionId === other.mentionId &&
-        tab.environmentId === other.environmentId &&
-        tab.browserInstanceId === other.browserInstanceId &&
-        tab.tabId === other.tabId &&
-        tab.titleAtMention === other.titleAtMention &&
-        tab.urlAtMention === other.urlAtMention;
-    })
-  );
-};
-
 /** What opening a provider session for a turn admits; the same for a new or a shared session. */
-function openPrepareInput(
-  input: Parameters<ProviderSessionManagerV2Shape["open"]>[0],
-  providerInstanceId: ProviderInstanceId,
-): ProviderMemoryPrepareInput {
-  const sandbox = input.runtimePolicy.sandboxPolicy;
-  return {
-    threadId: input.threadId,
-    providerInstanceId,
-    ...(input.runId === undefined ? {} : { runId: input.runId }),
-    ...(input.delegatedTaskId === undefined ? {} : { delegatedTaskId: input.delegatedTaskId }),
-    ...(input.memoryGrantCeiling === undefined
-      ? {}
-      : { memoryGrantCeiling: input.memoryGrantCeiling }),
-    ...(input.dispatchScopes === undefined ? {} : { dispatchScopes: input.dispatchScopes }),
-    readOnly:
-      input.readOnly === true ||
-      sandbox === "read-only" ||
-      (typeof sandbox === "object" &&
-        sandbox !== null &&
-        "type" in sandbox &&
-        sandbox.type === "readOnly"),
-    interactionMode: input.runtimePolicy.interactionMode,
-    turnCapabilities: input.turnCapabilities ?? [],
-    ...(input.screenBindingHints === undefined
-      ? {}
-      : { screenBindingHints: input.screenBindingHints }),
-  };
-}
-
 export interface McpCredentialRotation {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
@@ -783,34 +729,15 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
-                const attached: TurnCapability[] = [
-                  ...(browserToolsAvailable && usableThread ? (["browser"] as const) : []),
-                  ...(computerUse._tag === "proxied" ? (["computer-use"] as const) : []),
-                ];
-                const currentSettings = Option.isSome(serverSettings)
-                  ? yield* serverSettings.value.getSettings.pipe(
-                      Effect.tapError((cause) =>
-                        Effect.logWarning("Built-in screen guide unavailable: settings unreadable.", {
-                          cause,
-                        }),
-                      ),
-                      Effect.orElseSucceed(() => undefined),
-                    )
-                  : undefined;
-                const disabledSkills = BuiltInSkillName.literals.filter(
-                  (name) =>
-                    (Option.isSome(serverSettings) && currentSettings === undefined) ||
-                    (currentSettings !== undefined &&
-                      usableThread &&
-                      !resolveProjectBuiltInSkillEnabled(currentSettings, thread.value.projectId, name)),
-                );
-                const activeSkills = resolveBuiltInSkills({
-                  attached,
-                  ...(preparedInput.turnCapabilities === undefined
-                    ? {}
-                    : { requested: preparedInput.turnCapabilities }),
-                  disabled: disabledSkills,
-                }).active;
+                const activeSkills = yield* resolveAttachedScreenSkills({
+                  browserToolsAvailable,
+                  usableThread,
+                  computerUseAttached: computerUse._tag === "proxied",
+                  serverSettings,
+                  projectId: usableThread ? thread.value.projectId : undefined,
+                  requested: preparedInput.turnCapabilities,
+                });
+                if (activeSkills.includes("screen-code")) yield* installScreenCodeSkill;
                 const withTurnSkills = (config: McpProviderSessionConfig) =>
                   ComputerUse.withComputerUse(
                     { ...config, builtInSkills: activeSkills },
@@ -850,10 +777,7 @@ export const layerWithOptions = (
                     )
                   ) {
                     yield* mcpSessions.set(
-                      yield* withNativeSubagentLimit(
-                        threadId,
-                        withTurnSkills(existing),
-                      ),
+                      yield* withNativeSubagentLimit(threadId, withTurnSkills(existing)),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -894,10 +818,7 @@ export const layerWithOptions = (
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
                 yield* mcpSessions.set(
-                  yield* withNativeSubagentLimit(
-                    threadId,
-                    withTurnSkills(credential.config),
-                  ),
+                  yield* withNativeSubagentLimit(threadId, withTurnSkills(credential.config)),
                 );
                 yield* Ref.update(
                   sessions,

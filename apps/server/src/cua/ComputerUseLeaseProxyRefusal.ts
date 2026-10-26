@@ -3,6 +3,7 @@ import type { ComputerUseForegroundGrant } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Scheduler from "effect/Scheduler";
 
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
@@ -32,20 +33,29 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
   readonly finished: () => LeaseEnd | undefined;
   readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
   readonly end: (reason: LeaseEnd) => Effect.Effect<void>;
+  readonly canSend?: Effect.Effect<boolean>;
 }) {
   const current = input.current();
   if (current === undefined || input.proven() === current) return;
   const id = input.nextId();
   const answered = yield* Deferred.make<Envelope | undefined>();
   input.ownAnswers.set(id, answered);
-  yield* current.driver.send(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      method: "tools/call",
-      params: { name: "list_windows", arguments: {} },
-    }),
-  );
+  const sent = yield* Effect.gen(function* () {
+    if (input.canSend && !(yield* input.canSend)) return false;
+    yield* current.driver.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name: "list_windows", arguments: {} },
+      }),
+    );
+    return true;
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
+  if (!sent) {
+    input.ownAnswers.delete(id);
+    return;
+  }
   const answer = yield* Effect.raceFirst(
     Deferred.await(answered),
     Deferred.await(input.ended).pipe(Effect.as(undefined)),

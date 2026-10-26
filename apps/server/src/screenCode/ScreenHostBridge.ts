@@ -189,20 +189,39 @@ export class ScreenHostBridge {
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (++state.calls > context.limits.callsPerCell)
-      return deny({ ...failure("call_limit", call.callId),
-        limit: { name: "callsPerCell", maximum: context.limits.callsPerCell } });
+      return deny({
+        ...failure("call_limit", call.callId),
+        limit: { name: "callsPerCell", maximum: context.limits.callsPerCell },
+      });
     if (state.pending >= context.limits.pendingCalls)
-      return deny({ ...failure("pending_limit", call.callId),
-        limit: { name: "pendingCalls", maximum: context.limits.pendingCalls } });
+      return deny({
+        ...failure("pending_limit", call.callId),
+        limit: { name: "pendingCalls", maximum: context.limits.pendingCalls },
+      });
     if (call.method === "type_text" || call.method === "set_value") {
       const first = Array.isArray(call.args) ? call.args[0] : undefined;
-      const text = first && typeof first === "object" && !Array.isArray(first) && "text" in first
-        ? first.text : undefined;
+      const text =
+        first && typeof first === "object" && !Array.isArray(first) && "text" in first
+          ? first.text
+          : undefined;
       if (typeof text === "string" && Buffer.byteLength(text, "utf8") > context.limits.argBytes)
-        return deny({ ...failure("text_limit", call.callId),
-          limit: { name: "argBytes", maximum: context.limits.argBytes } });
+        return deny({
+          ...failure("text_limit", call.callId),
+          limit: { name: "argBytes", maximum: context.limits.argBytes },
+        });
     }
-    if (!call.targetRef && !["list_apps", "list_windows", "bind_app", "list_tabs", "bind_tab", "open_tab"].includes(call.method))
+    if (
+      !call.targetRef &&
+      ![
+        "list_apps",
+        "list_windows",
+        "bind_app",
+        "launch_app",
+        "list_tabs",
+        "bind_tab",
+        "open_tab",
+      ].includes(call.method)
+    )
       return deny(failure("target_missing", call.callId));
     if (call.targetRef) {
       let touched = this.turnTargets.get(turn);
@@ -297,9 +316,13 @@ export class ScreenHostBridge {
       ),
     );
     if (state.closed) {
-      const dispatched = admittedIndex !== undefined && state.journal[admittedIndex]?.receipt.dispatched === true;
+      const dispatched =
+        admittedIndex !== undefined && state.journal[admittedIndex]?.receipt.dispatched === true;
       settle(dispatched ? "unknown_outcome" : "refused", dispatched ? "unknown" : "settled");
-      return refused(call, { ...failure(dispatched ? "unknown_outcome" : state.cutoffReason ?? "stopped", call.callId), effectStarted: dispatched });
+      return refused(call, {
+        ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
+        effectStarted: dispatched,
+      });
     }
     if (result._tag === "Failure") {
       settle(
@@ -351,7 +374,9 @@ export class ScreenHostBridge {
             const { bytes: _bytes, ...rest } = record;
             return { ...rest, ...metadata };
           }
-          return Object.fromEntries(Object.entries(record).map(([name, part]) => [name, stripImage(part)]));
+          return Object.fromEntries(
+            Object.entries(record).map(([name, part]) => [name, stripImage(part)]),
+          );
         }
         return item;
       };
@@ -361,8 +386,10 @@ export class ScreenHostBridge {
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
       state.truncated.push("return");
       settle("unverifiable");
-      return refused(call, { ...failure("output_limit", call.callId),
-        limit: { name: "returnBytes", maximum: context.limits.returnBytes } });
+      return refused(call, {
+        ...failure("output_limit", call.callId),
+        limit: { name: "returnBytes", maximum: context.limits.returnBytes },
+      });
     }
     const evidence = result.success.evidence ?? [];
     const category =
@@ -411,14 +438,22 @@ export class ScreenHostBridge {
     this.cutCellNow(runId, turnId, cellId);
   });
 
-  cutCellNow(runId: string, turnId: string, cellId: string,
-    reason?: ScreenRunError["code"]): void {
-    const state = this.cells.get(key(runId, turnId, cellId));
+  cutCellNow(runId: string, turnId: string, cellId: string, reason?: ScreenRunError["code"]): void {
+    const id = key(runId, turnId, cellId);
+    const state = this.cells.get(id);
     if (state) {
       state.closed = true;
       if (reason) state.cutoffReason = reason;
       state.cutoff.abort();
     }
+    const turn = `${runId}\u0000${turnId}`;
+    let closed = this.closedCells.get(turn);
+    if (!closed) {
+      closed = new Set();
+      this.closedCells.set(turn, closed);
+    }
+    if (closed.size >= 4096) this.fencedTurns.add(turn);
+    else closed.add(cellId);
     this.endCellTargets(runId, turnId, cellId);
   }
 

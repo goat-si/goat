@@ -1,3 +1,4 @@
+import { acceptsCursorState, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
   DesktopPreviewRecordingInputSchema,
@@ -3169,12 +3170,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   let pointerSequence = 0;
   const cursorOwners = new Map<string, import("@goat/contracts").ComputerUseCursorState>();
-  const emitAgentPointer = Effect.fn("PreviewManager.emitAgentPointer")(function* (pointer: {
-    readonly key: { readonly threadId: string; readonly tabId: string };
-  } & (
-    | { readonly type: "pointer"; readonly phase: "move" | "click"; readonly x: number; readonly y: number; readonly cursor?: import("@goat/contracts").ComputerUseCursorState }
-    | { readonly type: "cursor-state"; readonly cursor: import("@goat/contracts").ComputerUseCursorState }
-  )) {
+  const emitAgentPointer = Effect.fn("PreviewManager.emitAgentPointer")(function* (
+    pointer: AgentPointer,
+  ) {
     const tab = [...(yield* SynchronizedRef.get(tabsRef)).values()].find(
       (candidate) =>
         candidate.serverTab?.threadId === pointer.key.threadId &&
@@ -3183,40 +3181,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!tab) return;
     const previous = cursorOwners.get(tab.tabId);
     if (pointer.cursor !== undefined) {
-      const next = pointer.cursor;
-      if (previous !== undefined) {
-        const sameOwner =
-          previous.identity.environmentId === next.identity.environmentId &&
-          previous.identity.runId === next.identity.runId &&
-          previous.identity.turnId === next.identity.turnId &&
-          previous.identity.targetId === next.identity.targetId &&
-          previous.identity.generation === next.identity.generation;
-        if (sameOwner
-          ? next.identity.sequence <= previous.identity.sequence ||
-            ((previous.phase === "hidden" || previous.phase === "yielded") &&
-              next.phase !== "hidden" && next.phase !== "yielded")
-          : previous.phase !== "hidden" && previous.phase !== "yielded" &&
-            next.identity.generation <= previous.identity.generation) return;
-      }
-      cursorOwners.set(tab.tabId, next);
+      if (!acceptsCursorState(previous, pointer.cursor)) return;
+      cursorOwners.set(tab.tabId, pointer.cursor);
     } else if (previous !== undefined) return;
-    const event: DesktopPreviewCursorEvent = pointer.type === "cursor-state"
-      ? {
-          type: "cursor-state",
-          tabId: tab.tabId,
-          cursor: pointer.cursor,
-          sequence: ++pointerSequence,
-          createdAt: yield* currentIso,
-        }
-      : {
-          tabId: tab.tabId,
-          phase: pointer.phase,
-          x: pointer.x,
-          y: pointer.y,
-          sequence: ++pointerSequence,
-          createdAt: yield* currentIso,
-          ...(pointer.cursor ? { cursor: pointer.cursor } : {}),
-        };
+    const event = pointerEvent(pointer, tab.tabId, ++pointerSequence, yield* currentIso);
     const recording = (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tab.tabId);
     const webContentsId = tab.webContentsId;
     if (recording?.consumers.has("recording") && webContentsId != null) {

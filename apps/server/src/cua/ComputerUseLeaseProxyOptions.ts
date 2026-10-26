@@ -48,7 +48,8 @@ export const primitiveReplySink = (
     const rawResult = envelope?.result;
     const record = (value: unknown): Record<string, unknown> | undefined =>
       value !== null && typeof value === "object" && !Array.isArray(value)
-        ? value as Record<string, unknown> : undefined;
+        ? (value as Record<string, unknown>)
+        : undefined;
     const resultObject = record(rawResult);
     const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
     const imagePart = content.map(record).find((part) => part?.type === "image");
@@ -56,27 +57,38 @@ export const primitiveReplySink = (
     const width = state?.screenshot_width;
     const height = state?.screenshot_height;
     const bytes = imagePart?.data;
-    const imageSize = typeof bytes === "string" &&
+    const imageSize =
+      typeof bytes === "string" &&
       bytes.length <= Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 &&
       /^[A-Za-z0-9+/]*={0,2}$/.test(bytes)
-      ? Buffer.from(bytes, "base64").byteLength : Infinity;
-    const validImage = imagePart !== undefined &&
+        ? Buffer.from(bytes, "base64").byteLength
+        : Infinity;
+    const validImage =
+      imagePart !== undefined &&
       (imagePart.mimeType === "image/png" || imagePart.mimeType === "image/jpeg") &&
-      typeof bytes === "string" && bytes.length % 4 === 0 &&
+      typeof bytes === "string" &&
+      bytes.length % 4 === 0 &&
       imageSize <= DEFAULT_SCREEN_RUN_LIMITS.imageBytes &&
-      Number.isSafeInteger(width) && (width as number) > 0 &&
-      Number.isSafeInteger(height) && (height as number) > 0;
-    const image = validImage ? {
-      mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
-      bytes: bytes as string,
-      width: width as number,
-      height: height as number,
-    } : undefined;
+      Number.isSafeInteger(width) &&
+      (width as number) > 0 &&
+      Number.isSafeInteger(height) &&
+      (height as number) > 0;
+    const image = validImage
+      ? {
+          mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
+          bytes: bytes as string,
+          width: width as number,
+          height: height as number,
+        }
+      : undefined;
     const imageError = imagePart !== undefined && !validImage;
-    const strippedResult = imagePart === undefined ? rawResult : {
-      ...resultObject,
-      content: content.filter((part) => record(part)?.type !== "image"),
-    };
+    const strippedResult =
+      imagePart === undefined
+        ? rawResult
+        : {
+            ...resultObject,
+            content: content.filter((part) => record(part)?.type !== "image"),
+          };
     const bounded = (value: unknown) => {
       if (value === undefined) return undefined;
       const encoded = JSON.stringify(value);
@@ -85,9 +97,11 @@ export const primitiveReplySink = (
         : { message: "Driver reply exceeded the primitive channel limit." };
     };
     const result = imageError ? undefined : bounded(strippedResult);
-    const error = bounded(imageError
-      ? { message: "Driver image exceeded the primitive image limit or was invalid." }
-      : envelope?.error);
+    const error = bounded(
+      imageError
+        ? { message: "Driver image exceeded the primitive image limit or was invalid." }
+        : envelope?.error,
+    );
     return (
       reply?.({
         requestId: request.requestId,
@@ -110,7 +124,13 @@ export const forwardPrimitiveRequests = <E>(
   requests: Stream.Stream<ComputerUsePrimitiveRequest> | undefined,
   reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
   nextId: () => string,
-  forward: (line: string, sink: ReplySink, connectionId: string) => Effect.Effect<unknown, E>,
+  forward: (
+    line: string,
+    sink: ReplySink,
+    connectionId: string,
+    request: ComputerUsePrimitiveRequest,
+  ) => Effect.Effect<unknown, E>,
+  onSettled?: (requestId: string) => void,
 ) =>
   requests === undefined
     ? Effect.void
@@ -125,7 +145,8 @@ export const forwardPrimitiveRequests = <E>(
             }),
             primitiveReplySink(request, reply),
             request.connectionGeneration,
-          ),
+            request,
+          ).pipe(Effect.ensuring(Effect.sync(() => onSettled?.(request.requestId)))),
         ),
         Effect.forkScoped,
         Effect.asVoid,
@@ -168,6 +189,8 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly input: Stream.Stream<string>;
   /** Server-origin calls share the driver's admission path but answer on a separate channel. */
   readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
+  readonly primitiveCancelled?: (requestId: string) => boolean;
+  readonly onPrimitiveSettled?: (requestId: string) => void;
   readonly cursorEvents?: Stream.Stream<ComputerUseCursorLeaseUpdate>;
   readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
   readonly onDriverStarted?: (current: {

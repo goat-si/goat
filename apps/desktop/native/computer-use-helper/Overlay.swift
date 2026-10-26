@@ -67,6 +67,7 @@ final class AgentOverlay {
   private var follow: Timer?
   private var settledPoint: CGPoint?
   private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+  private var currentPhase = "resting"
   private var motionObserver: NSObjectProtocol?
 
   init() {
@@ -120,7 +121,7 @@ final class AgentOverlay {
       self.reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
       self.cursorLayer.removeAllAnimations()
       self.thinkLayer.removeAllAnimations()
-      self.thinkLayer.isHidden = self.reducedMotion
+      self.thinkLayer.isHidden = self.reducedMotion || self.currentPhase != "thinking" || self.target?.point == nil
       self.place(animate: false)
     }
   }
@@ -141,6 +142,7 @@ final class AgentOverlay {
       point = CGPoint(x: fx, y: fy)
     }
     let phase = command["phase"] as? String ?? "resting"
+    currentPhase = phase
     view.acting = phase == "acting" || phase == "moving"
     target = (CGWindowID(windowId), point)
     place(animate: phase == "moving" || phase == "acting")
@@ -170,6 +172,7 @@ final class AgentOverlay {
   }
 
   func hide() {
+    currentPhase = "resting"
     follow?.invalidate()
     follow = nil
     target = nil
