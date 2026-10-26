@@ -324,6 +324,11 @@ export function makeRemoteSessions({
               }),
           ),
         );
+        if (session.token.trim().length === 0)
+          return yield* new SshPairingError({
+            message: "The GOAT app server returned an empty MCP session token.",
+            stdout: body,
+          });
         // The app server applies a requested ceiling; without one it keeps its default.
         return {
           ...session,
@@ -501,7 +506,7 @@ export function makeRemoteSessions({
         { kind: "pairing" },
         input,
       );
-      return yield* decodeRemotePairingOutput(body).pipe(
+      const pairing = yield* decodeRemotePairingOutput(body).pipe(
         Effect.mapError(
           (cause) =>
             new SshPairingError({
@@ -511,6 +516,12 @@ export function makeRemoteSessions({
             }),
         ),
       );
+      if (pairing.credential.trim().length === 0)
+        return yield* new SshPairingError({
+          message: "The GOAT app server returned an empty pairing credential.",
+          stdout: body,
+        });
+      return { credential: pairing.credential };
     }
     const selected =
       prepared ??

@@ -84,7 +84,10 @@ build's migrations.
 The managed server sets `appServerLive` in its descriptor while an app server's record names a
 live PID (`apps/server/src/environment/hostAppServer.ts`). A client reusing a managed forward
 reconnects, and so lands on the app server, only once the managed server's activity probe answers
-`idle` (`shouldMoveToAppServer`). Threads already running there finish where they started. The two
+`idle` (`shouldMoveToAppServer`). Threads already running there finish where they started. Only an
+ensure that reconnects at once drops the forward; background revalidation and the check right after
+a launch leave it alone. A probe that cannot run counts as declined. If the app server refuses a
+credential, that target uses the managed server for ten minutes. The two
 homes keep separate databases; nothing is merged. While the managed server still runs, the app
 lists its threads as **Headless server** (`apps/desktop/src/backend/DesktopHeadlessServer.ts`).
 When the app quits, its forward fails and the next ensure starts or reuses the managed server.

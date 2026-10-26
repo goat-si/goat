@@ -42,7 +42,8 @@ app_userdata="$HOME/.goat/desktop/userdata"
 app_record="$app_userdata/server-runtime.json"
 app_token="$app_userdata/runtime-control.token"
 app_none() { printf 'GOAT_APP_SERVER=%s\n' "$1"; exit 0; }
-[ -f "$app_record" ] && [ ! -L "$app_record" ] || app_none none
+[ -f "$app_record" ] || app_none none
+[ ! -L "$app_record" ] || app_none symlink
 app_line="$(tr '\n' ' ' <"$app_record")"
 app_pid="$(printf '%s\n' "$app_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
 app_port="$(printf '%s\n' "$app_line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
@@ -128,8 +129,8 @@ const sshOptions = (input: SshAuth.SshAuthOptions | undefined) => ({
 });
 
 /**
- * Whether the host's GOAT app server can serve this client. Fails open to `none` when the
- * check itself cannot run, so a host keeps working through the managed server.
+ * Whether the host's GOAT app server can serve this client. A check that cannot run answers
+ * `declined`, so the host keeps working through the managed server and stays there.
  */
 export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
   target: DesktopSshEnvironmentTarget,
@@ -144,7 +145,8 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
     ...sshOptions(input),
   }).pipe(Effect.option);
   const probe = Option.match(result, {
-    onNone: (): AppServerProbe => ({ kind: "none" }),
+    // Unknown is not absent: the managed server may still report the app, so stay put.
+    onNone: (): AppServerProbe => ({ kind: "declined", reason: "probe-failed" }),
     onSome: (output) => parseAppServerProbe(output.stdout),
   });
   if (probe.kind !== "none")

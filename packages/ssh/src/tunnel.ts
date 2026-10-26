@@ -3027,7 +3027,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // The launch round trip measures this link; the forward's readiness budget scales with it.
     const launchMs = (yield* Clock.currentTimeMillis) - launchStartedAt;
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
-      const stop = remoteLaunch.status === "ready" && remoteLaunch.pending === undefined;
+      const stop =
+        remoteLaunch.status === "ready" &&
+        remoteLaunch.remoteServerKind !== "app" &&
+        remoteLaunch.pending === undefined;
       if (!closed) {
         cancelledLaunches.set(input.key, stop);
         launchTransferred = true;
@@ -3190,7 +3193,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       yield* Scope.close(entryScope, Exit.void);
       if (!closed) {
-        cancelledLaunches.set(input.key, remoteLaunch.pending === undefined);
+        cancelledLaunches.set(
+          input.key,
+          remoteLaunch.pending === undefined && remoteLaunch.remoteServerKind !== "app",
+        );
         launchTransferred = true;
       }
       return yield* supersededPreparation();
@@ -3220,6 +3226,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           if (
             !stopRemote ||
             options.leaveRemoteServerRunning === true ||
+            // GOAT never stops the app server it only attached to.
+            tunnelEntry.remoteServerKind === "app" ||
             pendingReplacements.has(tunnelEntry.key)
           ) {
             return;
@@ -3293,6 +3301,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     key: string,
     entry: SshTunnelEntry,
     retainSelection = false,
+    // Only a caller that reconnects right away may drop a forward for the app server.
+    allowAppServerMove = false,
   ) {
     const logFields = {
       ...sshTargetLogFields(entry.target),
@@ -3322,6 +3332,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             : yield* readForwardDescriptor(entry.httpBaseUrl, entry.readiness.probeTimeoutMs);
         const liveVersion = descriptor?.serverVersion;
         const moveToAppServer =
+          allowAppServerMove &&
           (liveVersion === undefined || liveVersion === selectedVersion) &&
           (yield* shouldMoveToAppServer({
             descriptor,
@@ -3419,7 +3430,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         entry.attachmentInvalidated !== true &&
         entry.uncertainDrain !== true
       ) {
-        if (yield* keepAnsweringTunnel(key, entry)) {
+        if (yield* keepAnsweringTunnel(key, entry, false, true)) {
           if (
             previousSelection !== undefined &&
             selection !== undefined &&
@@ -3445,7 +3456,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.has(key) &&
         runner?.refreshOwnedRuntimeOnFirstConnection !== true
       ) {
-        if (yield* keepAnsweringTunnel(key, entry)) {
+        if (yield* keepAnsweringTunnel(key, entry, false, true)) {
           if (
             previousSelection !== undefined &&
             selection !== undefined &&
@@ -3470,7 +3481,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         entry.uncertainDrain === true ||
         pendingReplacements.has(key) ||
         runner?.refreshOwnedRuntimeOnFirstConnection === true;
-      if (!replace && (yield* keepAnsweringTunnel(key, entry))) {
+      if (!replace && (yield* keepAnsweringTunnel(key, entry, false, true))) {
         if (
           previousSelection !== undefined &&
           selection !== undefined &&
@@ -4155,7 +4166,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             yield* closeTunnelEntry(entry);
           }).pipe(Effect.uninterruptible);
         }
-        const stopRemote = cancelledLaunches.get(key) ?? !hadPending;
+        const stopRemote =
+          (cancelledLaunches.get(key) ?? !hadPending) &&
+          (entry === null || entry.remoteServerKind !== "app");
         cancelledLaunches.delete(key);
         if (options.leaveRemoteServerRunning !== true && stopRemote) {
           yield* runWithSshAuth({
