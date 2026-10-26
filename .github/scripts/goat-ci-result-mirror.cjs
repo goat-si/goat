@@ -119,7 +119,10 @@ async function main(env = process.env, io = {}) {
         log((code === 0 ? "::notice" : "::error") + " title=goat-ci-result::" + message);
         return code;
       }
-      // A newer run or attempt appeared while the jobs were read; it decides instead.
+      // A newer run or attempt appeared while the jobs were read; it decides instead. Listings are
+      // eventually consistent and can disagree for a while, so poll rather than list again at once.
+      log("the run listing changed while reading " + run.html_url + "; waiting");
+      await wait(POLL_MS);
       continue;
     }
     if (!own && now() - started >= NO_RUN_GRACE_MS) {
