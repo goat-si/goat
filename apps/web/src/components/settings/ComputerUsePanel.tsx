@@ -45,6 +45,8 @@ interface StatusLine {
   readonly error?: boolean;
   readonly grant?: CuaPermission;
   readonly retry?: boolean;
+  /** This desktop can run the check that proves capture and the tree, and nothing has. */
+  readonly check?: boolean;
   readonly relaunch?: boolean;
   readonly hint?: string | null;
   readonly hintError?: boolean;
@@ -61,6 +63,16 @@ function hostRejects(status: CuaHostStatus | null): boolean {
   if (status === null) return false;
   if (status.failure || status.display?.capability === "unavailable") return true;
   if (!status.readiness) return false;
+  // A Mac whose helper lost its proof (a restart, an update or a wake) shows that step as not
+  // checked rather than unsupported; it still ends a Ready this session's check gave.
+  const { helper, capture, tree } = status.readiness;
+  if (
+    status.platform === "darwin" &&
+    helper === "authenticated" &&
+    capture === "pending" &&
+    tree === "unavailable"
+  )
+    return true;
   const { steps } = computerUseReadinessSteps({
     readiness: status.readiness,
     platform: status.platform,
@@ -83,7 +95,7 @@ function statusLine(input: Parameters<typeof setupLine>[0]): StatusLine | null {
   if (!notice) return line;
   // A failed action keeps the line's own way forward, such as the grant's Open button.
   if (line?.grant) return { ...line, hint: notice, hintError: true };
-  return { text: notice, error: true, retry: line?.retry ?? false };
+  return { text: notice, error: true, retry: line?.retry ?? false, check: line?.check ?? false };
 }
 
 function setupLine(input: {
@@ -138,7 +150,14 @@ function setupLine(input: {
     (reported.accessibility !== "granted" || reported.screenCapture !== "granted")
   )
     return { text: cuaHostRequirements("darwin", input.hostLabel) };
-  return { text: computerUseStatusText({ enabled: true, status, error }) ?? "" };
+  // GOAT keeps a check's proof only until it, its helper or the computer restarts, so an enabled
+  // host is often unproven with nothing left to retry. The check restarts the driver, so it is
+  // not offered while one serves an agent.
+  const proven = status.readiness?.capture === "ready" && status.readiness.tree === "ready";
+  return {
+    text: computerUseStatusText({ enabled: true, status, error }) ?? "",
+    check: localCheck && status.running !== true && !proven,
+  };
 }
 
 /** Closed by default and remembered; a settings search for a row inside opens it for this visit. */
@@ -372,6 +391,15 @@ function ComputerUseStatus({
             onClick={() => void setup.start()}
           >
             Retry setup
+          </Button>
+        ) : line?.check ? (
+          <Button
+            size="compact"
+            variant="outline"
+            disabled={!canConfigure}
+            onClick={() => void setup.start()}
+          >
+            Run check
           </Button>
         ) : null}
         {line?.relaunch && setup.relaunch ? (

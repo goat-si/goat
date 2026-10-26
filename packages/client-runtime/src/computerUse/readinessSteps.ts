@@ -137,7 +137,11 @@ const LINUX_CAPTURE_UNPROVEN =
 // Only GOAT's desktop app on that computer can run the check; a remote client only saves.
 const windowsCaptureUnchecked = (machine: string) =>
   `Not checked yet. Turning computer use on in the GOAT desktop app on ${machine} restarts the helper and proves a real window capture.`;
-const WINDOWS_TREE_UNCHECKED = "The accessibility tree is read by the same check.";
+// A Mac's helper proves capture only through a check, and loses that proof whenever GOAT, its
+// helper or the Mac restarts, updates or wakes, so pending there means unproven, not consent.
+const macCaptureUnchecked = (machine: string) =>
+  `Not checked since GOAT, its helper or this Mac last restarted, updated or woke. Run the check in GOAT's computer use settings on ${machine} to prove a real window capture.`;
+const TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
@@ -251,15 +255,18 @@ export function computerUseReadinessSteps({
   // Capture, the tree and input are read through a confirmed helper; before that, or while it
   // does not answer (#1514), they are unchecked, not unsupported.
   const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
-  const windowsUnchecked = platform === "win32" && readiness?.capture === "pending";
+  const desktopUnchecked =
+    (platform === "win32" || platform === "darwin") && readiness?.capture === "pending";
   const capture = readiness
     ? [
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
-          : windowsUnchecked
+          : desktopUnchecked
             ? ({
                 state: "pending",
-                detail: windowsCaptureUnchecked(machine ?? "this computer"),
+                detail: (platform === "win32" ? windowsCaptureUnchecked : macCaptureUnchecked)(
+                  machine ?? "this computer",
+                ),
               } as const)
             : unconfirmed && readiness.capture === "unavailable"
               ? ({
@@ -272,8 +279,8 @@ export function computerUseReadinessSteps({
               state: "unknown",
               detail: "The accessibility tree is read once the helper is confirmed.",
             } as const)
-          : windowsUnchecked && readiness.tree === "unavailable"
-            ? ({ state: "pending", detail: WINDOWS_TREE_UNCHECKED } as const)
+          : desktopUnchecked && readiness.tree === "unavailable"
+            ? ({ state: "pending", detail: TREE_UNCHECKED } as const)
             : // On Linux the grant means AT-SPI answered; there, an unavailable tree means the
               // driver will not show agents the app's windows (#1610). Elsewhere a granted OS
               // permission proves no such read.
