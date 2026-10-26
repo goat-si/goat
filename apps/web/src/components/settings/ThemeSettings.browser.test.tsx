@@ -119,7 +119,7 @@ it("selects a theme for both modes, then a different theme for dark mode only", 
   await expect
     .element(themes.getByRole("menuitemradio", { name: /^Ember\s*, used for dark mode$/ }))
     .toBeVisible();
-  await userEvent.click(themes.getByRole("menuitemradio", { name: /GOAT/ }));
+  await userEvent.click(themes.getByRole("menuitemradio", { name: /^GOATs*$/ }));
   await expect.element(themeTrigger(screen)).toHaveAccessibleName("Theme: GOAT");
 });
 
