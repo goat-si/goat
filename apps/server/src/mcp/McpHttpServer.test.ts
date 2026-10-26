@@ -550,7 +550,7 @@ it.effect("bounds large ARIA trees without dropping every server locator", () =>
 it.effect("keeps the snapshot text under the agent's output ceiling", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const pageText = "/Users/theo/Code/project\nClaude, Codex · 79 threads\n".repeat(600);
+      const pageText = "/Users/sam/Code/project\nClaude, Codex · 79 threads\n".repeat(600);
       const element = (name: string, index: number) => ({
         tag: "div",
         role: "presentation",

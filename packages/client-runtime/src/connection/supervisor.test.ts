@@ -1701,7 +1701,7 @@ describe("EnvironmentSupervisor with SSH failures", () => {
         prepare: (attempt) =>
           attempt === 1
             ? Effect.fail(
-                sshPreparationFailure(new Error("julius@mbp: Permission denied (publickey).")),
+                sshPreparationFailure(new Error("alex@mbp: Permission denied (publickey).")),
               )
             : Effect.succeed(PREPARED_CONNECTION),
       });

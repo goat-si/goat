@@ -66,10 +66,17 @@ describe("GOAT Connect identifiers", () => {
       'console.error("[goat-cloud] failed")',
     );
     expect(apply(path, 'kind: "t3-connect"')).toBe('kind: "t3-connect"');
-    expect(findResidue(path, 'kind: "t3-connect"', KEEP_RULES)).toEqual([]);
+    expect(
+      findResidue(
+        "packages/client-runtime/src/connection/routes.ts",
+        'kind: "t3-connect"',
+        KEEP_RULES,
+      ),
+    ).toEqual([]);
     expect(findResidue(path, 'console.error("[t3-connect] failed")', KEEP_RULES)).toHaveLength(1);
-    const jwt = 'typ: "t3-cloud-mint+jwt"';
-    expect(findResidue("packages/shared/src/relayJwt.ts", jwt, KEEP_RULES)).toEqual([]);
+    expect(apply("packages/shared/src/relayJwt.ts", 'typ: "t3-cloud-mint+jwt"')).toBe(
+      'typ: "goat-cloud-mint+jwt"',
+    );
   });
 
   it("renames the local page slug and settings-search id together", () => {

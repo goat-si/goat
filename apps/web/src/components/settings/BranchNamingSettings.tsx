@@ -140,7 +140,7 @@ function BranchNamingFields() {
               placeholder={
                 instructionsMixed
                   ? "Mixed. Enter instructions to apply to all selected targets."
-                  : "Use julius/ followed by the issue ID and a short description."
+                  : "Use feature/ followed by the issue ID and a short description."
               }
             />
           </div>

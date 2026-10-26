@@ -824,31 +824,31 @@ describe("filter picker choices", () => {
 
   it("offers authors the host found that no loaded row carries, after the loaded ones", () => {
     const loaded = [
-      { actor: actor("julius", "Julius"), count: 4, mergedCount: 3 },
-      { actor: actor("theo"), count: 1, mergedCount: 0 },
+      { actor: actor("alex", "Alex"), count: 4, mergedCount: 3 },
+      { actor: actor("sam"), count: 1, mergedCount: 0 },
     ];
 
     const choices = pullRequestAuthorChoices(
       loaded,
-      [actor("Julius"), actor("juliana", "Juliana")],
+      [actor("Alex"), actor("juliana", "Juliana")],
       "jul",
     );
 
     expect(choices.map((choice) => [choice.actor.login, choice.count])).toEqual([
-      ["julius", 4],
+      ["alex", 4],
       ["juliana", 0],
     ]);
   });
 
   it("keeps showing an author picked from the host's search once the search clears", () => {
-    const loaded = [{ actor: actor("julius"), count: 4, mergedCount: 3 }];
+    const loaded = [{ actor: actor("alex"), count: 4, mergedCount: 3 }];
     const hosted = [actor("Juliana", "Juliana")];
 
     expect(selectedPullRequestAuthor(loaded, hosted, "juliana")?.actor).toEqual(
       actor("Juliana", "Juliana"),
     );
     expect(selectedPullRequestAuthor(loaded, [], "juliana")?.actor.login).toBe("juliana");
-    expect(selectedPullRequestAuthor(loaded, hosted, "JULIUS")?.count).toBe(4);
+    expect(selectedPullRequestAuthor(loaded, hosted, "ALEX")?.count).toBe(4);
     expect(selectedPullRequestAuthor(loaded, hosted, undefined)).toBeUndefined();
   });
 

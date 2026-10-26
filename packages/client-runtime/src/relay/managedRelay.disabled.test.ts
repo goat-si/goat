@@ -16,7 +16,7 @@ describe("ManagedRelayClient with Connect disabled", () => {
       const load = vi.fn((): ReadonlyArray<ManagedRelay.ManagedRelayAccessTokenCacheEntry> => [
         {
           accountId: "account-1",
-          clientId: "t3-mobile",
+          clientId: "goat-mobile",
           relayUrl: "https://relay.example.test",
           thumbprint: "thumbprint",
           scopes: [RelayEnvironmentConnectScope],
@@ -28,7 +28,7 @@ describe("ManagedRelayClient with Connect disabled", () => {
       const clear = vi.fn();
       const relay = yield* ManagedRelay.make({
         relayUrl: "https://relay.example.test",
-        clientId: "t3-mobile",
+        clientId: "goat-mobile",
         accessTokenStore: { load: Effect.sync(load), save, clear: Effect.sync(clear) },
       }).pipe(
         Effect.provideService(ManagedRelay.ManagedRelayDpopSigner, {

@@ -22,7 +22,7 @@ const devElectronPack = (configs: PackUserConfig[]) =>
   shouldLaunchElectronAfterPack ? withDevElectronLaunch(import.meta.dirname, configs) : configs;
 const publicConfigDefine = {
   __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
-    repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
+    repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
 };
 // The main process stamps the same commit time as the server archive it ships, so the SSH

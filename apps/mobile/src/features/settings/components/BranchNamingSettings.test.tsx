@@ -81,11 +81,11 @@ afterEach(() => {
 describe("BranchNamingSettings", () => {
   it("saves typed instructions when the screen closes before editing ends", () => {
     render("custom");
-    act(() => input(INSTRUCTIONS).onChangeText("  Use julius/ prefixes.  "));
+    act(() => input(INSTRUCTIONS).onChangeText("  Use feature/ prefixes.  "));
     leaveScreen();
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith({
-      branchNameInstructions: "Use julius/ prefixes.",
+      branchNameInstructions: "Use feature/ prefixes.",
     });
   });
 

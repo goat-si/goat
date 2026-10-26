@@ -29,12 +29,12 @@ import {
 } from "./serviceProtocol.ts";
 // A real listener: `goat update` builds its own FetchHttpClient, so the mock client never sees the probe.
 
-const linuxRuntime = "/home/theo/.t3/runtime/goat/versions/1.2.3/goat";
+const linuxRuntime = "/home/sam/.t3/runtime/goat/versions/1.2.3/goat";
 const linuxPlan = {
   program: [linuxRuntime, "__service-launcher"],
-  baseDir: "/home/theo/.t3",
-  logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
-  unitPath: "/home/theo/.config/systemd/user/goat.service",
+  baseDir: "/home/sam/.t3",
+  logPath: "/home/sam/.t3/userdata/logs/boot-service.log",
+  unitPath: "/home/sam/.config/systemd/user/goat.service",
 };
 
 it("reads the served T3 home back out of a rendered unit or plist", () => {
@@ -42,38 +42,38 @@ it("reads the served T3 home back out of a rendered unit or plist", () => {
     program: [`${baseDir}/runtime/goat/versions/1.2.3/goat`, "__service-launcher"],
     baseDir,
     logPath: `${baseDir}/userdata/logs/boot-service.log`,
-    unitPath: "/home/theo/.config/systemd/user/goat.service",
+    unitPath: "/home/sam/.config/systemd/user/goat.service",
   });
 
   expect(
-    BootService.bootServiceBaseDirOf(BootService.renderBootServiceUnit(plan("/home/theo/.t3"))),
-  ).toBe("/home/theo/.t3");
+    BootService.bootServiceBaseDirOf(BootService.renderBootServiceUnit(plan("/home/sam/.t3"))),
+  ).toBe("/home/sam/.t3");
   expect(
     BootService.bootServiceBaseDirOf(
-      BootService.renderBootServiceUnit(plan("/home/theo/T3 Data/100%")),
+      BootService.renderBootServiceUnit(plan("/home/sam/T3 Data/100%")),
     ),
-  ).toBe("/home/theo/T3 Data/100%");
+  ).toBe("/home/sam/T3 Data/100%");
   expect(
     BootService.bootServiceBaseDirOf(
-      BootService.renderBootServicePlist(plan("/Users/theo/a&b"), {
-        homeDir: "/Users/theo",
+      BootService.renderBootServicePlist(plan("/Users/sam/a&b"), {
+        homeDir: "/Users/sam",
         environmentPath: "/usr/bin",
       }),
     ),
-  ).toBe("/Users/theo/a&b");
+  ).toBe("/Users/sam/a&b");
   expect(BootService.bootServiceBaseDirOf("[Service]\nExecStart=/x\n")).toBeUndefined();
 });
 
 it("reads the home of units installed before the GOAT rename", () => {
   // goat-rename: legacy-begin
   expect(
-    BootService.bootServiceBaseDirOf("[Service]\nEnvironment=T3CODE_HOME=/home/theo/.t3\n"),
-  ).toBe("/home/theo/.t3");
+    BootService.bootServiceBaseDirOf("[Service]\nEnvironment=T3CODE_HOME=/home/sam/.t3\n"),
+  ).toBe("/home/sam/.t3");
   expect(
     BootService.bootServiceBaseDirOf(
-      "<dict>\n    <key>T3CODE_HOME</key>\n    <string>/Users/theo/.t3</string>\n</dict>",
+      "<dict>\n    <key>T3CODE_HOME</key>\n    <string>/Users/sam/.t3</string>\n</dict>",
     ),
-  ).toBe("/Users/theo/.t3");
+  ).toBe("/Users/sam/.t3");
   // goat-rename: legacy-end
   const unit = BootService.renderBootServiceUnit(linuxPlan);
   expect(BootService.bootServiceBaseDirOf(unit)).toBe(linuxPlan.baseDir);
@@ -82,12 +82,12 @@ it("reads the home of units installed before the GOAT rename", () => {
 });
 
 it.each([
-  ["a unit", '/home/theo/T3 "Data"/100%\\x', BootService.renderBootServiceUnit],
+  ["a unit", '/home/sam/T3 "Data"/100%\\x', BootService.renderBootServiceUnit],
   [
     "a plist",
-    "/Users/theo/a&b <c>",
+    "/Users/sam/a&b <c>",
     (plan: BootService.BootServicePlan) =>
-      BootService.renderBootServicePlist(plan, { homeDir: "/Users/theo", environmentPath: "" }),
+      BootService.renderBootServicePlist(plan, { homeDir: "/Users/sam", environmentPath: "" }),
   ],
 ] as const)("reads the launcher back out of %s", (_, baseDir, render) => {
   const program = `${baseDir}/runtime/versions/1.2.3/t3`;
@@ -98,16 +98,16 @@ it.each([
   ).toBe(program);
 });
 
-const macRuntime = "/Users/theo/.t3/runtime/goat/versions/1.2.3/goat";
+const macRuntime = "/Users/sam/.t3/runtime/goat/versions/1.2.3/goat";
 const macPlan = {
   program: [macRuntime, "__service-launcher"],
-  baseDir: "/Users/theo/.t3",
-  logPath: "/Users/theo/.t3/userdata/logs/boot-service.log",
-  unitPath: "/Users/theo/Library/LaunchAgents/si.goat.service.plist",
+  baseDir: "/Users/sam/.t3",
+  logPath: "/Users/sam/.t3/userdata/logs/boot-service.log",
+  unitPath: "/Users/sam/Library/LaunchAgents/si.goat.service.plist",
 };
 const macInstallerPath =
-  "/opt/homebrew/bin:/Users/theo/.npm-global/bin:/Users/theo/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
-const macRenderOptions = { homeDir: "/Users/theo", environmentPath: macInstallerPath };
+  "/opt/homebrew/bin:/Users/sam/.npm-global/bin:/Users/sam/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
+const macRenderOptions = { homeDir: "/Users/sam", environmentPath: macInstallerPath };
 
 const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   platform: NodeJS.Platform = "linux",
@@ -944,7 +944,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     Effect.gen(function* () {
       const { service, fs } = yield* makeHarness(
         "darwin",
-        "/opt/homebrew/bin:/Users/theo/\u0001invalid:/usr/bin",
+        "/opt/homebrew/bin:/Users/sam/\u0001invalid:/usr/bin",
       );
       const plan = yield* service.install();
       const plist = yield* fs.readFileString(plan.unitPath);

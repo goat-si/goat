@@ -116,21 +116,21 @@ export default mergeConfig(
         __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
         __GOAT_BUILD_COMMIT__: JSON.stringify(resolveBuildCommit(import.meta.dirname) ?? ""),
         __GOAT_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
-        __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
+        __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
         __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
-          repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
+          repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
         ),
         __GOAT_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: JSON.stringify(
-          repoEnv.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() ?? "",
+          repoEnv.GOAT_CLERK_CLI_OAUTH_CLIENT_ID?.trim() ?? "",
         ),
         __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_URL__: JSON.stringify(
-          repoEnv.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() ?? "",
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_URL?.trim() ?? "",
         ),
         __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_DATASET__: JSON.stringify(
-          repoEnv.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() ?? "",
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() ?? "",
         ),
         __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_TOKEN__: JSON.stringify(
-          repoEnv.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() ?? "",
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() ?? "",
         ),
       },
     },

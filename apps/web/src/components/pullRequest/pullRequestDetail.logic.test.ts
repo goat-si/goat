@@ -669,7 +669,7 @@ describe("findings that cannot be attached", () => {
   const review: PullRequestComment = {
     id: "r1",
     kind: "review",
-    author: { login: "julius", name: null, avatarUrl: null },
+    author: { login: "alex", name: null, avatarUrl: null },
     body: "This breaks SSO auth, revert the middleware change.",
     createdAt: "2026-07-01T00:00:00Z",
     url: null,
@@ -700,7 +700,7 @@ describe("findings that cannot be attached", () => {
           comments: [
             {
               id: attachedId,
-              author: { login: "julius", name: null, avatarUrl: null },
+              author: { login: "alex", name: null, avatarUrl: null },
               body: "rename the helper",
               createdAt: "2026-07-01T00:00:00Z",
               url: null,

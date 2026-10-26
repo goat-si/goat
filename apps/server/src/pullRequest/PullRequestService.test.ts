@@ -1263,10 +1263,10 @@ it.effect("puts the author a query names exactly ahead of those it only begins",
             queries.push(input.query);
             return Effect.succeed({
               items: [
-                { login: "theo-browne", name: null, avatarUrl: null },
-                { login: "octocat", name: "Theo", avatarUrl: null },
-                { login: "julius", name: "Julius", avatarUrl: null },
-                { login: "t3dotgg", name: "theo", avatarUrl: null },
+                { login: "sam-browne", name: null, avatarUrl: null },
+                { login: "octocat", name: "Sam", avatarUrl: null },
+                { login: "alex", name: "Alex", avatarUrl: null },
+                { login: "riven-example", name: "sam", avatarUrl: null },
               ],
               truncated: true,
             });
@@ -1275,12 +1275,12 @@ it.effect("puts the author a query names exactly ahead of those it only begins",
       ],
     });
 
-    const result = yield* service.filterOptions({ kind: "authors", query: "theo" });
+    const result = yield* service.filterOptions({ kind: "authors", query: "sam" });
 
-    assert.deepStrictEqual(queries, ["theo"]);
+    assert.deepStrictEqual(queries, ["sam"]);
     assert.deepStrictEqual(
       result.authors.map((author) => author.login),
-      ["octocat", "t3dotgg", "theo-browne"],
+      ["octocat", "riven-example", "sam-browne"],
     );
     assert.strictEqual(result.truncated, true);
   }),

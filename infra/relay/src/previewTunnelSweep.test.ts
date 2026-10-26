@@ -9,7 +9,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { sweepPreviewStage } from "./previewTunnelSweep.ts";
 
 const KEY = "0123456789abcdef";
-const TUNNEL_NAME = `t3coderelay-managedendpoint-pr-42-${KEY}`;
+const TUNNEL_NAME = `goatrelay-managedendpoint-pr-42-${KEY}`;
 
 // Answers the Cloudflare endpoints the sweep calls and records each request.
 const fakeCloudflare = (options: {
