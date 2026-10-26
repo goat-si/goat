@@ -41,7 +41,7 @@ describe("ThreadMetadataMcpUpdateInput", () => {
       assert.throws(() =>
         decodeUpdate({
           action: "link_pull_request",
-          pullRequest: { repository: "pingdotgg/t3code", number: 8690, url },
+          pullRequest: { repository: "goat-si/goat", number: 8690, url },
         }),
       );
     }

@@ -1,7 +1,6 @@
 import type { KeepRule } from "./engine.ts";
 
 const serviceEndpointPaths = new Set([
-  ".github/triage/PLAYBOOK.md",
   "AGENTS.md",
   "apps/desktop/gnome-extension/bundle.json",
   "apps/desktop/gnome-extension/metadata.json",
@@ -23,21 +22,6 @@ const exactLines = (...lines: readonly string[]) =>
 
 // Match the existing upstream phrases before other keeps strip repository URLs or legacy tokens.
 const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
-  [
-    ".agents/skills/contribution-triage/SKILL.md",
-    exactLines(
-      "description: Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review.",
-    ),
-  ],
-  [
-    ".github/triage/PLAYBOOK.md",
-    exactLines(
-      "# T3 Code triage playbook",
-      "You are a support engineer for T3 Code (https://github.com/pingdotgg/t3code), working",
-      "- How is T3 Code running on this machine: `npx t3 serve` in a terminal, the",
-      "Do not patch the T3 Code source as a fix. A good issue with strong repro steps",
-    ),
-  ],
   [
     "AGENTS.md",
     exactLines(

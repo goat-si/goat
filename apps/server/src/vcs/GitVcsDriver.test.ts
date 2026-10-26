@@ -109,13 +109,13 @@ it.effect("lists the fetch and push URLs of a partial clone remote", () =>
     });
     const driver = yield* GitVcsDriver.makeVcsDriverShape();
     yield* runGit(cwd, ["init"]);
-    yield* runGit(cwd, ["remote", "add", "origin", "https://github.com/pingdotgg/t3code.git"]);
+    yield* runGit(cwd, ["remote", "add", "origin", "https://github.com/goat-si/goat.git"]);
     yield* runGit(cwd, [
       "remote",
       "set-url",
       "--push",
       "origin",
-      "git@github.com:octocat/t3code.git",
+      "git@github.com:octocat/goat.git",
     ]);
     yield* runGit(cwd, ["config", "remote.origin.promisor", "true"]);
     yield* runGit(cwd, ["config", "remote.origin.partialclonefilter", "blob:none"]);
@@ -124,8 +124,8 @@ it.effect("lists the fetch and push URLs of a partial clone remote", () =>
     assert.deepEqual(result.remotes, [
       {
         name: "origin",
-        url: "https://github.com/pingdotgg/t3code.git",
-        pushUrl: Option.some("git@github.com:octocat/t3code.git"),
+        url: "https://github.com/goat-si/goat.git",
+        pushUrl: Option.some("git@github.com:octocat/goat.git"),
         isPrimary: true,
       },
     ]);

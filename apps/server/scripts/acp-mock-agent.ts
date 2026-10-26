@@ -1210,7 +1210,7 @@ const program = Effect.gen(function* () {
                 sources: [
                   { type: "url", url: "https://exa.test" },
                   { type: "url", url: "https://exa.test" },
-                  { type: "url", url: "https://github.com/pingdotgg/t3code" },
+                  { type: "url", url: "https://github.com/goat-si/goat" },
                 ],
               },
               id: "grok-web-search",

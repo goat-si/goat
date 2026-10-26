@@ -34,12 +34,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D10: startup repairs old saved theme IDs; it does not name the current product.",
   ),
   keep(
-    "upstream-policy-cli",
-    [".github/triage/PLAYBOOK.md"],
-    /`(?:npx )?t3(?: triage| serve)?`/g,
-    "#99/R6 retains upstream's support playbook and commands.",
-  ),
-  keep(
     "legacy-env-adoption-comment",
     [
       "apps/desktop/scripts/dev-electron.mjs",

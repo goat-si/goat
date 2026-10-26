@@ -30,6 +30,38 @@ const authReturnTests = new Set([
   "packages/shared/src/codexAuthHandoff.test.ts",
 ]);
 
+// Tests whose subject is upstream itself: the triage playbook must not mention it, and the release
+// notifier runs upstream's release.yml.
+const upstreamSubjectTests = new Set([
+  "apps/server/src/cli/triagePrompt.test.ts",
+  "scripts/notify-discord-release.test.ts",
+]);
+// Here upstream is the unrelated repository next to goat-si/goat.
+const UNRELATED_REPO_TEST = "scripts/build-desktop-artifact.test.ts";
+const sampleRepoScope = (path: string): boolean =>
+  (isTest(path) || path === "apps/server/scripts/acp-mock-agent.ts") &&
+  !upstreamSubjectTests.has(path) &&
+  path !== UNRELATED_REPO_TEST &&
+  !path.startsWith(".github/");
+
+const IDENTITY_TEST = "apps/server/src/project/RepositoryIdentityResolver.test.ts";
+const identityTestSample = (id: string, find: RegExp, replace: string): TextRule => ({
+  id: "samples:" + id,
+  category: "samples",
+  find,
+  replace,
+  scope: (path) => path === IDENTITY_TEST,
+});
+
+/** Upstream's repository as a sample repo in tests. */
+const sampleRepo = (id: string, find: RegExp, replace: string): TextRule => ({
+  id: "samples:" + id,
+  category: "samples",
+  find,
+  replace,
+  scope: sampleRepoScope,
+});
+
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   {
     // Upstream's hosted app is no longer an accepted Codex sign-in return; these tests return to the desktop.
@@ -74,4 +106,31 @@ export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
   sample("julius", /\bjulius\b/g, "alex"),
   sample("theo-title", /\bTheo\b/g, "Sam"),
   sample("theo", /\btheo\b/g, "sam"),
+  // Split owner and name fields first, so they keep matching the combined spelling. Lowercase
+  // spellings come before the mixed-case ones that case-insensitive matching tests use.
+  sampleRepo(
+    "repo-upstream-fields",
+    /(\bowner"?:\s*")pingdotgg("[,\s]*"?(?:name|repo)"?:\s*")t3code"/g,
+    '$1goat-si$2goat"',
+  ),
+  sampleRepo(
+    "repo-tools-fields",
+    /(\bowner"?:\s*")t3tools("[,\s]*"?(?:name|repo)"?:\s*")t3code"/g,
+    '$1sample-tools$2goat"',
+  ),
+  sampleRepo("repo-upstream", /\bpingdotgg\/t3code\b/g, "goat-si/goat"),
+  sampleRepo("repo-upstream-mixed", /\bpingdotgg\/t3code\b/gi, "Goat-SI/Goat"),
+  sampleRepo("repo-tools", /\bt3tools\/t3code\b/g, "sample-tools/goat"),
+  sampleRepo("repo-tools-title", /\bT3Tools\/t3code\b/g, "Sample-Tools/goat"),
+  sampleRepo("repo-tools-mixed", /\bt3tools\/t3code\b/gi, "Sample-Tools/Goat"),
+  sampleRepo("repo-octocat", /\boctocat\/t3code\b/g, "octocat/goat"),
+  // /work/t3code-fork stays: its remote in the same test keeps the fork name.
+  sampleRepo("checkout-path", /(?<=\/work(?:space)?\/)t3code(?!-[a-z])\b/g, "sample-repo"),
+  // A fork and a Bitbucket workspace whose repository name is derived from the samples above.
+  sampleRepo("repo-derived", /\b(binbandit|owner)\/t3code\b(?!-)/g, "$1/goat"),
+  // This file also asserts owner and name separately, so its owner moves everywhere in it.
+  identityTestSample("owner-tools-identity", /\bT3Tools\b/g, "Sample-Tools"),
+  identityTestSample("owner-tools-identity-key", /(?<![\w.-])t3tools(?=\/)/g, "sample-tools"),
+  identityTestSample("nested-identity", /(?<=\/platform\/)t3code\b/g, "goat"),
+  identityTestSample("name-identity", /(?<=\.name\)\.toBe\(")t3code(?="\))/g, "goat"),
 ];

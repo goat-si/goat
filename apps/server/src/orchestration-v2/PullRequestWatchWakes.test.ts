@@ -188,8 +188,8 @@ const seedProject = (input: {
     }),
   );
 
-const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
-const url = "https://github.com/pingdotgg/t3code/pull/7";
+const key = { host: "github.com", repository: "goat-si/goat", number: 7 };
+const url = "https://github.com/goat-si/goat/pull/7";
 const notification = {
   source: { kind: "monitor" as const },
   outcome: "failed" as const,
@@ -398,7 +398,7 @@ describe("pull request watch wakes", () => {
 });
 
 const second = { ...key, number: 8 };
-const secondUrl = "https://github.com/pingdotgg/t3code/pull/8";
+const secondUrl = "https://github.com/goat-si/goat/pull/8";
 
 /** An idle thread watching #7 and #8, each with one update kept as context. */
 const threadWithKeptContext = (name: string) =>

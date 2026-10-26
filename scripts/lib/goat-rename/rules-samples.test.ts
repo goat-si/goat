@@ -35,4 +35,29 @@ describe("sample names", () => {
       ),
     ).toBe('"Use feature/ followed by the issue ID and a short description."');
   });
+
+  it("points upstream sample repositories in tests at GOAT", () => {
+    expect(
+      apply(
+        "a/b.test.ts",
+        '{ owner: "pingdotgg", name: "t3code" } pingdotgg/t3code PingDotGG/T3Code',
+      ),
+    ).toBe('{ owner: "goat-si", name: "goat" } goat-si/goat Goat-SI/Goat');
+    expect(
+      apply(
+        "a/b.test.ts",
+        "t3tools/t3code T3Tools/t3code T3Tools/T3Code com.t3tools.T3Code.desktop",
+      ),
+    ).toBe("sample-tools/goat Sample-Tools/goat Sample-Tools/Goat com.t3tools.T3Code.desktop");
+    expect(apply("a/b.test.ts", "/work/t3code /work/t3code-2 /work/t3code-fork")).toBe(
+      "/work/sample-repo /work/sample-repo-2 /work/t3code-fork",
+    );
+    // Upstream is the subject of these tests, and replay transcripts record the real checkout.
+    for (const path of ["apps/server/src/cli/triagePrompt.test.ts", "src/x.ts"]) {
+      expect(apply(path, "pingdotgg/t3code")).toBe("pingdotgg/t3code");
+    }
+    expect(apply("a/b.test.ts", "/home/replay-user/t3code C:/Users/mike/t3code")).toBe(
+      "/home/replay-user/t3code C:/Users/mike/t3code",
+    );
+  });
 });

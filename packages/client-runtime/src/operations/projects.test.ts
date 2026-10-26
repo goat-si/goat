@@ -21,9 +21,7 @@ describe("add project shared logic", () => {
     expect(normalizePastedCloneUrl("imputnet/helium")).toBe(
       "https://github.com/imputnet/helium.git",
     );
-    expect(normalizePastedCloneUrl("  pingdotgg/t3code  ")).toBe(
-      "https://github.com/pingdotgg/t3code.git",
-    );
+    expect(normalizePastedCloneUrl("  goat-si/goat  ")).toBe("https://github.com/goat-si/goat.git");
   });
 
   it("keeps explicit clone URLs and local paths unchanged", () => {

@@ -127,20 +127,18 @@ describe("pullRequestCandidateUrlFromReferenceAutolink", () => {
   it("turns GitHub's shared issue route into a pull request candidate", () => {
     expect(
       pullRequestCandidateUrlFromReferenceAutolink(
-        "https://github.com/pingdotgg/t3code/issues/8600#issuecomment-1",
+        "https://github.com/goat-si/goat/issues/8600#issuecomment-1",
       ),
-    ).toBe("https://github.com/pingdotgg/t3code/pull/8600#issuecomment-1");
+    ).toBe("https://github.com/goat-si/goat/pull/8600#issuecomment-1");
   });
 
   it("does not reinterpret other issue hosts or malformed references", () => {
     expect(
-      pullRequestCandidateUrlFromReferenceAutolink(
-        "https://gitlab.com/pingdotgg/t3code/-/issues/8600",
-      ),
+      pullRequestCandidateUrlFromReferenceAutolink("https://gitlab.com/goat-si/goat/-/issues/8600"),
     ).toBeNull();
     expect(
       pullRequestCandidateUrlFromReferenceAutolink(
-        "https://github.com/pingdotgg/t3code/issues/not-a-number",
+        "https://github.com/goat-si/goat/issues/not-a-number",
       ),
     ).toBeNull();
   });
@@ -149,16 +147,16 @@ describe("pullRequestCandidateUrlFromReferenceAutolink", () => {
 describe("matchesLinkedPullRequestUrl", () => {
   const linkedPullRequest = {
     projectId: ProjectId.make("project-1"),
-    repository: "pingdotgg/t3code",
+    repository: "goat-si/goat",
     number: 42,
-    url: "https://github.com/pingdotgg/t3code/pull/42",
+    url: "https://github.com/goat-si/goat/pull/42",
   };
 
   it("matches the same pull request without looking up its project", () => {
     expect(
       matchesLinkedPullRequestUrl(
         linkedPullRequest,
-        "https://github.com/PingDotGG/T3Code/pull/42/files",
+        "https://github.com/Goat-SI/Goat/pull/42/files",
       ),
     ).toBe(true);
   });
@@ -337,7 +335,7 @@ describe("findProjectForChangeRequest", () => {
   it("claims nothing for a lookalike host, which is what keeps a link a link", () => {
     const projects = [
       project({
-        canonicalKey: "github.com/pingdotgg/t3code",
+        canonicalKey: "github.com/goat-si/goat",
         provider: "github",
         owner: "pingdotgg",
         name: "t3code",
@@ -346,7 +344,7 @@ describe("findProjectForChangeRequest", () => {
     expect(
       findProjectForChangeRequest(projects, {
         host: "github.com-evil.test",
-        repository: "pingdotgg/t3code",
+        repository: "goat-si/goat",
         number: 1,
       }),
     ).toBeUndefined();
