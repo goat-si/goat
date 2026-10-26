@@ -1,3 +1,9 @@
+import {
+  POWERSHELL_FLAGS,
+  POWERSHELL_OPTIONS_WITH_VALUE,
+  powerShellCommandArgumentIndex,
+} from "./powerShellOptions";
+
 type CommandWrapper = "env" | "sudo";
 type CommandProgramContext = "exec" | "shell";
 
@@ -16,16 +22,6 @@ const SHELL_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--rcfile", "--init-file"]
 const SHELL_COMMAND_WRAPPERS = new Set(["builtin", "command", "exec"]);
 const SHELL_PRECOMMAND_MODIFIERS = new Set(["nocorrect", "noglob", "time"]);
 const POWERSHELL_SETUP_PROGRAMS = new Set(["pop-location", "push-location", "set-location"]);
-const POWERSHELL_FLAGS = new Set(["-mta", "-nologo", "-noninteractive", "-noprofile", "-sta"]);
-const POWERSHELL_OPTIONS_WITH_VALUE = new Set([
-  "-configurationname",
-  "-executionpolicy",
-  "-inputformat",
-  "-outputformat",
-  "-version",
-  "-windowstyle",
-  "-workingdirectory",
-]);
 const START_PROCESS_FLAGS = new Set([
   "-confirm",
   "-debug",
@@ -1398,18 +1394,6 @@ function withoutShellWrapper(command: string): string {
 }
 
 const POWERSHELL_PROGRAMS = new Set(["powershell", "pwsh"]);
-
-/** Index of the script after `-Command`/`-c`, or null when the call runs a file or anything else. */
-function powerShellCommandArgumentIndex(tokens: ReadonlyArray<string>): number | null {
-  for (let index = 1; index < tokens.length; index += 1) {
-    const option = tokens[index]!.toLowerCase();
-    if (!option.startsWith("-")) return null;
-    if (option === "-c" || option === "-command") return index + 1;
-    if (POWERSHELL_OPTIONS_WITH_VALUE.has(option)) index += 1;
-    else if (!POWERSHELL_FLAGS.has(option)) return null;
-  }
-  return null;
-}
 
 const POWERSHELL_VERBS = new Set(
   `Add Approve Assert Backup Block Build Checkpoint Clear Close Compare Complete Compress Confirm Connect Convert ConvertFrom ConvertTo Copy Debug Deny Deploy Disable Disconnect Dismount Edit Enable Enter Exit Expand Export Find ForEach Format Get Grant Group Hide Import Initialize Install Invoke Join Limit Lock Measure Merge Mount Move New Open Optimize Out Ping Pop Protect Publish Push Read Receive Redo Register Remove Rename Repair Request Reset Resize Resolve Restart Restore Resume Revoke Save Search Select Send Set Show Skip Sort Split Start Step Stop Submit Suspend Switch Sync Tee Test Trace Unblock Undo Uninstall Unlock Unprotect Unpublish Unregister Update Use Wait Watch Where Write`.split(

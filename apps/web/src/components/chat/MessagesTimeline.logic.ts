@@ -25,6 +25,7 @@ import {
   type ToolGroupSummaryKind,
 } from "@goat/client-runtime/work-log/presentation";
 export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
+import { commandVerb } from "./commandVerb";
 import {
   deriveRevertTurnCountByUserMessageId,
   formatDuration,
@@ -270,21 +271,6 @@ export function liveWorkEntryLabel(
     return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
   }
   return workEntryDisplayLabel(entry, workspaceRoot);
-}
-
-function commandVerb(status: ReturnType<typeof liveActivityToolStatus>): string {
-  switch (status) {
-    case "inProgress":
-      return "Running";
-    case "failed":
-      return "Failed";
-    case "declined":
-      return "Declined";
-    case "stopped":
-      return "Stopped";
-    default:
-      return "Ran";
-  }
 }
 
 export function workEntryIsVisibleInGroup(
