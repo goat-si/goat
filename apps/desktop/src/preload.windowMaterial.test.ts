@@ -1,5 +1,5 @@
 import type { DesktopBridge, DesktopWindowMaterialState } from "@goat/contracts";
-import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import * as Channels from "./ipc/channels.ts";
 
 const ipc = vi.hoisted(() => ({
@@ -24,14 +24,14 @@ vi.mock("electron", () => ({
   webFrame: {},
   webUtils: {},
 }));
-beforeAll(async () => {
-  vi.stubGlobal("window", { addEventListener: () => {} });
-  try {
-    await import("./preload.ts");
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
+// Loaded while the file is collected: in a hook, the preload's transform counts against the hook
+// timeout, which a loaded CI runner exceeds.
+vi.stubGlobal("window", { addEventListener: () => {} });
+try {
+  await import("./preload.ts");
+} finally {
+  vi.unstubAllGlobals();
+}
 
 const state: DesktopWindowMaterialState = {
   revision: 1,

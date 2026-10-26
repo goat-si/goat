@@ -1,5 +1,5 @@
 import type { DesktopBridge } from "@goat/contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as IpcChannels from "./ipc/channels.ts";
 
@@ -34,11 +34,14 @@ vi.mock("electron", () => ({
   webUtils: {},
 }));
 
-beforeAll(async () => {
-  vi.stubGlobal("window", { addEventListener: () => {} });
+// Loaded while the file is collected: in a hook, the preload's transform counts against the hook
+// timeout, which a loaded CI runner exceeds.
+vi.stubGlobal("window", { addEventListener: () => {} });
+try {
   await import("./preload.ts");
+} finally {
   vi.unstubAllGlobals();
-});
+}
 
 const target = { alias: "box", hostname: "box.test", username: null, port: null };
 const bootstrap = {
