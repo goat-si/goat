@@ -1228,7 +1228,7 @@ for (const type of ["provider-turn.start", "provider-turn.restart"] as const) {
         attemptCount: 1,
         lastError: null,
       });
-      expect(h.projection().runs.at(-1)?.status).toBe("failed");
+      expect(h.projection().runs.at(-1)?.terminationCause).toEqual({ kind: "validation_error" });
       expect(h.projection().turnItems).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

@@ -44,6 +44,43 @@ export function terminalTerminationCause(
   return { kind: "unknown" };
 }
 
+/**
+ * A run that fails before its provider turn starts. An error item's failure class says whose
+ * problem it was; a failed setup command or an unclassified failure is preparation.
+ */
+export function beforeStartTerminationCause(item: {
+  readonly type: string;
+  readonly failure?: { readonly class: string };
+}): OrchestrationV2RunTerminationCause {
+  const failureClass = item.type === "error" ? item.failure?.class : undefined;
+  if (failureClass === "validation_error") return { kind: "validation_error" };
+  if (failureClass === "usage_limit") return { kind: "quota" };
+  if (failureClass === "provider_error" || failureClass === "permission_error")
+    return { kind: "provider_error" };
+  return { kind: "preparation_failed" };
+}
+
+/** The run.updated payload for a run settled before its provider turn starts. */
+export function settledBeforeStartRun(
+  run: OrchestrationV2Run,
+  settled: {
+    readonly status: "completed" | "failed";
+    readonly now: DateTime.Utc;
+    readonly item: Parameters<typeof beforeStartTerminationCause>[0];
+  },
+  started: { readonly startedAt?: DateTime.Utc },
+): OrchestrationV2Run {
+  return {
+    ...run,
+    status: settled.status,
+    ...started,
+    completedAt: settled.now,
+    ...(settled.status === "failed"
+      ? { terminationCause: beforeStartTerminationCause(settled.item) }
+      : {}),
+  };
+}
+
 export function queuedStartFailureKind(cause: unknown): Kind {
   const failure =
     typeof cause === "object" &&
