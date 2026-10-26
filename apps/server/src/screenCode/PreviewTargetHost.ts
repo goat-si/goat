@@ -381,6 +381,38 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ? (arg.query as { role?: string; name?: string; text?: string })
             : undefined;
         const baseObservationId = stringField(arg, "baseObservationId");
+        const screenshot = snapshot.screenshot;
+        const shot =
+          screenshot && screenshot.region && screenshot.scale && screenshot.data
+            ? {
+                ...screenshot,
+                region: screenshot.region,
+                scale: screenshot.scale,
+                data: screenshot.data,
+              }
+            : undefined;
+        const imageRef = NodeCrypto.randomUUID();
+        const regionId = NodeCrypto.randomUUID();
+        const imageMetadata = (observationId: string): ScreenImageMetadata | undefined =>
+          shot && {
+            imageRef,
+            callId: call.callId,
+            targetId: bound.ref.id,
+            observationId,
+            regionId,
+            region: shot.region,
+            pixelWidth: shot.width,
+            pixelHeight: shot.height,
+            scale: shot.scale,
+            mimeType: shot.mimeType,
+          };
+        // The reply carries the image metadata beside the tree, so the tree leaves room for its
+        // largest form. Observation ids are UUIDs, so a fresh one measures the same.
+        const reserved = imageMetadata(NodeCrypto.randomUUID());
+        const imageReserve = reserved
+          ? // @effect-diagnostics-next-line preferSchemaOverJson:off -- measures the bytes the reply will carry.
+            Buffer.byteLength(JSON.stringify({ image: { ...reserved, omitted: true } }))
+          : 0;
         const observation = yield* Effect.try({
           try: () =>
             observations.renderObservation({
@@ -388,7 +420,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               mode,
               ...(baseObservationId ? { baseObservationId } : {}),
               ...(query ? { query } : {}),
-              limits: { treeBytes: observationReplyBudget(call, context.limits) },
+              limits: { treeBytes: observationReplyBudget(call, context.limits, imageReserve) },
             }),
           catch: (cause) =>
             fail(
@@ -399,39 +431,27 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               "Observe a smaller tab region and retry.",
             ),
         });
-        const screenshot = snapshot.screenshot;
-        if (!screenshot || !screenshot.region || !screenshot.scale || !screenshot.data) {
+        const metadata = imageMetadata(observation.observationId);
+        if (!shot || !metadata) {
           return {
             value: observation,
             category: "confirmed",
             evidence: ["Current tab tree observed"],
           };
         }
-        const metadata: ScreenImageMetadata = {
-          imageRef: NodeCrypto.randomUUID(),
-          callId: call.callId,
-          targetId: bound.ref.id,
-          observationId: observation.observationId,
-          regionId: NodeCrypto.randomUUID(),
-          region: screenshot.region,
-          pixelWidth: screenshot.width,
-          pixelHeight: screenshot.height,
-          scale: screenshot.scale,
-          mimeType: screenshot.mimeType,
-        };
         observations.index.putRegion(bound.ref.id, observation.observationId, metadata.regionId, {
           ...metadata.region,
           pixelWidth: metadata.pixelWidth,
           pixelHeight: metadata.pixelHeight,
           scale: metadata.scale,
         });
-        if (Buffer.from(screenshot.data, "base64").byteLength > context.limits.imageBytes)
+        if (Buffer.from(shot.data, "base64").byteLength > context.limits.imageBytes)
           return {
             value: { ...observation, image: { ...metadata, omitted: true } },
             category: "partial",
             evidence: ["Image exceeded the cell limit"],
           };
-        const image: ScreenImage = { ...metadata, bytes: screenshot.data };
+        const image: ScreenImage = { ...metadata, bytes: shot.data };
         return {
           value: { ...observation, image: metadata },
           image,

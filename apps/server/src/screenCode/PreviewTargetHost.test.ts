@@ -138,7 +138,7 @@ it.effect("default observation does not capture an image", () =>
 );
 
 it.effect(
-  "a default-limit observation of a large tree returns truncated elements instead of output_limit",
+  "a default-limit screenshot observation of a large tree returns truncated elements and its image instead of output_limit",
   () =>
     Effect.gen(function* () {
       const tab = {
@@ -174,6 +174,14 @@ it.effect(
                   accessibilityTree: tree,
                   treeComplete: true,
                   refGeneration: "1",
+                  screenshot: {
+                    mimeType: "image/png",
+                    data: "AQID",
+                    width: 2,
+                    height: 2,
+                    region: { kind: "viewport", x: 0, y: 0, width: 1280, height: 720 },
+                    scale: 2,
+                  },
                 }) as A,
           ),
       };
@@ -183,10 +191,13 @@ it.effect(
       expect(binding?.outcome).toBe("ok");
       if (!binding || binding.outcome !== "ok") throw new Error("Expected tab binding");
       const targetRef = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
-      const reply = yield* bridge.handle(call("observe", 2, {}, targetRef), context);
+      const reply = yield* bridge.handle(
+        call("observe", 2, { screenshot: true }, targetRef),
+        context,
+      );
       expect(reply?.outcome).toBe("ok");
       if (!reply || reply.outcome !== "ok") throw new Error("Expected observation");
-      expect(reply.value).toMatchObject({ truncated: true });
+      expect(reply.value).toMatchObject({ truncated: true, image: { mimeType: "image/png" } });
       expect((reply.value as { elements: unknown[] }).elements.length).toBeLessThan(400);
       expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
         context.limits.returnBytes,

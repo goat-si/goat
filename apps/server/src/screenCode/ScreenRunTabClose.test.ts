@@ -13,6 +13,8 @@ import {
 } from "@goat/contracts";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { authorityReporter, type AuthorityListener } from "../preview/ServerBrowserScreen.ts";
+import { SessionControl } from "../preview/SessionControl.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -33,15 +35,15 @@ const context = {
   },
 };
 
-// Mirrors ServerBrowser: a close reports Stop for the tab before it replies, and a closed tab
-// leaves the live list, so an exact status for it finds no host.
+// Mirrors ServerBrowser: the tab's real control and authority reporter fire when close() drops
+// the owner, then the dropped tab reports Stop, all before the close replies. A closed tab leaves
+// the live list, so an exact status for it finds no host.
 const temporaryTabFixture = () => {
   const state = {
     open: false,
     closes: 0,
-    changed: undefined as
-      | ((change: { kind: "stop"; threadId: string; tabId: string }) => void)
-      | undefined,
+    changed: undefined as AuthorityListener | undefined,
+    control: undefined as SessionControl | undefined,
     commands: [] as Array<{ readonly type: string }>,
   };
   const tab = {
@@ -62,6 +64,14 @@ const temporaryTabFixture = () => {
       Effect.suspend(() => {
         if (request.operation === "open") {
           state.open = true;
+          const control = new SessionControl("agent");
+          control.onChange(
+            authorityReporter(
+              { control, threadId: "thread" as ThreadId, tabId: tab.tabId },
+              (change) => state.changed?.(change),
+            ),
+          );
+          state.control = control;
           return Effect.succeed({ tabId: tab.tabId } as A);
         }
         if (!state.open)
@@ -76,6 +86,7 @@ const temporaryTabFixture = () => {
           );
         if (request.operation === "close") {
           state.closes++;
+          void state.control?.close();
           state.changed?.({ kind: "stop", threadId: "thread", tabId: tab.tabId });
           state.open = false;
           return Effect.succeed({} as A);

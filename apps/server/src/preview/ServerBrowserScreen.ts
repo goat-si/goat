@@ -17,19 +17,25 @@ export interface AuthorityChange {
 export type AuthorityListener = (change: AuthorityChange) => void;
 
 /** Reports only real control changes: generation moves, not every viewer or owner update. */
-export const authorityReporter = (tab: ServerTab, notify: AuthorityListener) => {
+export const authorityReporter = (
+  tab: Pick<ServerTab, "control" | "threadId" | "tabId">,
+  notify: AuthorityListener,
+) => {
   let observedGeneration = tab.control.generation;
   return () => {
     if (tab.control.generation === observedGeneration) return;
     observedGeneration = tab.control.generation;
     notify({
-      kind: tab.control.isPrivate
-        ? "private"
-        : tab.control.isAgentStopped
-          ? "stop"
-          : tab.control.controller !== null
-            ? "takeover"
-            : "handBack",
+      // Closing drops the owner too; that ends the tab, it does not hand it back.
+      kind: tab.control.isClosed
+        ? "stop"
+        : tab.control.isPrivate
+          ? "private"
+          : tab.control.isAgentStopped
+            ? "stop"
+            : tab.control.controller !== null
+              ? "takeover"
+              : "handBack",
       threadId: tab.threadId,
       tabId: tab.tabId,
     });

@@ -59,6 +59,10 @@ export class SessionControl {
     return this.epoch;
   }
 
+  get isClosed() {
+    return this.closed;
+  }
+
   /** A secret field or passkey prompt has focus: agents neither act nor look, viewers see nothing. */
   get isPrivate() {
     return this.privateMode;

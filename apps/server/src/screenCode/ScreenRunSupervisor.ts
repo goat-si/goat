@@ -80,6 +80,10 @@ const ChildResultFrame = Schema.Struct({
   unawaitedCallIds: Schema.optionalKey(Schema.Array(Schema.Int)),
 });
 const decodeChildResult = Schema.decodeUnknownSync(ChildResultFrame);
+const UNREAD_AVAILABILITY = [
+  { kind: "app" as const, available: false, reason: "no_lease" as const },
+  { kind: "tab" as const, available: false, reason: "no_host" as const },
+];
 export const screenChildInvocation = (invocation: SelfInvocation) => ({
   command: invocation.command,
   args: selfInvocationArgs(invocation, ["__screen-run-child"]),
@@ -166,7 +170,9 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
-            let resultReceived = false;
+            // Set once the child's result arrives: a later Stop, wall timer or exit finishes the
+            // cell with that result, because the bridge's journal may already be taken.
+            let finishAfterResult: ((code: typeof SupervisorCode.Type) => void) | undefined;
             const hostErrors = new Map<number, ScreenRunError>();
             const callAbort = new AbortController();
             const cleanup = () => {
@@ -178,6 +184,7 @@ export function createScreenRunSupervisor(deps: {
             };
             const failRun = (code: typeof SupervisorCode.Type) => {
               if (settled) return;
+              if (finishAfterResult) return finishAfterResult(code);
               settled = true;
               cleanup();
               deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
@@ -211,7 +218,7 @@ export function createScreenRunSupervisor(deps: {
             };
             const onAbort = () => failRun("stopped");
             const onLine = (line: string) => {
-              if (resultReceived || settled) return;
+              if (finishAfterResult || settled) return;
               if (Buffer.byteLength(line) > MAX_FRAME_BYTES) return failRun("output_limit");
               let frame: unknown;
               try {
@@ -248,7 +255,8 @@ export function createScreenRunSupervisor(deps: {
                 return failRun("runtime_unavailable");
               }
               if (result.cellId !== cellId) return failRun("runtime_unavailable");
-              resultReceived = true;
+              // The child finished inside its wall limit; only collection remains.
+              cancelDeadline();
               session.lines.off("line", onLine);
               const error = Schema.is(ScreenRunError)(result.error)
                 ? result.error.callId !== undefined &&
@@ -258,6 +266,43 @@ export function createScreenRunSupervisor(deps: {
                 : Schema.is(ScreenGuestError)(result.error)
                   ? result.error
                   : undefined;
+              let collected: ReturnType<ScreenHostBridge["takeCellImagesNow"]> | undefined;
+              const finish = (
+                taken: ReturnType<ScreenHostBridge["takeCellImagesNow"]>,
+                availability: ScreenRunResult["availability"],
+              ) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve({
+                  runId: identity.runId,
+                  turnId: identity.turnId,
+                  cellId,
+                  status: result.status,
+                  ...(error === undefined ? {} : { error }),
+                  ...(result.value === undefined ? {} : { value: result.value }),
+                  console: Array.isArray(result.console) ? result.console : [],
+                  truncated: [
+                    ...(Array.isArray(result.truncated) ? result.truncated : []),
+                    ...taken.truncated,
+                  ],
+                  journal: taken.journal,
+                  imageMetadata: taken.imageMetadata,
+                  images: taken.images,
+                  availability,
+                });
+              };
+              finishAfterResult = (code) => {
+                if (settled) return;
+                callAbort.abort();
+                // A per-cell Stop leaves an idle child with its values; an exit or failure does not.
+                if (code !== "stopped") close(session);
+                finish(
+                  collected ??
+                    deps.hostBridge.takeCellImagesNow(identity.runId, identity.turnId, cellId),
+                  UNREAD_AVAILABILITY,
+                );
+              };
               const collect = Effect.gen(function* () {
                 if (result.status === "failed")
                   yield* deps.hostBridge.cutCell(
@@ -274,7 +319,7 @@ export function createScreenRunSupervisor(deps: {
                     result.unawaitedCallIds,
                   );
                 if (result.unawaitedCallIds?.length) callAbort.abort();
-                const collected = yield* deps.hostBridge.takeCellImages(
+                collected = yield* deps.hostBridge.takeCellImages(
                   identity.runId,
                   identity.turnId,
                   cellId,
@@ -282,46 +327,14 @@ export function createScreenRunSupervisor(deps: {
                 const available = yield* deps.hostBridge
                   .availability(identity.context)
                   .pipe(Effect.timeoutOption("1 second"));
-                const availability = Option.getOrElse(available, () => [
-                  { kind: "app" as const, available: false, reason: "no_lease" as const },
-                  { kind: "tab" as const, available: false, reason: "no_host" as const },
-                ]);
-                return { collected, availability };
+                return {
+                  taken: collected,
+                  availability: Option.getOrElse(available, () => UNREAD_AVAILABILITY),
+                };
               });
               void deps.runCallback(collect).then(
-                ({ collected, availability }) => {
-                  if (settled) return;
-                  settled = true;
-                  cleanup();
-                  resolve({
-                    runId: identity.runId,
-                    turnId: identity.turnId,
-                    cellId,
-                    status: result.status,
-                    ...(error === undefined ? {} : { error }),
-                    ...(result.value === undefined ? {} : { value: result.value }),
-                    console: Array.isArray(result.console) ? result.console : [],
-                    truncated: [
-                      ...(Array.isArray(result.truncated) ? result.truncated : []),
-                      ...collected.truncated,
-                    ],
-                    journal: collected.journal,
-                    imageMetadata: collected.imageMetadata,
-                    images: collected.images,
-                    availability,
-                  });
-                },
-                (cause) => {
-                  if (settled) return;
-                  settled = true;
-                  cleanup();
-                  close(session);
-                  reject(
-                    Schema.is(ScreenSupervisorFailure)(cause)
-                      ? cause
-                      : failure("runtime_unavailable"),
-                  );
-                },
+                ({ taken, availability }) => finish(taken, availability),
+                () => failRun("runtime_unavailable"),
               );
             };
             const cancelDeadline = deps.scheduleDeadline
@@ -375,7 +388,10 @@ export function createScreenRunSupervisor(deps: {
       if (session.active) {
         yield* deps.hostBridge.cutCell(runId, turnId, session.active, reason);
         session.abortActive?.("stopped");
-      } else close(session);
+      }
+      // A cell that already returned its result keeps the child through a per-cell Stop; the turn
+      // ending still ends it.
+      close(session);
     }),
     activeCount: () => sessions.size,
   };

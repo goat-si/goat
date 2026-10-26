@@ -375,6 +375,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     tabId?: string;
     controlId?: string;
   }) => {
+    // A hand back or resume restores authority; the generation check already refuses stale input.
+    if (change.kind === "handBack" || change.kind === "resume") return;
     for (const [id, turn] of turns) {
       if (change.threadId !== undefined && turn.threadId !== change.threadId) continue;
       const [runId, turnId] = id.split("\u0000");
@@ -757,9 +759,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   }
   if (options.browser?.onAuthorityChange) {
     const unsubscribe = options.browser.onAuthorityChange((change) => {
-      // The agent's own close_tab reports a Stop for that tab; its dispatch releases the claim.
-      if (change.kind === "stop" && options.tabHost?.isClosingOwnTab(change.threadId, change.tabId))
-        return;
+      // The agent's own close_tab moves that tab's control before it replies; its dispatch
+      // releases the claim, so no report from the closing tab may cut the cell that asked.
+      if (options.tabHost?.isClosingOwnTab(change.threadId, change.tabId)) return;
       fenceNow(change);
       void runCallback(
         service

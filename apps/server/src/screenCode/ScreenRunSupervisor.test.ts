@@ -19,11 +19,13 @@ const fixtureSupervisor = (input: {
   limits: ReturnType<typeof screenRunLimits>;
   hostBridge: ScreenHostBridge;
   command?: string;
+  scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }) =>
   createScreenRunSupervisor({
     asset: input.asset,
     limits: input.limits,
     hostBridge: input.hostBridge,
+    ...(input.scheduleDeadline ? { scheduleDeadline: input.scheduleDeadline } : {}),
     invocation: {
       command: input.command ?? process.execPath,
       entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
@@ -189,6 +191,53 @@ it.live("hung post-cell availability returns within its bound", () =>
     ]);
     yield* supervisor.finishTurn("r", "t", "test");
   }),
+);
+
+it.live(
+  "a Stop while availability is read after the result keeps the result and its receipts",
+  () =>
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const reading = yield* Deferred.make<void>();
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher({
+        availability: () => Deferred.succeed(reading, undefined).pipe(Effect.andThen(Effect.never)),
+        dispatch: () =>
+          Effect.succeed({ value: 4, category: "confirmed", evidence: ["observation:test"] }),
+      });
+      let fireDeadline: (() => void) | undefined;
+      const supervisor = fixtureSupervisor({
+        asset,
+        limits,
+        hostBridge: bridge,
+        scheduleDeadline: (run) => {
+          fireDeadline = run;
+          return () => {
+            fireDeadline = undefined;
+          };
+        },
+      });
+      const running = yield* Effect.forkChild(
+        supervisor.runCell(
+          { runId: "r", turnId: "t", context: context("one", limits) },
+          "return await screen.list_apps();",
+          false,
+        ),
+      );
+      yield* Deferred.await(reading);
+      // The result frame cancels the wall timer, so a slow read cannot turn into wall_limit.
+      expect(fireDeadline).toBeUndefined();
+      yield* supervisor.cutCell("r", "t", "one", "Stop");
+      const result = yield* Fiber.join(running);
+      expect(result.status).toBe("completed");
+      expect(result.value).toBe(4);
+      expect(result.journal).toHaveLength(1);
+      expect(result.journal[0]?.receipt).toMatchObject({ category: "confirmed" });
+      expect(supervisor.activeCount()).toBe(1);
+      yield* supervisor.finishTurn("r", "t", "test");
+      expect(supervisor.activeCount()).toBe(0);
+    }),
 );
 
 it.live("sequential awaited host calls settle in order", () =>
