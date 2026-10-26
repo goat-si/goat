@@ -707,6 +707,7 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
     remember: "",
     rememberQuote: "",
     notesChangeRequested: "",
+    additionalTasks: [],
     clarifyAbout: "other",
   });
   const receptionInput = {

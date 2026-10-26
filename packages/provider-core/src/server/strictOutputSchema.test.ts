@@ -165,6 +165,7 @@ describe("structured output schemas", () => {
       remember: "",
       rememberQuote: "",
       notesChangeRequested: "",
+      additionalTasks: [],
     };
     const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReceptionModelOutput));
     for (const answer of [

@@ -120,6 +120,9 @@ export type ChannelReceptionReadResult = typeof ChannelReceptionReadResult.Type;
 /** The most reads one pass may ask for; one round of reads per input. */
 export const CHANNEL_RECEPTION_MAX_READS = 3;
 
+/** The most additional coding tasks one reception pass may start alongside its primary task. */
+export const CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS = 3;
+
 /** The most choices a clarifying question offers. */
 export const CHANNEL_RECEPTION_MAX_OPTIONS = 4;
 
@@ -160,6 +163,15 @@ export const ChannelReceptionInput = Schema.Struct({
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
 
+export const ChannelReceptionTaskSpec = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  instruction: TrimmedNonEmptyString,
+  projectId: Schema.optional(ProjectId),
+  /** One of `allowedHosts`, when the person asked for another machine. */
+  host: Schema.optional(TrimmedNonEmptyString),
+});
+export type ChannelReceptionTaskSpec = typeof ChannelReceptionTaskSpec.Type;
+
 /**
  * What the model decided. The ledger validates every id, target, and permission in it before
  * anything happens; the model cannot pick a task, project, or mode the requester may not use.
@@ -178,6 +190,15 @@ export const ChannelReceptionAction = Schema.Union([
      * note. The server keeps it only when it occurs in that input; only such tasks may edit notes.
      */
     notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
+    /**
+     * Additional independent coding tasks requested in the same message, each started as its own
+     * ledger task alongside the primary one.
+     */
+    additionalTasks: Schema.optional(
+      Schema.Array(ChannelReceptionTaskSpec).check(
+        Schema.isMaxLength(CHANNEL_RECEPTION_MAX_ADDITIONAL_TASKS),
+      ),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("read"),
