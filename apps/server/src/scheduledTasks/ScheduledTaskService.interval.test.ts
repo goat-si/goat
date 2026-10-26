@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput } from "@goat/contracts";
+import { CommandId, ScheduledTaskUpsertInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -22,7 +22,15 @@ const dependencies = Layer.mergeAll(
   NodeCrypto.layer,
   Scheduler.layer,
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-    launch: () => Effect.die("synthetic dispatch failure"),
+    launch: (input) =>
+      Effect.fail(
+        new ThreadLaunchService.ThreadLaunchError({
+          operation: "dispatch-message",
+          commandId: input.commandId ?? CommandId.make("synthetic"),
+          projectId: input.projectId,
+          cause: "synthetic pre-command failure",
+        }),
+      ),
   }),
   Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
     namedProjectsRoot: "/projects",

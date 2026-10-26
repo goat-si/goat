@@ -404,3 +404,55 @@ it.effect(
       assert.equal(after.nextRunAt, before.nextRunAt);
     }).pipe(Effect.provide(harness())),
 );
+
+it.effect(
+  "durable acceptance overrides a rejection snapshot and clears its dispatch-failure timestamp",
+  () =>
+    Effect.gen(function* () {
+      const runs = yield* Runs.ScheduledTaskRuns;
+      const sink = yield* EventSink.EventSinkV2;
+      const task = yield* create();
+      const at = DateTime.formatIso(yield* DateTime.now);
+      const firingId = CommandId.make("firing:late-proof");
+      const messageId = MessageId.make("message:late-proof");
+      yield* runs.begin({
+        task,
+        firingId,
+        messageId,
+        requestedAt: at,
+        triggerKind: "manual",
+        webhookDeliveryId: null,
+      });
+      yield* runs.finishDispatch({ firingId, acceptedRun: null, at, dispatchEvidence: "rejected" });
+      const accepted = yield* syntheticLaunch(sink)(
+        {
+          commandId: firingId,
+          projectId,
+          title: "Synthetic",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          workspaceStrategy: { type: "root" },
+          createdBy: "user",
+          creationSource: "web",
+          initialMessage: {
+            messageId,
+            scheduledTaskId: task.id,
+            text: "Synthetic",
+            attachments: [],
+          },
+        },
+        "queued",
+      );
+      const receipt = yield* runs.finishDispatch({
+        firingId,
+        acceptedRun: null,
+        at,
+        dispatchEvidence: "rejected",
+      });
+      assert.equal(receipt.dispatchStatus, "accepted");
+      assert.equal(receipt.runId, accepted.projection.runs[0]?.id);
+      assert.equal(receipt.status, "queued");
+      assert.equal(receipt.completedAt, null);
+    }).pipe(Effect.provide(harness())),
+);

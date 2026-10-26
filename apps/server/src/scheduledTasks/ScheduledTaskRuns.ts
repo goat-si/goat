@@ -379,6 +379,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
         const rebound = before.runId !== null && before.runId !== run.id;
         if (
           rebound ||
+          before.dispatchStatus !== "accepted" ||
           !terminal.has(before.status) ||
           status === "rolled_back" ||
           status === before.status
@@ -398,9 +399,9 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
                 : DateTime.formatIso(run.startedAt),
             completedAt: terminal.has(status)
               ? run.completedAt === null
-                ? (before.completedAt ?? at)
+                ? ((before.dispatchStatus === "accepted" ? before.completedAt : null) ?? at)
                 : DateTime.formatIso(run.completedAt)
-              : rebound
+              : rebound || before.dispatchStatus !== "accepted"
                 ? null
                 : before.completedAt,
           };
