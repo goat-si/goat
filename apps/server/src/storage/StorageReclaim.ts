@@ -95,6 +95,12 @@ export class StorageFileRemovalHook extends Context.Service<
   (removedPath: string) => Effect.Effect<void>
 >()("goat/storage/StorageReclaim/StorageFileRemovalHook") {}
 
+/** A deterministic removal failure seam for the grouped-file regression test. */
+export class StorageFileRemovalAttemptHook extends Context.Service<
+  StorageFileRemovalAttemptHook,
+  (target: string) => Effect.Effect<void, RemoveFailed>
+>()("goat/storage/StorageReclaim/StorageFileRemovalAttemptHook") {}
+
 /** A scan this recent answers usage without scanning again. */
 const FRESH_MS = 5 * 60_000;
 
@@ -128,6 +134,7 @@ const make = Effect.gen(function* () {
   const sizes = new Map<string, { readonly bytes: number; readonly at: number }>();
   const lock = yield* Semaphore.make(1);
   const fileRemovalHook = yield* Effect.serviceOption(StorageFileRemovalHook);
+  const fileRemovalAttemptHook = yield* Effect.serviceOption(StorageFileRemovalAttemptHook);
   const fileProgress = yield* Ref.make<{ removed: number; bytes: number; total: number } | null>(
     null,
   );
@@ -192,6 +199,7 @@ const make = Effect.gen(function* () {
     if (realRoot === null || realTarget === null) return "its location could not be resolved";
     if (!samePath(realTarget, path.resolve(target), rules)) return "a link sits in its path";
     if (!isStrictlyInside(realRoot, realTarget, rules)) return "it is outside " + root;
+    if (Option.isSome(fileRemovalAttemptHook)) yield* fileRemovalAttemptHook.value(target);
     yield* Effect.tryPromise({
       try: () => NodeFSP.rm(target, { recursive: true, force: false }),
       catch: (cause) =>
@@ -626,7 +634,7 @@ const make = Effect.gen(function* () {
             ? {}
             : { reason: done.success }),
       }).pipe(Effect.ignore);
-      if (done._tag === "Failure") return failureMessage(done.failure);
+      if (done._tag === "Failure") return yield* done.failure;
       if (done.success !== null && done.success !== "it is already gone")
         return file.path + ": " + done.success;
       if (done.success === null) {
@@ -765,7 +773,7 @@ const make = Effect.gen(function* () {
   return StorageReclaim.of({ usage, clean });
 });
 
-class RemoveFailed extends Schema.TaggedError<RemoveFailed>()("StorageRemoveFailed", {
+export class RemoveFailed extends Schema.TaggedError<RemoveFailed>()("StorageRemoveFailed", {
   message: Schema.String,
 }) {}
 

@@ -180,6 +180,43 @@ describe("HostPressureMonitor", () => {
     );
   });
 
+  it.effect("keeps held memory pressure when the critical disk changes to a roomy volume", () => {
+    const volume = (deviceId: number, path: string, freeGiB: number): PressureSample => ({
+      ...reading(0.1),
+      memoryFreeRatio: 0.04,
+      diskDeviceId: deviceId,
+      diskPath: path,
+      diskAvailableBytes: freeGiB * GIB,
+      diskTotalBytes: 1000 * GIB,
+    });
+    return Effect.gen(function* () {
+      const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+      yield* every30s(7);
+      const before = yield* monitor.current;
+      expect(before?.reasons.map((reason) => reason.signal)).toEqual(["memory", "disk"]);
+
+      const next = yield* monitor.sample;
+      const current = yield* monitor.current;
+      const disk = yield* monitor.disk.pipe(Stream.runHead);
+      expect(next?.level).toBe("critical");
+      expect(current?.level).toBe("critical");
+      expect(current?.since).toBe(before?.since);
+      expect(current?.reasons.map((reason) => reason.signal)).toEqual(["memory"]);
+      expect(disk._tag === "Some" ? disk.value : null).toMatchObject({
+        level: "ok",
+        path: "/volume-b/worktrees",
+        availableBytes: 400 * GIB,
+      });
+    }).pipe(
+      Effect.provide(
+        layer([
+          ...Array.from({ length: 7 }, () => volume(1, "/volume-a/home", 10)),
+          volume(2, "/volume-b/worktrees", 400),
+        ]),
+      ),
+    );
+  });
+
   it.effect(
     "clears disk and overall critical pressure on a new path when device identity is unknown",
     () => {

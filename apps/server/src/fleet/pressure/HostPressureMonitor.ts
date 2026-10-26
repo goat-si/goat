@@ -19,13 +19,14 @@ import * as HostResources from "../../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { managedWorktreesDirectories } from "../../worktreesDirectory.ts";
 import {
+  combineHostPressure,
   diskOnlySample,
   initialPressureState,
   mostPressedDisk,
+  nonDiskSample,
   resolvePressureSettings,
   sampleFromCapacity,
   stepPressure,
-  toHostPressure,
   type PressureSample,
   type PressureState,
 } from "./pressureModel.ts";
@@ -96,13 +97,12 @@ export const make = Effect.fn("HostPressureMonitor.make")(function* (
     const previousVolume = yield* Ref.get(diskVolume);
     if (previousVolume !== undefined && previousVolume !== volume) {
       // A recovery hold belongs to one volume, not the next disk chosen by mostPressedDisk.
-      yield* Ref.set(state, undefined);
       yield* Ref.set(diskState, undefined);
     }
     yield* Ref.set(diskVolume, volume);
     const next = stepPressure(
       (yield* Ref.get(state)) ?? initialPressureState(now),
-      reading,
+      nonDiskSample(reading),
       resolved,
       now,
     );
@@ -128,12 +128,16 @@ export const make = Effect.fn("HostPressureMonitor.make")(function* (
             totalBytes: reading.diskTotalBytes,
           };
     if (!sameDiskReading(previous, current)) yield* SubscriptionRef.set(disk, current);
-    return toHostPressure(next);
+    return combineHostPressure(next, diskNext);
   });
   return HostPressureMonitor.of({
-    current: Ref.get(state).pipe(
-      Effect.map((value) => (value === undefined ? undefined : toHostPressure(value))),
-    ),
+    current: Effect.gen(function* () {
+      const nonDisk = yield* Ref.get(state);
+      const disk = yield* Ref.get(diskState);
+      return nonDisk === undefined || disk === undefined
+        ? undefined
+        : combineHostPressure(nonDisk, disk);
+    }),
     sample: sample(),
     disk: SubscriptionRef.changes(disk),
   });

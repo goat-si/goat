@@ -17,8 +17,53 @@ import {
   machine,
   setup,
 } from "./StorageReclaim.testkit.ts";
+import { RemoveFailed } from "./StorageReclaim.ts";
 
 describe("StorageReclaim", () => {
+  it.live("fails a grouped cleanup when the first file removal gets an I/O error", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+           created_at, updated_at, deleted_at, payload_json)
+        VALUES ('thread-first-error', 'project', 'group', 'codex', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          '2026-01-02T00:00:00.000Z', '{}')
+      `;
+      yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+      const files = ["1", "2"].map((digit) =>
+        path.join(
+          config.attachmentsDir,
+          `thread-first-error-${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}.png`,
+        ),
+      );
+      for (const file of files) {
+        yield* fs.writeFileString(file, "image\n");
+        yield* fs.utimes(file, LONG_AGO, LONG_AGO);
+      }
+      const item = (yield* reclaim.usage({ rescan: true })).items.find(
+        (candidate) => candidate.kind === "attachments" && candidate.state === "removable",
+      )!;
+      expect(item.files?.map((file) => file.path)).toEqual(files);
+      machine.beforeFileRemoved = (target) =>
+        target === files[0]
+          ? Effect.fail(new RemoveFailed({ message: "EACCES: removal denied" }))
+          : Effect.void;
+      const result = yield* reclaim.clean({
+        items: [{ id: item.id, token: item.token }],
+        actor: "test",
+      });
+      expect(result.results[0]).toMatchObject({
+        outcome: "failed",
+        reason: expect.stringContaining("EACCES: removal denied"),
+      });
+      expect(result.freedBytes).toBe(0);
+      for (const file of files) expect(yield* fs.exists(file)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("reports removed files and bytes when a later group file changes during removal", () =>
     Effect.gen(function* () {
       const { fs, path, config, reclaim } = yield* setup;

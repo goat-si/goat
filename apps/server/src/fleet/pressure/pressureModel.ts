@@ -114,6 +114,15 @@ export const diskOnlySample = (sample: PressureSample): PressureSample => ({
   eventLoopDelayMs: null,
 });
 
+/** Keep CPU, memory, load, and stalls on the host when the selected disk changes. */
+export const nonDiskSample = (sample: PressureSample): PressureSample => ({
+  ...sample,
+  diskAvailableBytes: null,
+  diskTotalBytes: null,
+  diskPath: undefined,
+  diskDeviceId: undefined,
+});
+
 /**
  * Of the volumes GOAT fills (its home, and worktree folders a person moved to another drive), the
  * one the disk level comes from: the highest level on these thresholds, then the highest on the
@@ -412,6 +421,22 @@ export const toHostPressure = (state: PressureState): HostPressure => {
     loadPerCore: state.loadPerCore === null ? null : Math.round(state.loadPerCore * 100) / 100,
     eventLoopDelayMs: longest > 0 ? Math.round(longest) : null,
   };
+};
+
+export const combineHostPressure = (nonDisk: PressureState, disk: PressureState): HostPressure => {
+  const level = higher(nonDisk.level, disk.level);
+  const since =
+    nonDisk.level === disk.level
+      ? Math.min(nonDisk.since, disk.since)
+      : level === nonDisk.level
+        ? nonDisk.since
+        : disk.since;
+  return toHostPressure({
+    ...nonDisk,
+    level,
+    since,
+    reasons: [...nonDisk.reasons, ...disk.reasons],
+  });
 };
 
 /**
