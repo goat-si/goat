@@ -339,6 +339,24 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
         ),
     },
     {
+      kind: "preview-tab",
+      canRender: (record) => record.kind === "preview-tab",
+      render: (record, context) =>
+        record.kind === "preview-tab" ? (
+          <UserMessageContextPopover
+            copyMarkdown={context.copyMarkdown}
+            accessibleLabel={`Browser tab, ${record.title || record.url}`}
+            kind="thread"
+            icon={<MousePointerClickIcon />}
+            label={record.title || record.url}
+          >
+            <span>{record.url}</span>
+          </UserMessageContextPopover>
+        ) : (
+          <UnavailableUserMessageContextChip {...context} />
+        ),
+    },
+    {
       kind: "capability",
       canRender: (record) => record.kind === "capability",
       render: (record, context) =>

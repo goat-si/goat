@@ -758,6 +758,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly deviceToolsAvailable?: boolean;
     /** The managed `cua-driver` MCP server is attached to this thread. */
     readonly computerUse?: boolean;
+    readonly screenCode?: boolean;
     readonly computerUseDeferred?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
@@ -798,6 +799,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
               computerUse: input.computerUse ?? false,
+              screenCode: input.screenCode ?? false,
             },
           )
         : buildCodexDevelopmentContext();
@@ -7184,6 +7186,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 mcpSession !== undefined &&
                 runtime.cuaDriver !== undefined &&
                 McpProviderSession.carriesComputerUseSkill(mcpSession),
+              screenCode: McpProviderSession.carriesScreenCodeSkill(mcpSession),
               computerUseDeferred,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),

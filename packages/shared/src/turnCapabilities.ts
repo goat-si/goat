@@ -5,6 +5,7 @@ import {
   type ComposerContextId,
   type ComposerContextRecord,
   type OrchestrationMessageContext,
+  type ScreenBindingHints,
   type TurnCapability,
 } from "@goat/contracts";
 
@@ -48,6 +49,43 @@ export function requestedTurnCapabilities(input: {
       requested.add(record.capability);
   }
   return [...requested];
+}
+
+/** Only referenced typed records become hints; display text never selects a target. */
+export function screenBindingHintsFromOrigin(input: {
+  readonly text: string;
+  readonly records: ReadonlyArray<ComposerContextRecord>;
+}): ScreenBindingHints {
+  const referenced = new Set(
+    collectComposerContextReferences(input.text).map((occurrence) => occurrence.contextId),
+  );
+  const appIds = new Set<string>();
+  const tabs = new Map<string, ScreenBindingHints["tabs"][number]>();
+  let browserRequested = false;
+  let computerRequested = false;
+  for (const record of input.records) {
+    if (!referenced.has(record.contextId)) continue;
+    if (record.kind === "capability" && "capability" in record) {
+      if (record.capability === "browser") browserRequested = true;
+      if (record.capability === "computer-use") computerRequested = true;
+      if (record.app) appIds.add(record.app.id);
+    }
+    if (record.kind === "preview-tab" && "tabId" in record) {
+      const tab = {
+        mentionId: record.contextId,
+        environmentId: record.environmentId,
+        browserInstanceId: record.browserInstanceId,
+        tabId: record.tabId,
+        titleAtMention: record.title,
+        urlAtMention: record.url,
+      };
+      const previous = tabs.get(record.contextId);
+      if (previous && JSON.stringify(previous) !== JSON.stringify(tab))
+        throw new Error("Conflicting preview tab identity for one mention.");
+      tabs.set(record.contextId, tab);
+    }
+  }
+  return { browserRequested, computerRequested, appIds: [...appIds], tabs: [...tabs.values()] };
 }
 
 /**

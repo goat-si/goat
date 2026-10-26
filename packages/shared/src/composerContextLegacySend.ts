@@ -17,7 +17,11 @@ export function serializeLegacyContextMessage(input: {
     if (!record) continue;
     used.add(occurrence.contextId);
     const replacement =
-      record.kind === "review-comment" ? renderReviewComment(record) : inlineLabel(record);
+      record.kind === "review-comment"
+        ? renderReviewComment(record)
+        : record.kind === "preview-tab" && "tabId" in record
+          ? `@tab(${record.environmentId}/${record.browserInstanceId}/${record.tabId}; ${record.title}; ${record.url})`
+          : inlineLabel(record);
     text = `${text.slice(0, occurrence.start)}${replacement}${text.slice(occurrence.end)}`;
   }
 

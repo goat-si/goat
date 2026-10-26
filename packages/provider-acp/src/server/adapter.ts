@@ -7132,6 +7132,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
             hasGoatMcp: mcpContext.servers.length > 0,
+            screenCodeSkill: mcpContext.screenCodeSkill === true,
           } satisfies GoatAcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
@@ -7229,6 +7230,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               text: buildRuntimeInstructions({
                 harness: flavor.runtimeHarness ?? driver,
                 model: turnInput.modelSelection.model,
+                screenCode: mcpContext.screenCodeSkill === true,
+                screenCodeCompact: true,
                 // The server list is fixed when a session is activated, so a
                 // driver enabled later reaches the agent on its next activation.
                 computerUse:

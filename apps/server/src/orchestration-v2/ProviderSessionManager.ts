@@ -5,12 +5,14 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
+  BuiltInSkillName,
   COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
   type RunId,
+  type ScreenBindingHints,
   type NodeId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
@@ -19,6 +21,7 @@ import {
   ProviderInstanceId,
   type ProviderInteractionMode,
   type TurnCapability,
+  resolveProjectBuiltInSkillEnabled,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -66,6 +69,7 @@ import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import * as EventSink from "./EventSink.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -177,7 +181,32 @@ export interface ProviderMemoryPrepareInput {
   readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
   /** What this turn's `@computer` / `@browser` chips asked for; the next turn starts over. */
   readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
+  readonly screenBindingHints?: ScreenBindingHints;
 }
+
+const sameScreenBindingHints = (
+  left: ScreenBindingHints | undefined,
+  right: ScreenBindingHints | undefined,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.browserRequested === right.browserRequested &&
+    left.computerRequested === right.computerRequested &&
+    left.appIds.length === right.appIds.length &&
+    left.appIds.every((id, index) => id === right.appIds[index]) &&
+    left.tabs.length === right.tabs.length &&
+    left.tabs.every((tab, index) => {
+      const other = right.tabs[index];
+      return other !== undefined &&
+        tab.mentionId === other.mentionId &&
+        tab.environmentId === other.environmentId &&
+        tab.browserInstanceId === other.browserInstanceId &&
+        tab.tabId === other.tabId &&
+        tab.titleAtMention === other.titleAtMention &&
+        tab.urlAtMention === other.urlAtMention;
+    })
+  );
+};
 
 /** What opening a provider session for a turn admits; the same for a new or a shared session. */
 function openPrepareInput(
@@ -203,6 +232,9 @@ function openPrepareInput(
         sandbox.type === "readOnly"),
     interactionMode: input.runtimePolicy.interactionMode,
     turnCapabilities: input.turnCapabilities ?? [],
+    ...(input.screenBindingHints === undefined
+      ? {}
+      : { screenBindingHints: input.screenBindingHints }),
   };
 }
 
@@ -241,6 +273,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly readOnly?: boolean;
     readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
+    readonly screenBindingHints?: ScreenBindingHints;
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
     readonly initialProviderItemIdentityVersion?: 2;
@@ -750,6 +783,40 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
+                const attached: TurnCapability[] = [
+                  ...(browserToolsAvailable && usableThread ? (["browser"] as const) : []),
+                  ...(computerUse._tag === "proxied" ? (["computer-use"] as const) : []),
+                ];
+                const currentSettings = Option.isSome(serverSettings)
+                  ? yield* serverSettings.value.getSettings.pipe(
+                      Effect.tapError((cause) =>
+                        Effect.logWarning("Built-in screen guide unavailable: settings unreadable.", {
+                          cause,
+                        }),
+                      ),
+                      Effect.orElseSucceed(() => undefined),
+                    )
+                  : undefined;
+                const disabledSkills = BuiltInSkillName.literals.filter(
+                  (name) =>
+                    (Option.isSome(serverSettings) && currentSettings === undefined) ||
+                    (currentSettings !== undefined &&
+                      usableThread &&
+                      !resolveProjectBuiltInSkillEnabled(currentSettings, thread.value.projectId, name)),
+                );
+                const activeSkills = resolveBuiltInSkills({
+                  attached,
+                  ...(preparedInput.turnCapabilities === undefined
+                    ? {}
+                    : { requested: preparedInput.turnCapabilities }),
+                  disabled: disabledSkills,
+                }).active;
+                const withTurnSkills = (config: McpProviderSessionConfig) =>
+                  ComputerUse.withComputerUse(
+                    { ...config, builtInSkills: activeSkills },
+                    computerUse,
+                    COMPUTER_USE_LEASE_ROUTE,
+                  );
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -776,16 +843,16 @@ export const layerWithOptions = (
                     resolved.memoryPolicy?.grant === grant &&
                     resolved.memoryPolicy.policyEpoch === committed.epoch &&
                     // A credential issued while the lineage read failed is replaced once it works.
-                    (resolved.thread.subagent === true) === subagent
+                    (resolved.thread.subagent === true) === subagent &&
+                    sameScreenBindingHints(
+                      resolved.screenBindingHints,
+                      preparedInput.screenBindingHints,
+                    )
                   ) {
                     yield* mcpSessions.set(
                       yield* withNativeSubagentLimit(
                         threadId,
-                        ComputerUse.withComputerUse(
-                          existing,
-                          computerUse,
-                          COMPUTER_USE_LEASE_ROUTE,
-                        ),
+                        withTurnSkills(existing),
                       ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
@@ -815,6 +882,9 @@ export const layerWithOptions = (
                   isLiveCaller,
                   isAttached,
                   readOnly,
+                  ...(preparedInput.screenBindingHints === undefined
+                    ? {}
+                    : { screenBindingHints: preparedInput.screenBindingHints }),
                   ...(renew === undefined ? {} : { renew }),
                   subagent,
                 });
@@ -826,11 +896,7 @@ export const layerWithOptions = (
                 yield* mcpSessions.set(
                   yield* withNativeSubagentLimit(
                     threadId,
-                    ComputerUse.withComputerUse(
-                      credential.config,
-                      computerUse,
-                      COMPUTER_USE_LEASE_ROUTE,
-                    ),
+                    withTurnSkills(credential.config),
                   ),
                 );
                 yield* Ref.update(

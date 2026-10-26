@@ -2308,6 +2308,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             buildRuntimeInstructions({
               harness: "Cursor",
               model: turnInput.modelSelection.model,
+              screenCode: McpProviderSession.carriesScreenCodeSkill(config),
+              screenCodeCompact: true,
               computerUse:
                 agent !== null &&
                 agent.cuaDriverKey !== "" &&

@@ -1,7 +1,7 @@
 import { GOAT_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import type { ProviderInteractionMode } from "@goat/contracts";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "./developmentInstructions.ts";
-import { GOAT_PULL_REQUEST_INSTRUCTIONS } from "./runtimeInstructions.ts";
+import { GOAT_PULL_REQUEST_INSTRUCTIONS, SCREEN_CODE_INSTRUCTION_SECTIONS } from "./runtimeInstructions.ts";
 
 /**
  * Always injected, so every line is paid on every turn of every GOAT agent. A line belongs here
@@ -56,6 +56,7 @@ Investigate with read-only actions; do not edit files or implement. Resolve disc
 export interface GoatAcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasGoatMcp: boolean;
+  readonly screenCodeSkill?: boolean;
 }
 
 /**
@@ -72,7 +73,8 @@ export function goatAcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasGoatMcp === input.state.hasGoatMcp
+    input.previousState.hasGoatMcp === input.state.hasGoatMcp &&
+    input.previousState.screenCodeSkill === input.state.screenCodeSkill
   ) {
     return input.prompt;
   }
@@ -87,6 +89,9 @@ export function goatAcpPromptWithInstructions(input: {
           GOAT_ORCHESTRATION_INSTRUCTIONS.trim(),
           GOAT_ACP_TOOL_FALLBACK,
         ]
+      : []),
+    ...(input.state.hasGoatMcp && input.state.screenCodeSkill
+      ? SCREEN_CODE_INSTRUCTION_SECTIONS
       : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;

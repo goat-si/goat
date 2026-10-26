@@ -166,9 +166,11 @@ export function withBuiltInProviderSkills(
 ): ReadonlyArray<ServerProviderSkill> {
   if (!provider || !settings) return skills;
   const offered = BUILTIN_SKILLS.filter((skill) =>
-    skill.capability === "computer-use"
-      ? settings.enableCua && COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
-      : target?.devDisciplineSkill === true && BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver),
+    skill.anyOf?.includes("browser")
+      ? COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
+      : skill.anyOf?.includes("computer-use")
+        ? settings.enableCua && COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
+        : target?.devDisciplineSkill === true && BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver),
   );
   if (offered.length === 0) return skills;
   const resolved = { projectSettingsOverrides: {}, ...settings };

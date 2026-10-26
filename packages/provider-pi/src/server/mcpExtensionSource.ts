@@ -11,7 +11,10 @@ import {
 } from "@goat/contracts/agentSurface/resolve";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
-import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
+import {
+  COMPUTER_USE_INSTRUCTIONS,
+  SCREEN_CODE_INSTRUCTION_SECTIONS,
+} from "@goat/provider-core/server/runtimeInstructions";
 
 export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
 
@@ -26,6 +29,8 @@ export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
  * process launched with, anything else (Plan, read-only, a changed driver) closes it for the turn.
  */
 export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
+export const GOAT_SCREEN_CODE_SKILL_ENV = "GOAT_SCREEN_CODE_SKILL";
+export const GOAT_SCREEN_CODE_SKILL_GATE_ENV = "GOAT_SCREEN_CODE_SKILL_GATE";
 
 // These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
@@ -61,11 +66,14 @@ const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
+const SCREEN_CODE_SKILL_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_ENV)};
+const SCREEN_CODE_SKILL_GATE_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_GATE_ENV)};
 const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
 const GOAT_CALL_READ_TARGETS = new Set(${JSON.stringify(GOAT_CALL_READ_TARGETS)});
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
 const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
+const SCREEN_CODE_INSTRUCTIONS = ${JSON.stringify(SCREEN_CODE_INSTRUCTION_SECTIONS.join("\n\n"))};
 const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
@@ -417,6 +425,17 @@ async function readCuaSkill(): Promise<boolean> {
   }
 }
 
+async function readScreenCodeSkill(): Promise<boolean> {
+  const path = env(SCREEN_CODE_SKILL_GATE_ENV);
+  if (path === undefined) return env(SCREEN_CODE_SKILL_ENV) === "on";
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path, "utf8")).trim() === "on";
+  } catch {
+    return false;
+  }
+}
+
 function cuaSpec(): StdioMcpSpec | undefined {
   const raw = env(CUA_ENV);
   return raw === undefined ? undefined : parseCuaSpec(raw);
@@ -746,6 +765,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       cuaOpen = open;
     }
     const withComputerUse = computerUse && cuaOpen && (await readCuaSkill());
+    const withScreenCode = await readScreenCodeSkill();
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
@@ -753,6 +773,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
       if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
       else delete sections.goat_computer_use;
+      if (withScreenCode) sections.goat_screen_code = SCREEN_CODE_INSTRUCTIONS;
+      else delete sections.goat_screen_code;
       return undefined;
     }
     return {
@@ -762,7 +784,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         DEVELOPMENT_INSTRUCTIONS +
         "\\n\\n" +
         ORCHESTRATION_INSTRUCTIONS +
-        (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
+        (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : "") +
+        (withScreenCode ? "\\n\\n" + SCREEN_CODE_INSTRUCTIONS : ""),
     };
   });
 }

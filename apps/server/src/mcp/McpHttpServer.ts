@@ -62,6 +62,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
+import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
@@ -128,6 +129,9 @@ import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolki
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
+import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
+import { ScreenRunTool, ScreenToolkit, validScreenRunPayload } from "./toolkits/screen/tools.ts";
+import { screenRunMcpResult } from "./toolkits/screen/result.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -720,6 +724,66 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
   });
 });
 
+const registerScreenRun = Effect.fn("McpHttpServer.registerScreenRun")(function* () {
+  const server = yield* McpServer.McpServer;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
+  const built = yield* decodeAsAdvertised(ScreenToolkit);
+  const tool = ScreenRunTool;
+  yield* server.addTool({
+    tool: new McpSchema.Tool({
+      name: tool.name,
+      description: Tool.getDescription(tool),
+      inputSchema: Tool.getJsonSchema(tool),
+      annotations: {
+        ...Context.getOption(tool.annotations, Tool.Title).pipe(
+          Option.map((title) => ({ title })),
+          Option.getOrUndefined,
+        ),
+        readOnlyHint: Context.get(tool.annotations, Tool.Readonly),
+        destructiveHint: Context.get(tool.annotations, Tool.Destructive),
+        idempotentHint: Context.get(tool.annotations, Tool.Idempotent),
+        openWorldHint: Context.get(tool.annotations, Tool.OpenWorld),
+      },
+    }),
+    annotations: tool.annotations,
+    handle: (payload) =>
+      Effect.withFiber((fiber) => {
+        if (!validScreenRunPayload(payload))
+          return Effect.succeed(
+            new McpSchema.CallToolResult({
+              isError: true,
+              content: [{ type: "text", text: "Invalid screen run input." }],
+            }),
+          );
+        if (Option.isNone(screen))
+          return Effect.succeed(
+            new McpSchema.CallToolResult({
+              isError: true,
+              content: [{ type: "text", text: "Screen run is unavailable on this GOAT host." }],
+            }),
+          );
+        const invocation = Context.getUnsafe(
+          fiber.context,
+          McpInvocationContext.McpInvocationContext,
+        );
+        return built.handle("goat_screen_run", payload).pipe(
+          Stream.unwrap,
+          Stream.run(Sink.last()),
+          Effect.flatMap(Effect.fromOption),
+          Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+          Effect.provideService(ScreenRunService.ScreenRunService, screen.value),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.map(({ encodedResult }) => screenRunMcpResult(encodedResult)),
+          Effect.matchCauseEffect({
+            onFailure: imageToolFailure(tool.name, "screen_run", "Screen run failed."),
+            onSuccess: Effect.succeed,
+          }),
+        );
+      }),
+  });
+});
+
 const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function* <
   T extends Tool.Any,
   E,
@@ -1208,6 +1272,7 @@ export const catalogRegistrations = {
   attachment: toolkitRegistration(AttachmentToolkit, AttachmentHandlers.layer),
   note: toolkitRegistration(NoteToolkit, NoteHandlers.layer),
   computerUse: toolkitRegistration(ComputerUseToolkit, ComputerUseHandlers.layer),
+  screen: imageToolRegistration(registerScreenRun(), ScreenHandlers.layer),
   channel: toolkitRegistration(ChannelToolkit, ChannelHandlers.layer),
   pullRequests: toolkitRegistration(PullRequestsToolkit, PullRequestsHandlers.layer),
   deviceStandard: toolkitRegistration(DeviceStandardToolkit, DeviceHandlers.layerStandard),
@@ -1380,6 +1445,7 @@ export const layer = Layer.mergeAll(
   layerChannelToolkit,
   catalogRegistrations.note,
   catalogRegistrations.computerUse,
+  catalogRegistrations.screen,
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerHostStatusToolkit,

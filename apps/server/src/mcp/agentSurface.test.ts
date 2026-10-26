@@ -29,6 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
+import { ScreenToolkit } from "./toolkits/screen/tools.ts";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ProviderHostSync from "../provider/ProviderHostSync.ts";
@@ -40,7 +41,7 @@ import {
   deviceAccessGranted,
   entries,
   serveCatalogOverHttp,
-  toolkits,
+  toolkits as standardToolkits,
 } from "./agentSurface.testkit.ts";
 import {
   GOAT_MCP_CANONICAL_TOOL_ALIASES,
@@ -50,6 +51,8 @@ import {
 import { NodeHttpServer } from "@effect/platform-node";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
 
+const toolkits = { ...standardToolkits, screen: ScreenToolkit };
+
 const registered = catalog.pipe(
   Layer.provide(dependencies),
   Layer.provideMerge(McpServer.McpServer.layer),
@@ -58,7 +61,7 @@ const registered = catalog.pipe(
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes the upload and report receipt reconcile reads, origin.resolve_binding and the
   // OpenCodex sync, background.wait, and the storage usage and cleanup tools.
-  expect(entries).toHaveLength(212);
+  expect(entries).toHaveLength(213);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -512,6 +515,9 @@ describe("agent surface access", () => {
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
         if (entry.resource === "memory") continue;
+        // This inert catalog has no screen runner; screen/handlers.test.ts covers its live
+        // direct, goat_call and outside-client admission through one authenticated registration.
+        if (entry.path === "surface.screen_run") continue;
         const args = yield* argumentsFor(entry);
         const [legacy] = entry.legacyNames;
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {

@@ -67,6 +67,23 @@ const annotation = {
 };
 
 describe("mobile composer context", () => {
+  it("a typed preview tab retains exact identity through mobile send", () => {
+    const tab = {
+      version: 1 as const,
+      kind: "preview-tab" as const,
+      contextId: ComposerContextId.make("tab-one"),
+      label: "Docs",
+      environmentId: EnvironmentId.make("env-one"),
+      browserInstanceId: "browser-one",
+      tabId: "tab-one",
+      title: "Docs",
+      url: "https://example.test/docs",
+    };
+    const text = formatComposerContextReference(tab);
+    const context = { version: 1 as const, records: [tab] };
+    expect(serializeComposerMessageForServer(text, context, true).context?.records).toEqual([tab]);
+    expect(composerContextSendBlockReason(context)).toBeNull();
+  });
   it("rejects a malformed record instead of allowing the wire decoder to drop its payload", () => {
     expect(
       composerContextSendBlockReason({

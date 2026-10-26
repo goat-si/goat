@@ -3189,6 +3189,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         buildRuntimeInstructions({
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
+          screenCode: McpProviderSession.carriesScreenCodeSkill(mcpSession),
           computerUse:
             state.cua !== undefined && McpProviderSession.carriesComputerUseSkill(mcpSession),
         }),

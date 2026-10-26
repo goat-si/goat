@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
   MessageId,
+  ComposerContextId,
+  EnvironmentId,
   ProviderInstanceId,
   RunId,
   ThreadId,
@@ -8,9 +10,11 @@ import {
   type OrchestrationV2Run,
 } from "@goat/contracts";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
+import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 
 import { preparedTurnCapabilities, runTurnCapabilities } from "./TurnCapabilities.ts";
+import { runPrepareInput } from "./RunExecutionService.ts";
 
 const now = DateTime.makeUnsafe("2026-10-24T00:00:00.000Z");
 const run = (index: number, fields: Partial<OrchestrationV2Run> = {}): OrchestrationV2Run => ({
@@ -67,6 +71,39 @@ it("a restart continuation keeps the @browser chip of the message it continues",
     }),
     [],
   );
+});
+
+it("a restart continuation carries only its referenced exact tab hint", () => {
+  const source = run(1);
+  const tab = {
+    version: 1 as const,
+    kind: "preview-tab" as const,
+    contextId: ComposerContextId.make("tab-one"),
+    label: "Docs",
+    environmentId: EnvironmentId.make("environment-1"),
+    browserInstanceId: "browser-one",
+    tabId: "tab-one",
+    title: "Docs",
+    url: "https://example.test/docs",
+  };
+  const sourceMessage = message(source, {
+    text: formatComposerContextReference(tab),
+    context: { version: 1, records: [tab] },
+  });
+  const restart = run(2, { restartContinuationOfRunId: source.id });
+  const restartMessage = message(restart, { creationSource: "server", text: "Continue" });
+  const projection = { runs: [source, restart], messages: [sourceMessage, restartMessage] };
+  assert.deepEqual(runPrepareInput({ run: restart, message: restartMessage, projection }).screenBindingHints?.tabs, [
+    {
+      mentionId: tab.contextId,
+      environmentId: tab.environmentId,
+      browserInstanceId: tab.browserInstanceId,
+      tabId: tab.tabId,
+      titleAtMention: tab.title,
+      urlAtMention: tab.url,
+    },
+  ]);
+  assert.deepEqual(runPrepareInput({ run: source, message: { ...sourceMessage, text: "No tab" }, projection }).screenBindingHints?.tabs, []);
 });
 
 it("a message whose chip was deleted asks for nothing", () => {

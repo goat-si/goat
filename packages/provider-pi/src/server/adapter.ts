@@ -470,6 +470,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               ),
               key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
             };
+      const screenSkillGatePath =
+        mcpSession === undefined
+          ? undefined
+          : yield* provideCacheFs(
+              fileSystem
+                .makeTempFileScoped({ prefix: "goat-pi-screen-skill-" })
+                .pipe(Effect.provideService(Scope.Scope, scope)),
+            );
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
@@ -477,6 +485,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
         cuaGatePath: cuaGate?.path,
+        screenSkillGatePath,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -2416,13 +2425,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
-            if (cuaGate !== undefined) {
+            if (screenSkillGatePath !== undefined || cuaGate !== undefined) {
               const attached = yield* mcpSessions.read(turnInput.threadId);
+              if (screenSkillGatePath !== undefined)
+                yield* fileSystem
+                  .writeFileString(
+                    screenSkillGatePath,
+                    McpProviderSession.carriesScreenCodeSkill(attached) ? "on" : "off",
+                  )
+                  .pipe(Effect.mapError(() => protocolError("Could not update Pi's screen guide for this turn")));
+              if (cuaGate !== undefined) {
               yield* writePiCuaGate(fileSystem, cuaGate, attached).pipe(
                 Effect.mapError(() =>
                   protocolError("Could not update Pi's computer use access for this turn"),
                 ),
               );
+              }
             }
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {

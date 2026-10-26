@@ -14,6 +14,8 @@ Link each PR you create, take over, or push to with goat_pull_request_link (full
  */
 export const COMPUTER_USE_INSTRUCTION_SECTIONS = builtInSkillSections(["computer-use"]);
 export const COMPUTER_USE_INSTRUCTIONS = COMPUTER_USE_INSTRUCTION_SECTIONS.join("\n\n");
+export const SCREEN_CODE_INSTRUCTION_SECTIONS = builtInSkillSections(["screen-code"]);
+export const SCREEN_CODE_INSTRUCTIONS = "Screen: goat_screen_run";
 
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
@@ -23,6 +25,9 @@ export function buildRuntimeInstructions(runtime: {
   readonly reasoningEffort?: string | undefined;
   /** True when this turn carries the computer use skill (see `resolveBuiltInSkills`). */
   readonly computerUse?: boolean | undefined;
+  readonly screenCode?: boolean | undefined;
+  /** Cursor and ACP resend this block on later turns under the 300-byte budget. */
+  readonly screenCodeCompact?: boolean | undefined;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -33,7 +38,12 @@ export function buildRuntimeInstructions(runtime: {
   const modelInfo = model && model !== "auto" && model !== "default" ? `, as ${modelLabel}` : "";
   const effortInfo = effort ? ` with ${effort} reasoning effort` : "";
   const computerUse = runtime.computerUse ? `\n\n${COMPUTER_USE_INSTRUCTIONS}` : "";
-  return `<runtime_info>You run in GOAT through the ${harness} harness${modelInfo}${effortInfo}; say so only if asked. Markdown can embed images and videos by absolute file path.</runtime_info>${computerUse}`;
+  const screenCode = !runtime.screenCode
+    ? ""
+    : runtime.screenCodeCompact
+      ? `\n${SCREEN_CODE_INSTRUCTIONS}`
+      : `\n\n${SCREEN_CODE_INSTRUCTION_SECTIONS.join("\n\n")}`;
+  return `<runtime_info>You run in GOAT through the ${harness} harness${modelInfo}${effortInfo}; say so only if asked. Markdown can embed images and videos by absolute file path.</runtime_info>${computerUse}${screenCode}`;
 }
 
 function toSingleLine(value: string): string {

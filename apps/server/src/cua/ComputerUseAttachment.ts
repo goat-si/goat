@@ -360,15 +360,16 @@ export function withComputerUse(
     builtInSkills: _previousSkills,
     ...rest
   } = config;
+  const base = _previousSkills === undefined ? rest : { ...rest, builtInSkills: _previousSkills };
   switch (attachment._tag) {
     case "none":
-      return attachment.blockUserConfig ? { ...rest, cuaDriverBlocked: true } : rest;
+      return attachment.blockUserConfig ? { ...base, cuaDriverBlocked: true } : base;
     case "proxied":
       return {
-        ...rest,
+        ...base,
         cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute),
         ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
-        builtInSkills: attachment.skills,
+        builtInSkills: [...new Set([...(_previousSkills ?? []), ...attachment.skills])],
       };
   }
 }

@@ -434,12 +434,16 @@ function BuiltInSkillRows({
   canConfigure: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
 }) {
-  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => (
+  return BUILTIN_SKILLS.filter((skill) => skill.anyOf?.includes("computer-use")).map((skill) => (
     <SettingSwitchRow
       key={skill.name}
-      {...searchableSetting("computer-use-skill")}
+      {...(skill.name === "computer-use"
+        ? searchableSetting("computer-use-skill")
+        : { id: "screen-code-skill", title: "Screen Code skill" })}
       settingKey="disabledBuiltInSkills"
-      description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+      description={skill.name === "screen-code"
+        ? "Built in. Teaches agents to run bounded screen cells on attached browser or desktop targets. Off keeps the tools without this guide."
+        : "Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."}
       label={`${skill.displayName} skill`}
       checked={!disabledSkills.includes(skill.name)}
       canConfigure={canConfigure}

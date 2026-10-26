@@ -1439,6 +1439,7 @@ export function makeClaudeQueryOptions(input: {
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly computerUseSkill?: boolean;
+  readonly screenCodeSkill?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -1552,6 +1553,7 @@ export function makeClaudeQueryOptions(input: {
       append: [
         buildRuntimeInstructions({
           harness: "Claude Code",
+          screenCode: input.screenCodeSkill === true,
           computerUse:
             input.computerUseSkill !== false &&
             input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
@@ -10029,6 +10031,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeThreadId,
             resume: shouldResume,
             computerUseSkill: McpProviderSession.carriesComputerUseSkill(mcpSession),
+            screenCodeSkill: McpProviderSession.carriesScreenCodeSkill(mcpSession),
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,

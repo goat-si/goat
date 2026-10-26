@@ -4,6 +4,7 @@ import {
   ThreadId,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
+  type ScreenBindingHints,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -29,6 +30,7 @@ export interface McpMemoryPolicy {
 }
 
 export interface McpCredentialRequest {
+  readonly screenBindingHints?: ScreenBindingHints;
   readonly grantedScopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly memoryPolicy?: McpMemoryPolicy;
   /** Reads only committed authority; never SQL or a settings lock. */
@@ -133,6 +135,22 @@ interface CredentialRecord {
   readonly isLiveCaller: Effect.Effect<boolean> | undefined;
   readonly isAttached: Effect.Effect<boolean> | undefined;
 }
+
+const copyScreenBindingHints = (hints: ScreenBindingHints): ScreenBindingHints => ({
+  browserRequested: hints.browserRequested,
+  computerRequested: hints.computerRequested,
+  appIds: [...hints.appIds],
+  tabs: hints.tabs.map((tab) => ({ ...tab })),
+});
+
+const copyInvocationScope = (
+  scope: McpInvocationContext.McpThreadInvocationScope,
+): McpInvocationContext.McpThreadInvocationScope => ({
+  ...scope,
+  ...(scope.screenBindingHints === undefined
+    ? {}
+    : { screenBindingHints: copyScreenBindingHints(scope.screenBindingHints) }),
+});
 
 interface Tombstone {
   readonly reason: "expired" | "revoked";
@@ -361,6 +379,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       ): CredentialRecord => {
         const scope: McpInvocationContext.McpThreadInvocationScope = {
           environmentId,
+          ...(request.screenBindingHints === undefined
+            ? {}
+            : { screenBindingHints: copyScreenBindingHints(request.screenBindingHints) }),
           ...(request.grantedScopes === undefined
             ? {}
             : { grantedScopes: [...request.grantedScopes] }),
@@ -543,7 +564,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       // Authority replaced while the policy was read: answer with the
       // replacement's scope, never the superseded one.
       return [
-        latest.generation === generation ? scope : withoutMemoryAuthority(latest.scope),
+        copyInvocationScope(
+          latest.generation === generation ? scope : withoutMemoryAuthority(latest.scope),
+        ),
         registryState(records, current.tombstones),
       ] as const;
     });

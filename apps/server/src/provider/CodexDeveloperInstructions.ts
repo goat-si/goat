@@ -2,6 +2,7 @@ import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app
 import {
   buildRuntimeInstructions,
   COMPUTER_USE_INSTRUCTION_SECTIONS,
+  SCREEN_CODE_INSTRUCTION_SECTIONS,
 } from "@goat/provider-core/server/runtimeInstructions";
 
 import {
@@ -22,6 +23,7 @@ export interface GoatToolAvailability {
   readonly device: boolean;
   /** The managed `cua-driver` MCP server is attached to this turn. */
   readonly computerUse?: boolean;
+  readonly screenCode?: boolean;
 }
 
 const normalizeAvailability = (
@@ -88,6 +90,14 @@ export function buildCodexAdditionalContext(
       ? Object.fromEntries(
           COMPUTER_USE_INSTRUCTION_SECTIONS.map((section, index) => [
             `goat_code_runtime_computer_use_${String(index + 1).padStart(2, "0")}`,
+            { kind: "application" as const, value: section },
+          ]),
+        )
+      : {}),
+    ...(typeof toolsAvailable !== "boolean" && toolsAvailable.screenCode === true
+      ? Object.fromEntries(
+          SCREEN_CODE_INSTRUCTION_SECTIONS.map((section, index) => [
+            `goat_code_runtime_screen_code_${String(index + 1).padStart(2, "0")}`,
             { kind: "application" as const, value: section },
           ]),
         )

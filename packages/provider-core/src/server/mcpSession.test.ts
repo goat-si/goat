@@ -4,10 +4,17 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  carriesScreenCodeSkill,
   memoryToolAvailability,
   withAgentDeviceEnvironment,
   withThreadMcpEnvironment,
 } from "./mcpSession.ts";
+
+it("only an attached screen-code skill sets the provider guide flag", () => {
+  expect(carriesScreenCodeSkill(undefined)).toBe(false);
+  expect(carriesScreenCodeSkill({ builtInSkills: [] })).toBe(false);
+  expect(carriesScreenCodeSkill({ builtInSkills: ["screen-code"] })).toBe(true);
+});
 
 describe("device CLI environment", () => {
   it("preserves provider credentials and commands while routing devices to the owned daemon", () => {

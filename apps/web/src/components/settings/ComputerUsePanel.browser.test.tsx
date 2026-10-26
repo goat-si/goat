@@ -375,6 +375,7 @@ it("keeps the readiness list and skill switch in Advanced, closed by default and
     expect(screen.getByRole("switch", { name: "Computer Use skill" }).query()).toBeNull();
     await screen.getByRole("button", { name: "Details" }).click();
     await expect.element(screen.getByText("1. OS grants")).toBeVisible();
+    await expect.element(screen.getByRole("switch", { name: "Screen Code skill" })).toBeInTheDocument();
     expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBe("true");
     await clickSwitch("Computer Use skill");
     expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });

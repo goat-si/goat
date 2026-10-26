@@ -14,7 +14,7 @@ const entries: ReadonlyArray<Entry> = Object.values(agentSurfaceRegistry);
 
 // The projections in docs/internals/agent-surface.md#paths. Resource and verb are stored
 // separately because names such as goat_preview_recording_start cannot be split reliably.
-const mcpName = (entry: AgentSurfaceEntry) => `goat_${entry.resource}_${entry.verb}`;
+const mcpName = (entry: AgentSurfaceEntry) => listedToolName(entry);
 const kebab = (part: string) => part.replaceAll("_", "-");
 const cliCommand = (entry: AgentSurfaceEntry) =>
   `goat ${kebab(entry.resource)} ${kebab(entry.verb)}`;
@@ -108,6 +108,15 @@ const OFF_GRAMMAR_NAMES = [
 const META_TOOL_NAMES = ["goat_describe", "goat_call"] as const;
 
 describe("agent surface grammar", () => {
+  it("declares screen run as a thread-scoped write with non-replayable input", () => {
+    const screen = agentSurfaceRegistry["surface.screen_run"];
+    expect(screen.name).toBe("goat_screen_run");
+    expect(screen.listing).toBe("core");
+    expect(screen.requires).toBe("thread");
+    expect(screen.effect).toBe("write");
+    expect(screen.capability).toBe("none");
+    expect(screen.idempotencyReason).toContain("unknown outcome");
+  });
   it("keeps paths, resources and verbs in lower snake case", () => {
     for (const [key, entry] of Object.entries(agentSurfaceRegistry)) {
       expect(key).toBe(`${entry.resource}.${entry.verb}`);

@@ -271,7 +271,7 @@ describe("computerUseAttachment", () => {
         proxy,
         // A cua-driver the person configured would skip Stop, pauses and app approvals.
         overrideUserConfig: true,
-        skills: ["computer-use"],
+        skills: ["computer-use", "screen-code"],
       });
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
@@ -279,7 +279,7 @@ describe("computerUseAttachment", () => {
     }),
   );
 
-  it.effect("drops the skill only for the project that switched it off", () =>
+  it.effect("drops only the computer-use guide for the project that switched it off", () =>
     Effect.gen(function* () {
       const optedOut = ProjectId.make("project-cua-off");
       const skills = (projectId: ProjectId) =>
@@ -296,13 +296,13 @@ describe("computerUseAttachment", () => {
             }),
           ),
         );
-      assert.deepEqual(yield* skills(optedOut), []);
-      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use"]);
+      assert.deepEqual(yield* skills(optedOut), ["screen-code"]);
+      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use", "screen-code"]);
     }),
   );
 
   it.effect(
-    "a proxied control in a project with the computer-use skill switched off still gets the proxy descriptor and channel token but no skill",
+    "a project with computer-use guide off keeps the proxy and screen-code guide",
     () =>
       Effect.gen(function* () {
         const projectId = ProjectId.make("project-cua-off");
@@ -319,7 +319,7 @@ describe("computerUseAttachment", () => {
           ),
         );
         if (attached._tag !== "proxied") throw new Error("expected proxy attachment");
-        assert.deepEqual(attached.skills, []);
+        assert.deepEqual(attached.skills, ["screen-code"]);
         const config = ComputerUse.withComputerUse(session, attached, ROUTE);
         assert.deepInclude(config.cuaDriver?.environment ?? [], {
           name: ComputerUse.LEASE_PROXY_ENV.proxyChannelToken,
@@ -338,7 +338,7 @@ describe("computerUseAttachment", () => {
           }),
         ),
       );
-      assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, []);
+      assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, ["screen-code"]);
       const config = ComputerUse.withComputerUse(session, attached, ROUTE);
       assert.isDefined(config.cuaDriver);
       assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
@@ -519,8 +519,8 @@ describe("computerUseAttachment", () => {
               }),
             ),
           );
-        assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use"]);
-        assert.deepEqual(yield* skillsFor(["browser"]), []);
+        assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use", "screen-code"]);
+        assert.deepEqual(yield* skillsFor(["browser"]), ["screen-code"]);
       }),
   );
 
@@ -679,7 +679,7 @@ describe("computerUseAttachment", () => {
         },
         proxy,
         overrideUserConfig: true,
-        skills: ["computer-use"],
+        skills: ["computer-use", "screen-code"],
       });
       assert.deepEqual(leased.minted, [Option.some(lease)]);
       assert.deepEqual(
@@ -724,6 +724,15 @@ describe("computerUseAttachment", () => {
     );
     assert.isFalse("cuaDriver" in blocked);
     assert.isTrue(blocked.cuaDriverBlocked);
+  });
+
+  it("keeps a browser screen guide when desktop control is detached", () => {
+    const config = ComputerUse.withComputerUse(
+      { ...session, builtInSkills: ["screen-code"] },
+      { _tag: "none", reason: "plan", blockUserConfig: false },
+      ROUTE,
+    );
+    assert.deepEqual(config.builtInSkills, ["screen-code"]);
   });
 
   it.effect(
