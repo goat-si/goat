@@ -113,7 +113,6 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
             devicePlatform: () => Effect.succeed("posix"),
             connectHubClient: () => Effect.die("unused"),
             pinnedFingerprint: () => Effect.succeed(PINNED),
-            prepareDevice: () => Effect.die("unused"),
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(true),

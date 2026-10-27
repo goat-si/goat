@@ -34,7 +34,6 @@ import * as Settings from "../serverSettings.ts";
 import type { SshAliasEvent, SshAliasListener } from "../sshRemote/SshAliasEvents.ts";
 import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { PREPARE_EXIT } from "./childPrepare.ts";
 import * as ReadyDispatch from "./ChildReadyDispatch.ts";
 import * as Bootstrap from "./OpenCodexChildBootstrap.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
@@ -57,7 +56,8 @@ export interface Machine {
   hub: boolean;
   homeVersion: string;
   platform: DevicePlatform;
-  prepareExit: number;
+  /** The Child refuses preparing OpenCodex with this; it prepares when undefined. */
+  prepareFailure: ChildReadyFailure["code"] | undefined;
   joined: HubDeviceOperationResult["state"];
   owned: Set<string>;
   /** Machines the cloud catalog no longer counts as this server's: deleted or forgotten. */
@@ -116,11 +116,6 @@ export interface Machine {
 
 export const PERSON = { kind: "client" as const, sessionId: AuthSessionId.make("person") };
 
-const PREPARE_FAILURE: Record<number, ChildReadyFailure["code"]> = {
-  [PREPARE_EXIT.installFailed]: "installation_failed",
-  [PREPARE_EXIT.ocxUnusable]: "ocx_unusable",
-  [PREPARE_EXIT.runtimeUnhealthy]: "startup_failed",
-};
 const readySetup = (
   admission: ReadyDispatch.ChildSetupAdmission,
   proof: boolean,
@@ -172,11 +167,10 @@ const childProtocol = (
     Effect.gen(function* () {
       calls.push(`prepare ${alias} ${machine.homeVersion}`);
       yield* Effect.suspend(() => machine.duringPrepare);
-      const code = PREPARE_FAILURE[machine.prepareExit];
-      if (code !== undefined || machine.prepareExit !== 0)
+      if (machine.prepareFailure !== undefined)
         return yield* new ReadyDispatch.ChildReadyDispatchFailure({
           failure: {
-            code: code ?? "unreachable",
+            code: machine.prepareFailure,
             step: "opencodex_running",
             message: "OpenCodex could not be prepared there.",
             retryable: true,
@@ -445,7 +439,7 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     hub: true,
     homeVersion: "2.91.0",
     platform: "posix",
-    prepareExit: 0,
+    prepareFailure: undefined,
     joined: "child",
     owned: new Set(["boat-builder"]),
     removed: new Set(),

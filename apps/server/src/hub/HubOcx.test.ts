@@ -11,7 +11,6 @@ import * as Path from "effect/Path";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { PREPARE_EXIT } from "../opencodex/childPrepare.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -30,57 +29,6 @@ import {
 
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
-/** SSH as the alias resolves it: `executable` is its provisioned GOAT, scripts are recorded. */
-const deviceWithRuntime = (executable: string | undefined, scripts: Array<string>) =>
-  hubOcxLayer.pipe(
-    Layer.provide(
-      Layer.mock(Dispatch.SshRemoteDispatch)({
-        provisionedRuntimeExecutable: () => Effect.succeed(executable),
-        runHostScript: ({ script }) =>
-          Effect.sync(() => {
-            scripts.push(script);
-            return { stdout: "2.92.0\n__goat_ocx_exit=0\n", stderr: "" };
-          }),
-      }),
-    ),
-    Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
-    Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
-    Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
-    Layer.provide(NodeServices.layer),
-  );
-const prepareOn = (layer: ReturnType<typeof deviceWithRuntime>) =>
-  HubOcx.pipe(
-    Effect.flatMap((ocx) => ocx.prepareDevice("lidge-ts", "2.91.0", 60_000)),
-    Effect.provide(layer),
-  );
-
-it.effect(
-  "prepares a device with its provisioned executable when no public goat command exists",
-  () =>
-    Effect.gen(function* () {
-      const scripts: Array<string> = [];
-      const executable = "/home/alex/.goat/runtime/goat/versions/1.2.3/it's here/goat";
-      const output = yield* prepareOn(deviceWithRuntime(executable, scripts));
-      expect(output).toEqual({ code: 0, stdout: "2.92.0" });
-      expect(scripts).toHaveLength(1);
-      // The one GOAT the script may run is that file, quoted as data; nothing looks one up.
-      expect(scripts[0]?.split("\n")[0]).toBe(
-        "goat_cli='/home/alex/.goat/runtime/goat/versions/1.2.3/it'\\''s here/goat'",
-      );
-      expect(scripts[0]).not.toMatch(/\bnpm\b|command -v goat/u);
-    }),
-);
-
-it.effect(
-  "reports goat_runtime_missing without sending a prepare script when the alias has no provisioned runtime",
-  () =>
-    Effect.gen(function* () {
-      const scripts: Array<string> = [];
-      const output = yield* prepareOn(deviceWithRuntime(undefined, scripts));
-      expect(output.code).toBe(PREPARE_EXIT.goatRuntimeMissing);
-      expect(scripts).toEqual([]);
-    }),
-);
 const CODE = "ocx_pair_Q0xJRU5UX1RFU1RfQ09ERV9GSVhUVVJFXzAwMDAwMDAwMDA";
 const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("hub-fixture"),

@@ -15,12 +15,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
-import {
-  type OcxLayout,
-  PREPARE_EXIT,
-  prepareScript,
-  resolveOcx,
-} from "../opencodex/childPrepare.ts";
+import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
 
 const MAX_BYTES = 256 * 1024;
@@ -105,16 +100,6 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
-    /**
-     * Makes the device ready to be a Child: its provisioned GOAT installs the pinned OpenCodex
-     * when none supported is there, then starts it unless it answers. Without that GOAT nothing
-     * runs (`goatRuntimeMissing`). Stdout is the version that answers; codes are `PREPARE_EXIT`.
-     */
-    readonly prepareDevice: (
-      alias: string,
-      version: string,
-      timeoutMs: number,
-    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /**
      * Attaches to, or provisions, GOAT's runtime on the device the way SSH setup does, never
      * replacing a running one. False while it is pending or has no usable executable.
@@ -346,20 +331,6 @@ const make = Effect.gen(function* () {
     home,
     homeAdmitted,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
-    prepareDevice: Effect.fn("HubOcx.prepareDevice")(function* (alias, version, timeoutMs) {
-      const goatExecutable = yield* dispatch.provisionedRuntimeExecutable(alias).pipe(
-        Effect.mapError(
-          (error) =>
-            new HubOcxError({
-              reason: "unreachable",
-              message: `${alias} could not resolve its GOAT runtime (${error.reason}).`,
-            }),
-        ),
-      );
-      if (goatExecutable === undefined)
-        return { code: PREPARE_EXIT.goatRuntimeMissing, stdout: "" };
-      return yield* runDevice(alias, prepareScript(version, goatExecutable), timeoutMs);
-    }),
     ensureDeviceRuntime: Effect.fn("HubOcx.ensureDeviceRuntime")(function* (alias) {
       return yield* dispatch.ensureRuntime(alias).pipe(
         Effect.mapError(

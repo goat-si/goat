@@ -9,7 +9,6 @@ import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as AutomationHold from "../automationHold.ts";
-import { PREPARE_EXIT } from "./childPrepare.ts";
 import { build, type Machine, MINUTE, PERSON, setup } from "./OpenCodexChildBootstrap.testkit.ts";
 it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("held: dispatches no child setup; release: the queued machine joins", () =>
@@ -85,7 +84,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     "compiled installer failure is blocked with install_failed and retried after ten minutes",
     () =>
       Effect.gen(function* () {
-        const home = yield* setup({ prepareExit: PREPARE_EXIT.installFailed });
+        const home = yield* setup({ prepareFailure: "installation_failed" });
         expect(yield* home.bootstrap.ensure("boat-builder")).toMatchObject({
           state: "blocked",
           reason: "install_failed",
@@ -93,7 +92,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
         expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
         yield* home.ready("boat-builder");
         expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("blocked");
-        home.machine.prepareExit = 0;
+        home.machine.prepareFailure = undefined;
         yield* TestClock.adjust(10 * MINUTE);
         yield* home.ready("boat-builder");
         expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("running");
