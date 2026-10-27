@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -8,6 +11,7 @@ import * as Path from "effect/Path";
 import * as FileSystem from "effect/FileSystem";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -38,6 +42,7 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     stateDir: string,
   ) => Effect.Effect<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError>,
   avdOutput: ProcessRunner.ProcessRunOutput = processOutput(0),
+  spawn?: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -60,23 +65,24 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     Effect.provideService(HostProcess.Platform, "darwin"),
     Effect.provideService(
       ChildProcessSpawner.ChildProcessSpawner,
-      ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(123),
-            stdout: Stream.empty,
-            stderr: Stream.empty,
-            all: Stream.empty,
-            exitCode: Effect.never,
-            isRunning: Effect.succeed(true),
-            kill: () => Effect.void,
-            stdin: Sink.drain,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.empty,
-            unref: Effect.succeed(Effect.void),
-          }),
+      spawn ??
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(123),
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              exitCode: Effect.never,
+              isRunning: Effect.succeed(true),
+              kill: () => Effect.void,
+              stdin: Sink.drain,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+              unref: Effect.succeed(Effect.void),
+            }),
+          ),
         ),
-      ),
     ),
     Effect.provideService(ProcessRunner.ProcessRunner, {
       run: (input) =>
@@ -94,6 +100,96 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   yield* host.ensureReady(() => Effect.void);
   return { host, fs, stateDir };
 });
+
+const replacementFixture = Effect.fn("replacementFixture")(function* () {
+  const firstExit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+  const failedReplacement = yield* Deferred.make<void>();
+  const replacementSpawned = yield* Deferred.make<void>();
+  const retryScheduled = yield* Deferred.make<void>();
+  const clock = yield* Clock.Clock;
+  let spawns = 0;
+  const spawn = ChildProcessSpawner.make(() =>
+    Effect.gen(function* () {
+      const index = ++spawns;
+      if (index === 2) {
+        yield* Deferred.succeed(failedReplacement, undefined);
+        return yield* Effect.die(new Error("transient replacement spawn failure"));
+      }
+      if (index === 3) yield* Deferred.succeed(replacementSpawned, undefined);
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(120 + index),
+        stdout: Stream.empty,
+        stderr: Stream.empty,
+        all: Stream.empty,
+        exitCode: index === 1 ? Deferred.await(firstExit) : Effect.never,
+        isRunning:
+          index === 1
+            ? Deferred.isDone(firstExit).pipe(Effect.map((done) => !done))
+            : Effect.succeed(true),
+        kill: () => Effect.void,
+        stdin: Sink.drain,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      });
+    }),
+  );
+  const { host } = yield* agentFixture(
+    () => Effect.succeed(processOutput(0)),
+    processOutput(0),
+    spawn,
+  ).pipe(
+    Effect.provideService(Clock.Clock, {
+      ...clock,
+      sleep: (duration) =>
+        (Duration.toMillis(duration) === 1_000
+          ? Deferred.succeed(retryScheduled, undefined)
+          : Effect.void
+        ).pipe(Effect.andThen(clock.sleep(duration))),
+    }),
+  );
+  yield* Deferred.succeed(firstExit, ChildProcessSpawner.ExitCode(1));
+  yield* TestClock.adjust("0 millis");
+  yield* Deferred.await(failedReplacement);
+  return { host, spawns: () => spawns, replacementSpawned, retryScheduled };
+});
+
+it.effect("retries a failed hub replacement without another ensureReady call", () =>
+  Effect.gen(function* () {
+    const { host, spawns, replacementSpawned, retryScheduled } = yield* replacementFixture();
+    expect(spawns()).toBe(2);
+    yield* TestClock.adjust("0 millis");
+    expect(yield* Deferred.isDone(retryScheduled)).toBe(true);
+    yield* TestClock.adjust("1 second");
+    yield* Deferred.await(replacementSpawned);
+    expect(spawns()).toBe(3);
+    expect(yield* host.current).not.toBeNull();
+    yield* host.stop;
+    yield* TestClock.adjust("1 minute");
+    expect(spawns()).toBe(3);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("does not resurrect a stopped hub while replacement retry is sleeping", () =>
+  Effect.gen(function* () {
+    const { host, spawns } = yield* replacementFixture();
+    yield* host.stop;
+    yield* TestClock.adjust("1 minute");
+    expect(spawns()).toBe(2);
+    expect(yield* host.current).toBeNull();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("does not replace a hub superseded during replacement retry backoff", () =>
+  Effect.gen(function* () {
+    const { host, spawns } = yield* replacementFixture();
+    const replacement = yield* host.ensureReady(() => Effect.void);
+    expect(spawns()).toBe(3);
+    yield* TestClock.adjust("1 minute");
+    expect(spawns()).toBe(3);
+    expect((yield* host.current)?.hub).toEqual(replacement.hub);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 describe("AgentDevice startup", () => {
   it.effect("reports an incompatible lock immediately and retains it for manual repair", () =>
