@@ -16,7 +16,8 @@ import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import { playwrightQuoted, rememberSecret } from "./pageSecrets.ts";
+import { rememberSecret } from "./pageSecrets.ts";
+import { compileSecretForms, secretSpans } from "./secretForms.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -208,87 +209,11 @@ const settledPrivate = (control: SessionControl) =>
       })
     : Promise.resolve(false);
 
-const uriEncoded = (value: string) => {
-  try {
-    return [encodeURIComponent(value)];
-  } catch {
-    // An unpaired surrogate has no URL form for a page to echo.
-    return [];
-  }
-};
-
-/** How a page or a snapshot can write the value back: raw, JSON-escaped, URL- or form-encoded. */
-const encodedForms = (value: string) =>
-  // The snapshot drops zero-width characters and collapses whitespace in the text it shows.
-  [
-    value,
-    value
-      .replace(/[\u200b\u00ad]/g, "")
-      .trim()
-      .replace(/\s+/g, " "),
-  ]
-    .flatMap((each) => [
-      each,
-      JSON.stringify(each).slice(1, -1),
-      playwrightQuoted(each),
-      ...uriEncoded(each),
-      new URLSearchParams({ v: each }).toString().slice(2),
-    ])
-    .flatMap((form) => [form, form.replaceAll("'", "''")]);
-
-/**
- * Servers write percent escapes in either case. Folding every A-F, wherever it stands, keeps each
- * index in place and every exact match a match; it only also masks hex-case variants.
- */
-const foldHex = (text: string) => text.replace(/[A-F]/g, (digit) => digit.toLowerCase());
-
-interface Form {
-  readonly text: string;
-  readonly fallback: Int32Array;
-}
-
-/** The Knuth-Morris-Pratt table, built once per form for every string one answer holds. */
-const compile = (form: string): Form => {
-  const fallback = new Int32Array(form.length);
-  for (let i = 1, k = 0; i < form.length; i++) {
-    while (k > 0 && form.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
-    if (form.charCodeAt(i) === form.charCodeAt(k)) k++;
-    fallback[i] = k;
-  }
-  return { text: form, fallback };
-};
-
-/**
- * Where `form` occurs in `text`, overlaps included, merged into spans. Knuth-Morris-Pratt keeps
- * this linear, so a long or repetitive secret neither builds a huge pattern nor stalls the loop.
- */
-const spansOf = (text: string, { text: form, fallback }: Form, cut: boolean) => {
-  const spans: Array<[number, number]> = [];
-  if (form.length > text.length && !cut) return spans;
-  let k = 0;
-  for (let i = 0; i < text.length; i++) {
-    while (k > 0 && text.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
-    if (text.charCodeAt(i) === form.charCodeAt(k)) k++;
-    if (k < form.length) continue;
-    const start = i + 1 - k;
-    const last = spans.at(-1);
-    if (last !== undefined && start <= last[1]) last[1] = i + 1;
-    else spans.push([start, i + 1]);
-    k = fallback[k - 1] ?? 0;
-  }
-  // A cut text can end partway through the value: a tail that starts it goes too.
-  if (cut && k > 0) spans.push([text.length - k, text.length]);
-  return spans;
-};
-
 /** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
 const maskWith = (values: ReadonlySet<string>) => {
-  const forms = [...new Set([...values].flatMap(encodedForms).map(foldHex))]
-    .filter((form) => form !== "")
-    .map(compile);
+  const forms = compileSecretForms(values);
   return (text: string, cut = false) => {
-    const searched = foldHex(text);
-    const spans = forms.flatMap((form) => spansOf(searched, form, cut));
+    const spans = secretSpans(text, forms, cut);
     if (spans.length === 0) return text;
     let masked = "";
     let shown = 0;
@@ -405,7 +330,7 @@ export const make = Effect.gen(function* () {
             const values = filledValues.get(request.threadId) ?? new Set<string>();
             values.add(value);
             filledValues.set(request.threadId, values);
-            rememberSecret(tab.page, encodedForms(value));
+            rememberSecret(tab.page, value);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.

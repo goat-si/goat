@@ -101,7 +101,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     const page = await context.newPage();
     await page.goto(origin);
     await page.setContent(`<p>echo ${filled}</p>`);
-    rememberSecret(page, [filled]);
+    rememberSecret(page, filled);
     const snapshot = await ServerBrowserPage.snapshot({
       page,
       cdp: await context.newCDPSession(page),

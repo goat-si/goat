@@ -21,7 +21,8 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
-import { maskSnapshotRecords, playwrightQuoted } from "./pageSecrets.ts";
+import { maskSnapshotRecords } from "./pageSecrets.ts";
+import { playwrightQuoted } from "./secretForms.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 

@@ -5,6 +5,8 @@
  * @module cookieValues
  */
 
+import { compileSecretForms, type SecretForm, secretSpans } from "./secretForms.ts";
+
 export const REDACTED = "[redacted]";
 /** Cookie values this long are redacted wherever they appear, even inside other text. */
 export const MIN_SECRET_LENGTH = 6;
@@ -17,6 +19,12 @@ const MIN_TOKEN_LENGTH = 3;
 const MAX_PATTERN_SOURCE = 32_768;
 
 type Span = readonly [number, number];
+/** A filled entry is a secret GOAT typed, matched as a substring however short. */
+type Cookies = ReadonlyArray<{
+  readonly name: string;
+  readonly value: string;
+  readonly filled?: boolean;
+}>;
 
 /** Escapes text for use as a literal inside a RegExp. */
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -142,14 +150,15 @@ interface Prepared {
   readonly maxLong: number;
   readonly pairForms: ReadonlyArray<string>;
   readonly tokenForms: ReadonlyArray<string>;
+  readonly filled: ReadonlyArray<SecretForm>;
 }
 
 const preparedLists = new WeakMap<object, Prepared>();
 
-function prepare(cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>) {
+function prepare(cookies: Cookies) {
   const known = preparedLists.get(cookies);
   if (known !== undefined) return known;
-  const valued = cookies.filter((cookie) => cookie.value !== "");
+  const valued = cookies.filter((cookie) => cookie.value !== "" && cookie.filled !== true);
   // As sent, as a URL encodes it, and as JSON escapes it inside a string.
   const formsOf = (value: string) => [
     value,
@@ -178,6 +187,9 @@ function prepare(cookies: ReadonlyArray<{ readonly name: string; readonly value:
         .filter(({ value }) => value.length >= MIN_TOKEN_LENGTH)
         .flatMap(({ value }) => formsOf(value)),
     ),
+    filled: compileSecretForms(
+      cookies.filter((cookie) => cookie.filled === true).map(({ value }) => value),
+    ),
   };
   preparedLists.set(cookies, prepared);
   return prepared;
@@ -186,16 +198,13 @@ function prepare(cookies: ReadonlyArray<{ readonly name: string; readonly value:
 /**
  * Each cookie is redacted wherever it appears as name=value, which is how an echoed Cookie or
  * Set-Cookie header looks. Its value is redacted anywhere once it has six characters, and as a
- * whole token from three. Every kind of match is found in the original text and only then
- * replaced, so one never hides another; no pattern is ever built from a whole long value.
+ * whole token from three; a filled secret anywhere. Every kind of match is found in the original
+ * text and only then replaced, so one never hides another; no pattern is built from a value.
  */
-export const redactCookieValues = (
-  text: string,
-  cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>,
-) => {
+export const redactCookieValues = (text: string, cookies: Cookies) => {
   const prepared = prepare(cookies);
-  if (prepared.sortedLong.length + prepared.pairForms.length + prepared.tokenForms.length === 0)
-    return text;
+  const { sortedLong, pairForms, tokenForms, filled } = prepared;
+  if (sortedLong.length + pairForms.length + tokenForms.length + filled.length === 0) return text;
   const pairs = matchInBatches(
     text,
     prepared.pairForms,
@@ -214,5 +223,6 @@ export const redactCookieValues = (
     ...cutTailSpan(text, prepared),
     ...pairs,
     ...tokens,
+    ...secretSpans(text, filled),
   ]);
 };

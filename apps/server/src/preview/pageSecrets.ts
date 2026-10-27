@@ -16,22 +16,17 @@ import { MIN_SECRET_LENGTH, redactCookieValues } from "./cookieValues.ts";
 
 const MASKED_VALUE = "••••••••";
 
-/** How Playwright's snapshot quotes text: JSON's escapes, and \xNN for the unnamed controls. */
-export const playwrightQuoted = (value: string) =>
-  value.replace(/[\\"\p{Cc}]/gu, (char) =>
-    '\\"\b\f\n\r\t'.includes(char)
-      ? JSON.stringify(char).slice(1, -1)
-      : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-  );
-
-type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
+/** A cookie value, or a secret GOAT filled, which masks as a substring wherever it stands. */
+type Cookie = { readonly name: string; readonly value: string; readonly filled?: boolean };
+type Cookies = ReadonlyArray<Cookie>;
 
 type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
 
-type Cookie = { readonly name: string; readonly value: string };
 /** Cookie values a context held, newest last; far more than a page sets in a session. */
 const MAX_REMEMBERED = 10_000;
 const remembered = new WeakMap<object, Map<string, Cookie>>();
+/** Secrets GOAT filled in a context's pages, kept apart so no cookie churn evicts them. */
+const filledSecrets = new WeakMap<object, Set<string>>();
 
 /** The page's URL and every frame's, cross-origin iframes included. */
 export const frameUrls = (page: CookiePage) => [
@@ -63,18 +58,18 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
     seen.set(key, { name, value });
     if (seen.size > MAX_REMEMBERED) seen.delete(seen.keys().next().value ?? key);
   }
-  return [...seen.values()];
+  const filled = [...(filledSecrets.get(context) ?? [])].map((value) => ({
+    name: "",
+    value,
+    filled: true,
+  }));
+  return [...seen.values(), ...filled];
 };
 
-/**
- * A secret GOAT filled in the page joins the values its context held, so where it and a cookie
- * value overlap, both are found in the original text and masked as one.
- */
-export const rememberSecret = (page: Pick<Page, "context">, forms: ReadonlyArray<string>) => {
+/** A secret GOAT filled joins the tab's values, so it and a cookie it overlaps mask as one. */
+export const rememberSecret = (page: Pick<Page, "context">, value: string) => {
   const context = page.context();
-  const seen = remembered.get(context) ?? new Map<string, Cookie>();
-  remembered.set(context, seen);
-  for (const value of forms) if (value !== "") seen.set(`=${value}`, { name: "", value });
+  filledSecrets.set(context, (filledSecrets.get(context) ?? new Set<string>()).add(value));
 };
 
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
