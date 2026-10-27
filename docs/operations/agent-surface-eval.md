@@ -164,6 +164,65 @@ The manual tasks need connected hosts and a person who approves or finishes sign
 runner includes them only with `--include-manual`. D8's historical provider-sync
 verdict requires those tasks; this does not gate `goat_screen_run`.
 
+## Replaying tool-use mistakes
+
+The separate [replay cases](../../scripts/agent-surface/eval/replay-cases.ts) cover review
+rounds, async delegation, managed worktrees, PR ownership, thread links, and HTML preview.
+They use invented histories adapted from upstream's tool-use regressions. They do not change
+the paired campaign task set or count toward its gate.
+
+Export a case with this checkout's GOAT instructions and the tools its thread listing serves:
+
+```sh
+node scripts/agent-surface/eval/replay-run.ts --case async-delegate-ends-turn --listing core --context
+```
+
+Repeat with `--listing full` to compare the two surfaces. Context generation uses the existing
+inert catalog fixture; no installed GOAT server, credentials, provider, or captured harness
+prompt is needed. The output is harness-independent GOAT context, not a complete Claude or
+Codex request. An external harness supplies its native tools, honors the case's role and prior
+turns, and records the new continuation. This command does not run that harness or simulate
+future tool results.
+
+Save the continuation as JSON with `version`, `caseId`, and `listing` from the exported context,
+plus `calls`, `text`, and `stopReason`. Calls contain `tool`, object `input`, and optional
+`isError` (set it to `true` for rejected calls). Record executed nested code-mode calls in order;
+the grader does not execute or inspect JavaScript source. Include only the new continuation,
+because setup calls cannot satisfy the case's requirements. For example:
+
+```json
+{
+  "version": 1,
+  "caseId": "async-delegate-ends-turn",
+  "listing": "core",
+  "calls": [
+    {
+      "tool": "mcp__goat__goat_call",
+      "input": {
+        "path": "task.create",
+        "args": { "task": "Compare the cache designs", "mode": "async" }
+      }
+    }
+  ],
+  "text": "The research task is running; its result will arrive automatically.",
+  "stopReason": "end_turn"
+}
+```
+
+Grade it without calling a model or executing any replayed action:
+
+```sh
+node scripts/agent-surface/eval/replay-run.ts --case async-delegate-ends-turn --listing core --trace ../continuation.json
+```
+
+Exit 1 means a rule failed. `max_steps` and `error` stop reasons always fail. The grader checks
+required and forbidden calls, partial arguments, ordering, call counts, shell patterns and
+answer text. It resolves GOAT names through the current registry, accepts `goat_call` dispatch
+in either listing, and rejects unknown paths or direct calls outside the selected listing.
+These are behavioral checks on the supplied trace, not proof that its arguments passed the
+server's schemas or that the requested work happened. Keep real transcripts and credentials
+out of committed replay data. Changing a case or grading rule raises `REPLAY_VERSION`.
+
 ## Not yet possible
 
 - `goat_eval` is unbuilt. Its candidate arm remains historical; this runner does
