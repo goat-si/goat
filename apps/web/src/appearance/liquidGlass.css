@@ -26,28 +26,27 @@
       background-color: var(--lg-terminal);
     }
 
-    /* The framed sidebar paints a rounded panel on a pseudo-element below the titlebar strip. As
-       glass, the rail, strip and panel read as one continuous sheet, so the element carries the
-       tint from top to bottom and the framed panel is dropped. */
+    /* Framed layout: the destination rail and the titlebar strip are the window frame and take the
+       pane tint, like the main area; the nested sidebar is a rounded panel (its ::before) in the
+       sidebar tint, outlined by the content frame. */
+    [data-destination-rail][data-glass-pane] {
+      background-color: var(--lg-pane);
+    }
     [data-glass-pane="rail"].before\:bg-sidebar {
-      background-color: var(--lg-rail);
+      background: linear-gradient(
+        var(--lg-pane) 0 calc(var(--workspace-topbar-height) - 1px),
+        transparent 0
+      );
     }
     [data-glass-pane="rail"].before\:bg-sidebar::before {
-      background-color: transparent;
+      background-color: var(--lg-rail);
     }
 
-    /* The shell's content frame (index.css workspace-content-frame) outlines the main area with a
-       rounded corner and paints an opaque corner cover; on glass that reads as a notch and a
-       recessed panel. One faint full-height divider between sidebar and main replaces it. */
-    .workspace-content-frame {
-      border-color: transparent;
-    }
+    /* The content frame's corner cover paints the opaque page colour outside its curve to hide
+       square fills beneath; on glass every fill there is already clear, and the opaque wedge broke
+       the line where the frame's top and left edges meet. */
     .workspace-content-frame::before {
       background: none;
-    }
-    [data-slot="sidebar-container"]::after {
-      top: 0;
-      border-color: color-mix(in srgb, var(--contrast-foreground) 8%, transparent);
     }
     [data-slot="sidebar-inset"][data-glass-pane="pane"] {
       box-shadow: none;
