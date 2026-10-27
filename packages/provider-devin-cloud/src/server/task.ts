@@ -18,7 +18,8 @@ const MAX_PROGRESS = 2_000;
 const MAX_EARLY_SESSIONS = 8;
 const MAX_MESSAGES = 64;
 const UNKNOWN_PROMPT = "Could not confirm the cloud prompt outcome; no automatic resubmission.";
-// ACP's authRequired. The CLI may answer it after forwarding the prompt, so the outcome stays unknown.
+// ACP's authRequired answers on a live connection, so the session stays usable after sign-in. The
+// CLI may still have forwarded the prompt, so the message says it was not resent.
 const SIGN_IN_AGAIN =
   "Devin asked you to sign in again (run `devin auth login`). GOAT could not confirm whether this prompt reached Devin, so it was not resent.";
 const isAcpRequestError = Schema.is(AcpRequestError);
@@ -405,6 +406,58 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
           });
       }),
     );
+  const refuse = (detail: string, code: string, expected: TaskInput | undefined) =>
+    gate.withPermit(
+      Effect.gen(function* () {
+        if (settled || closed || !input || input !== expected || !thread?.cloudTask) return;
+        const turn = input;
+        const summary = text || thread.cloudTask.summary;
+        yield* updateTask({
+          status: "failed",
+          ...(summary !== undefined ? { summary } : {}),
+          error: detail,
+          progress: detail.slice(0, MAX_PROGRESS),
+        });
+        // No response arrived, so the prompt-count marker stays where it was.
+        if (turn.commitCloudTask && thread.cloudTask)
+          yield* turn.commitCloudTask(thread.cloudTask, {
+            nativeThreadRef: thread.nativeThreadRef,
+            nativeConversationHeadRef: thread.nativeConversationHeadRef,
+          });
+        settled = true;
+        const now = yield* DateTime.now;
+        thread = { ...thread, status: "idle", updatedAt: now };
+        yield* emit({ type: "provider_thread.updated", driver: DRIVER, providerThread: thread });
+        yield* emit({
+          type: "provider_turn.updated",
+          driver: DRIVER,
+          threadId: turn.threadId,
+          providerTurn: {
+            id: turnId(),
+            providerThreadId: thread.id,
+            nodeId: turn.rootNodeId,
+            runAttemptId: turn.attemptId,
+            nativeTurnRef: null,
+            ordinal: turn.providerTurnOrdinal,
+            status: "failed",
+            startedAt,
+            completedAt: now,
+          },
+        });
+        yield* onSettled();
+        yield* emit({
+          type: "turn.terminal",
+          driver: DRIVER,
+          providerThreadId: thread.id,
+          providerTurnId: turnId(),
+          runOrdinal: turn.runOrdinal,
+          failureItemOrdinal: 1,
+          status: "failed",
+          failure: makeProviderFailure({ class: "provider_error", message: detail, code }),
+          threadDisposition: "reusable",
+        });
+      }),
+    );
   const bind = (next: TaskInput, recovered: boolean) =>
     gate.withPermit(
       Effect.gen(function* () {
@@ -541,7 +594,9 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
         );
       }).pipe(
         Effect.catch((error) =>
-          uncertain(isSignInRequired(error) ? SIGN_IN_AGAIN : UNKNOWN_PROMPT, bound),
+          isSignInRequired(error)
+            ? refuse(SIGN_IN_AGAIN, "auth_required", bound)
+            : uncertain(UNKNOWN_PROMPT, bound),
         ),
       );
     }),

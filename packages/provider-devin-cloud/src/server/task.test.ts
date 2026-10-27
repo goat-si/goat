@@ -208,49 +208,81 @@ it.effect(
     }),
 );
 // Transport-level assertions only; the real persistence cases below remain mandatory.
-it.effect("a sign-in refusal of the prompt stays unknown and tells the user to sign in again", () =>
-  Effect.gen(function* () {
-    const events: Adapter.ProviderAdapterV2Event[] = [];
-    let prompts = 0;
-    const observer = yield* makeTaskObserver(
-      (event) =>
-        Effect.sync(() => {
-          events.push(event);
-        }),
-      () => Effect.void,
-    );
-    yield* observer.bind(taskInput, false);
-    yield* observer.run(
-      relay({
-        prompt: () =>
-          Effect.suspend(() => {
-            prompts += 1;
-            return Effect.fail(
-              new DevinCloudCliError({
-                stage: "relay",
-                cause: AcpRequestError.fromProtocolError(
-                  { code: -32000, message: "Authentication required" },
-                  { method: "session/prompt" },
-                ),
-              }),
-            );
+it.effect(
+  "a sign-in refusal fails the turn and keeps the session usable instead of treating it as a lost connection",
+  () =>
+    Effect.gen(function* () {
+      const events: Adapter.ProviderAdapterV2Event[] = [];
+      const reasons: string[] = [];
+      const commits: Array<{ status: string; ordinal: number | undefined }> = [];
+      let settledCalls = 0;
+      let prompts = 0;
+      const observer = yield* makeTaskObserver(
+        (event) =>
+          Effect.sync(() => {
+            events.push(event);
           }),
-      }),
-      "task",
-    );
-    const updated = events.findLast((event) => event.type === "provider_thread.updated");
-    const task =
-      updated?.type === "provider_thread.updated" ? updated.providerThread.cloudTask : undefined;
-    assert.equal(task?.status, "unknown");
-    assert.equal(
-      task?.error,
-      "Devin asked you to sign in again (run `devin auth login`). GOAT could not confirm whether this prompt reached Devin, so it was not resent.",
-    );
-    const terminal = events.find((event) => event.type === "turn.terminal");
-    assert.equal(terminal?.type === "turn.terminal" ? terminal.status : "", "failed");
-    assert.equal(terminal?.type === "turn.terminal" ? terminal.threadDisposition : "", "broken");
-    assert.equal(prompts, 1);
-  }),
+        (reason) =>
+          Effect.sync(() => {
+            reasons.push(reason);
+          }),
+        () =>
+          Effect.sync(() => {
+            settledCalls += 1;
+          }),
+      );
+      yield* observer.bind(
+        {
+          ...taskInput,
+          commitCloudTask: (task, refs) =>
+            Effect.sync(() => {
+              commits.push({ status: task.status, ordinal: refs?.nativeThreadRef?.ordinal });
+            }),
+        },
+        false,
+      );
+      yield* observer.run(
+        relay({
+          prompt: () =>
+            Effect.suspend(() => {
+              prompts += 1;
+              return Effect.fail(
+                new DevinCloudCliError({
+                  stage: "relay",
+                  cause: AcpRequestError.fromProtocolError(
+                    { code: -32000, message: "Authentication required" },
+                    { method: "session/prompt" },
+                  ),
+                }),
+              );
+            }),
+        }),
+        "task",
+      );
+      const updated = events.findLast((event) => event.type === "provider_thread.updated");
+      const task =
+        updated?.type === "provider_thread.updated" ? updated.providerThread.cloudTask : undefined;
+      assert.equal(task?.status, "failed");
+      assert.equal(
+        task?.error,
+        "Devin asked you to sign in again (run `devin auth login`). GOAT could not confirm whether this prompt reached Devin, so it was not resent.",
+      );
+      assert.deepEqual(commits, [{ status: "failed", ordinal: thread.nativeThreadRef?.ordinal }]);
+      const terminal = events.find((event) => event.type === "turn.terminal");
+      assert.equal(terminal?.type === "turn.terminal" ? terminal.status : "", "failed");
+      assert.equal(
+        terminal?.type === "turn.terminal" ? terminal.threadDisposition : "",
+        "reusable",
+      );
+      assert.equal(
+        terminal?.type === "turn.terminal" ? terminal.failure?.code : "",
+        "auth_required",
+      );
+      assert.deepEqual(reasons, []);
+      assert.equal(settledCalls, 1);
+      assert.equal(prompts, 1);
+      yield* observer.assertIdle;
+    }),
 );
 it.effect("retains early metadata and sends late blocked metadata through the base port", () =>
   Effect.gen(function* () {
