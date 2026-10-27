@@ -73,6 +73,7 @@ import {
   shouldMoveToAppServer,
 } from "./appServer.ts";
 import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
+import { makeRemoteScripts, type RuntimeExecutableShape } from "./runtimeExecutable.ts";
 import {
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
@@ -275,7 +276,8 @@ export type SshSetupOutcome =
       readonly fix: SshHostFailure["fix"];
     };
 
-export interface SshEnvironmentManagerShape extends ExistingServerRouteShape {
+export interface SshEnvironmentManagerShape
+  extends ExistingServerRouteShape, RuntimeExecutableShape {
   readonly readyEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<
@@ -4712,32 +4714,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return (appServerRefusals.get(key) ?? 0) > (yield* Clock.currentTimeMillis) ? "managed" : null;
   });
 
-  const runRemoteScript = Effect.fn("ssh/tunnel.runRemoteScript")(function* (
-    target: DesktopSshEnvironmentTarget,
-    input: { readonly script: string; readonly timeoutMs?: number },
-  ): Effect.fn.Return<
-    { readonly stdout: string; readonly stderr: string },
-    SshEnvironmentEffectError,
-    SshEnvironmentEffectContext
-  > {
-    const { resolvedTarget, key } = yield* resolveManagedTarget(target);
-    yield* validateManagedPin(resolvedTarget);
-    return yield* runWithSshAuth({
-      key,
-      keyOnly: managedAliases.has(resolvedTarget.alias),
-      target: resolvedTarget,
-      operation: (authOptions) =>
-        runSshCommand(resolvedTarget, {
-          remoteCommandArgs: ["sh", "-s"],
-          stdin: input.script,
-          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-          ...(authOptions.authSecret === undefined ? {} : { authSecret: authOptions.authSecret }),
-          ...(authOptions.batchMode === undefined ? {} : { batchMode: authOptions.batchMode }),
-          ...(authOptions.interactiveAuth === undefined
-            ? {}
-            : { interactiveAuth: authOptions.interactiveAuth }),
-        }),
-    });
+  const { runRemoteScript, provisionedRuntimeExecutable } = makeRemoteScripts({
+    tunnels,
+    generations,
+    isClosed: () => closed,
+    managedAliases,
+    resolveManagedTarget,
+    validateManagedPin,
+    runWithSshAuth,
   });
 
   const beginSetupOperation: SshEnvironmentManagerShape["beginSetupOperation"] = Effect.fn(
@@ -4962,6 +4946,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     issueClientSession: withSharing(issueClientSession),
     attachedServerKind,
     runRemoteScript: withSharing(runRemoteScript),
+    provisionedRuntimeExecutable: withSharing(provisionedRuntimeExecutable),
   });
 });
 

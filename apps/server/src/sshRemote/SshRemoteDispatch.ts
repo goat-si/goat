@@ -79,6 +79,7 @@ import {
   pendingRuntimeMessage,
 } from "./sshEnvironmentRoute.ts";
 import { remoteModelOffer } from "./remoteModelOffer.ts";
+import * as HostRuntime from "./sshHostRuntime.ts";
 import {
   buildRemoteBrowseScript,
   parseRemoteBrowseOutput,
@@ -299,15 +300,6 @@ export class SshRemoteDispatch extends Context.Service<
       { readonly stdout: string; readonly stderr: string },
       SshRemoteDispatchError
     >;
-    /** Runs a POSIX sh script on a known SSH host alias, the way runRemoteScript does. */
-    readonly runHostScript: (input: {
-      readonly host: string;
-      readonly script: string;
-      readonly timeoutMs: number;
-    }) => Effect.Effect<
-      { readonly stdout: string; readonly stderr: string },
-      SshRemoteDispatchError
-    >;
     readonly identifyTarget: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<EnvironmentId | null, SshRemoteDispatchError>;
@@ -371,7 +363,7 @@ export class SshRemoteDispatch extends Context.Service<
       target: DesktopSshEnvironmentTarget,
       scopes: ReadonlyArray<AuthEnvironmentScope>,
     ) => Effect.Effect<SshTunnel.RemoteClientSession, SshRemoteDispatchError>;
-  }
+  } & HostRuntime.HostRuntimeAdapters
 >()("goat/sshRemote/SshRemoteDispatch") {}
 
 const decodeIdentityFile = Schema.decodeEffect(EnvironmentId);
@@ -1348,13 +1340,13 @@ const make = Effect.gen(function* () {
       }),
     ).pipe(sshFailed(input.target.alias));
   });
-  const runHostScript = Effect.fn("SshRemoteDispatch.runHostScript")(function* (input: {
-    readonly host: string;
-    readonly script: string;
-    readonly timeoutMs: number;
-  }) {
-    const target = yield* resolveHost(input.host);
-    return yield* runRemoteScript({ target, script: input.script, timeoutMs: input.timeoutMs });
+  const hostRuntime = HostRuntime.makeHostRuntime({
+    manager,
+    resolveHost,
+    withRuntime,
+    sshFailed,
+    readyCloudTarget,
+    runRemoteScript,
   });
   const identifyTarget = Effect.fn("SshRemoteDispatch.identifyTarget")(function* (
     target: DesktopSshEnvironmentTarget,
@@ -2215,7 +2207,7 @@ const make = Effect.gen(function* () {
     resolveThreadEnvironment,
     connectedHosts,
     runRemoteScript,
-    runHostScript,
+    ...hostRuntime,
     preflightTarget,
     identifyTarget,
     proxyEndpoint,

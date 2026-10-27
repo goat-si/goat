@@ -150,6 +150,8 @@ export const makeSsh = (
     publishProviderDiagnosis: unused,
     runRemoteScript: unused,
     runHostScript: unused,
+    provisionedRuntimeExecutable: unused,
+    ensureRuntime: unused,
     preflightTarget: unused,
     identifyTarget: unused,
     listHosts: unused,

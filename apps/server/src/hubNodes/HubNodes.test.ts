@@ -202,6 +202,8 @@ const fixture = Effect.gen(function* () {
     preflightTarget: forbidden,
     runRemoteScript: forbidden,
     runHostScript: forbidden,
+    provisionedRuntimeExecutable: forbidden,
+    ensureRuntime: forbidden,
     launchThread: forbidden,
     runtimeStatus: forbidden,
     runtimeUpdate: forbidden,
