@@ -30,6 +30,12 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
     "GOAT.app",
   ),
   rule(
+    "files-viewed-example-repository",
+    at("apps/web/src/components/pullRequest/filesViewedStore.test.ts"),
+    /(?<=repository: ")t3\/code(?=")/g,
+    "sample/repo",
+  ),
+  rule(
     "sea-injection-scratch",
     at("scripts/lib/linux-arm64-sea.ts"),
     /(?<=prefix: ")t3-sea-(?=")/g,
