@@ -53,6 +53,7 @@ import { workspaceDetailLinkAction } from "./features/workspace/workspace-detail
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
 
 import { rootNavigationRef as navigationRef } from "./lib/rootNavigation";
+import { pruneNewTaskFlowStates } from "./features/threads/new-task-flow-state";
 import { pruneNewTaskBranchCheckouts } from "./features/threads/NewTaskDraftRouteScreen";
 import "../global.css";
 
@@ -152,12 +153,18 @@ function AppContent() {
                       onReady={() => {
                         const state = navigationRef.getRootState();
                         recordWorkspaceSelections(state);
-                        if (state) pruneNewTaskBranchCheckouts(state);
+                        if (state) {
+                          pruneNewTaskFlowStates(state);
+                          pruneNewTaskBranchCheckouts(state);
+                        }
                       }}
                       theme={navigationTheme}
                       onStateChange={(state) => {
                         recordWorkspaceSelections(state);
-                        if (state) pruneNewTaskBranchCheckouts(state);
+                        if (state) {
+                          pruneNewTaskFlowStates(state);
+                          pruneNewTaskBranchCheckouts(state);
+                        }
                       }}
                     />
                   </IncomingShareProvider>

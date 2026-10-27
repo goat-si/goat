@@ -61,7 +61,6 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
-  waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
@@ -147,6 +146,7 @@ function NewTaskWorkspaceIcon(props: {
 const DRAFT_CLOUD_STATE = deriveCloudTaskState(null);
 
 export function NewTaskDraftScreen(props: {
+  readonly flowKey?: string;
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
@@ -161,6 +161,7 @@ export function NewTaskDraftScreen(props: {
   const [creationMetadata] = useState(makeTurnCommandMetadata);
   const projects = useProjects();
   const flow = useNewTaskFlow();
+  const servesRoute = props.flowKey === flow.flowKey;
   const navigation = useNavigation();
   const goBack = useWorkspaceBackNavigation("threads");
   const {
@@ -286,7 +287,7 @@ export function NewTaskDraftScreen(props: {
   // draft and share at that point without re-running the import effect.
   const isCurrentShareImport = useEffectEvent(
     (draftKey: string, shareId: string) =>
-      flow.draftKey === draftKey && props.incomingShareId === shareId,
+      servesRoute && flow.draftKey === draftKey && props.incomingShareId === shareId,
   );
   const isImportingShare = importingShareKey !== null;
   const alertedUnavailableIncomingShareIdRef = useRef<string | null>(null);
@@ -303,7 +304,9 @@ export function NewTaskDraftScreen(props: {
     ),
   );
   const isProjectPickerReturnActive =
-    isReturningToProjectPicker && !requestedInitialProjectAvailable;
+    servesRoute &&
+    ((isReturningToProjectPicker && !requestedInitialProjectAvailable) ||
+      (props.draftId !== undefined && flow.missingRouteDraftId === props.draftId));
   const isIncomingShareAwaitingServerConfig = Boolean(
     incomingShare?.attachments.some((attachment) => attachment.type === "file") &&
     selectedEnvironmentServerConfig === null,
@@ -358,10 +361,10 @@ export function NewTaskDraftScreen(props: {
     }
   }, [cancelledIncomingShareId, navigation, props.incomingShareId]);
   useEffect(() => {
-    if (!isReturningToProjectPicker) {
+    if (!isProjectPickerReturnActive) {
       return;
     }
-    if (requestedInitialProjectAvailable) {
+    if (requestedInitialProjectAvailable && flow.missingRouteDraftId === null) {
       // oxlint-disable-next-line react/set-state-in-effect -- Ends the return-to-picker flow once the requested project arrives from the catalog.
       setIsReturningToProjectPicker(false);
       return;
@@ -374,7 +377,8 @@ export function NewTaskDraftScreen(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [
-    isReturningToProjectPicker,
+    isProjectPickerReturnActive,
+    flow.missingRouteDraftId,
     navigation,
     props.incomingShareId,
     requestedInitialProjectAvailable,
@@ -392,40 +396,14 @@ export function NewTaskDraftScreen(props: {
     };
   }, []);
 
-  const { beginEditingPendingTask, cancelEditingPendingTask, editingPendingTask, openDraft } = flow;
-  // Cold launches load drafts and projects separately; wait for hydration and retry while shells load.
-  const attemptedDraftIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!props.draftId || props.pendingTaskId) {
-      return;
-    }
-    const draftId = props.draftId;
-    if (attemptedDraftIdRef.current === draftId) {
-      return;
-    }
-    let cancelled = false;
-    void waitForComposerDraftsLoaded().then(() => {
-      if (cancelled || attemptedDraftIdRef.current === draftId) {
-        return;
-      }
-      if (openDraft(draftId)) {
-        attemptedDraftIdRef.current = draftId;
-        return;
-      }
-      if (getComposerDraftSnapshot(draftId).project !== undefined && projects.length === 0) {
-        return;
-      }
-      attemptedDraftIdRef.current = draftId;
-      navigation.dispatch(CommonActions.navigate("NewTaskProject"));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [navigation, openDraft, projects, props.draftId, props.pendingTaskId]);
-
+  const { beginEditingPendingTask, cancelEditingPendingTask, editingPendingTask } = flow;
   const attemptedPendingTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!props.pendingTaskId || editingPendingTask?.messageId === props.pendingTaskId) {
+    if (
+      !servesRoute ||
+      !props.pendingTaskId ||
+      editingPendingTask?.messageId === props.pendingTaskId
+    ) {
       return;
     }
     if (attemptedPendingTaskIdRef.current === props.pendingTaskId) {
@@ -435,20 +413,26 @@ export function NewTaskDraftScreen(props: {
     if (!beginEditingPendingTask(props.pendingTaskId)) {
       navigation.dispatch(CommonActions.navigate("NewTaskProject"));
     }
-  }, [beginEditingPendingTask, editingPendingTask?.messageId, navigation, props.pendingTaskId]);
+  }, [
+    servesRoute,
+    beginEditingPendingTask,
+    editingPendingTask?.messageId,
+    navigation,
+    props.pendingTaskId,
+  ]);
 
   useEffect(() => {
-    if (!props.pendingTaskId) return;
+    if (!servesRoute || !props.pendingTaskId) return;
     return () => {
       attemptedPendingTaskIdRef.current = null;
       cancelEditingPendingTask();
     };
-  }, [props.pendingTaskId, cancelEditingPendingTask]);
+  }, [props.pendingTaskId, servesRoute, cancelEditingPendingTask]);
 
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
 
   useEffect(() => {
-    if (props.pendingTaskId || props.draftId) {
+    if (!servesRoute || props.pendingTaskId || props.draftId) {
       return;
     }
     if (lastInitialProjectRefRef.current !== props.initialProjectRef) {
@@ -518,6 +502,7 @@ export function NewTaskDraftScreen(props: {
 
     navigation.dispatch(CommonActions.navigate("NewTaskProject"));
   }, [
+    servesRoute,
     projectScopes,
     projects,
     flow.draftKey,
@@ -547,6 +532,7 @@ export function NewTaskDraftScreen(props: {
   }, [loadBranches, selectedProject]);
 
   useEffect(() => {
+    if (!servesRoute) return;
     const shareId = props.incomingShareId;
     const draftKey = flow.draftKey;
     const destinationProject = selectedProject;
@@ -759,6 +745,7 @@ export function NewTaskDraftScreen(props: {
         }
       });
   }, [
+    servesRoute,
     consumeShare,
     cancelledIncomingShareId,
     flow.draftKey,

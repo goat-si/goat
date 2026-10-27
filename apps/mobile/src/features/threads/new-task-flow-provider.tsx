@@ -1,6 +1,6 @@
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import * as Dialog from "../../components/ui/Dialog";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
@@ -42,7 +42,6 @@ import {
   appendComposerDraftAttachments,
   type ComposerDraftInsertion,
   clearComposerDraft,
-  composerDraftsAtom,
   createNewTaskDraft,
   getComposerDraftSnapshot,
   isComposerDraftEmpty,
@@ -106,6 +105,7 @@ import {
   resolveNewTaskDraftWorkspace,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { useNewTaskRouteFlow } from "./use-new-task-route-flow";
 import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
@@ -181,10 +181,10 @@ type NewTaskFlowContextValue = {
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
-  readonly reset: () => void;
+  readonly flowKey: string;
+  readonly missingRouteDraftId: string | null;
   readonly setProject: (project: EnvironmentProject) => void;
-  /** Returns false if the existing draft is gone, allowing fallback to a fresh draft. */
-  readonly openDraft: (draftKey: string) => boolean;
+  readonly getSelectedProjectKey: () => string | null;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
   readonly switchEnvironment: (environmentId: EnvironmentId) => Promise<boolean>;
   readonly switchingToEnvironmentId: EnvironmentId | null;
@@ -228,6 +228,7 @@ const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(n
 export function NewTaskFlowProvider(
   props: React.PropsWithChildren<{
     active?: boolean;
+    flowKey?: string;
     routeDraftId?: string;
     routePendingTaskId?: string;
   }>,
@@ -250,39 +251,36 @@ export function NewTaskFlowProvider(
     projectSortOrder: "updated_at",
   });
 
-  const [selectedEnvironmentIdOverride, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
-    null,
+  const routeFlow = useNewTaskRouteFlow(props, projects);
+  const { flowKey, state: flowState, read: readFlow, update: updateFlow } = routeFlow;
+  const {
+    environmentId: selectedEnvironmentIdOverride,
+    projectKey: selectedProjectKey,
+    draftKey: activeDraftKey,
+    submitting,
+    expandedProvider,
+    editingPendingTask,
+  } = flowState;
+  const setSelectedEnvironmentId = (environmentId: EnvironmentId | null) =>
+    updateFlow({ environmentId });
+  const setSelectedProjectKey = (projectKey: string | null) => updateFlow({ projectKey });
+  const setActiveDraftKey = (draftKey: string | null) => updateFlow({ draftKey });
+  const setSubmitting = (submitting: boolean) => updateFlow({ submitting });
+  const setExpandedProvider = (expandedProvider: string | null) => updateFlow({ expandedProvider });
+  const setEditingPendingTask = (editingPendingTask: QueuedThreadMessage | null) =>
+    updateFlow({ editingPendingTask });
+  const selectedEnvironmentId = selectedEnvironmentIdOverride ?? projects[0]?.environmentId ?? null;
+  const editor = useMemo(
+    () => ({
+      flowKey,
+      message: { current: null as QueuedThreadMessage | null },
+      revision: { current: Promise.resolve(0) },
+      flush: { current: null as (() => void) | null },
+    }),
+    [flowKey],
   );
-  const selectedEnvironmentId =
-    selectedEnvironmentIdOverride !== null &&
-    projects.some((project) => project.environmentId === selectedEnvironmentIdOverride)
-      ? selectedEnvironmentIdOverride
-      : (projects[0]?.environmentId ?? null);
-  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
-  const [activeDraftKey, setActiveDraftKey] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
-  const [editingPendingTask, setEditingPendingTask] = useState<QueuedThreadMessage | null>(null);
-  // Mirror edit state synchronously so unmount flush cannot save a session ended this render.
-  const editingPendingTaskRef = useRef<QueuedThreadMessage | null>(null);
-  const editingRevisionRef = useRef(Promise.resolve(0));
-
-  const reset = useCallback(() => {
-    setSelectedEnvironmentId(null);
-    setSelectedProjectKey(null);
-    setActiveDraftKey(null);
-    setSubmitting(false);
-    setExpandedProvider(null);
-    const editing = editingPendingTaskRef.current;
-    editingPendingTaskRef.current = null;
-    setEditingPendingTask(null);
-    if (editing) {
-      if (activeEditingMessageId === editing.messageId) {
-        activeEditingMessageId = null;
-      }
-      releaseEditingQueuedMessage(editing.messageId);
-    }
-  }, []);
+  const editingPendingTaskRef = editor.message;
+  const editingRevisionRef = editor.revision;
 
   const projectsForEnvironment = pipe(
     projects,
@@ -308,15 +306,19 @@ export function NewTaskFlowProvider(
   })();
 
   const selectedProject =
-    projectsForEnvironment.find(
-      (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
-    ) ??
-    // Pin queued edits to their original project when its shell is missing; fallback would silently retarget them.
-    (editingPendingProject !== null &&
-    selectedProjectKey ===
-      scopedProjectKey(editingPendingProject.environmentId, editingPendingProject.id)
-      ? editingPendingProject
-      : (projectsForEnvironment[0] ?? null));
+    routeFlow.pending || routeFlow.missingRouteDraftId !== null
+      ? null
+      : (projectsForEnvironment.find(
+          (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
+        ) ??
+        // Pin queued edits to their original project when its shell is missing; fallback would silently retarget them.
+        (editingPendingProject !== null &&
+        selectedProjectKey ===
+          scopedProjectKey(editingPendingProject.environmentId, editingPendingProject.id)
+          ? editingPendingProject
+          : selectedProjectKey === null
+            ? (projectsForEnvironment[0] ?? null)
+            : null));
 
   const projectDefaults = useNewTaskProjectDefaults(selectedProject);
   const selectedEnvironmentServerConfig = projectDefaults.serverConfig;
@@ -392,6 +394,8 @@ export function NewTaskFlowProvider(
   useEffect(() => {
     if (
       props.active === false ||
+      props.routeDraftId !== undefined ||
+      props.routePendingTaskId !== undefined ||
       activeDraftKey !== null ||
       editingPendingTask !== null ||
       selectedProject === null
@@ -405,7 +409,15 @@ export function NewTaskFlowProvider(
         projectId: selectedProject.id,
       }),
     );
-  }, [activeDraftKey, editingPendingTask, selectedProject, props.active]);
+  }, [
+    activeDraftKey,
+    editingPendingTask,
+    selectedProject,
+    props.active,
+    props.routeDraftId,
+    props.routePendingTaskId,
+    setActiveDraftKey,
+  ]);
   const activePendingKey =
     props.active === false
       ? null
@@ -609,8 +621,9 @@ export function NewTaskFlowProvider(
   };
   const carryDraftContentTo = (project: EnvironmentProject) => {
     const target = { environmentId: project.environmentId, projectId: project.id };
-    if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
-      retargetNewTaskDraft(activeDraftKey, target);
+    const currentDraftKey = readFlow().draftKey;
+    if (currentDraftKey !== null && isNewTaskDraftKey(currentDraftKey)) {
+      retargetNewTaskDraft(currentDraftKey, target);
     } else if (!editingPendingTaskRef.current) {
       setActiveDraftKey(createNewTaskDraft(target));
     }
@@ -618,27 +631,10 @@ export function NewTaskFlowProvider(
 
   const setProject = (project: EnvironmentProject) => {
     carryDraftContentTo(project);
-    setSelectedEnvironmentId(project.environmentId);
-    setSelectedProjectKey(scopedProjectKey(project.environmentId, project.id));
-  };
-
-  const openDraft = (draftKey: string): boolean => {
-    const draft = appAtomRegistry.get(composerDraftsAtom)[draftKey];
-    const stamp = draft?.project;
-    if (!isNewTaskDraftKey(draftKey) || !stamp) {
-      return false;
-    }
-    // Require the stamped project to load; selectedProject otherwise falls back and retargets the draft.
-    const projectLoaded = projects.some(
-      (project) => project.environmentId === stamp.environmentId && project.id === stamp.projectId,
-    );
-    if (!projectLoaded) {
-      return false;
-    }
-    setActiveDraftKey(draftKey);
-    setSelectedEnvironmentId(stamp.environmentId);
-    setSelectedProjectKey(scopedProjectKey(stamp.environmentId, stamp.projectId));
-    return true;
+    updateFlow({
+      environmentId: project.environmentId,
+      projectKey: scopedProjectKey(project.environmentId, project.id),
+    });
   };
 
   const selectEnvironment = (environmentId: EnvironmentId) => {
@@ -657,7 +653,7 @@ export function NewTaskFlowProvider(
   const [switchingToEnvironmentId, setSwitchingToEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
-  const latestSwitchRef = useRef<object | null>(null);
+  const latestSwitchRef = useMemo(() => ({ flowKey, current: null as object | null }), [flowKey]);
   const switchEnvironment = async (environmentId: EnvironmentId): Promise<boolean> => {
     if (environmentId === selectedEnvironmentId) {
       latestSwitchRef.current = null;
@@ -916,7 +912,7 @@ export function NewTaskFlowProvider(
     }
   }, [finishEditingPendingTask, queuedMessagesByThreadKey]);
 
-  const editingFlushRef = useRef<(() => void) | null>(null);
+  const editingFlushRef = editor.flush;
   useEffect(() => {
     editingFlushRef.current = () => {
       const editing = editingPendingTaskRef.current;
@@ -964,15 +960,12 @@ export function NewTaskFlowProvider(
         });
     };
   }, [buildPendingTaskMessage]);
-  const cancelEditingPendingTask = () => {
+  const cancelEditingPendingTask = useCallback(() => {
     editingFlushRef.current?.();
-  };
-  useEffect(
-    () => () => {
-      editingFlushRef.current?.();
-    },
-    [],
-  );
+  }, [editingFlushRef]);
+  useEffect(() => {
+    return () => editor.flush.current?.();
+  }, [editor]);
 
   const value = {
     activeNewTask,
@@ -1008,9 +1001,10 @@ export function NewTaskFlowProvider(
     selectedModelOption,
     selectedProviderStatus,
     providerGroups,
-    reset,
+    flowKey,
+    missingRouteDraftId: routeFlow.missingRouteDraftId,
     setProject,
-    openDraft,
+    getSelectedProjectKey: () => readFlow().projectKey,
     selectEnvironment,
     switchEnvironment,
     switchingToEnvironmentId,

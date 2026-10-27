@@ -1,4 +1,3 @@
-import { useNewTaskFlow } from "./new-task-flow-provider";
 import * as Dialog from "../../components/ui/Dialog";
 import {
   CommonActions,
@@ -7,7 +6,7 @@ import {
   usePreventRemoveContext,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import {
   isAtomCommandInterrupted,
@@ -84,13 +83,6 @@ const idleBranchCheckoutAtom = Atom.make(AsyncResult.initial<BranchCheckoutResul
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const currentRoute = useRoute();
   const params = useMemo(() => route.params ?? {}, [route.params]);
-  const { reset } = useNewTaskFlow();
-  const [initialized, setInitialized] = useState(false);
-  useLayoutEffect(() => {
-    reset();
-    // oxlint-disable-next-line react/set-state-in-effect -- Draft reset runs once before first paint; initialized gates the screen until then.
-    setInitialized(true);
-  }, [reset]);
   const pendingTaskId = Array.isArray(params.pendingTaskId)
     ? params.pendingTaskId[0]
     : params.pendingTaskId;
@@ -189,7 +181,6 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   );
   const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
 
-  if (!initialized) return null;
   return (
     <>
       {preparingBranch ? (
@@ -201,6 +192,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
         </ThreadScreenFallback>
       ) : (
         <NewTaskDraftScreen
+          flowKey={flowKey}
           initialProjectRef={preparedProjectRef}
           incomingShareId={
             Array.isArray(params.incomingShareId)
