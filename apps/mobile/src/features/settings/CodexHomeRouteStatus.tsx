@@ -87,13 +87,16 @@ export async function confirmCodexRouteChange(input: {
   readonly environmentId: EnvironmentId;
   readonly instanceId: ProviderInstanceId;
   readonly opened: ProviderInstanceConfig | undefined;
-  readonly readLatest: () => ProviderInstanceConfig | undefined;
+  /** The instance and the server's capabilities as the environment reports them now. */
+  readonly readLatest: () => {
+    readonly instance: ProviderInstanceConfig | undefined;
+    readonly supportsPreconditions: boolean;
+  };
   readonly change: CodexRouteChange;
-  readonly supportsPreconditions: boolean;
   readonly mutate: (mutation: ReturnType<typeof buildDefaultCodexRouteMutation>) => Promise<void>;
 }) {
-  if (!input.supportsPreconditions) throw new Error(UPDATE_GOAT_FOR_HOME);
-  const latest = input.readLatest();
+  const { instance: latest, supportsPreconditions } = input.readLatest();
+  if (!supportsPreconditions) throw new Error(UPDATE_GOAT_FOR_HOME);
   const opened = routeFields(input.opened);
   if (
     latest === undefined ||
@@ -146,10 +149,15 @@ export function CodexHomeRouteStatus({
   const managed = configValue(instance, "setupMode") === "managed";
   const homeAuth: CodexHomeAuth =
     configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
-  /** The instance as the environment reports it now, read when a confirmation is accepted. */
-  const readLatestInstance = () =>
-    Option.getOrNull(AsyncResult.value(appAtomRegistry.get(configAtom)))?.config.settings
-      .providerInstances[provider.instanceId];
+  /** The instance and capabilities as the environment reports them now, read when a confirmation is accepted. */
+  const readLatestInstance = () => {
+    const latest = Option.getOrNull(AsyncResult.value(appAtomRegistry.get(configAtom)))?.config;
+    return {
+      instance: latest?.settings.providerInstances[provider.instanceId],
+      supportsPreconditions:
+        latest?.environment.capabilities.providerInstancePreconditions === true,
+    };
+  };
   /**
    * Without a change this only refreshes. A change confirmed in an Alert is checked against the
    * instance captured when that Alert opened, then written to the selected environment.
@@ -168,7 +176,6 @@ export function CodexHomeRouteStatus({
           opened,
           readLatest: readLatestInstance,
           change,
-          supportsPreconditions,
           mutate: async (mutation) => {
             const result = await mutate(mutation);
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);

@@ -115,9 +115,8 @@ describe("OpenCodex Home routing", () => {
           environmentId: EnvironmentId.make("child"),
           instanceId: ProviderInstanceId.make("child_codex"),
           opened,
-          readLatest: () => latest,
+          readLatest: () => ({ instance: latest, supportsPreconditions: true }),
           change,
-          supportsPreconditions: true,
           mutate,
         }),
       ).rejects.toThrow("Settings changed on another device");
@@ -134,9 +133,26 @@ describe("OpenCodex Home routing", () => {
         environmentId: EnvironmentId.make("old"),
         instanceId: ProviderInstanceId.make("old_codex"),
         opened: instance,
-        readLatest: () => instance,
+        readLatest: () => ({ instance, supportsPreconditions: false }),
         change: { opencodexAuth: "none" },
-        supportsPreconditions: false,
+        mutate,
+      }),
+    ).rejects.toThrow("Update GOAT on this machine to change Home authentication.");
+    expect(mutate).not.toHaveBeenCalled();
+  });
+  it("refuses a confirmation when the server lost write preconditions after the Alert opened", async () => {
+    const instance: ProviderInstanceConfig = {
+      driver: codex,
+      config: { modelRoute: "opencodex", opencodexAuth: "openai" },
+    };
+    const mutate = vi.fn(async () => undefined);
+    await expect(
+      confirmCodexRouteChange({
+        environmentId: EnvironmentId.make("rolled_back"),
+        instanceId: ProviderInstanceId.make("rolled_back_codex"),
+        opened: instance,
+        readLatest: () => ({ instance, supportsPreconditions: false }),
+        change: { opencodexAuth: "none" },
         mutate,
       }),
     ).rejects.toThrow("Update GOAT on this machine to change Home authentication.");
@@ -156,9 +172,8 @@ describe("OpenCodex Home routing", () => {
       environmentId: EnvironmentId.make("child"),
       instanceId: ProviderInstanceId.make("child_codex"),
       opened,
-      readLatest: () => latest,
+      readLatest: () => ({ instance: latest, supportsPreconditions: true }),
       change: { opencodexAuth: "none" },
-      supportsPreconditions: true,
       mutate,
     });
     expect(mutate).toHaveBeenCalledExactlyOnceWith(
