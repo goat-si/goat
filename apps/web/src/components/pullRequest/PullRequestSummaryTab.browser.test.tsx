@@ -108,3 +108,25 @@ it("keeps an unsaved description when collapsed and reopened", async () => {
   await screen.click("Description");
   expect(screen.container.querySelector("textarea")!.value).toBe("Unsaved description");
 });
+
+it("shows bot verdict badges while hiding bot chatter by default", async () => {
+  using _storage = vi.spyOn(Storage.prototype, "getItem").mockReturnValue(null);
+  const comments = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"].map(
+    (reviewState) => ({
+      id: reviewState,
+      kind: "review" as const,
+      author: { login: "reviewer[bot]", name: null, avatarUrl: null, isBot: true },
+      body: reviewState === "COMMENTED" ? "Bot chatter" : "",
+      reviewState,
+      createdAt: detail.createdAt,
+      url: null,
+      path: null,
+    }),
+  );
+  await using screen = await render({ ...detail, comments, commentCount: comments.length });
+
+  await expect.element(screen.getByText("Approved", { exact: true }).last()).toBeVisible();
+  await expect.element(screen.getByText("Changes requested", { exact: true }).last()).toBeVisible();
+  expect(screen.getByRole("article").elements()).toHaveLength(2);
+  await expect.element(screen.getByText("Bot chatter")).not.toBeInTheDocument();
+});

@@ -79,6 +79,11 @@ import {
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
 import { isWindowsAbsolutePath } from "@goat/shared/path";
+import {
+  attachTurnThreadCards,
+  turnThreadTargetsEqual,
+  type TurnThreadTarget,
+} from "./turnThreadTargets";
 
 function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
@@ -626,6 +631,13 @@ type MessagesTimelineRowContent =
       revertTurnCount?: number | undefined;
     }
   | {
+      kind: "thread-cards";
+      id: string;
+      createdAt: string;
+      runId: RunId;
+      targets: ReadonlyArray<TurnThreadTarget>;
+    }
+  | {
       kind: "assistant-meta";
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       id: string;
@@ -640,7 +652,6 @@ type MessagesTimelineRowContent =
       createdAt: string;
       projectedItem: OrchestrationV2ProjectedTurnItem;
       subagents?: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
-      resourceSummary?: boolean;
     }
   | {
       kind: "proposed-plan";
@@ -1256,11 +1267,7 @@ function attachTrailingToolGroupsToAssistant(
         lastTrailingWorkIndex = index;
         continue;
       }
-      if (
-        candidate.kind === "event" &&
-        candidate.resourceSummary &&
-        candidate.projectedItem.item.runId === runId
-      ) {
+      if (candidate.kind === "thread-cards" && candidate.runId === runId) {
         hasTrailingToolGroup = true;
         lastTrailingWorkIndex = index;
         continue;
@@ -2131,7 +2138,7 @@ export function deriveMessagesTimelineRows(input: {
 
   const result = placeCloudRunCard(
     attachTrailingToolGroupsToAssistant(
-      attachCreatedThreadSummaries(nextRows, timelineEntries, collapsedFoldMemberIds),
+      attachTurnThreadCards(nextRows, timelineEntries, collapsedFoldMemberIds),
     ),
     input.cloudRun ?? null,
   );
@@ -2150,56 +2157,6 @@ function timelineRowIsWorkLog(row: MessagesTimelineRow | undefined): boolean {
       row.kind === "work-live" ||
       row.kind === "thinking")
   );
-}
-
-function attachCreatedThreadSummaries(
-  rows: MessagesTimelineRow[],
-  timelineEntries: ReadonlyArray<TimelineEntry>,
-  collapsedFoldMemberIds: ReadonlySet<string>,
-): MessagesTimelineRow[] {
-  const terminalIndexes = new Map<RunId, number>();
-  const createdByRun = new Map<RunId, Array<Extract<MessagesTimelineRow, { kind: "event" }>>>();
-  for (const [index, row] of rows.entries()) {
-    if (row.kind === "message" && row.showAssistantMeta && row.message.runId) {
-      terminalIndexes.set(row.message.runId, index);
-    }
-  }
-  for (const entry of timelineEntries) {
-    const projectedItem =
-      entry.kind === "work"
-        ? entry.entry.projectedItem
-        : entry.kind === "event"
-          ? entry.projectedItem
-          : undefined;
-    if (projectedItem?.item.type === "thread_created" && projectedItem.item.runId) {
-      const runId = projectedItem.item.runId;
-      const entries = createdByRun.get(runId) ?? [];
-      entries.push({ kind: "event", id: entry.id, createdAt: entry.createdAt, projectedItem });
-      createdByRun.set(runId, entries);
-    }
-  }
-  return rows.flatMap((row, index): MessagesTimelineRow[] => {
-    if (row.kind === "event" && row.projectedItem.item.type === "thread_created") {
-      const runId = row.projectedItem.item.runId;
-      const terminalIndex = runId === null ? undefined : terminalIndexes.get(runId);
-      if (
-        terminalIndex !== undefined &&
-        (collapsedFoldMemberIds.has(row.id) || index > terminalIndex)
-      )
-        return [];
-    }
-    if (row.kind === "message" && row.showAssistantMeta && row.message.runId) {
-      return [
-        row,
-        ...(createdByRun.get(row.message.runId) ?? []).map((entry) => ({
-          ...entry,
-          id: `summary:${entry.id}`,
-          resourceSummary: true,
-        })),
-      ];
-    }
-    return [row];
-  });
 }
 
 const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
@@ -2488,10 +2445,12 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
 
+    case "thread-cards":
+      return turnThreadTargetsEqual(a.targets, (b as typeof a).targets);
+
     case "event":
       return (
         a.projectedItem === (b as typeof a).projectedItem &&
-        a.resourceSummary === (b as typeof a).resourceSummary &&
         Equal.equals(a.subagents, (b as typeof a).subagents)
       );
 
