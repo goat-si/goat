@@ -741,7 +741,7 @@ it.effect("accounts for overflow and disk loss once and resumes successful write
           Effect.gen(function* () {
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);
-            if (failing) return yield* Effect.fail(problem);
+            if (failing) return yield* problem;
             yield* fs.writeFile(file, data, writeOptions);
           }),
       }),
