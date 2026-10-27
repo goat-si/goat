@@ -230,6 +230,13 @@ threads across connected machines, the same way Fleet counts them; choose one to
 **New Thread** starts one the way the new-thread shortcut does, **Open GOAT** brings the window
 back, and **Quit GOAT** quits the app.
 
+While an agent on this computer uses Computer Use, the menu starts with **Computer Use** and the
+icon shows a small dot. Its submenu stops one app for every thread using it, the whole screen, or
+everything. Stopping ends GOAT's permission and leaves the app open; a thread that holds several
+apps loses all of them, and asks again on its next turn unless it is in full access. Only this
+computer's agents are listed. On Linux some panels leave out the app icons, and the menu updates
+while it is open.
+
 On Windows and Linux, closing the window keeps GOAT running behind the icon; quit from its menu.
 On Linux this needs a panel that shows the icon: GNOME shows it only while the AppIndicator
 extension is on (Ubuntu ships it), and without one closing the window quits as before. On Windows
