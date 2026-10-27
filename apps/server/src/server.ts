@@ -1,3 +1,4 @@
+import * as VoiceTranscription from "./voiceTranscription.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
@@ -972,7 +973,6 @@ const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
   Layer.provide(GitVcsDriver.layer),
   Layer.provide(RuntimeLayer.layerProjectService),
 );
-
 const layerNotes = NotesLayers.layer.pipe(
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provide(
@@ -987,7 +987,6 @@ const layerNotes = NotesLayers.layer.pipe(
   ),
   Layer.provide(ThreadResultService.layer),
 );
-
 const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -1003,6 +1002,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
+      Layer.provide(VoiceTranscription.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),

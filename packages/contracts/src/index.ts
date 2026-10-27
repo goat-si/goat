@@ -128,3 +128,4 @@ export * from "./humanStepResult.ts";
 export * from "./permissionProfiles.ts";
 export * from "./goatclawLanes.ts";
 export * from "./decisions.ts";
+export * from "./voice.ts";

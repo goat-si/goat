@@ -1,6 +1,10 @@
-import { RegistryContext, useAtomMount } from "@effect/atom-react";
+import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
+import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
+import { ManagedRelay } from "@goat/client-runtime/relay";
+import type { EnvironmentId } from "@goat/contracts";
 import {
   AudioModule,
+  IOSOutputFormat,
   RecordingPresets,
   requestRecordingPermissionsAsync,
   type RecordingStatus,
@@ -18,7 +22,9 @@ import {
   type ReactNode,
 } from "react";
 import { AppState, Platform } from "react-native";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { useSharedValue } from "react-native-reanimated";
 
 import {
@@ -26,12 +32,18 @@ import {
   preferredMicrophoneInput,
   rememberMicrophones,
 } from "../../lib/microphonePriority";
-import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
+import { getLocalVoiceTranscriber, getVoiceTranscriber } from "../../native/voiceTranscription";
+import { connectionAtomRuntime } from "../../connection/runtime";
+import { environmentSession } from "../../state/session";
+import { environmentPresentations } from "../../state/presentation";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { getNativeShowcaseScene } from "../showcase/nativeShowcaseScene";
 import {
   VOICE_RECORDING_LIMIT_SECONDS,
+  createRemoteVoiceTranscriber,
+  throwIfVoiceTranscriptionAborted,
   voiceInputBlocksSubmission,
+  type EnvironmentVoiceRequestContext,
   type VoiceInputState,
 } from "@goat/client-runtime/voice-input";
 import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
@@ -46,16 +58,47 @@ import {
 const INITIAL_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
 const VOICE_METERING_INTERVAL_MS = 80;
 // The native constructor expects platform-flattened options, as built by useAudioRecorder.
-const { ios: IOS_RECORDING_OPTIONS, android: ANDROID_RECORDING_OPTIONS } =
-  RecordingPresets.HIGH_QUALITY;
 const VOICE_RECORDING_OPTIONS = {
   extension: RecordingPresets.HIGH_QUALITY.extension,
   sampleRate: RecordingPresets.HIGH_QUALITY.sampleRate,
   numberOfChannels: RecordingPresets.HIGH_QUALITY.numberOfChannels,
   bitRate: RecordingPresets.HIGH_QUALITY.bitRate,
   isMeteringEnabled: true,
-  ...(Platform.OS === "ios" ? IOS_RECORDING_OPTIONS : ANDROID_RECORDING_OPTIONS),
+  ...(Platform.OS === "ios"
+    ? {
+        extension: ".wav",
+        sampleRate: 24_000,
+        numberOfChannels: 1,
+        outputFormat: IOSOutputFormat.LINEARPCM,
+        linearPCMBitDepth: 16,
+        linearPCMIsBigEndian: false,
+        linearPCMIsFloat: false,
+      }
+    : RecordingPresets.HIGH_QUALITY.android),
 };
+
+const voiceServicesAtom = connectionAtomRuntime.atom(
+  Effect.gen(function* () {
+    const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+    return { signer, remoteAuthorization };
+  }),
+);
+
+const voiceRequestContextsAtom = Atom.make((get) => {
+  const services = get(voiceServicesAtom);
+  const presentations = get(environmentPresentations.presentationsAtom);
+  const contexts = new Map<EnvironmentId, EnvironmentVoiceRequestContext>();
+  if (!AsyncResult.isSuccess(services)) return contexts;
+  for (const [environmentId, presentation] of presentations) {
+    if (presentation.connection.phase !== "connected") continue;
+    const prepared = Option.getOrNull(
+      get(environmentSession.preparedConnectionValueAtom(environmentId)),
+    );
+    if (prepared) contexts.set(environmentId, { prepared, ...services.value });
+  }
+  return contexts;
+});
 
 const VoiceInputContext = createContext<ReturnType<typeof useVoiceInputRuntime> | null>(null);
 
@@ -72,6 +115,7 @@ export function useGlobalVoiceInput() {
 
 function useVoiceInputRuntime() {
   const registry = use(RegistryContext);
+  const remoteContexts = useAtomValue(voiceRequestContextsAtom);
   useAtomMount(mobilePreferencesAtom);
   useAtomMount(updateMobilePreferencesAtom);
   const [{ state, ownerKey, label }, setState] = useState({
@@ -128,7 +172,28 @@ function useVoiceInputRuntime() {
     });
     session = new VoiceInputSession({
       recorder,
-      getTranscriber: getLocalVoiceTranscriber,
+      getTranscriber: () => {
+        const target = session?.currentTarget;
+        const environmentId = target?.environmentId;
+        const remote =
+          Platform.OS === "ios" && environmentId
+            ? createRemoteVoiceTranscriber({
+                locale: Intl.DateTimeFormat().resolvedOptions().locale,
+                providerInstanceId: target.providerInstanceId,
+                cwd: target.cwd,
+                threadId: target.threadId,
+                resolveContext: () =>
+                  registry.get(voiceRequestContextsAtom).get(environmentId) ?? null,
+                readAudioBytes: async (uri, signal) => {
+                  throwIfVoiceTranscriptionAborted(signal);
+                  const bytes = await new File(uri).bytes();
+                  throwIfVoiceTranscriptionAborted(signal);
+                  return bytes;
+                },
+              })
+            : null;
+        return getVoiceTranscriber(remote);
+      },
       requestPermission: async () => {
         const permission = await requestRecordingPermissionsAsync();
         return { granted: permission.granted, canAskAgain: permission.canAskAgain };
@@ -232,9 +297,14 @@ function useVoiceInputRuntime() {
 
   const stop = useCallback(() => controller.stop(), [controller]);
   const cancel = useCallback(() => controller.cancel(), [controller]);
+  const localAvailable = getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null;
+  const isAvailableForEnvironment = (environmentId: EnvironmentId | null) =>
+    localAvailable ||
+    (Platform.OS === "ios" && environmentId !== null && remoteContexts.has(environmentId));
 
   return {
-    isAvailable: getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null,
+    isAvailable: localAvailable || (Platform.OS === "ios" && remoteContexts.size > 0),
+    isAvailableForEnvironment,
     state,
     audioLevels,
     elapsedSeconds,

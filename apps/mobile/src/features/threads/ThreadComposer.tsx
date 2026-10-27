@@ -554,7 +554,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     }
     return report !== null;
   };
-
   const composerMenu = useComposerCommandMenu({
     draftMessage: draftMessage,
     ownerKey: composerDraftKey,
@@ -581,6 +580,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
+    environmentId: props.selectedThread.environmentId,
+    providerInstanceId: currentModelSelection.instanceId,
+    cwd: props.selectedThread.worktreePath ?? props.projectCwd ?? null,
+    threadId: props.isDraft ? null : props.selectedThread.id,
     label: props.selectedThread.title || "Untitled thread",
     readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
     subscribeToDraftChanges: (onChange) => appAtomRegistry.subscribe(composerDraftsAtom, onChange),
@@ -626,9 +629,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     !isSubmissionLocked &&
     sendBlockedReason === null &&
     !modelUnavailable;
-
   useEffect(() => () => setComposerEditing(false), [setComposerEditing]);
-
   const onPressPreview = (source: FilePreviewSource) => {
     wasExpandedBeforePreviewRef.current = isFocused;
     setPreviewVideo(null);
@@ -640,7 +641,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         },
     );
   };
-
   const closePreview = () => {
     setPreviewFile(null);
     setPreviewVideo(null);
