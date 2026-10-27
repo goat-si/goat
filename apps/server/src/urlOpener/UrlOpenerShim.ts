@@ -54,14 +54,15 @@ export const ensureUrlOpenerShim = Effect.fn("UrlOpenerShim.ensure")(
 );
 
 /**
- * A BROWSER in the provider instance's environment settings is the user's choice too. Adapters
- * that add GOAT's variables as an overlay cannot see it, so the opener is dropped here.
+ * Sets or clears a thread config's opener on every prepare: a BROWSER in the provider instance's
+ * environment settings is the user's choice, and overlays cannot see it.
  */
 export const instanceUrlOpener = Effect.fn("UrlOpenerShim.instanceUrlOpener")(function* (
   serverSettings: Option.Option<
     Pick<ServerSettings.ServerSettingsService["Service"], "getSettings">
   >,
   providerInstanceId: ProviderInstanceId,
+  urlOpener: string | undefined,
 ) {
   const settings = Option.isSome(serverSettings)
     ? yield* serverSettings.value.getSettings.pipe(Effect.option)
@@ -74,8 +75,7 @@ export const instanceUrlOpener = Effect.fn("UrlOpenerShim.instanceUrlOpener")(fu
       ) === true,
   });
   return (config: McpProviderSessionConfig): McpProviderSessionConfig => {
-    if (!chosen || config.urlOpener === undefined) return config;
     const { urlOpener: _, ...rest } = config;
-    return rest;
+    return chosen || urlOpener === undefined ? rest : { ...rest, urlOpener };
   };
 });

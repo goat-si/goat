@@ -20,19 +20,20 @@ export const URL_OPENER_FALLBACK_ENV = "GOAT_URL_OPENER_FALLBACK";
 // preview.open's url bound.
 const MAX_PREVIEW_URL_LENGTH = 2048;
 const PREVIEW_OPEN_TIMEOUT_MS = 20_000;
+const THREAD_CHECK_TIMEOUT_MS = 5_000;
 const SYSTEM_OPENER_SETTLE_MS = 3_000;
 const THREAD_CREDENTIAL_VARIABLE = /^(?:GOAT|T3|T3CODE|T3_CODE)_(?:ACP_MCP|MCP|CUA_LEASE)_/; // goat-rename: legacy
 
 type Env = Readonly<Record<string, string | undefined>>;
+type Credential = { readonly endpoint: string; readonly authorization: string };
 
 export interface UrlOpenerIo {
   readonly env: Env;
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
-  readonly openInPreview: (
-    url: string,
-    credential: { readonly endpoint: string; readonly authorization: string },
-  ) => Promise<AgentSurfaceResult>;
+  readonly openInPreview: (url: string, credential: Credential) => Promise<AgentSurfaceResult>;
+  /** Any read the thread's credential may make; only a refusal matters. */
+  readonly checkThread: (credential: Credential) => Promise<AgentSurfaceResult>;
   readonly openWithSystem: (url: string, env: Env) => Promise<boolean>;
 }
 
@@ -70,6 +71,9 @@ const tabIdOf = (result: AgentSurfaceResult): string | undefined => {
   return available !== false && typeof tabId === "string" && tabId !== "" ? tabId : undefined;
 };
 
+const refused = (result: AgentSurfaceResult) =>
+  result.status === "error" && result.error.code === "unauthenticated";
+
 export async function runUrlOpener(args: ReadonlyArray<string>, io: UrlOpenerIo): Promise<number> {
   if (io.env[URL_OPENER_FALLBACK_ENV] !== undefined) {
     io.stderr("GOAT's URL opener was started by its own system opener; not opening again.\n");
@@ -84,9 +88,20 @@ export async function runUrlOpener(args: ReadonlyArray<string>, io: UrlOpenerIo)
     io.stderr(`Opening ${url} with the system browser: ${reason}\n`);
     return (await io.openWithSystem(url, systemOpenerEnvironment(io.env))) ? 0 : 1;
   };
-  if (!previewableUrl(url)) return system("GOAT's browser preview opens plain http(s) URLs only.");
+  // Exit 0 on refusal: callers such as Python's webbrowser and xdg-open try the next browser on
+  // a failure, which would open the URL anyway.
+  const refuse = () => {
+    io.stderr(`GOAT did not open ${url}: this thread's GOAT session has ended or was stopped.\n`);
+    return 0;
+  };
+  // A shell that carries a thread's markers acts as that thread, for every URL.
   const thread = threadEnvironmentFrom(io.env);
-  if (thread._tag !== "present") return system("this shell has no GOAT thread.");
+  if (thread._tag === "invalid") return refuse();
+  if (!previewableUrl(url)) {
+    if (thread._tag === "present" && refused(await io.checkThread(thread))) return refuse();
+    return system("GOAT's browser preview opens plain http(s) URLs only.");
+  }
+  if (thread._tag === "absent") return system("this shell has no GOAT thread.");
 
   const result = await io.openInPreview(url, thread);
   const tabId = tabIdOf(result);
@@ -94,12 +109,7 @@ export async function runUrlOpener(args: ReadonlyArray<string>, io: UrlOpenerIo)
     io.stdout(`Opened ${url} in GOAT's browser preview, tab ${tabId}.\n`);
     return 0;
   }
-  // Exit 0 below: callers such as Python's webbrowser and xdg-open try the next browser on a
-  // failure, which would open the URL anyway.
-  if (result.status === "error" && result.error.code === "unauthenticated") {
-    io.stderr(`GOAT did not open ${url}: this thread's GOAT session has ended or was stopped.\n`);
-    return 0;
-  }
+  if (refused(result)) return refuse();
   if (result.status === "error" && result.error.code === "unknown_outcome") {
     io.stderr(
       `GOAT may have opened ${url} in its browser preview; check before opening it again.\n`,
@@ -120,12 +130,16 @@ export async function runUrlOpener(args: ReadonlyArray<string>, io: UrlOpenerIo)
 type FetchImplementation = (url: string, init?: RequestInit) => Promise<Response>;
 
 /**
- * Every request of the call, including the session DELETE its scope sends on close, ends at
- * `deadline`: an answer lost after dispatch is unknown_outcome, one lost before is unavailable.
+ * One goat_call as the thread. Every request, including the session DELETE its scope sends on
+ * close, ends at `deadline`: a write's answer lost after dispatch is unknown_outcome.
  */
-export const openInPreview = (
-  url: string,
-  credential: { readonly endpoint: string; readonly authorization: string },
+export const callThread = (
+  call: {
+    readonly path: string;
+    readonly args: Readonly<Record<string, unknown>>;
+    readonly effect: "read" | "destructive";
+  },
+  credential: Credential,
   deadline: AbortSignal,
   fetchImplementation: FetchImplementation = fetch,
 ): Promise<AgentSurfaceResult> =>
@@ -134,15 +148,14 @@ export const openInPreview = (
       { source: "thread", ...credential },
       {
         kind: "call",
-        path: "preview.open",
-        // A new tab, as a browser would open, so the agent's current tab keeps its page.
-        args: { url, reuseExistingTab: false },
+        path: call.path,
+        args: call.args,
         json: true,
-        effect: "destructive",
+        effect: call.effect,
         format: "value",
-        entryPath: "preview.open",
+        entryPath: call.path,
       },
-      "destructive",
+      call.effect,
       (target, init) =>
         fetchImplementation(target, {
           ...init,
@@ -183,6 +196,17 @@ export const runUrlOpenerCli = (args: ReadonlyArray<string>): Promise<number> =>
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
     openInPreview: (url, credential) =>
-      openInPreview(url, credential, AbortSignal.timeout(PREVIEW_OPEN_TIMEOUT_MS)),
+      callThread(
+        // A new tab, as a browser would open, so the agent's current tab keeps its page.
+        { path: "preview.open", args: { url, reuseExistingTab: false }, effect: "destructive" },
+        credential,
+        AbortSignal.timeout(PREVIEW_OPEN_TIMEOUT_MS),
+      ),
+    checkThread: (credential) =>
+      callThread(
+        { path: "surface.describe", args: { path: "preview.open" }, effect: "read" },
+        credential,
+        AbortSignal.timeout(THREAD_CHECK_TIMEOUT_MS),
+      ),
     openWithSystem,
   });

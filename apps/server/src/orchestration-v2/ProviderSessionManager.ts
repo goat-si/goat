@@ -735,7 +735,11 @@ export const layerWithOptions = (
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
                 });
-                const withUrlOpener = yield* instanceUrlOpener(serverSettings, providerInstanceId);
+                const withUrlOpener = yield* instanceUrlOpener(
+                  serverSettings,
+                  providerInstanceId,
+                  mcpSessionRegistry.urlOpener,
+                );
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.

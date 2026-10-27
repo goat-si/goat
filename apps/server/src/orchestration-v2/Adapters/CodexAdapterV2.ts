@@ -183,6 +183,7 @@ import {
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
+import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
 
 const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
@@ -1354,16 +1355,6 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("goat/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
-// One app-server hosts many threads, so its process must never carry a thread credential.
-const codexThreadMcpEnvironment = (
-  session: McpProviderSession.McpProviderSessionConfig | undefined,
-) =>
-  Object.fromEntries(
-    Object.entries(McpProviderSession.withThreadAgentEnvironment({}, session)).map(
-      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
-    ),
-  );
-
 /**
  * Codex waits this long for MCP servers before the first model request and
  *   leaves out any server still starting (default 1 s, too short for cold
@@ -2188,6 +2179,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             userCuaDriverByCwd.set(key, configured);
             return configured;
           });
+        const withoutConfiguredBrowser = makeCodexConfiguredBrowser((cwd) =>
+          ensureInitialized.pipe(
+            Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+          ),
+        );
         /** Thread config plus the managed driver it carries. */
         const threadRuntimeParams = (input: {
           readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -2214,7 +2210,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             return {
               params: codexThreadRuntimeParams({
-                mcpSession: input.mcpSession,
+                mcpSession: yield* withoutConfiguredBrowser(
+                  input.mcpSession,
+                  input.runtimePolicy?.cwd,
+                ),
                 ...(input.modelSelection === undefined
                   ? {}
                   : { modelSelection: input.modelSelection }),

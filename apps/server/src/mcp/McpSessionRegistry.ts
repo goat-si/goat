@@ -78,6 +78,8 @@ export interface McpCredentialRefusal {
 }
 
 export interface McpSessionRegistryShape {
+  /** What a thread's processes get as BROWSER (UrlOpenerShim.ts); none when absent. */
+  readonly urlOpener?: string;
   readonly issue: (
     request: McpCredentialRequest & {
       /**
@@ -490,7 +492,6 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           ...(temporaryDirectory === undefined || options.systemTemporaryDirectory === undefined
             ? {}
             : { systemTemporaryDirectory: options.systemTemporaryDirectory }),
-          ...(options.urlOpener === undefined ? {} : { urlOpener: options.urlOpener }),
         },
       };
     },
@@ -697,6 +698,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   }, Effect.uninterruptible);
 
   return McpSessionRegistry.of({
+    ...(options.urlOpener === undefined ? {} : { urlOpener: options.urlOpener }),
     issue,
     resolve,
     explainRefusal,

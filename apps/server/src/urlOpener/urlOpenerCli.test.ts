@@ -2,7 +2,7 @@ import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  openInPreview,
+  callThread,
   runUrlOpener,
   URL_OPENER_FALLBACK_ENV,
   type UrlOpenerIo,
@@ -20,9 +20,22 @@ const opened: AgentSurfaceResult = {
   status: "ok",
   value: { available: true, visible: true, tabId: "tab-7", url: null, title: null, loading: true },
 };
+const revoked: AgentSurfaceResult = {
+  status: "error",
+  error: {
+    code: "unauthenticated",
+    reason: "credential_refused",
+    message: "The credential was revoked.",
+    retryable: false,
+  },
+};
 
 /** One shell's opener: what reached GOAT's preview and what reached the system browser. */
-const harness = (preview: AgentSurfaceResult, env: Record<string, string> = THREAD_ENV) => {
+const harness = (
+  preview: AgentSurfaceResult,
+  env: Record<string, string> = THREAD_ENV,
+  thread: AgentSurfaceResult = { status: "ok", value: {} },
+) => {
   const previewCalls: Array<{ url: string; authorization: string }> = [];
   const systemCalls: Array<{ url: string; env: Readonly<Record<string, string | undefined>> }> = [];
   const out: Array<string> = [];
@@ -35,6 +48,7 @@ const harness = (preview: AgentSurfaceResult, env: Record<string, string> = THRE
       previewCalls.push({ url, authorization: credential.authorization });
       return preview;
     },
+    checkThread: async () => thread,
     openWithSystem: async (url, systemEnv) => {
       systemCalls.push({ url, env: systemEnv });
       return true;
@@ -62,22 +76,18 @@ describe("GOAT's BROWSER for a thread", () => {
     expect(shell.systemCalls).toEqual([]);
   });
 
-  it("refuses once the thread's session has ended, without falling back to the system browser", async () => {
-    const shell = harness({
-      status: "error",
-      error: {
-        code: "unauthenticated",
-        reason: "credential_refused",
-        message: "The credential was revoked.",
-        retryable: false,
-      },
-    });
-    const code = await runUrlOpener(["https://example.com/"], shell.io);
-
-    // Exit 0 keeps callers such as Python's webbrowser from trying another browser themselves.
-    expect(code).toBe(0);
-    expect(shell.systemCalls).toEqual([]);
-    expect(shell.stderr()).toContain("did not open");
+  it("refuses every URL once the thread's session has ended, without falling back to the system browser", async () => {
+    for (const url of ["https://example.com/", "file:///home/user/report.html"]) {
+      const shell = harness(revoked, THREAD_ENV, revoked);
+      // Exit 0 keeps callers such as Python's webbrowser from trying another browser themselves.
+      expect(await runUrlOpener([url], shell.io), url).toBe(0);
+      expect(shell.systemCalls, url).toEqual([]);
+      expect(shell.stderr(), url).toContain("did not open");
+    }
+    // Markers GOAT blanked or broke are no reason to open anything either.
+    const blank = harness(opened, { ...THREAD_ENV, GOAT_ACP_MCP_AUTHORIZATION: "" });
+    expect(await runUrlOpener(["mailto:someone@example.com"], blank.io)).toBe(0);
+    expect([...blank.previewCalls, ...blank.systemCalls]).toEqual([]);
   });
 
   it("hands what the preview cannot open to the system browser, without BROWSER or the thread credential", async () => {
@@ -160,8 +170,8 @@ describe("the preview call's deadline", () => {
       return stall(init?.signal);
     };
 
-    const pending = openInPreview(
-      "https://example.com/",
+    const pending = callThread(
+      { path: "preview.open", args: { url: "https://example.com/" }, effect: "destructive" },
       { endpoint: "http://127.0.0.1:43123/mcp", authorization: "Bearer thread-token" },
       deadline.signal,
       fetchImplementation,

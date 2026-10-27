@@ -63,7 +63,7 @@ describe("GOAT's BROWSER shim", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("is left out for a provider instance whose environment settings set BROWSER", () =>
+  it.effect("is left out while a provider instance's settings set BROWSER, and returns after", () =>
     Effect.gen(function* () {
       const settings = Option.some({
         getSettings: Effect.succeed({
@@ -76,6 +76,8 @@ describe("GOAT's BROWSER shim", () => {
           },
         }),
       });
+      const opener = "/tmp/goat-threads-fixture/goat-browser";
+      // A reused credential's config, as the previous prepare left it.
       const config = {
         environmentId: EnvironmentId.make("environment"),
         threadId: ThreadId.make("thread"),
@@ -84,13 +86,16 @@ describe("GOAT's BROWSER shim", () => {
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer fixture",
         browserToolsAvailable: true,
-        urlOpener: "/tmp/goat-threads-fixture/goat-browser",
       };
-      const chosen = yield* instanceUrlOpener(settings, ProviderInstanceId.make("codex-firefox"));
-      const unchosen = yield* instanceUrlOpener(settings, ProviderInstanceId.make("codex"));
+      const chosen = yield* instanceUrlOpener(
+        settings,
+        ProviderInstanceId.make("codex-firefox"),
+        opener,
+      );
+      const unchosen = yield* instanceUrlOpener(settings, ProviderInstanceId.make("codex"), opener);
 
-      expect(chosen(config).urlOpener).toBeUndefined();
-      expect(unchosen(config).urlOpener).toBe(config.urlOpener);
+      expect(chosen({ ...config, urlOpener: opener }).urlOpener).toBeUndefined();
+      expect(unchosen(config).urlOpener).toBe(opener);
     }),
   );
 });
