@@ -120,6 +120,25 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
   },
+  setTrayMenu: (menu) => ipcRenderer.invoke(IpcChannels.SET_TRAY_MENU_CHANNEL, menu),
+  onTrayAction: (listener) => {
+    const decode = Schema.decodeUnknownOption(
+      Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("open-thread"),
+          environmentId: Schema.String,
+          threadId: Schema.String,
+        }),
+        Schema.Struct({ kind: Schema.Literal("new-thread") }),
+      ]),
+    );
+    const handler = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+      const action = decode(raw);
+      if (action._tag === "Some") listener(action.value);
+    };
+    ipcRenderer.on(IpcChannels.TRAY_ACTION_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.TRAY_ACTION_CHANNEL, handler);
+  },
   onTrackpadScrollEnd: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);

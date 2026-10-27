@@ -22,6 +22,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { isHostedStaticApp } from "../hostedPairing";
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
 
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
@@ -136,16 +137,21 @@ export function createAllEnvironmentProjectSnapshotsReadyAtom(input: {
   }).pipe(Atom.withLabel("web-all-environment-project-snapshots-ready"));
 }
 
+/** Hosted pages and desktops with their local server off have no primary environment to wait for. */
+export function requiresPrimaryEnvironment(): boolean {
+  return !isHostedStaticApp() && !(typeof window !== "undefined" && isLocalEnvironmentDisabled());
+}
+
 export const allEnvironmentProjectSnapshotsReadyAtom =
   createAllEnvironmentProjectSnapshotsReadyAtom({
     catalogValueAtom: environmentCatalog.catalogValueAtom,
     shellStateValueAtom: environmentShell.stateValueAtom,
-    requiresPrimaryEnvironment: !isHostedStaticApp(),
+    requiresPrimaryEnvironment: requiresPrimaryEnvironment(),
   });
 
 export const allReachableShellsLiveAtom = Atom.make((get) => {
   const catalog = get(environmentCatalog.catalogValueAtom);
-  if (!catalogIsComplete(catalog, !isHostedStaticApp())) return false;
+  if (!catalogIsComplete(catalog, requiresPrimaryEnvironment())) return false;
   for (const environmentId of enabledEnvironmentIds(catalog)) {
     const shell = get(environmentShell.stateValueAtom(environmentId));
     if (shell.status === "live" && Option.isSome(shell.snapshot)) continue;
