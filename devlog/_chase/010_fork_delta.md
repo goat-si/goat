@@ -167,7 +167,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: `3a13908a0`
 - 경로: `apps/web/src/components/files/pdf`, `apps/web/src/components/files/BrowserDocumentFrame.tsx`, `third-party-licenses.config.json`의 PDF.js·Synara 항목
 - 정책: 파일 미리보기의 PDF는 GOAT PDF.js 뷰어(페이지 이동, 확대, 검색)로 보인다. upstream이 브라우저 미리보기 PDF를 native `<embed>`로 보내는 변경(#21095)은 라우팅만 받고 `BrowserDocumentFrame`은 GOAT 뷰어를 유지한다. 어느 쪽으로 갈지는 #515에서 정한다.
-  upstream 자체 뷰어(`apps/web/src/components/files/PdfViewer.tsx`, `pdfViewer.css`, `readBoundedDocument.ts`)는 GOAT에서 쓰지 않아 사이클 261028 B18에서 지웠다. upstream이 이 세 파일을 바꾸면 받지 않는다.
+  upstream 자체 뷰어(`apps/web/src/components/files/PdfViewer.tsx`, `pdfViewer.css`, `readBoundedDocument.ts`)는 GOAT에서 쓰지 않는다. 사이클 261028 B18(PR #1923)이 이 세 파일을 지운다. 그 PR이 랜딩한 뒤에는 upstream이 이 세 파일을 바꿔도 받지 않는다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 
