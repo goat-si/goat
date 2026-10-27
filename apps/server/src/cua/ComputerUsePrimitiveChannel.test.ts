@@ -66,6 +66,52 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
   };
 });
 
+/** One thread whose control state a test moves between turns, Stop and revocation. */
+const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
+  const signals = yield* PubSub.unbounded<void>();
+  let state: ComputerUseLeases.ComputerUseControlState = { _tag: "active", idle: false };
+  const leases = ComputerUseLeases.ComputerUseLeases.of({
+    currentControl: () => Effect.succeedSome({ controlId }),
+    controlState: () => Effect.sync(() => state),
+    subscribe: PubSub.subscribe(signals),
+  } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
+  const channel = yield* PrimitiveChannel.make.pipe(
+    Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+  );
+  yield* channel.issue({ ...authority, controlId, expiresAt: 60_000 });
+  const registration = yield* channel.registerStream({
+    ...authority,
+    proxyInstanceId: "proxy:one",
+    kind: "thread",
+  });
+  if (registration.status !== "registered") throw new Error("expected registration");
+  return {
+    channel,
+    registration,
+    setState: (next: ComputerUseLeases.ComputerUseControlState) =>
+      Effect.sync(() => {
+        state = next;
+      }).pipe(Effect.andThen(PubSub.publish(signals, undefined))),
+    report: (current: typeof authority, driverGeneration: number) => ({
+      ...current,
+      registrationId: registration.registrationId,
+      controlId,
+      connectionId: `driver:${driverGeneration}`,
+      driverGeneration,
+    }),
+    request: () =>
+      channel.request({
+        threadId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 1,
+        deadlineMillis: 30_000,
+        tool: "click",
+        args: {},
+      }),
+  };
+});
+
 describe("ComputerUsePrimitiveChannel", () => {
   it.effect("cancel after delivery emits a proxy marker for the admitted request", () =>
     Effect.gen(function* () {
@@ -160,53 +206,102 @@ describe("ComputerUsePrimitiveChannel", () => {
       yield* f.channel.closeStream({ threadId, registrationId: f.registered.registrationId });
     }),
   );
-  it.effect("turn end revokes the channel token and quarantines in-flight server input", () =>
-    Effect.gen(function* () {
-      const signals = yield* PubSub.unbounded<void>();
-      let idle = false;
-      const leases = ComputerUseLeases.ComputerUseLeases.of({
-        currentControl: () => Effect.succeedSome({ controlId }),
-        controlState: () => Effect.sync(() => ({ _tag: "active" as const, idle })),
-        subscribe: PubSub.subscribe(signals),
-      } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
-      const channel = yield* PrimitiveChannel.make.pipe(
-        Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
-      );
-      yield* channel.issue({ ...authority, controlId, expiresAt: 60_000 });
-      const registration = yield* channel.registerStream({
-        ...authority,
-        proxyInstanceId: "proxy:one",
-        kind: "thread",
-      });
-      if (registration.status !== "registered") throw new Error("expected registration");
-      assert.isTrue(
-        yield* channel.reportControlReady({
-          ...authority,
-          registrationId: registration.registrationId,
-          controlId,
-          connectionId: "driver:zero",
-          driverGeneration: 0,
-        }),
-      );
-      const pending = yield* channel
-        .request({
-          threadId,
-          runId: "run:one",
-          turnId: "cell:one",
-          callId: 0,
-          deadlineMillis: 30_000,
-          tool: "click",
-          args: {},
-        })
-        .pipe(Effect.forkChild);
-      yield* Stream.runHead(registration.requests);
-      idle = true;
-      yield* PubSub.publish(signals, undefined);
-      assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
-      assert.isUndefined(
-        yield* channel.authenticate({ threadId, proxyChannelToken: authority.proxyChannelToken }),
-      );
-    }).pipe(Effect.scoped),
+  it.effect(
+    "a thread's next turn reaches the desktop through the proxy it registered in its first turn",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* turnFixture();
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        const pending = yield* t.request().pipe(Effect.forkChild);
+        yield* Stream.runHead(t.registration.requests);
+        yield* t.setState({ _tag: "active", idle: true });
+        assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
+        assert.equal(
+          yield* t.channel.authenticate({
+            threadId,
+            proxyChannelToken: authority.proxyChannelToken,
+          }),
+          authority.attachmentGeneration,
+        );
+        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+
+        yield* t.setState({ _tag: "active", idle: false });
+        const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        assert.equal(
+          yield* t.channel.authenticate({
+            threadId,
+            proxyChannelToken: authority.proxyChannelToken,
+          }),
+          next.attachmentGeneration,
+        );
+        assert.isTrue(yield* t.channel.reportControlCutoff(t.report(next, 0)));
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(next, 1)));
+        const waiter = yield* t.request().pipe(Effect.forkChild);
+        const delivered = Option.getOrThrow(
+          yield* Stream.runHead(
+            t.registration.requests.pipe(
+              Stream.filter(
+                (item): item is ComputerUsePrimitiveRequest => item.state === "primitive-request",
+              ),
+            ),
+          ),
+        );
+        assert.equal(delivered.registrationId, t.registration.registrationId);
+        assert.equal(delivered.connectionGeneration, "driver:1");
+        yield* t.channel.cancel("run:one", "cell:one");
+        assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+      }).pipe(Effect.scoped),
+  );
+
+  for (const reason of ["stopped", "stopped_all", "revoked", "disabled"] as const)
+    it.effect(
+      `a control ended as ${reason} closes the channel and quarantines in-flight input`,
+      () =>
+        Effect.gen(function* () {
+          const t = yield* turnFixture();
+          assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+          const pending = yield* t.request().pipe(Effect.forkChild);
+          yield* Stream.runHead(t.registration.requests);
+          yield* t.setState({ _tag: "ended", reason });
+          assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
+          assert.isUndefined(
+            yield* t.channel.authenticate({
+              threadId,
+              proxyChannelToken: authority.proxyChannelToken,
+            }),
+          );
+          const next = { ...authority, attachmentGeneration: "attachment:two" };
+          yield* t.setState({ _tag: "active", idle: false });
+          yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+          assert.isFalse(yield* t.channel.reportControlReady(t.report(next, 1)));
+        }).pipe(Effect.scoped),
+    );
+
+  it.effect(
+    "an explicit revoke closes the channel even when the next attachment reuses the token",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* turnFixture();
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        yield* t.channel.revoke({ threadId, proxyChannelToken: authority.proxyChannelToken });
+        assert.isUndefined(
+          yield* t.channel.authenticate({
+            threadId,
+            proxyChannelToken: authority.proxyChannelToken,
+          }),
+        );
+        const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        assert.isFalse(yield* t.channel.reportControlReady(t.report(next, 1)));
+        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+        const reconnected = yield* t.channel.registerStream({
+          ...next,
+          proxyInstanceId: "proxy:two",
+          kind: "thread",
+        });
+        assert.equal(reconnected.status, "registered");
+      }).pipe(Effect.scoped),
   );
 
   it.effect(
