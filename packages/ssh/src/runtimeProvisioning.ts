@@ -32,6 +32,7 @@ import {
 import { REMOTE_RUNTIME_STATE_KEY, runSshCommand } from "./command.ts";
 import { SshLaunchError } from "./errors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
+import { NATIVE_WINDOWS, nativeWindowsAfter, prepareWindowsRuntime } from "./runtimeWindows.ts";
 import {
   archiveFailure,
   archiveSupplyError,
@@ -214,8 +215,14 @@ sh -c ${shellSingleQuote(installer)} -- --version
                 stateKey,
                 runner?.keepExistingRunner ?? false,
               ),
-            }).pipe(Effect.mapError(runtimePreparationError))
+            }).pipe(
+              // Native Windows has no sh to start; it is prepared without one.
+              Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, authOptions) }),
+              Effect.mapError(runtimePreparationError),
+            )
           : { stdout: observedProbe };
+      if (result === NATIVE_WINDOWS)
+        return yield* prepareWindowsRuntime(target, authOptions, runner, onPhase);
       const probe = yield* decodeRemoteJsonOutput(result.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );

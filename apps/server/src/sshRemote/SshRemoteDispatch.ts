@@ -1182,6 +1182,14 @@ const make = Effect.gen(function* () {
     target: DesktopSshEnvironmentTarget,
   ) {
     yield* readyCloudTarget(target, false);
+    // A native Windows runtime has no sh for the identity script; its launch already named it.
+    const nativeIdentity = manager.nativeEnvironmentId;
+    if (nativeIdentity !== undefined) {
+      const native = yield* withRuntime(nativeIdentity(target)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (native !== undefined) return native;
+    }
     const attached = yield* manager.attachedServerKind?.(target) ?? Effect.succeed(null);
     const result = yield* withRuntime(
       manager.runRemoteScript(target, {

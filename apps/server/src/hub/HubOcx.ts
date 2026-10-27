@@ -391,9 +391,15 @@ const make = Effect.gen(function* () {
     yield* admission.authorize.pipe(
       Effect.mapError(() => refused("Approval for this membership change is no longer active.")),
     );
-    const destination = yield* dispatch
+    const identify = dispatch
       .identifyTarget({ alias, hostname: alias, username: null, port: null })
       .pipe(Effect.orElseSucceed(() => null));
+    // A device without a GOAT runtime attached yet gets one, as setup does, then names itself.
+    const destination =
+      (yield* identify) ??
+      ((yield* dispatch.ensureRuntime(alias).pipe(Effect.orElseSucceed(() => false)))
+        ? yield* identify
+        : null);
     if (destination === null) return yield* refused(`GOAT on ${alias} did not identify itself.`);
     const input: ChildReadyConnectionInput = {
       destinationEnvironmentId: destination,

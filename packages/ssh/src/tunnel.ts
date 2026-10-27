@@ -98,6 +98,7 @@ import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
+import * as NativeWindows from "./runtimeWindows.ts";
 import { makeManagedTrust } from "./managedTrust.ts";
 import { makeTargetAdmission, type RequestTicket } from "./targetAdmission.ts";
 import { makeFailureEnrichment, runtimeFailureResult } from "./sshFailureDiagnostics.ts";
@@ -1670,6 +1671,12 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           "goat.runtime.requestedVersion",
           selected.requestedVersion,
         );
+        if (selected.nativeWindows !== undefined) {
+          const native = NativeWindows.launchWindowsRuntime(target, input ?? {}, selected);
+          const launched = yield* restore(native);
+          if (onLaunched !== undefined) yield* onLaunched({ status: "ready" });
+          return launched;
+        }
         const result = folded ?? (yield* launch(selected));
         if (!getLastNonEmptyOutputLine(result.stdout)) {
           return yield* new SshLaunchError({
@@ -1864,7 +1871,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   input?: SshAuth.SshAuthOptions & { readonly ownedOnly?: boolean },
 ): Effect.fn.Return<
   void,
-  SshCommandError | SshInvalidTargetError,
+  SshCommandError | SshInvalidTargetError | SshLaunchError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const stateKey = REMOTE_RUNTIME_STATE_KEY;
@@ -1879,6 +1886,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
   }).pipe(
+    NativeWindows.orNativeStop(target, input ?? {}),
     Effect.tapError((cause) =>
       Effect.logWarning("ssh.remoteServer.stop.failed", {
         ...sshTargetLogFields(target),
@@ -1907,7 +1915,7 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   input?: SshAuth.SshAuthOptions,
 ): Effect.fn.Return<
   string,
-  SshCommandError | SshInvalidTargetError,
+  SshCommandError | SshInvalidTargetError | SshLaunchError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const result = yield* runSshCommand(target, {
@@ -1917,7 +1925,7 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-  });
+  }).pipe(NativeWindows.orNativeLog(target, input ?? {}));
   return result.stdout.trim();
 });
 
@@ -4714,7 +4722,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return (appServerRefusals.get(key) ?? 0) > (yield* Clock.currentTimeMillis) ? "managed" : null;
   });
 
-  const { runRemoteScript, provisionedRuntimeExecutable } = makeRemoteScripts({
+  const { runRemoteScript, provisionedRuntimeExecutable, nativeId } = makeRemoteScripts({
     tunnels,
     generations,
     isClosed: () => closed,
@@ -4948,6 +4956,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     attachedServerKind,
     runRemoteScript: withSharing(runRemoteScript),
     provisionedRuntimeExecutable: withSharing(provisionedRuntimeExecutable),
+    nativeEnvironmentId: withSharing(nativeId),
   });
 });
 

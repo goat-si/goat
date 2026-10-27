@@ -2,6 +2,7 @@ import type {
   AuthEnvironmentScope,
   ChildSetupPurpose,
   DesktopSshEnvironmentTarget,
+  RuntimeSessionRequest,
 } from "@goat/contracts";
 import {
   AuthEnvironmentScopes,
@@ -37,6 +38,7 @@ import {
   SshPairingError,
 } from "./errors.ts";
 import type { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
+import { issueWindowsCredential } from "./runtimeWindows.ts";
 
 export interface RemoteMcpClientSessionOptions {
   /**
@@ -380,19 +382,24 @@ export function makeRemoteSessions({
       ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
     > {
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
-      if (prepared?.appServerPort !== undefined) {
+      // A server that issues its own credentials: the GOAT app's, or native Windows' goat.exe.
+      const fromServer = Effect.fn("ssh/tunnel.issueServerMcpSession")(function* (
+        issue: (
+          request: RuntimeSessionRequest,
+        ) => Effect.Effect<
+          string,
+          SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
+          ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+        >,
+        server: string,
+      ) {
         const request = appServerSessionRequest(mcpSessionRequestInput(sessionOptions));
         if (Option.isNone(request))
           return yield* new SshPairingError({
             message: `The MCP session requested for ${target.alias} has a scope or runtime mode GOAT cannot grant.`,
             stdout: "",
           });
-        const body = yield* issueAppServerCredential(
-          target,
-          prepared.appServerPort,
-          request.value,
-          input,
-        );
+        const body = yield* issue(request.value);
         const session = yield* decodeRemoteMcpSessionOutput(
           body,
           sessionOptions.childSetupPurpose,
@@ -400,7 +407,7 @@ export function makeRemoteSessions({
           Effect.mapError(
             (cause) =>
               new SshPairingError({
-                message: "The GOAT app server did not return an MCP session.",
+                message: `${server} did not return an MCP session.`,
                 stdout: body,
                 cause,
               }),
@@ -408,15 +415,21 @@ export function makeRemoteSessions({
         );
         if (session.token.trim().length === 0)
           return yield* new SshPairingError({
-            message: "The GOAT app server returned an empty MCP session token.",
+            message: `${server} returned an empty MCP session token.`,
             stdout: body,
           });
-        // The app server applies a requested ceiling; without one it keeps its default.
+        // The server applies a requested ceiling; without one it keeps its default.
         return {
           ...session,
           runtimeModeCeilingApplied: sessionOptions.runtimeModeCeiling !== null,
         };
-      }
+      });
+      const appServerPort = prepared?.appServerPort;
+      if (appServerPort !== undefined)
+        return yield* fromServer(
+          (request) => issueAppServerCredential(target, appServerPort, request, input),
+          "The GOAT app server",
+        );
       const selected =
         prepared ??
         (yield* prepareRemoteRuntime(
@@ -425,6 +438,12 @@ export function makeRemoteSessions({
           { ...runner, keepExistingRunner: true },
           stateKey,
         ));
+      const native = selected.nativeWindows;
+      if (native !== undefined)
+        return yield* fromServer(
+          (request) => issueWindowsCredential(target, input ?? {}, native, request),
+          `GOAT on ${target.alias}`,
+        );
       const result = yield* runSshCommand(target, {
         remoteCommandArgs: ["sh", "-s"],
         timeoutStage: "pairing",
@@ -528,6 +547,22 @@ export function makeRemoteSessions({
         { ...runner, keepExistingRunner: true },
         stateKey,
       ));
+    const native = selected.nativeWindows;
+    if (native !== undefined) {
+      const request = appServerSessionRequest({
+        subject: sessionOptions.subject,
+        scopes: sessionOptions.scopes,
+        ttl: sessionOptions.ttl,
+        label: sessionOptions.label,
+      });
+      if (Option.isNone(request) || sessionOptions.subject === "mcp-client")
+        return yield* new SshPairingError({
+          message: `The client session requested for ${target.alias} has a scope GOAT cannot grant.`,
+          stdout: "",
+        });
+      const body = yield* issueWindowsCredential(target, input ?? {}, native, request.value);
+      return yield* decodeRemoteClientSessionOutput(body, sessionOptions.scopes);
+    }
     const result = yield* runSshCommand(target, {
       remoteCommandArgs: ["sh", "-s"],
       timeoutStage: "pairing",
@@ -616,6 +651,26 @@ export function makeRemoteSessions({
         { ...runner, keepExistingRunner: true },
         stateKey,
       ));
+    const native = selected.nativeWindows;
+    if (native !== undefined) {
+      const body = yield* issueWindowsCredential(target, input ?? {}, native, { kind: "pairing" });
+      const pairing = yield* decodeRemotePairingOutput(body).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SshPairingError({
+              message: `GOAT on ${target.alias} returned an unreadable pairing credential.`,
+              stdout: "",
+              cause,
+            }),
+        ),
+      );
+      if (pairing.credential.trim().length === 0)
+        return yield* new SshPairingError({
+          message: `GOAT on ${target.alias} returned an empty pairing credential.`,
+          stdout: "",
+        });
+      return { credential: pairing.credential };
+    }
     const result = yield* runSshCommand(target, {
       remoteCommandArgs: ["sh", "-s"],
       timeoutStage: "pairing",

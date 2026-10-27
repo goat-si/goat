@@ -1,4 +1,4 @@
-import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
+import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@goat/contracts";
 import { parseSemver } from "@goat/shared/semver";
 import * as Effect from "effect/Effect";
 
@@ -10,6 +10,7 @@ import {
   type PreparedRemoteRuntime,
 } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT } from "./runtimeFactsScripts.ts";
+import { inspectWindowsRuntime } from "./runtimeWindows.ts";
 import type {
   SshAuthOperationInput,
   SshEnvironmentEffectContext,
@@ -73,6 +74,17 @@ export interface RuntimeExecutableShape {
   readonly provisionedRuntimeExecutable?: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<string | undefined, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  /**
+   * The environment a native Windows runtime this manager launched answers as, read from the
+   * attachment without a round trip; undefined for any other attachment.
+   */
+  readonly nativeEnvironmentId?: (
+    target: DesktopSshEnvironmentTarget,
+  ) => Effect.Effect<
+    EnvironmentId | undefined,
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  >;
 }
 
 /** Remote scripts over the manager's SSH auth: arbitrary ones, and the executable lookup. */
@@ -131,7 +143,7 @@ export const makeRemoteScripts = (input: {
       SshEnvironmentEffectError,
       SshEnvironmentEffectContext
     > {
-      const { key } = yield* input.resolveManagedTarget(target);
+      const { resolvedTarget, key } = yield* input.resolveManagedTarget(target);
       const entry = input.tunnels.get(key);
       if (entry === undefined) return undefined;
       const selected = entry.selectedRuntime;
@@ -143,6 +155,25 @@ export const makeRemoteScripts = (input: {
         entry.selectedRuntime === selected &&
         entry.attachmentInvalidated !== true &&
         (input.generations.get(key) ?? 0) === generation;
+      const native = selected.nativeWindows;
+      if (native !== undefined) {
+        if (!current()) return undefined;
+        yield* input.validateManagedPin(resolvedTarget);
+        // Re-read: the executable must still be the hashed one running as this instance.
+        const state = yield* input.runWithSshAuth({
+          key,
+          keyOnly: input.managedAliases.has(resolvedTarget.alias),
+          target: resolvedTarget,
+          operation: (auth) => inspectWindowsRuntime(resolvedTarget, auth, selected.version ?? ""),
+        });
+        const live = state.live ? state.selection : null;
+        return current() &&
+          live !== null &&
+          live.instanceId === native.instanceId &&
+          live.sha256 === native.sha256
+          ? live.executablePath
+          : undefined;
+      }
       const script = buildProvisionedRuntimeExecutableScript(selected);
       if (script === undefined || !current()) return undefined;
       const output = yield* runRemoteScript(target, { script, timeoutMs: LOOKUP_TIMEOUT_MS });
@@ -156,5 +187,19 @@ export const makeRemoteScripts = (input: {
     },
   );
 
-  return { runRemoteScript, provisionedRuntimeExecutable };
+  const nativeId = Effect.fn("ssh/tunnel.nativeEnvironmentId")(function* (
+    target: DesktopSshEnvironmentTarget,
+  ): Effect.fn.Return<
+    EnvironmentId | undefined,
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  > {
+    const { key } = yield* input.resolveManagedTarget(target);
+    const entry = input.tunnels.get(key);
+    return input.isClosed() || entry?.attachmentInvalidated === true
+      ? undefined
+      : entry?.selectedRuntime.nativeWindows?.environmentId;
+  });
+
+  return { runRemoteScript, provisionedRuntimeExecutable, nativeId };
 };
