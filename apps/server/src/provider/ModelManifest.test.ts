@@ -265,6 +265,83 @@ const layerService = (input: {
   );
 
 describe("ModelManifest service", () => {
+  it.live.each(["feed", "cache"] as const)(
+    "accepts %s release dates and ignores legacy badges",
+    (source) =>
+      Effect.gen(function* () {
+        const payload = {
+          ...REMOTE_CLAUDE_MANIFEST,
+          providers: {
+            claudeAgent: {
+              profiles: {},
+              models: [
+                { slug: "old", name: "Old", status: "current", badge: "new" },
+                {
+                  slug: "invalid-date",
+                  name: "Invalid Date",
+                  status: "current",
+                  badge: "new",
+                  releasedAt: "invalid",
+                },
+                {
+                  slug: "future",
+                  name: "Future",
+                  status: "current",
+                  badge: "new",
+                  releasedAt: "2099-01-01",
+                },
+                {
+                  slug: "recent",
+                  name: "Recent",
+                  status: "current",
+                  releasedAt: "2026-10-27",
+                },
+              ],
+            },
+          },
+        };
+        if (source === "cache") {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const config = yield* ServerConfig.ServerConfig;
+          yield* fs.writeFileString(
+            path.join(config.stateDir, "model-manifest.json"),
+            JSON.stringify({ fetchedAtMs: 0, manifest: payload }),
+          );
+        }
+        const service = yield* ModelManifest.make.pipe(
+          Effect.provide(
+            layerHttpClient(() => {
+              assert.strictEqual(source, "feed");
+              return Response.json(payload);
+            }),
+          ),
+        );
+        const manifest = yield* source === "feed" ? service.refresh : service.current;
+        const catalog = ModelManifest.resolveProviderCatalog(
+          manifest,
+          ProviderDriverKind.make("claudeAgent"),
+          Date.parse("2026-10-28T00:00:00Z"),
+        );
+        assert.deepStrictEqual(
+          catalog?.models.map((model) => model.slug),
+          ["old", "invalid-date", "future", "recent"],
+        );
+        assert.deepStrictEqual(
+          catalog?.models.map((model) => model.badge),
+          [undefined, undefined, undefined, "new"],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          layerService({
+            prefix: `model-manifest-old-${source}-test`,
+            response: () => Response.json(REMOTE_MANIFEST),
+          }),
+        ),
+      ),
+  );
+
   it.live("prefers a fetched manifest over the bundle and caches it to disk", () =>
     Effect.gen(function* () {
       const service = yield* ModelManifest.make;
