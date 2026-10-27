@@ -6,6 +6,8 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
   active,
+  reobserveRefusalSafety,
+  terminalRefusalSafety,
   foregroundActive,
   call,
   CONTROL,
@@ -539,6 +541,7 @@ describe("proxy execution ownership", () => {
       assert.deepEqual(answer.structuredContent, {
         refused: "targetRefused",
         detail: "control_idle",
+        safety: terminalRefusalSafety,
       });
       assert.isFalse(h.reservations.some((request) => request.action === "reserve"));
       assert.equal(yield* h.driverQueued, 0);
@@ -575,6 +578,7 @@ describe("proxy execution ownership", () => {
       assert.deepEqual(answer.structuredContent, {
         refused: "userIntervened",
         detail: "waiting_for_human",
+        safety: terminalRefusalSafety,
       });
       assert.equal(yield* h.driverQueued, 0);
     }),
@@ -642,6 +646,7 @@ describe("proxy execution ownership", () => {
       assert.deepEqual(result.structuredContent, {
         refused: "targetRefused",
         detail: "target_busy",
+        safety: reobserveRefusalSafety,
         holderThreadId: "thread:holder",
       });
       assert.equal(yield* h.driverQueued, 0);

@@ -1,22 +1,23 @@
+import {
+  managedWorktreesDir,
+  makeWorktreeStartHarness,
+  startWithMissingWorktree,
+} from "./ProviderTurnStartService.worktree.testkit.ts";
 import * as Logger from "effect/Logger";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
-import type { MemoryTaskGrantCeiling } from "@goat/contracts";
+import { MemoryTaskGrantCeiling } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CommandId,
-  CheckpointScopeId,
-  MessageId,
-  NodeId,
+  GitCommandError,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
-  ProjectId,
-  type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -28,7 +29,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { worktreeThreadBusy } from "../mcp/WorktreeInventoryService.ts";
@@ -40,169 +40,17 @@ import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ResourceCleanup from "./ResourceCleanupService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import * as ProjectService from "../project/ProjectService.ts";
-import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
-import * as ContextHandoffService from "./ContextHandoffService.ts";
-import * as EventSink from "./EventSink.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { layerRealGit } from "./ProviderTurnStartService.testkit.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
-import * as RunExecutionService from "./RunExecutionService.ts";
-import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as WorkspaceLease from "../workspace/workspaceLease.ts";
-import {
-  layerWorktreeLocation,
-  makeLocalCommandHarness,
-} from "./ProviderTurnStartService.localCommand.testkit.ts";
-
-const managedWorktreesDir = "/tmp/provider-turn-start-worktrees";
-// fs.realpath applies `..` and `.` before following symlinks.
-const normalize = (target: string) => {
-  const parts: Array<string> = [];
-  for (const part of target.split("/")) {
-    if (part === "..") parts.pop();
-    else if (part !== "" && part !== ".") parts.push(part);
-  }
-  return `/${parts.join("/")}`;
-};
-
-/** Starts a run on a thread whose worktree folder is missing, with routing reads failing after. */
-function makeWorktreeStartHarness(
-  branch: string | null,
-  worktreePath = `${managedWorktreesDir}/project/feature-restore`,
-  realPaths: Record<string, string> = {
-    [managedWorktreesDir]: managedWorktreesDir,
-    [`${managedWorktreesDir}/project`]: `${managedWorktreesDir}/project`,
-  },
-) {
-  const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
-  const runId = RunId.make("run_provider_turn_start_projection_failure");
-  const attemptId = RunAttemptId.make("attempt_provider_turn_start_projection_failure");
-  const rootNodeId = NodeId.make("node_provider_turn_start_projection_failure");
-  const providerThreadId = ProviderThreadId.make(
-    "provider_thread_provider_turn_start_projection_failure",
-  );
-  const providerSessionId = ProviderSessionId.make(
-    "provider_session_provider_turn_start_projection_failure",
-  );
-  const messageId = MessageId.make("message_provider_turn_start_projection_failure");
-  const checkpointScopeId = CheckpointScopeId.make(
-    "checkpoint_scope_provider_turn_start_projection_failure",
-  );
-  const projection = {
-    thread: {
-      id: threadId,
-      projectId: ProjectId.make("project_provider_turn_start_projection_failure"),
-      branch,
-      worktreePath,
-    },
-    runs: [
-      {
-        id: runId,
-        status: "starting",
-        rootNodeId,
-        activeAttemptId: attemptId,
-        providerThreadId,
-        userMessageId: messageId,
-        ordinal: 2,
-      },
-    ],
-    nodes: [{ id: rootNodeId, checkpointScopeId }],
-    attempts: [{ id: attemptId }],
-    providerThreads: [{ id: providerThreadId, providerSessionId }],
-    providerSessions: [],
-    messages: [{ id: messageId, text: "Continue", attachments: [] }],
-    checkpointScopes: [{ id: checkpointScopeId }],
-    contextHandoffs: [],
-    contextTransfers: [],
-    turnItems: [],
-  } as unknown as OrchestrationV2ThreadProjection;
-  let projectionReadCount = 0;
-  const writeIfRunCurrent = vi.fn(() =>
-    Effect.succeed({ committed: true, storedEvents: [] } as never),
-  );
-  const startRootRun = vi.fn(() => Effect.void);
-  const pruneWorktrees = vi.fn(() => Effect.void);
-  const createWorktree = vi.fn(() => Effect.succeed({} as never));
-  const layer = ProviderTurnStart.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
-        Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
-        IdAllocator.layer,
-        Layer.succeed(FileSystem.FileSystem, {
-          exists: () => Effect.succeed(false),
-          realPath: (target: string) =>
-            normalize(target) in realPaths
-              ? Effect.succeed(realPaths[normalize(target)])
-              : Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "NotFound",
-                    module: "FileSystem",
-                    method: "realPath",
-                    pathOrDescriptor: target,
-                  }),
-                ),
-        } as never),
-        layerWorktreeLocation(),
-        Layer.mock(GitWorkflow.GitWorkflowService)({ pruneWorktrees, createWorktree }),
-        Layer.mock(ProjectService.ProjectService)({
-          getById: () =>
-            Effect.succeedSome({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
-        }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getThreadRecords: () => {
-            projectionReadCount += 1;
-            return Effect.succeed(projection);
-          },
-          getTurnStartContext: () => {
-            projectionReadCount += 1;
-            return Effect.succeed({
-              ...projection,
-              hasConversation: projection.messages.some(
-                (m) =>
-                  m.role === "user" &&
-                  (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
-              ),
-            });
-          },
-          getRuntimeRecoveryProjection: () => {
-            projectionReadCount += 1;
-            return Effect.fail(
-              new ProjectionStore.ProjectionStoreReadError({
-                threadId,
-                cause: "simulated inherited-background projection failure",
-              }),
-            );
-          },
-        }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
-        Layer.mock(ProviderAuthService.ProviderAuthService)({
-          tryHandlePromptCommand: () => Effect.succeed(false),
-        }),
-        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
-        Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
-      ),
-    ),
-  );
-
-  return {
-    layer,
-    threadId,
-    runId,
-    pruneWorktrees,
-    createWorktree,
-    writeIfRunCurrent,
-    startRootRun,
-    projectionReadCount: () => projectionReadCount,
-  };
-}
+import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 
 it.each([
   { label: "with a branch", branch: "feature/restore" },
@@ -285,33 +133,6 @@ it("settles the last contended start attempt instead of leaving its run starting
   }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise);
 });
 
-function startWithMissingWorktree(worktreePath: string, realPaths?: Record<string, string>) {
-  const harness = makeWorktreeStartHarness("feature/restore", worktreePath, realPaths);
-  const {
-    layer,
-    threadId,
-    runId,
-    pruneWorktrees,
-    createWorktree,
-    writeIfRunCurrent,
-    startRootRun,
-  } = harness;
-  const projectionReadCount = harness.projectionReadCount;
-  const start = Effect.gen(function* () {
-    return yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
-      .start({ threadId, runId })
-      .pipe(Effect.flip);
-  }).pipe(Effect.provide(layer), Effect.runPromise);
-  return {
-    start,
-    pruneWorktrees,
-    createWorktree,
-    writeIfRunCurrent,
-    startRootRun,
-    projectionReads: projectionReadCount,
-  };
-}
-
 it.each([
   {
     label: "<managed>/<repo>/<branch>",
@@ -366,6 +187,167 @@ it.each([
   await harness.start;
   expect(harness.createWorktree).toHaveBeenCalledTimes(input.recreated ? 1 : 0);
 });
+
+effectIt.effect(
+  "recovers the thread branch tip, falls back to the current project branch, and rejects detached HEAD",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const gitWorkflow = yield* GitWorkflow.GitWorkflowService;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-recreate-repo-" });
+      const workspaceRoot = path.join(root, "project");
+      const worktreesDir = path.join(root, "worktrees");
+      const worktreePath = path.join(worktreesDir, "project", "restore");
+      yield* fileSystem.makeDirectory(workspaceRoot);
+      const git = (cwd: string, args: ReadonlyArray<string>) =>
+        driver
+          .execute({ operation: "test.worktreeRecovery", cwd, args })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      yield* git(workspaceRoot, ["init", "-b", "main"]);
+      yield* git(workspaceRoot, ["config", "user.name", "Test"]);
+      yield* git(workspaceRoot, ["config", "user.email", "test@example.com"]);
+      yield* git(workspaceRoot, ["commit", "--allow-empty", "-m", "base"]);
+      yield* git(workspaceRoot, ["worktree", "add", "-b", "feature/restore", worktreePath]);
+      yield* fileSystem.writeFileString(path.join(worktreePath, "thread.txt"), "thread work");
+      yield* git(worktreePath, ["add", "."]);
+      yield* git(worktreePath, ["commit", "-m", "thread tip"]);
+      const threadTip = yield* git(worktreePath, ["rev-parse", "HEAD"]);
+      yield* git(workspaceRoot, ["switch", "-c", "project-current"]);
+      yield* fileSystem.writeFileString(
+        path.join(workspaceRoot, "project.txt"),
+        "new project code",
+      );
+      yield* git(workspaceRoot, ["add", "."]);
+      yield* git(workspaceRoot, ["commit", "-m", "project tip"]);
+      const projectTip = yield* git(workspaceRoot, ["rev-parse", "HEAD"]);
+      expect(projectTip).not.toBe(threadTip);
+      // Tags must neither hide the thread branch nor select a different recovery tip.
+      yield* git(workspaceRoot, ["tag", "feature/restore", projectTip]);
+      yield* git(workspaceRoot, ["tag", "project-current", threadTip]);
+
+      // Reuse the workflow across turns so recovery cannot select a cached project branch.
+      for (const scenario of ["retained", "deleted", "detached"] as const) {
+        yield* fileSystem.remove(worktreePath, { recursive: true });
+        if (scenario !== "retained") {
+          yield* git(workspaceRoot, ["worktree", "prune"]);
+          yield* git(workspaceRoot, ["branch", "-D", "feature/restore"]);
+        }
+        if (scenario === "detached") {
+          yield* git(workspaceRoot, ["switch", "--detach"]);
+          expect(yield* git(workspaceRoot, ["branch", "--show-current"])).toBe("");
+        }
+        const harness = makeLocalCommandHarness({
+          text: "Continue",
+          workspaceRoot,
+          worktreePath,
+          worktreesDir,
+          fileSystem,
+          gitWorkflow,
+          failReadsAfterRunning: true,
+        });
+        const open = harness.open.getMockImplementation()!;
+        harness.open.mockImplementation(() =>
+          Effect.gen(function* () {
+            expect(yield* git(worktreePath, ["branch", "--show-current"])).toBe("feature/restore");
+            expect(yield* git(worktreePath, ["rev-parse", "HEAD"])).toBe(
+              scenario === "retained" ? threadTip : projectTip,
+            );
+            expect(
+              yield* fileSystem.readFileString(
+                path.join(worktreePath, scenario === "retained" ? "thread.txt" : "project.txt"),
+              ),
+            ).toBe(scenario === "retained" ? "thread work" : "new project code");
+            return yield* open();
+          }).pipe(Effect.orDie),
+        );
+
+        yield* harness.start;
+
+        if (scenario === "detached") {
+          expect(harness.open).not.toHaveBeenCalled();
+          expect(harness.startRootRun).not.toHaveBeenCalled();
+          expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+          expect(harness.projection().turnItems).toMatchObject([
+            { type: "error", failure: { message: expect.stringContaining("no current branch") } },
+          ]);
+          expect(yield* fileSystem.exists(worktreePath)).toBe(false);
+          expect(yield* git(workspaceRoot, ["branch", "--list", "feature/restore"])).toBe("");
+        } else {
+          expect(harness.open).toHaveBeenCalledOnce();
+          expect(harness.startRootRun).toHaveBeenCalledWith(
+            expect.objectContaining({
+              runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
+            }),
+          );
+          expect(harness.projection().runs.at(-1)?.status).toBe("running");
+        }
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
+);
+
+effectIt.effect(
+  "preserves recreation interrupts and retries, then fails the final attempt before provider start",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const worktreesDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-recreate-failure-",
+      });
+      const worktreePath = path.join(worktreesDir, "project", "restore");
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        worktreesDir,
+        worktreePath,
+        fileSystem,
+        failReadsAfterRunning: true,
+      });
+      harness.createWorktree.mockImplementationOnce(() => Effect.interrupt);
+      harness.createWorktree.mockImplementation(() =>
+        Effect.fail(
+          new GitCommandError({
+            operation: "worktree-add",
+            command: "git worktree add",
+            cwd: "/tmp/native-account-project",
+            detail: "fatal: private git diagnostic",
+          }),
+        ),
+      );
+
+      const interrupted = yield* Effect.exit(harness.start);
+      expect(interrupted._tag).toBe("Failure");
+      if (interrupted._tag === "Failure")
+        expect(Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
+      expect(harness.events).toEqual([]);
+      expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+
+      const retry = yield* Effect.result(harness.startWithRetry);
+      expect(retry).toMatchObject({ _tag: "Failure", failure: { _tag: "ProviderTurnStartError" } });
+      expect(harness.events).toEqual([]);
+      expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+
+      yield* harness.start;
+      expect(harness.createWorktree).toHaveBeenCalledTimes(3);
+      expect(harness.writeIfRunCurrent).toHaveBeenCalledOnce();
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.turnItems).toMatchObject([
+        {
+          type: "error",
+          failure: {
+            message: `Could not recreate the worktree for branch 'feature/restore' at ${worktreePath}.`,
+          },
+        },
+      ]);
+      expect(JSON.stringify(harness.events)).not.toContain("private git diagnostic");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>
   Effect.gen(function* () {

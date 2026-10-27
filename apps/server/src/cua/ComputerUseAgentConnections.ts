@@ -5,7 +5,7 @@
  * lease proxy. When only the agent route fails (exit 77 from the helper's parent check, a
  * capture crash, a driver that will not start), readiness stays green and goat_describe kept
  * calling computer use available through a night of failures. Each proxy now reports when its
- * driver ends on its own, and when one answers the handshake. A run of endings with no working
+ * driver ends on its own, and when one answers a tool call. A run of endings with no working
  * connection between them is a host condition, not one thread's bad luck, so agents and Settings
  * are told the honest reason after FAILING_AFTER of them; one working connection clears it, as a
  * circuit breaker's closed state resets its failure count on success.
