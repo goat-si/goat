@@ -21,6 +21,7 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
+import { maskSnapshotRecords } from "./pageSecrets.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
@@ -732,7 +733,6 @@ const capture = async (
     `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
-  const masked = <A>(value: A) => redactValue(value, mask) as A;
   return {
     ...page,
     url: mask(page.url),
@@ -741,9 +741,7 @@ const capture = async (
     visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
     accessibilityTree,
     ...treeFields,
-    consoleEntries: masked([...input.consoleEntries]),
-    networkEntries: masked([...input.networkEntries]),
-    actionTimeline: masked([...input.actionTimeline]),
+    ...maskSnapshotRecords(mask, input),
     ...(screenshot === undefined ? {} : { screenshot }),
   };
 };
@@ -1086,10 +1084,10 @@ export const evaluate = async (
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));
   if (result.exceptionDetails) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationExecutionError",
-      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-    );
+    const { exception, text } = result.exceptionDetails;
+    // The page writes its own exception's message, so it is masked like a result.
+    const message = await redactEvaluation(page, cdp, exception?.description ?? text, before);
+    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", String(message));
   }
   const value =
     "value" in result.result ? result.result.value : (result.result.description ?? null);

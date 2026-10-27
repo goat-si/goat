@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
@@ -15,6 +16,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
   const password = `pw_${NodeCrypto.randomUUID()}`;
   const scoped = `path_${NodeCrypto.randomUUID()}`;
   const framed = `frame_${NodeCrypto.randomUUID()}`;
+  const fetched = `api_${NodeCrypto.randomUUID()}`;
   const decoy = "tok_0123456789abcdef_not_a_cookie";
 
   beforeAll(async () => {
@@ -63,8 +65,8 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       renderScale: 1,
       captureImage: false,
       consoleEntries: [{ text: `sid=${session}` }] as never,
-      networkEntries: [{ url: `${origin}/?js=${script}` }] as never,
-      actionTimeline: [{ detail: password }] as never,
+      networkEntries: [{ url: `${origin}/?js=${script}`, method: "GET" }] as never,
+      actionTimeline: [{ error: password }] as never,
       timeoutMs: 30_000,
     });
     const text = JSON.stringify(snapshot);
@@ -94,5 +96,112 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       "(() => { const read = document.cookie; history.pushState(null, '', '/'); return read; })()",
     );
     expect(JSON.stringify(moved)).not.toContain(scoped);
+  });
+
+  it("masks a cookie the page fetched with before GOAT watched it, under a path no frame showed", async () => {
+    await context.addCookies([
+      { name: "api", value: fetched, domain: "credentials.test", path: "/api", httpOnly: true },
+      // Short and sent only elsewhere: ordinary words that match it stay.
+      { name: "seen", value: "yes", domain: "credentials.test", path: "/other" },
+    ]);
+    // The API echoes the cookie it got; the page puts the answer in its text and its console.
+    await context.route(`${origin}/api/**`, (route) =>
+      route.fulfill({ contentType: "application/json", body: JSON.stringify({ api: fetched }) }),
+    );
+    const { page, cdp } = await open();
+    await page.evaluate(
+      "fetch('/api/whoami').then((answer) => answer.text()).then((text) => { document.body.insertAdjacentHTML('beforeend', '<p id=\"echo\">yes, ' + text + '</p>'); })",
+    );
+    await page.locator("#echo").waitFor();
+    // Watching starts after the fetch, as for a tab the desktop already had open.
+    const diagnostics = new ServerBrowserDiagnostics(page);
+    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
+    await page.evaluate("console.log(document.getElementById('echo').textContent)");
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: diagnostics.consoleEntries,
+      networkEntries: diagnostics.networkEntries,
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    const read = await ServerBrowserPage.evaluate(
+      { page, cdp },
+      { expression: "document.body.innerText" },
+      5_000,
+    );
+    const logs = await diagnostics.readMasked({});
+    for (const observed of [snapshot, read, logs])
+      expect(JSON.stringify(observed)).not.toContain(fetched);
+    expect(snapshot.visibleText).toContain('yes, {"api":"');
+    expect(JSON.stringify(logs)).toContain("yes, {");
+  });
+  it("masks only the page's text in console, network and action entries, never their own fields", async () => {
+    // Unrelated and never sent to this page, but long enough to be masked anywhere.
+    await context.addCookies(
+      ["timestamp", "finished", "succeeded"].map((value, index) => ({
+        name: `preference${index}`,
+        value,
+        url: "http://unrelated.test",
+      })),
+    );
+    const { page, cdp } = await open();
+    const at = "2026-10-28T00:00:00.000Z";
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [{ level: "log", text: `hello ${session}`, timestamp: at }],
+      networkEntries: [
+        {
+          url: `${origin}/${session}`,
+          method: session,
+          status: 200,
+          failed: false,
+          timestamp: at,
+          phase: "finished",
+        },
+      ],
+      actionTimeline: [
+        { id: "1", action: "click", status: "succeeded", startedAt: at, error: `saw ${session}` },
+      ],
+      timeoutMs: 30_000,
+    });
+    expect(snapshot.consoleEntries[0]).toEqual({
+      level: "log",
+      text: "hello [redacted]",
+      timestamp: at,
+    });
+    expect(snapshot.networkEntries[0]).toMatchObject({
+      method: "[redacted]",
+      url: `${origin}/[redacted]`,
+      phase: "finished",
+    });
+    expect(snapshot.actionTimeline[0]).toMatchObject({
+      status: "succeeded",
+      error: "saw [redacted]",
+    });
+  });
+  it("masks the page's text in an evaluation's exception", async () => {
+    const { page, cdp } = await open();
+    const failed = await ServerBrowserPage.evaluate(
+      { page, cdp },
+      { expression: "(() => { throw new Error(document.body.innerText) })()" },
+      5_000,
+    ).catch((error: unknown) => String(error instanceof Error ? error.message : error));
+    expect(failed).toContain("Echo:");
+    expect(failed).not.toContain(session);
+  });
+  it("keeps masking a logged cookie value after the cookie changes", async () => {
+    const { page } = await open();
+    const diagnostics = new ServerBrowserDiagnostics(page);
+    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
+    await page.evaluate("console.log(document.cookie)");
+    expect(JSON.stringify(await diagnostics.readMasked({}))).not.toContain(script);
+    await context.addCookies([{ name: "js", value: `rotated_${script}x`, url: origin }]);
+    expect(JSON.stringify(await diagnostics.readMasked({}))).not.toContain(script);
   });
 });

@@ -241,6 +241,48 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(result.text).not.toMatch(/set-cookie|x-auth/i);
   });
 
+  it("redacts a cookie the tab only sent to another path, wherever it comes back", async () => {
+    await context.addCookies([
+      {
+        name: "api",
+        value: "ApiScopedValue456",
+        domain: "app.example",
+        path: "/api",
+        httpOnly: true,
+      },
+    ]);
+    await page.route("https://app.example/profile", (route) =>
+      route.fulfill({ contentType: "text/plain", body: "your key is ApiScopedValue456" }),
+    );
+    await page.evaluate("fetch('/api/me').then((answer) => answer.text())");
+    const result = await inPageFetch(page, control, { url: "/profile" });
+    expect(result.text).toBe("your key is [redacted]");
+  });
+
+  it("redacts a cookie from the response's content type and from a failure's message", async () => {
+    await context.addCookies([
+      {
+        name: "api",
+        value: "ApiScopedValue456",
+        domain: "app.example",
+        path: "/api",
+        httpOnly: true,
+      },
+    ]);
+    await page.route("https://app.example/typed", (route) =>
+      route.fulfill({ contentType: "text/plain; note=ApiScopedValue456", body: "ok" }),
+    );
+    expect((await inPageFetch(page, control, { url: "/typed" })).contentType).toBe(
+      "text/plain; note=[redacted]",
+    );
+    // A page's own fetch wrapper decides what a failure says.
+    await page.evaluate("window.fetch = () => Promise.reject(new Error('saw ApiScopedValue456'))");
+    const failure = await inPageFetch(page, control, { url: "/typed" }).catch((error: unknown) =>
+      error instanceof Error ? error.message : String(error),
+    );
+    expect(failure).not.toContain("ApiScopedValue456");
+  });
+
   it("returns no content for a body that is not text, and bounds long text", async () => {
     expect(await inPageFetch(page, control, { url: "/logo.png" })).toMatchObject({
       format: "raw",
