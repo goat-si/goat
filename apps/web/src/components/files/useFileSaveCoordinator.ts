@@ -6,7 +6,7 @@ import { projectEnvironment } from "~/state/projects";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { FileSaveCoordinator } from "./fileSaveCoordinator";
+import type { FileSaveCoordinator } from "./fileSaveCoordinator";
 import {
   confirmProjectFileQueryData,
   getProjectFileSaveSession,
@@ -51,16 +51,16 @@ export function useFileSaveCoordinator({
   }
   const session = current.session;
 
-  // StrictMode replay needs a fresh coordinator; retired file sessions stay inert.
+  // Each surface leases the file's coordinator; retired callbacks stay inert.
   useEffect(session.setup, [session]);
   useEffect(() => {
     if (!canWriteFiles) return;
     let cancelled = false;
-    // Replay must retire the first session before recovery queues a draft to flush.
+    // StrictMode cleanup cancels recovery from the retired surface lease.
     queueMicrotask(() => {
       if (cancelled) return;
       const unsaved = getUnsavedProjectFileQueryData(environmentId, cwd, relativePath);
-      if (unsaved) session.change(unsaved.contents);
+      if (unsaved) session.recover(unsaved.contents);
     });
     return () => {
       cancelled = true;
@@ -103,74 +103,79 @@ function createFileSaveSession({
       if (result._tag !== "Success") setStatus("reloadFailed");
     },
     change: (contents: string) => coordinatorRef.current?.change(contents),
+    recover: (contents: string) => {
+      const coordinator = coordinatorRef.current;
+      if (!coordinator) return;
+      if (coordinator.unconfirmedContents === null) coordinator.change(contents);
+      else coordinator.retry();
+    },
     setup: () => {
-      const coordinator = new FileSaveCoordinator({
-        debounceMs: FILE_SAVE_DEBOUNCE_MS,
-        canPersist: () =>
-          !fileSession.blocked && readEnvironmentScope(environmentId, AuthFilesystemWriteScope),
-        onPendingChange: (pending) => {
-          onPendingChange(relativePath, pending);
-          if (!fileSession.blocked) setStatus(pending ? "unsaved" : "saved");
-        },
-        persist: (nextContents) => {
-          const generation = fileSession.generation;
-          return fileSession.enqueue(async () => {
-            if (
-              generation !== fileSession.generation ||
-              fileSession.blocked ||
-              !readEnvironmentScope(environmentId, AuthFilesystemWriteScope)
-            )
-              return null;
-            const baseline = getProjectFileData(environmentId, cwd, relativePath);
-            const expectedVersion = fileSession.takeOverwrite() ? undefined : baseline?.version;
-            setStatus("saving");
-            const result = await writeFile({
-              environmentId,
-              input: {
-                cwd,
-                relativePath,
-                contents: nextContents,
-                ...(expectedVersion !== undefined ? { expectedVersion } : {}),
-                ...(baseline?.textFormat ? { textFormat: baseline.textFormat } : {}),
-              },
-            });
-            if (result._tag === "Success") {
-              // Advance the baseline before a serialized follow-up, including
-              // when newer edits prevent this write from clearing the draft.
-              persistence.confirmed =
-                confirmProjectFileQueryData(
-                  environmentId,
+      const lease = fileSession.acquire(
+        {
+          debounceMs: FILE_SAVE_DEBOUNCE_MS,
+          canPersist: () =>
+            !fileSession.blocked && readEnvironmentScope(environmentId, AuthFilesystemWriteScope),
+          persist: (nextContents) => {
+            const generation = fileSession.generation;
+            return fileSession.enqueue(async () => {
+              if (
+                generation !== fileSession.generation ||
+                fileSession.blocked ||
+                !readEnvironmentScope(environmentId, AuthFilesystemWriteScope)
+              )
+                return null;
+              const baseline = getProjectFileData(environmentId, cwd, relativePath);
+              const expectedVersion = fileSession.takeOverwrite() ? undefined : baseline?.version;
+              setStatus("saving");
+              const result = await writeFile({
+                environmentId,
+                input: {
                   cwd,
                   relativePath,
-                  nextContents,
-                  result.value,
-                ) !== false;
-              if (!persistence.confirmed) setStatus("unsaved");
-            } else {
-              const failure = squashAtomCommandFailure(result);
-              const kind =
-                failure && typeof failure === "object" && "failure" in failure
-                  ? failure.failure
-                  : undefined;
-              setStatus(
-                kind === "changed_on_disk"
-                  ? "changed"
-                  : kind === "deleted_on_disk"
-                    ? "deleted"
-                    : "failed",
-              );
-            }
-            return result;
-          });
+                  contents: nextContents,
+                  ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+                  ...(baseline?.textFormat ? { textFormat: baseline.textFormat } : {}),
+                },
+              });
+              if (result._tag === "Success") {
+                // Advance the baseline before a serialized follow-up, including
+                // when newer edits prevent this write from clearing the draft.
+                persistence.confirmed =
+                  confirmProjectFileQueryData(
+                    environmentId,
+                    cwd,
+                    relativePath,
+                    nextContents,
+                    result.value,
+                  ) !== false;
+                if (!persistence.confirmed) setStatus("unsaved");
+              } else {
+                const failure = squashAtomCommandFailure(result);
+                const kind =
+                  failure && typeof failure === "object" && "failure" in failure
+                    ? failure.failure
+                    : undefined;
+                setStatus(
+                  kind === "changed_on_disk"
+                    ? "changed"
+                    : kind === "deleted_on_disk"
+                      ? "deleted"
+                      : "failed",
+                );
+              }
+              return result;
+            });
+          },
+          onConfirmed: () => persistence.confirmed,
         },
-        onConfirmed: () => persistence.confirmed,
-      });
-      coordinatorRef.current = coordinator;
-      fileSession.coordinators.add(coordinator);
+        (pending) => {
+          onPendingChange(relativePath, pending);
+        },
+      );
+      coordinatorRef.current = lease.coordinator;
       return () => {
         coordinatorRef.current = null;
-        coordinator.dispose();
-        fileSession.coordinators.delete(coordinator);
+        lease.release();
       };
     },
   };
