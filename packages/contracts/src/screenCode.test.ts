@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  ScreenEffectReceipt,
   ScreenHostCall,
   DEFAULT_SCREEN_RUN_LIMITS,
   ScreenHostReply,
@@ -52,6 +53,53 @@ describe("screen code wire contracts", () => {
     expect(() => decode({ ...call, threadId: "thread:forged" })).toThrow();
     expect(() => decode({ ...call, method: "run_script" })).toThrow();
     expect(() => targetDecode({ ...target, generation: -1 })).toThrow();
+  });
+
+  it("roundtrips additive safety receipts and keeps older receipts unclassified", () => {
+    const receipt = {
+      callId: 1,
+      method: "click",
+      journalState: "settled",
+      category: "partial",
+      dispatched: true,
+      evidence: [],
+    } as const;
+    const codec = Schema.toCodecJson(ScreenEffectReceipt);
+    const decode = Schema.decodeUnknownSync(codec);
+    const encode = Schema.encodeSync(codec);
+    expect(encode(decode(receipt))).toEqual(receipt);
+    expect(decode(receipt).safety).toBeUndefined();
+    const safety = {
+      possibleCommit: true,
+      retryClass: "never",
+      writeStatus: "may_have_applied",
+      code: "write_partial",
+      unappliedInput: { field: "name", requested: "Example", applied: "Exam" },
+    } as const;
+    expect(encode(decode({ ...receipt, safety }))).toEqual({ ...receipt, safety });
+    expect(() => decode({ ...receipt, safety: { possibleCommit: false } })).toThrow();
+  });
+
+  it("a strict reply carries a not_run error with safety, and still refuses unknown error fields", () => {
+    const decodeReply = Schema.decodeUnknownSync(ScreenHostReply);
+    const safety = {
+      possibleCommit: false,
+      retryClass: "new_key",
+      writeStatus: "not_started",
+      code: "write_refused_reobserve",
+    } as const;
+    const reply = {
+      t: "reply",
+      runId: "run:1",
+      cellId: "cell:1",
+      callId: 2,
+      outcome: "error",
+      error: { code: "not_run", callId: 2, effectStarted: false, nextStep: "Observe.", safety },
+    } as const;
+    expect(encodeScreenHostReply(decodeReply(reply))).toEqual(reply);
+    const { safety: _safety, ...older } = reply.error;
+    expect(decodeReply({ ...reply, error: older }).error?.safety).toBeUndefined();
+    expect(() => decodeReply({ ...reply, error: { ...reply.error, retryAfter: 1 } })).toThrow();
   });
 
   it("bounds guest arguments and rejects extra reply authority", () => {

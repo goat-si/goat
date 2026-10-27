@@ -1,15 +1,25 @@
 import type { PreviewAutomationControlReason } from "@goat/contracts";
 
+import { PREVIEW_ADMISSION_REASONS } from "./actionOutcomeSafety.ts";
+
 export class BrowserControlInterrupted extends Error {
   readonly reason: PreviewAutomationControlReason;
+  /** GOAT refused before any input left; a cut of work under way leaves this false. */
+  readonly beforeInput: boolean;
   constructor(
     message = "Browser control changed. Refresh the snapshot before trying again.",
     reason: PreviewAutomationControlReason = "interrupted",
+    beforeInput = PREVIEW_ADMISSION_REASONS.has(reason),
   ) {
     super(message);
     this.reason = reason;
+    this.beforeInput = beforeInput;
   }
 }
+
+/** A refusal raised while admitting a request or at its dispatch gate. */
+const refused = (message?: string, reason?: PreviewAutomationControlReason) =>
+  new BrowserControlInterrupted(message, reason, true);
 
 const settle = (work: Promise<unknown>) =>
   work.then(
@@ -153,8 +163,7 @@ export class SessionControl {
     this.assertOpen();
     const blocked = this.agentBlocked();
     if (blocked) throw blocked;
-    if (this.owner !== null)
-      throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+    if (this.owner !== null) throw refused("A human controls this tab.", "humanControl");
   }
 
   /**
@@ -163,11 +172,24 @@ export class SessionControl {
    */
   dispatchGate(expectedGeneration?: number) {
     const epoch = this.epoch;
-    const gate = () => {
+    // Clicks and scroll collection reuse one gate; once input went out, a later refusal is not
+    // "before input" for the action as a whole.
+    let passed = false;
+    const check = () => {
       this.assertAgentMayDispatch();
       if (expectedGeneration !== undefined && this.epoch !== expectedGeneration)
-        throw new BrowserControlInterrupted("Browser control changed; refresh the tab snapshot.");
-      if (this.epoch !== epoch) throw new BrowserControlInterrupted();
+        throw refused("Browser control changed; refresh the tab snapshot.");
+      if (this.epoch !== epoch) throw refused();
+    };
+    const gate = () => {
+      try {
+        check();
+      } catch (cause) {
+        if (passed && cause instanceof BrowserControlInterrupted && cause.beforeInput)
+          throw new BrowserControlInterrupted(cause.message, cause.reason, false);
+        throw cause;
+      }
+      passed = true;
       this.activeAgentDispatching = true;
     };
     const linger = (work: Promise<unknown>) => {
@@ -185,8 +207,8 @@ export class SessionControl {
   }
 
   private agentBlocked() {
-    if (this.privateMode) return new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
-    if (this.agentStopped) return new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
+    if (this.privateMode) return refused(PRIVATE_MESSAGE, "privateMode");
+    if (this.agentStopped) return refused(STOPPED_MESSAGE, "stopped");
     return undefined;
   }
 
@@ -213,7 +235,7 @@ export class SessionControl {
   }
 
   private assertOpen() {
-    if (this.closed) throw new BrowserControlInterrupted("This browser tab is closed.", "closed");
+    if (this.closed) throw refused("This browser tab is closed.", "closed");
   }
 
   private changeOwner(owner: string | null) {
@@ -232,11 +254,11 @@ export class SessionControl {
 
   private async action<A>(allowed: () => boolean, run: () => Promise<A>, deadlineMs?: number) {
     this.assertOpen();
-    if (!allowed()) throw new BrowserControlInterrupted("You do not control this browser tab.");
+    if (!allowed()) throw refused("You do not control this browser tab.");
     const epoch = this.epoch;
     return this.enqueue(async () => {
       this.assertOpen();
-      if (epoch !== this.epoch || !allowed()) throw new BrowserControlInterrupted();
+      if (epoch !== this.epoch || !allowed()) throw refused();
       if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
         throw new DOMException(
           "This browser request expired before it could start.",
@@ -261,9 +283,7 @@ export class SessionControl {
         new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
       );
     if (this.owner !== null)
-      return Promise.reject(
-        new BrowserControlInterrupted("A human controls this tab.", "humanControl"),
-      );
+      return Promise.reject(refused("A human controls this tab.", "humanControl"));
     const blocked = this.agentBlocked();
     if (blocked) return Promise.reject(blocked);
     return this.action(
@@ -310,7 +330,7 @@ export class SessionControl {
   }
 
   assertNoHumanControl() {
-    if (this.owner !== null) throw new BrowserControlInterrupted(HUMAN_MESSAGE, "humanControl");
+    if (this.owner !== null) throw refused(HUMAN_MESSAGE, "humanControl");
   }
 
   /**
@@ -323,10 +343,8 @@ export class SessionControl {
       return Promise.reject(
         new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
       );
-    if (this.owner !== null)
-      return Promise.reject(new BrowserControlInterrupted(HUMAN_MESSAGE, "humanControl"));
-    if (this.agentStopped)
-      return Promise.reject(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
+    if (this.owner !== null) return Promise.reject(refused(HUMAN_MESSAGE, "humanControl"));
+    if (this.agentStopped) return Promise.reject(refused(STOPPED_MESSAGE, "stopped"));
     const authority = this.authority;
     const assertMayDispatch = () => {
       this.assertOpen();

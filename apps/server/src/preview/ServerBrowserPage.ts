@@ -53,7 +53,7 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.reason,
+      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);

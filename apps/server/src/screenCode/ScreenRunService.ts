@@ -32,6 +32,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
+import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
@@ -491,7 +492,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         .pipe(
           Effect.mapError((cause) => ({
             ...fail(cause.code),
-            effectStarted: cause.effectStarted === true,
+            ...cellErrorSafety(
+              { effectStarted: cause.effectStarted === true },
+              cause.receipts ?? [],
+            ),
             ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
             ...(cause.code === "wall_limit"
               ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
@@ -511,13 +515,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 sequence: result.journal.length + index + 1,
               })),
             ].slice(-64);
-            return result.error && isScreenRunErrorSchema(result.error)
+            const classified = cellResultSafety(result);
+            return classified.error && isScreenRunErrorSchema(classified.error)
               ? Effect.fail({
-                  ...result.error,
+                  ...classified.error,
                   receipts: journal.slice(-16).map((entry) => entry.receipt),
                 })
               : Effect.succeed({
-                  ...result,
+                  ...classified,
                   journal,
                   ...(contextReset
                     ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }

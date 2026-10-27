@@ -582,6 +582,11 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
           Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          // Preview tools return their failures (failureMode "return") so the safety survives.
+          Effect.filterOrFail(
+            (output) => !output.isFailure,
+            (output) => output.result,
+          ),
           Effect.flatMap(({ encodedResult }) =>
             Effect.gen(function* () {
               const snapshot = encodedResult as SnapshotMetadata & {
