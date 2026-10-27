@@ -30,6 +30,8 @@ export const CLOUDFLARED_MIN_VERSION = "2025.6.1";
 const CLOUDFLARED_PATH_ENV_NAME = "GOAT_CLOUDFLARED_PATH";
 
 const CLOUDFLARED_DOWNLOAD_TIMEOUT = "10 minutes";
+const CLOUDFLARED_COMMAND_TIMEOUT = "60 seconds";
+const CLOUDFLARED_COMMAND_FORCE_KILL_AFTER = "1 second";
 
 export type RelayClientExecutableSource = "override" | "managed" | "path";
 
@@ -389,22 +391,24 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }),
     );
 
-  const runCommand = Effect.fn("cloudflared.runCommand")(function* (
-    command: string,
-    args: ReadonlyArray<string>,
-  ) {
-    const child = yield* spawner.spawn(
-      ChildProcess.make(command, args, {
-        shell: false,
-        stdout: "ignore",
-        stderr: "ignore",
-      }),
-    );
-    const exitCode = Number(yield* child.exitCode);
-    if (exitCode !== 0) {
-      return yield* new CloudflaredCommandError({ command, exitCode });
-    }
-  });
+  const runCommand = Effect.fn("cloudflared.runCommand")(
+    function* (command: string, args: ReadonlyArray<string>) {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command, args, {
+          shell: false,
+          stdout: "ignore",
+          stderr: "ignore",
+          forceKillAfter: CLOUDFLARED_COMMAND_FORCE_KILL_AFTER,
+        }),
+      );
+      const exitCode = Number(yield* child.exitCode);
+      if (exitCode !== 0) {
+        return yield* new CloudflaredCommandError({ command, exitCode });
+      }
+    },
+    Effect.timeout(CLOUDFLARED_COMMAND_TIMEOUT),
+    Effect.scoped,
+  );
 
   const downloadAsset = Effect.fn("cloudflared.downloadAsset")(function* (
     asset: CloudflaredReleaseAsset,
