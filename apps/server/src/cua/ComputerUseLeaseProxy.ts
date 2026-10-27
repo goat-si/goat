@@ -954,7 +954,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             (key) => key === "session",
           ),
           connectionId: current.connectionId,
-          sink: verifier.wrap(sink, message?.params?.name, message?.params?.arguments, current),
+          sink: verifier.wrap(sink, message, current),
           ...(reservationId === undefined ? {} : { reservationId }),
         });
     });

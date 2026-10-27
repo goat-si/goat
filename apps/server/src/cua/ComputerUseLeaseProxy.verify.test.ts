@@ -2,7 +2,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const window = { pid: 4, window_id: 9 };
 const result = (id: unknown, structuredContent: object, text = "") =>
@@ -109,6 +109,35 @@ describe("read-back after input the driver could not verify", () => {
       yield* h.reply(result(2, { effect: "confirmed" }));
       const answer = (yield* h.nextToProvider) as unknown as Answer;
       assert.deepEqual(answer.result.structuredContent, { effect: "confirmed" });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect("leaves a screen-run cell's input alone, so its tokens stay valid mid-script", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ verifyInputByTreeDiff: true });
+      yield* h.push(active());
+      const current = yield* h.driverStarted;
+      yield* h.send(call(1, "get_window_state", window));
+      yield* h.nextToDriver;
+      yield* h.reply(result(1, { snapshot_id: "s1" }));
+      yield* h.nextToProvider;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:click",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 1_000,
+        tool: "click",
+        args: { ...window, element_token: "s1:3" },
+      });
+      const sent = yield* h.nextToDriver;
+      yield* h.reply(result(sent.id, { effect: "unverifiable" }));
+      assert.include(JSON.stringify(yield* h.primitiveReply), "unverifiable");
       assert.equal(yield* h.driverQueued, 0);
     }),
   );

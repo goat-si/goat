@@ -13,7 +13,7 @@ import type * as Scope from "effect/Scope";
 
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
-import type { ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
+import { PRIMITIVE_ID, type ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import { targetOf } from "./computerUseTarget.ts";
 
 /** Input whose effect a tree diff can show. */
@@ -178,11 +178,16 @@ export const makeInputVerifier = (input: {
       const read = tool === "get_window_state" && !failed ? treeReadOf(args) : undefined;
       if (read !== undefined) reads.set(read.window_id, read);
     },
-    wrap: (sink: ReplySink, tool: unknown, args: unknown, child: Running): ReplySink => {
-      const windowId = targetOf(args)?.windowId;
-      if (!input.enabled || typeof tool !== "string" || !VERIFIABLE_INPUT_TOOLS.has(tool))
-        return sink;
-      if (windowId === undefined) return sink;
+    /**
+     * A screen-run cell is left alone: it keeps its own observation and its tokens, which a
+     * re-read would retire mid-script.
+     */
+    wrap: (sink: ReplySink, message: Envelope | undefined, child: Running): ReplySink => {
+      const tool = message?.params?.name;
+      const windowId = targetOf(message?.params?.arguments)?.windowId;
+      const primitive = typeof message?.id === "string" && message.id.startsWith(PRIMITIVE_ID);
+      if (!input.enabled || primitive || typeof tool !== "string") return sink;
+      if (!VERIFIABLE_INPUT_TOOLS.has(tool) || windowId === undefined) return sink;
       return {
         answer: (line, status, context) => {
           const read = reads.get(windowId);
