@@ -197,6 +197,45 @@ describe("trayMenuTemplate", () => {
     );
     expect(entries[0]?.label).toBe("Stop Using R&&D Tool");
   });
+
+  it("uses the first app icon on the header and each app's own icon on its row", () => {
+    const calculator = { id: "calculator" } as unknown as Electron.NativeImage;
+    const kakao = { id: "kakao" } as unknown as Electron.NativeImage;
+    const calculatorIcon = "data:image/png;base64,calculator";
+    const kakaoIcon = "data:image/png;base64,kakao";
+    const icon = vi.fn((url: string) => (url === kakaoIcon ? kakao : calculator));
+    const items = template({
+      menu: held({
+        threadCount: 3,
+        appCount: 2,
+        targets: [
+          { ...stopped("com.apple.calculator", "Calculator", 1), icon: calculatorIcon },
+          { ...stopped("com.kakao.KakaoTalk", "KakaoTalk", 2), icon: kakaoIcon },
+          stopped(null, "Screen", 1),
+        ],
+      }),
+      icon,
+    });
+    const entries = submenu(items);
+    expect(items[0]?.icon).toBe(calculator);
+    expect(entries[0]?.icon).toBe(calculator);
+    expect(entries[1]?.icon).toBe(kakao);
+    expect(Object.hasOwn(entries[2] ?? {}, "icon")).toBe(false);
+    expect(icon.mock.calls.map(([url]) => url)).toEqual([
+      calculatorIcon,
+      calculatorIcon,
+      kakaoIcon,
+    ]);
+  });
+
+  it("omits every icon key when no icon function is given", () => {
+    const ownsIcon = (items: readonly Electron.MenuItemConstructorOptions[]): boolean =>
+      items.some(
+        (item) =>
+          Object.hasOwn(item, "icon") || (Array.isArray(item.submenu) && ownsIcon(item.submenu)),
+      );
+    expect(ownsIcon(template({ menu: held(holders) }))).toBe(false);
+  });
 });
 
 describe("trayLabel", () => {
