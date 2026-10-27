@@ -69,6 +69,36 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it.each(["cursor", "cursorCloud"])(
+    "keeps ambiguous families in the mixed %s catalog and honors supplied labels",
+    (driver) => {
+      const source = provider({ instanceId: driver, provider: ProviderDriverKind.make(driver) });
+      const entries = deriveProviderInstanceEntries([
+        {
+          ...source,
+          models: [
+            { slug: "grok", name: "Grok 4 Pro", isCustom: false, capabilities: {} },
+            { slug: "claude", name: "Claude Opus 5.5", isCustom: false, capabilities: {} },
+            {
+              slug: "supplied",
+              name: "Grok 4 Pro",
+              shortName: "Account label",
+              isCustom: false,
+              capabilities: {},
+            },
+          ],
+        },
+      ]);
+      const options = getAppModelOptionsForInstance(DEFAULT_UNIFIED_SETTINGS, entries[0]!);
+      expect(options.map((option) => option.shortName ?? option.name)).toEqual([
+        "Grok 4 Pro",
+        "Opus 5.5",
+        "Account label",
+      ]);
+      expect(options.map((option) => option.slug)).toEqual(["grok", "claude", "supplied"]);
+    },
+  );
+
   it("derives readable labels for catalog and custom models without changing selections", () => {
     const instanceId = ProviderInstanceId.make("codex");
     const source = provider({ instanceId });

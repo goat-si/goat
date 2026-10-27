@@ -22,6 +22,43 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it.each(["cursor", "cursorCloud"])(
+    "keeps ambiguous families in the mixed %s catalog and honors supplied labels",
+    (driver) => {
+      const config = {
+        providers: [
+          {
+            instanceId: driver,
+            driver,
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [
+              { slug: "grok", name: "Grok 4 Pro", isCustom: false, capabilities: null },
+              { slug: "claude", name: "Claude Opus 5.5", isCustom: false, capabilities: null },
+              {
+                slug: "supplied",
+                name: "Grok 4 Pro",
+                shortName: "Account label",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+          },
+        ],
+      } as unknown as ServerConfig;
+      const options = buildModelOptions(config, null, undefined, null);
+      expect(options.map((option) => option.shortName ?? option.label)).toEqual([
+        "Grok 4 Pro",
+        "Opus 5.5",
+        "Account label",
+      ]);
+      expect(options.map((option) => option.selection)).toEqual(
+        ["grok", "claude", "supplied"].map((model) => ({ instanceId: driver, model })),
+      );
+    },
+  );
+
   it("keeps full labels and routing while deriving compact model labels", () => {
     const config = {
       providers: [

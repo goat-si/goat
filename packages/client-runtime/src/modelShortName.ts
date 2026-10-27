@@ -77,8 +77,6 @@ function nativeModelFamilies(driver: string | null | undefined): ReadonlyArray<s
     case "claudeAgent":
     case "claudeCloud":
       return ["Claude "];
-    case "cursor":
-    case "cursorCloud":
     case "grok":
       return ["Grok "];
     case "antigravity":
