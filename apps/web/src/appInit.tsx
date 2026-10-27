@@ -35,6 +35,7 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
+import { startDesktopTray } from "./desktopTray";
 import { getRouter, type AppRouter } from "./router";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
@@ -166,7 +167,10 @@ export function startAppServices(): AppRouter {
   startPermissionUpdateNotices(router);
   startThreadNotifications(appAtomRegistry, router);
   startGuideRunNotifications(appAtomRegistry, router);
-  if (isElectron) startDesktopUpdateLaunchNotice();
+  if (isElectron) {
+    startDesktopUpdateLaunchNotice();
+    startDesktopTray(appAtomRegistry, router);
+  }
 
   return router;
 }

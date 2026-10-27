@@ -34,6 +34,7 @@ import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { HubNodesImportCoordinator } from "../components/desktop/HubNodesImportCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
+import { DesktopTrayNewThread } from "../components/desktop/DesktopTrayNewThread";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { DiskPressureNotificationCoordinator } from "../components/DiskPressureNotificationCoordinator";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
@@ -244,6 +245,7 @@ function RootRouteBranch() {
         {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <HubNodesImportCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+        {isElectron ? <DesktopTrayNewThread /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         {hasCloudPublicConfig() ? <RelayClientInstallDialog /> : null}
         <ConnectOnboardingDialog />
