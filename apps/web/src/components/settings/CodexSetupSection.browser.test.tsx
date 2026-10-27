@@ -397,3 +397,18 @@ it.each(["failed", "cancelled", "succeeded"] as const)(
     expect(mocks.open).not.toHaveBeenCalled();
   },
 );
+
+it("does not submit a cancelled desktop page manually opened from shared auth state", async () => {
+  const state = setup();
+  const response = Promise.withResolvers<string>();
+  using _desktop = stubGlobal("desktopBridge", {
+    receiveProviderAuthCallback: vi.fn().mockReturnValue(response.promise),
+    cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
+  });
+  await using screen = await render(ui());
+  await publish(state.auth, waiting("other-client"));
+  await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+  await screen.getByRole("button", { name: "Cancel", exact: true }).click();
+  await act(() => response.resolve("http://localhost/callback?code=cancelled"));
+  expect(mocks.completeAuth).not.toHaveBeenCalled();
+});

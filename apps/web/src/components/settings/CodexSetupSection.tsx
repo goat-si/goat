@@ -380,7 +380,9 @@ function ManagedCodexSetup({
     );
     setHandoff(null);
   }
+  const receivingCallback = useRef<string | null>(null);
   const cancelSignIn = () => {
+    receivingCallback.current = null;
     setAwaitingProvider(null);
     if (handoff) {
       setHandoff(null);
@@ -389,7 +391,6 @@ function ManagedCodexSetup({
     return run(() => cancelAuth({ environmentId, input: { instanceId, flowId: auth!.flowId! } }));
   };
 
-  const receivingCallback = useRef<string | null>(null);
   const openPage = async (
     authorizationUrl: string,
     flowId: string | null,
