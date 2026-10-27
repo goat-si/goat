@@ -43,7 +43,9 @@ provider (Codex, Claude, ...)
   it only through the helper, which brokers them in the #1207 envelope. Signed desktop artifacts
   carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
-  cursor and window highlight itself (#1214), hidden in private mode and during a takeover.
+  cursor and window highlight itself (#1214), hidden in private mode and during a takeover. The
+  driver refuses its cursor tools there, so the proxy answers them from the helper's cursor: it
+  starts on, and turning it off hides only the on-screen cursor until the control ends.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build

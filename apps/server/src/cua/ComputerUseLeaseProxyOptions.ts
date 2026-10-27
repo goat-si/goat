@@ -248,6 +248,8 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
+  /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */
+  readonly answersCursorTools?: boolean;
   readonly onCursorReport?: (report: AgentCursorReport) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the

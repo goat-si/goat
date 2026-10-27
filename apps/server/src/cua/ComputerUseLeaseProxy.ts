@@ -41,6 +41,7 @@ import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
+import { AGENT_CURSOR_TOOLS, answerCursorTool } from "./ComputerUseCursorTools.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import {
@@ -794,6 +795,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       finished === undefined &&
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
+    const name = message?.method === "tools/call" ? message.params?.name : undefined;
+    if (isRequest && options.answersCursorTools && AGENT_CURSOR_TOOLS.has(String(name))) {
+      if (!stillCurrent()) return yield* sink.answer(notSent(id));
+      const line = yield* answerCursorTool(id, String(name), message?.params?.arguments, overlay);
+      return yield* sink.answer(line, "settled", { tool: String(name) });
+    }
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({

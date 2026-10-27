@@ -121,6 +121,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_session",
   "list_sessions",
   "get_agent_cursor_state",
+  "get_config",
 ]);
 
 export const MAY_HAVE_ACTED =
