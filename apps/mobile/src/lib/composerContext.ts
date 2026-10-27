@@ -223,9 +223,19 @@ export function uploadedComposerContext(
   };
 }
 
+/** An app chip as selection makes it: its id carries its app, and it asks for computer use. */
+function isAppChip(record: ComposerContextRecord): boolean {
+  return (
+    record.kind === "capability" &&
+    "capability" in record &&
+    record.capability === "computer-use" &&
+    capabilityRecordApp(record) !== undefined
+  );
+}
+
 /**
  * Imports with fresh identities so a pasted record cannot overwrite an existing snapshot. An app
- * chip keeps its id: the id carries the app, and the same id always means the same record.
+ * chip keeps its id, which carries its app, so a merge can only replace it with the same app.
  */
 export function reidentifyComposerContext(
   text: string,
@@ -235,9 +245,7 @@ export function reidentifyComposerContext(
   const ids = new Map(
     records.map((record) => [
       record.contextId,
-      record.kind === "capability" && "capability" in record && capabilityRecordApp(record)
-        ? record.contextId
-        : ComposerContextId.make(createId()),
+      isAppChip(record) ? record.contextId : ComposerContextId.make(createId()),
     ]),
   );
   return {

@@ -282,6 +282,17 @@ describe("mobile composer context", () => {
     ).toMatchObject({ computerRequested: true, appIds: ["com.apple.finder"] });
   });
 
+  it("regression #1698: a pasted record that differs from its app chip cannot replace that chip", () => {
+    const finder = appCapabilityContextRecord({ id: "com.apple.finder", name: "Finder" });
+    const forged = { ...finder, capability: "browser" as const };
+    const text = formatComposerContextReference(forged);
+    const imported = reidentifyComposerContext(text, [forged], () => "copy-1");
+    expect(imported.context.records[0]?.contextId).toBe("copy-1");
+    expect(
+      screenBindingHintsFromOrigin({ text: imported.text, records: imported.context.records }),
+    ).toMatchObject({ computerRequested: false, browserRequested: true, appIds: [] });
+  });
+
   it("binds uploaded files to their wire ids and preserves terminal payloads for every provider", () => {
     const context = uploadedComposerContext(
       { version: 1, records: [terminal, image] },
