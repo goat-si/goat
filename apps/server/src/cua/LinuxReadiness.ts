@@ -87,9 +87,14 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
         ...Object.fromEntries(display.map(({ name, value }) => [name, value])),
       };
       // The helper's own judgement of this session: GNOME 50+ on Wayland is refused, never probed.
-      const session = detectLinuxSession(
-        linuxSessionFacts(sessionEnvironment, () => readGnomeShellVersion(sessionEnvironment)),
-      );
+      const waylandGnome =
+        !sessionEnvironment.DISPLAY &&
+        sessionEnvironment.WAYLAND_DISPLAY !== undefined &&
+        /GNOME/iu.test(sessionEnvironment.XDG_CURRENT_DESKTOP ?? "");
+      const version = waylandGnome
+        ? yield* Effect.promise(() => readGnomeShellVersion(sessionEnvironment))
+        : null;
+      const session = detectLinuxSession(linuxSessionFacts(sessionEnvironment, () => version));
       const gdbus = gdbusRunner(
         Object.fromEntries(
           Object.entries(sessionEnvironment).filter(

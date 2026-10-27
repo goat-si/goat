@@ -37,9 +37,12 @@ const PARENT_CHECK_MS = 2_000;
 const FOCUS_EVENTS_RETRY_MS = 2_000;
 
 const environment = process.env;
-const session = detectLinuxSession(
-  linuxSessionFacts(environment, () => readGnomeShellVersion(environment)),
-);
+const waylandGnome =
+  !environment.DISPLAY &&
+  environment.WAYLAND_DISPLAY !== undefined &&
+  /GNOME/iu.test(environment.XDG_CURRENT_DESKTOP ?? "");
+const version = waylandGnome ? await readGnomeShellVersion(environment) : null;
+const session = detectLinuxSession(linuxSessionFacts(environment, () => version));
 
 const driverEnvironment: Record<string, string> = {};
 for (const name of SESSION_NAMES) {

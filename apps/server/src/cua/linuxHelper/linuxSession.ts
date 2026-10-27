@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; zlib reads its own capture.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeZlib from "node:zlib";
+import { makeGnomeShellVersionReader } from "./gnomeVersion.ts";
 
 import {
   COMPUTER_USE_METHODS,
@@ -143,17 +143,7 @@ export const linuxSessionFacts = (
 };
 
 /** `gnome-shell --version` in the session's environment, or null when it cannot be read. */
-export const readGnomeShellVersion = (environment: NodeJS.ProcessEnv): string | null => {
-  try {
-    return NodeChildProcess.execFileSync("gnome-shell", ["--version"], {
-      timeout: 2_000,
-      encoding: "utf8",
-      env: environment,
-    });
-  } catch {
-    return null;
-  }
-};
+export const readGnomeShellVersion = makeGnomeShellVersionReader();
 
 export function linuxCapabilities(
   session: LinuxSession,

@@ -818,7 +818,7 @@
   "packages/shared/src/path.ts": { "nonNull": 3 },
   "packages/shared/src/qrCode.ts": { "nonNull": 50 },
   "packages/shared/src/serverSettings.test.ts": { "lines": 1008 },
-  "packages/shared/src/shell.test.ts": { "lines": 1045 },
+  "packages/shared/src/shell.test.ts": { "lines": 973 },
   "packages/shared/src/shell.ts": { "nonNull": 1 },
   "packages/shared/src/sshDestination.ts": { "nonNull": 3 },
   "packages/shared/src/standingInstructions.ts": { "nonNull": 1 },
