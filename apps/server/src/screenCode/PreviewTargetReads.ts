@@ -46,7 +46,7 @@ const READ_OPTIONS = ["format", "offset", "revision", "settleMs", "timeoutMs", "
 export const cellReadInput = (
   arg: Record<string, unknown>,
   replyBytes: number,
-): Record<string, unknown> | ScreenRunError => {
+): { readonly input: Record<string, unknown> } | { readonly error: ScreenRunError } => {
   const unknown = Object.keys(arg).filter(
     (key) =>
       key !== "targetRef" &&
@@ -54,14 +54,15 @@ export const cellReadInput = (
       !(READ_OPTIONS as ReadonlyArray<string>).includes(key),
   );
   if (unknown.length > 0)
-    return fail("invalid_argument", `Unknown read options: ${unknown.join(", ")}.`);
+    return { error: fail("invalid_argument", `Unknown read options: ${unknown.join(", ")}.`) };
   const requested = typeof arg.maxBytes === "number" ? arg.maxBytes : 32_000;
   const maxBytes = Math.min(requested, 48_000, replyBytes);
-  if (maxBytes < 1_000) return fail("output_limit", "Raise returnBytes to read page text.");
+  if (maxBytes < 1_000)
+    return { error: fail("output_limit", "Raise returnBytes to read page text.") };
   const input: Record<string, unknown> = { maxBytes };
   for (const key of READ_OPTIONS)
     if (key !== "maxBytes" && arg[key] !== undefined) input[key] = arg[key];
-  return input;
+  return { input };
 };
 
 export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(function* (input: {

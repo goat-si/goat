@@ -145,7 +145,7 @@ it.effect("a cell reads page text from an unclaimed tab within the reply budget"
     expect(page?.value).toMatchObject({ text: "# Workspace" });
     const request = fixture.requests.find((entry) => entry.operation === "read");
     expect(request?.input).toMatchObject({ scope: { ref: "e1" }, format: "text" });
-    expect((request?.input as { maxBytes: number }).maxBytes).toBeLessThan(
+    expect((request?.input as { maxBytes: number } | undefined)?.maxBytes).toBeLessThan(
       DEFAULT_SCREEN_RUN_LIMITS.returnBytes,
     );
     expect(request?.exact).not.toHaveProperty("controlGeneration");

@@ -357,14 +357,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
       if (call.method === "read_page") {
         const scope = cellScope(arg.scope, observations);
-        const input = cellReadInput(arg, observationReplyBudget(call, context.limits));
+        const read = cellReadInput(arg, observationReplyBudget(call, context.limits));
         if (scope && "code" in scope) return yield* Effect.fail(scope);
-        if ("code" in input) return yield* Effect.fail(input);
+        if ("error" in read) return yield* Effect.fail(read.error);
         const page = yield* broker
           .invoke({
             scope: context.invocation,
             operation: "read",
-            input: { ...input, ...(scope ? { scope } : {}) },
+            input: { ...read.input, ...(scope ? { scope } : {}) },
             exact: exact(bound.tab, false),
             updateCurrentTab: false,
           })
