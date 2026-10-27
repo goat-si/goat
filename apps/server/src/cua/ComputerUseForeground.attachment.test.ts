@@ -93,6 +93,9 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     ...(person === undefined ? {} : { runId: person, personStarted: true }),
     leases: Option.some({
       ...leases,
+      // Unattended turns need a host that detects secret fields; none does while private mode
+      // is off (#1695), so this host stands for one once it is back on.
+      detection: Effect.succeed({ humanInput: true, privateMode: true, frames: false }),
       proxy: { command: "/fixture/node", entrypoint: "/fixture/proxy" },
     }),
   });
