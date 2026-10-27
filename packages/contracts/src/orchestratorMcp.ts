@@ -43,7 +43,7 @@ import {
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
 import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTermination.ts";
-import { TurnCapability } from "./composerContext.ts";
+import { RemoteSenderAttribution, TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
@@ -791,6 +791,8 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
   permissionProfileCeiling: Schema.optional(PermissionProfile),
+  /** Set by the GOAT that forwards a send from one of its threads; a label, never authority. */
+  remoteSender: Schema.optional(RemoteSenderAttribution),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 

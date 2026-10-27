@@ -510,7 +510,11 @@ when this app runs on a different computer from the one that started them. A
 thread opens from there once this app is also connected to its machine. In the
 desktop app, **Connect** adds the host over SSH using the same host name. A
 thread started from another machine shows **Launched by** with that machine's
-name in its header, also when the launching thread is not open here.
+name in its header, also when the launching thread is not open here. A message
+an agent sends to a thread on another machine shows **Sent by** with the sending
+thread's name; it opens that thread while this app is connected to its machine.
+The name is how the sending machine described itself, so treat it as a label,
+not as proof of who sent it.
 
 ### Link a GOAT server for agents without SSH
 

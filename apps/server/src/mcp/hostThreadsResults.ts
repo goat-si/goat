@@ -32,7 +32,8 @@ export const withoutHost = <T extends { readonly host?: unknown; readonly allHos
  * request is left out; a real one reaches it and fails there with nothing sent.
  */
 export const remoteSendArguments = (input: OrchestratorMcpThreadSendInput) => {
-  const { capabilities, ...rest } = withoutHost(input);
+  // A caller's own remoteSender never forwards; this machine adds its own for a thread caller.
+  const { capabilities, remoteSender: _claimed, ...rest } = withoutHost(input);
   return capabilities === undefined || capabilities.length === 0 ? rest : { ...rest, capabilities };
 };
 

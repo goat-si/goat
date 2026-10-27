@@ -42,6 +42,22 @@ vi.mock(import("~/state/entities"), async (original) => ({
   ) => (ref && threadShells.get(`${ref.environmentId}/${ref.threadId}`)) ?? null) as never,
 }));
 
+const connectedEnvironments = vi.hoisted(() => ({ ids: [] as ReadonlyArray<string> }));
+vi.mock(import("~/state/environments"), async (original) => ({
+  ...(await original()),
+  useConnectedEnvironmentIds: (() => connectedEnvironments.ids) as never,
+}));
+const REMOTE_CONTEXT = {
+  version: 1 as const,
+  records: [],
+  remoteSender: {
+    environmentId: EnvironmentId.make("env-studio"),
+    environmentLabel: "mac-studio",
+    threadId: ThreadId.make("coordinator"),
+    title: "Coordinator",
+  },
+};
+
 function setup({
   scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }>,
   shells = [] as ReadonlyArray<{
@@ -247,6 +263,45 @@ describe("MessagesTimeline agent messages", () => {
     ]);
     expect(screen.text()).toContain("Sent from another thread");
     expect(screen.buttons(/^Open /)).toHaveLength(0);
+  });
+
+  it("names a sender on another machine and opens it there while that machine is connected", async () => {
+    setup();
+    connectedEnvironments.ids = [EnvironmentId.make("env-studio")];
+    const onOpenThread = vi.fn();
+    await using screen = await renderTimeline(
+      [message(AGENT_MESSAGE, { createdBy: "agent", context: REMOTE_CONTEXT })],
+      { onOpenThread },
+    );
+    expect(screen.text()).toContain("Sent by Coordinator from another thread");
+    await click(screen.button("Open Coordinator"));
+    expect(onOpenThread).toHaveBeenCalledWith(ThreadId.make("coordinator"), {
+      environmentId: "env-studio",
+      sentFrom: expect.objectContaining({
+        senderThreadId: "coordinator",
+        senderEnvironmentId: "env-studio",
+        messageId: MessageId.make("message-1"),
+      }),
+    });
+    await click(screen.button("Review finished"));
+    await click(screen.button("Open thread"));
+    expect(onOpenThread).toHaveBeenLastCalledWith(ThreadId.make("coordinator"), {
+      environmentId: "env-studio",
+    });
+  });
+
+  it("names a sender on a disconnected machine without a link", async () => {
+    setup();
+    connectedEnvironments.ids = [];
+    await using screen = await renderTimeline([
+      message(AGENT_MESSAGE, { createdBy: "agent", context: REMOTE_CONTEXT }),
+    ]);
+    expect(screen.text()).toContain("Sent by Coordinator from another thread");
+    expect(screen.buttons(/^Open /)).toHaveLength(0);
+    // Expanded, the footer still names the action and says why it is unavailable.
+    await click(screen.button("Review finished"));
+    expect(screen.text()).toContain("Open thread");
+    expect(screen.buttons("Open thread")).toHaveLength(0);
   });
 
   it("names the toggle after the sender when the message has no text", async () => {
