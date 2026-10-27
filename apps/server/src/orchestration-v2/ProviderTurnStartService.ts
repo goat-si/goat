@@ -1,3 +1,4 @@
+import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -85,28 +86,6 @@ export class WorkspaceLeaseBusyError extends Schema.TaggedError<WorkspaceLeaseBu
   }
 }
 
-class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateError>()(
-  "WorktreeRecreateError",
-  {
-    worktreePath: Schema.String,
-    branch: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}.`;
-  }
-}
-
-class WorktreeRecreateNoBaseError extends Schema.TaggedError<WorktreeRecreateNoBaseError>()(
-  "WorktreeRecreateNoBaseError",
-  { worktreePath: Schema.String, branch: Schema.String },
-) {
-  override get message(): string {
-    return `Could not recreate branch '${this.branch}' at ${this.worktreePath}: the project workspace has no current branch to start it from (detached HEAD?).`;
-  }
-}
-
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
 const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError);
 
@@ -163,7 +142,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+    const recreateMissingWorktree = yield* makeRecreateMissingWorktree;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
@@ -174,35 +153,6 @@ export const layer: Layer.Layer<
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapters.ProviderAdapterRegistryV2);
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
-
-    const recreateMissingWorktree = Effect.fn("ProviderTurnStartService.recreateMissingWorktree")(
-      function* (input: {
-        readonly cwd: string;
-        readonly worktreePath: string;
-        readonly branch: string;
-      }) {
-        const { cwd, worktreePath, branch } = input;
-        yield* gitWorkflow.pruneWorktrees({ cwd });
-        const localBranchNames = yield* gitWorkflow.listLocalBranchNames(cwd);
-        if (localBranchNames.includes(branch)) {
-          yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
-          return;
-        }
-        // Recovery can follow an external checkout, before the status cache expires.
-        yield* gitWorkflow.invalidateLocalStatus(cwd);
-        const { refName: baseRef } = yield* gitWorkflow.localStatus({ cwd });
-        if (baseRef === null) {
-          return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
-        }
-        yield* gitWorkflow.createWorktree({
-          cwd,
-          refName: `refs/heads/${baseRef}`,
-          newRefName: branch,
-          baseRefName: `refs/heads/${baseRef}`,
-          path: worktreePath,
-        });
-      },
-    );
 
     // Build draining callbacks outside startup scope so they cannot retain full thread history.
     const makeRunControls = (input: {
@@ -733,13 +683,7 @@ export const layer: Layer.Layer<
                   cwd: project.workspaceRoot,
                   worktreePath,
                   branch,
-                }).pipe(
-                  Effect.mapError((cause) =>
-                    cause._tag === "WorktreeRecreateNoBaseError"
-                      ? cause
-                      : new WorktreeRecreateError({ worktreePath, branch, cause }),
-                  ),
-                );
+                });
               }
             }
           }).pipe(Effect.result),

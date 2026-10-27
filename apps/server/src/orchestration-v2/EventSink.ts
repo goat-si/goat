@@ -1,3 +1,4 @@
+import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
 import { makeCloudResultItemGuard } from "./CloudResultItemGuard.ts";
@@ -531,27 +532,7 @@ const layerBase: Layer.Layer<
       );
     });
 
-    // The enclosing write or commit span already traces this per-event projection merge.
-    const updateDelegatedCompletionOnly = Effect.fnUntraced(function* (
-      events: ReadonlyArray<OrchestrationV2DomainEvent>,
-      includesRun: (runId: RunId) => boolean,
-    ) {
-      return yield* Effect.forEach(events, (event) =>
-        Effect.gen(function* () {
-          if (event.type !== "run.updated" || !includesRun(event.payload.id)) return event;
-          const { runs } = yield* projectionStore.getThreadRecords(event.threadId, ["runs"], {
-            runIds: [event.payload.id],
-          });
-          const current = runs[0];
-          return current === undefined
-            ? event
-            : {
-                ...event,
-                payload: { ...current, delegatedCompletion: event.payload.delegatedCompletion },
-              };
-        }),
-      );
-    });
+    const updateDelegatedCompletionOnly = makeDelegatedCompletionUpdater(projectionStore);
 
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],

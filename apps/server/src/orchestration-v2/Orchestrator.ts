@@ -1,3 +1,7 @@
+import {
+  completionDeliveryRun,
+  completionDeliveryMessage,
+} from "./goat/DelegatedCompletionMerge.ts";
 import { markThreadUnread } from "./ProjectionRunNotification.ts";
 import { HandoffError, isHandoffPending } from "@goat/contracts";
 import { itemHandoff } from "./handoffState.ts";
@@ -49,7 +53,6 @@ import {
   type OrchestrationV2ContextTransferResolution,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DelegatedCompletionCohort,
-  type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
@@ -1305,23 +1308,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       yield* eventSink.writeWithEffects({ events: withIds, effects, ...options });
     });
-
-  const completionDeliveryRun = (
-    projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs">,
-    delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
-  ) => {
-    if (delivery == null) return undefined;
-    const message = projection.messages.find((candidate) => candidate.id === delivery.messageId);
-    return projection.runs.find((candidate) => candidate.id === message?.runId);
-  };
-
-  const completionDeliveryMessage = (
-    projection: Pick<OrchestrationV2ThreadProjection, "messages">,
-    delivery: OrchestrationV2DelegatedCompletionDelivery | null | undefined,
-  ) =>
-    delivery === null || delivery === undefined
-      ? undefined
-      : projection.messages.find((candidate) => candidate.id === delivery.messageId);
 
   const offerDelegatedCompletionDelivery =
     /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
