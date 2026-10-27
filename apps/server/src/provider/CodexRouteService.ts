@@ -183,7 +183,9 @@ const makeState = Effect.gen(function* () {
     admission,
     revision,
     generation,
-    assertGeneration: (id, expected) => admission.withPermits(1)(assertGeneration(id, expected)),
+    assertGeneration: Effect.fn("CodexRouteState.assertGeneration")(function* (id, expected) {
+      yield* admission.withPermits(1)(assertGeneration(id, expected));
+    }),
     reserveUse: (id, expectedGeneration) =>
       admission.withPermits(1)(
         Effect.acquireRelease(
