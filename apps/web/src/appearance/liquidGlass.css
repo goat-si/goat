@@ -82,6 +82,13 @@
       [data-desktop-window-material="macos-glass"],
       [data-desktop-window-material="windows-mica"]
     ) {
+    /* Native vibrancy already blurs and tints; SidebarInset and the chat column stack two layers,
+       so each takes half the backdrop tint. */
+    --lg-native-pane: color-mix(
+      in srgb,
+      var(--background) calc(var(--glass-opacity) * 0.4),
+      transparent
+    );
     background: transparent !important;
 
     :is(
@@ -109,7 +116,10 @@
       :has(> [data-chat-column] > [data-chat-header]),
       :has(> [data-workspace-page-header])
     ) {
-      background: linear-gradient(transparent 0 var(--workspace-topbar-height), var(--lg-pane) 0);
+      background: linear-gradient(
+        transparent 0 var(--workspace-topbar-height),
+        var(--lg-native-pane) 0
+      );
     }
   }
 
