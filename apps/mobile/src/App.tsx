@@ -52,7 +52,7 @@ import {
 import { workspaceDetailLinkAction } from "./features/workspace/workspace-detail-selection";
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
 
-import { rootNavigationRef as navigationRef } from "./lib/rootNavigation";
+import { attachRootNavigation, rootNavigationRef as navigationRef } from "./lib/rootNavigation";
 import { pruneNewTaskFlowStates } from "./features/threads/new-task-flow-state";
 import { pruneNewTaskBranchCheckouts } from "./features/threads/NewTaskDraftRouteScreen";
 import "../global.css";
@@ -148,7 +148,7 @@ function AppContent() {
                 <NativeLayoutMetricsProvider>
                   <IncomingShareProvider>
                     <Navigation
-                      ref={navigationRef}
+                      ref={attachRootNavigation}
                       linking={appLinking}
                       onReady={() => {
                         const state = navigationRef.getRootState();
