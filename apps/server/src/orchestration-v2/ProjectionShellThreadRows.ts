@@ -54,12 +54,11 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
         )
       )`;
   };
-  // Mirrors isSilentRunForShell.
-  const isSilentShellRun = (alias: string) => {
+  // Mirrors isIdleCompactionRun: prompted by an idle compaction whose compaction did not fail.
+  const isIdleCompactionRun = (alias: string) => {
     const run = sql.literal(alias);
     return sql`(
-        ${run}.status <> 'failed'
-        AND EXISTS (
+        EXISTS (
           SELECT 1 FROM orchestration_v2_projection_messages prompt
           WHERE prompt.message_id = json_extract(${run}.payload_json, '$.userMessageId')
             AND ${isIdleCompactionMessage("prompt")}
@@ -71,6 +70,9 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
         )
       )`;
   };
+  // Mirrors isSilentRunForShell.
+  const isSilentShellRun = (alias: string) =>
+    sql`(${sql.literal(alias)}.status <> 'failed' AND ${isIdleCompactionRun(alias)})`;
 
   const selectShellThreadRows = (
     threadId?: ThreadId,
@@ -300,5 +302,5 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
             }${threadIds === undefined ? sql`` : sql` AND t.thread_id IN ${sql.in(threadIds)}`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
-  return { selectShellThreadRows, isIdleCompactionMessage, isSilentShellRun };
+  return { selectShellThreadRows, isIdleCompactionMessage, isIdleCompactionRun, isSilentShellRun };
 };

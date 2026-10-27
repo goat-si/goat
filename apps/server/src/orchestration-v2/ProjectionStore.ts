@@ -945,9 +945,10 @@ export function applyToProjection(
   const next = applyToProjectionEvent(projection, event);
   const completedAt = options.deferNotificationCursor
     ? undefined
-    : RunNotification.notificationCompletions([event], quietRunIds(next, [event])).get(
-        event.threadId,
-      );
+    : RunNotification.notificationCompletions(
+        [event],
+        notificationCursorContext(next, [event]),
+      ).get(event.threadId);
   return {
     ...next,
     thread: RunNotification.preserveThreadNotification(
@@ -1911,8 +1912,14 @@ function isSilentRunForShell(
   run: OrchestrationV2ThreadProjection["runs"][number],
   projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
 ): boolean {
+  return run.status !== "failed" && isIdleCompactionRun(run, projection);
+}
+
+function isIdleCompactionRun(
+  run: OrchestrationV2ThreadProjection["runs"][number],
+  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "turnItems">,
+): boolean {
   return (
-    run.status !== "failed" &&
     projection.messages.some(
       (message) => message.id === run.userMessageId && idleCompactionOf(message) !== undefined,
     ) &&
@@ -1922,17 +1929,23 @@ function isSilentRunForShell(
   );
 }
 
-function quietRunIds(
+function notificationCursorContext(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages" | "turnItems">,
   events: ReadonlyArray<OrchestrationV2DomainEvent>,
-): ReadonlySet<RunId> {
-  const quiet = new Set<RunId>();
+): RunNotification.NotificationCursorContext {
+  const idleRunIds = new Set<RunId>();
   for (const event of events) {
     if (event.type !== "run.created" && event.type !== "run.updated") continue;
     const run = projection.runs.find((candidate) => candidate.id === event.payload.id);
-    if (run !== undefined && isSilentRunForShell(run, projection)) quiet.add(run.id);
+    if (run !== undefined && isIdleCompactionRun(run, projection)) idleRunIds.add(run.id);
   }
-  return quiet;
+  const failedIds = RunNotification.failedCompactionRunIds(events);
+  const failedCompactions = projection.runs.flatMap((run) =>
+    failedIds.has(run.id) && run.completedAt !== null && run.completionNotification !== "silent"
+      ? [{ threadId: run.threadId, completedAt: run.completedAt }]
+      : [],
+  );
+  return { idleRunIds, failedCompactions };
 }
 
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
@@ -7274,14 +7287,24 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         }),
       recordNotificationCompletions: (events) =>
         Ref.update(replayState, (state) => {
-          const quiet = new Set<RunId>();
+          const idleRunIds = new Set<RunId>();
+          const failedCompactions: Array<
+            RunNotification.NotificationCursorContext["failedCompactions"][number]
+          > = [];
           for (const threadId of new Set(events.map((event) => event.threadId))) {
             const projection = state.projections.get(threadId);
             if (projection === undefined) continue;
-            const threadEvents = events.filter((event) => event.threadId === threadId);
-            for (const id of quietRunIds(projection, threadEvents)) quiet.add(id);
+            const context = notificationCursorContext(
+              projection,
+              events.filter((event) => event.threadId === threadId),
+            );
+            for (const id of context.idleRunIds) idleRunIds.add(id);
+            failedCompactions.push(...context.failedCompactions);
           }
-          for (const [threadId, at] of RunNotification.notificationCompletions(events, quiet)) {
+          for (const [threadId, at] of RunNotification.notificationCompletions(events, {
+            idleRunIds,
+            failedCompactions,
+          })) {
             const projection = state.projections.get(threadId);
             if (projection)
               state.projections.set(threadId, {
