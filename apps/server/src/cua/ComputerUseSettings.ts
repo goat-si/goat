@@ -26,8 +26,16 @@ export const admitEnable = Effect.fn("ComputerUseSettings.admitEnable")(function
   );
 });
 
-export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* (enabled: boolean) {
+/**
+ * Admission can install Cua Driver and take minutes, so the caller's grant is checked again
+ * inside the settings write lock: a client revoked meanwhile cannot commit.
+ */
+export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* (
+  enabled: boolean,
+  authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
+) {
   if (enabled) yield* admitEnable();
   const settings = yield* ServerSettings.ServerSettingsService;
-  return { enabled: (yield* settings.updateSettings({ enableCua: enabled })).enableCua };
+  const stored = yield* settings.updateSettings({ enableCua: enabled }, authorizeAtCommit);
+  return { enabled: stored.enableCua };
 });

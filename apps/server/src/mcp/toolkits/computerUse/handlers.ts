@@ -1,4 +1,4 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import { OrchestratorMcpFailure, ServerSettingsError } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
@@ -9,6 +9,8 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { ComputerUseToolkit } from "./tools.ts";
 
 const WAIT_FOR_ANSWER = Duration.minutes(10);
+/** settingsPath of the error the commit-time grant check raises, told apart from real failures. */
+const CLIENT_REVOKED = "mcp:computer-use-client-revoked";
 
 export const layer = McpToolAccess.toLayer(ComputerUseToolkit, {
   goat_computer_use_update: McpToolAccess.writesWithCapability(({ enabled }) =>
@@ -28,13 +30,23 @@ export const layer = McpToolAccess.toLayer(ComputerUseToolkit, {
       )
         return yield* denied();
       yield* scope.reauthorize(["settings:write"]).pipe(Effect.mapError(denied));
-      return yield* ComputerUseSettings.setEnabled(enabled).pipe(
+      const authorizeAtCommit = scope.reauthorize(["settings:write"]).pipe(
         Effect.mapError(
-          (error) =>
-            new OrchestratorMcpFailure({
-              code: "orchestration_error",
-              message: error.message,
+          () =>
+            new ServerSettingsError({
+              settingsPath: CLIENT_REVOKED,
+              operation: "enable-computer-use",
             }),
+        ),
+      );
+      return yield* ComputerUseSettings.setEnabled(enabled, authorizeAtCommit).pipe(
+        Effect.mapError((error) =>
+          error.settingsPath === CLIENT_REVOKED
+            ? denied()
+            : new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: error.message,
+              }),
         ),
       );
     }),

@@ -127,3 +127,37 @@ it.effect("a failed admission returns its reason and leaves computer use off", (
     Effect.provide(NodeHttpServer.layerTest),
   ),
 );
+
+it.effect("a client revoked while the driver installs cannot commit the setting", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const revoked = yield* Ref.make(false);
+    const revocable: McpInvocationScope = {
+      ...client,
+      reauthorize: () =>
+        Effect.flatMap(Ref.get(revoked), (isRevoked) =>
+          isRevoked
+            ? Effect.fail(
+                new EnvironmentAuthorizationError({
+                  message: "session revoked",
+                  requiredScope: "settings:write",
+                }),
+              )
+            : Effect.void,
+        ),
+    };
+    // The person revokes the client while admission is still installing the driver.
+    const driver = Layer.mock(CuaDriver.CuaDriver)({ admitEnable: Ref.set(revoked, true) });
+    const http = yield* serveCatalogOverHttpWithSettings(
+      { client: revocable },
+      Layer.succeed(ServerSettings.ServerSettingsService, settings),
+    ).pipe(Effect.provide(driver));
+    const result = yield* http.callTool("client", "goat_computer_use_update", { enabled: true });
+    expect(textOf(result)).toContain("capability_denied");
+    expect((yield* settings.getSettings).enableCua).toBe(false);
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest()),
+    Effect.scoped,
+    Effect.provide(NodeHttpServer.layerTest),
+  ),
+);
