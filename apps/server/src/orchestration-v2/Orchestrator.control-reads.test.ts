@@ -1354,6 +1354,7 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
       threadId: parentThreadId,
       environmentId: null,
       via: "delegate_task",
+      runId: parentRun.id,
     });
     const replay = yield* orchestrator.dispatch({
       type: "delegated_task.request",
