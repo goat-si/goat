@@ -34,6 +34,7 @@ async function openSettings(url: string) {
     defaultErrorComponent: ({ error }) => <p role="alert">{error.message}</p>,
   });
   await router.load();
+  // The test renders the real route tree itself, so the default test router stays off.
   const screen = await render(<RouterProvider router={router} />, { router: false });
   return { screen, router };
 }
