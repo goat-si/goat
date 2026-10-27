@@ -8,6 +8,7 @@ const reactTests = [
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
   "src/features/goat-bot/GoatBotBubble.test.tsx",
   "src/features/goat-bot/GoatBotDayStamp.test.tsx",
