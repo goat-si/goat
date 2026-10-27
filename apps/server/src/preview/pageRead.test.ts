@@ -1,5 +1,5 @@
 import { chromium, type Page } from "playwright-core";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
@@ -13,7 +13,7 @@ const fixture = async (
   ) => Promise<void>,
 ) => {
   expect(chromiumInstalled).toBe(true);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ["--site-per-process"] });
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -287,4 +287,39 @@ it("retries a document replaced during settling and counts unreadable frames", (
     expect(result.text).not.toContain("First document");
     expect(result.text).not.toContain("Unshared frame");
     expect(result.omittedFrames).toBe(1);
+  }));
+
+it("withholds a scoped frame read when its secret reader never answers", () =>
+  fixture(async (page, read) => {
+    await page.route("https://read.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<iframe src="https://private-frame.test/"></iframe>',
+      }),
+    );
+    await page.route("https://private-frame.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<input type="password" value="frame-private-value"><main>frame-private-value</main>',
+      }),
+    );
+    await page.goto("https://read.test/framed");
+    const context = page.context();
+    const open = context.newCDPSession.bind(context);
+    using mocks = new DisposableStack();
+    mocks.use(
+      vi.spyOn(context, "newCDPSession").mockImplementation(async (target) => {
+        const session = await open(target);
+        if (target !== page)
+          mocks.use(
+            vi
+              .spyOn(session, "send")
+              .mockRejectedValue(new Error("Fixture frame reader unavailable")),
+          );
+        return session;
+      }),
+    );
+    await expect(
+      read({ scope: { selector: "iframe >> internal:control=enter-frame >> main" } }),
+    ).rejects.toMatchObject({ detail: { reason: "pageChanged" } });
   }));

@@ -171,6 +171,7 @@ export const pageRead = (
         const before = await read().catch(() => {
           throw readFailure("pageChanged");
         });
+        if (before.some((values) => values === undefined)) throw readFailure("pageChanged");
         const cookiesBefore = await tabCookies(page);
         let rendered: Rendered;
         for (;;) {
