@@ -26,6 +26,7 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
+import { eligibleSourceMessages, scanSourceStream, type SourceScan } from "./memorySourceScan.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -66,7 +67,6 @@ const decodeSelection = Schema.decodeUnknownEffect(M.MemoryModelSelection);
 const encodeSelection = Schema.encodeSync(Schema.fromJsonString(M.MemoryModelSelection));
 const decodeInput = Schema.decodeUnknownEffect(M.GenerateMemorySummaryInput);
 const decodePayload = Schema.decodeEffect(M.MemoryPayload);
-const encodeIds = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(M.MessageId)));
 const encodeGenerationMessage = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -175,21 +175,28 @@ const make = Effect.gen(function* () {
               : [],
           );
           // Filter eligibility before the bound; historical updates and skipped messages cannot fill a chunk.
-          const rows = yield* query(sql<{
-            payload_json: string;
-            sequence: number;
-            event_id: string;
-          }>`
-            SELECT e.payload_json,e.sequence,e.event_id FROM orchestration_events e
-            WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.stream_id=${meta.sourceThread.threadId}
-            AND e.event_type='message.updated' AND e.sequence>${meta.fromSequence ?? 0} AND e.sequence<=${meta.sourceWatermark.throughSequence}
-            AND coalesce(json_extract(e.payload_json,'$.streaming'),0)=0 AND trim(json_extract(e.payload_json,'$.text'))!=''
-            AND json_extract(e.payload_json,'$.role') IN ('user','assistant')
-            AND json_extract(e.payload_json,'$.id') NOT IN (SELECT value FROM json_each(${yield* query(encodeIds(exclusions))}))
-            AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='message.updated' AND json_extract(n.payload_json,'$.id')=json_extract(e.payload_json,'$.id') AND n.sequence>e.sequence AND n.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence})
-            AND (CASE WHEN json_extract(e.payload_json,'$.runId') IS NULL THEN '' ELSE coalesce((SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence} ORDER BY r.sequence DESC LIMIT 1),'') END)!='rolled_back'
-            AND (json_extract(e.payload_json,'$.role')='user' OR (SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') AND r.sequence<=${meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence} ORDER BY r.sequence DESC LIMIT 1)='completed')
-            ORDER BY e.sequence LIMIT 102`);
+          const scan = yield* query(
+            scanSourceStream(sql, {
+              threadId: meta.sourceThread.threadId,
+              afterSequence: meta.fromSequence ?? 0,
+              throughSequence: meta.sourceWatermark.throughSequence,
+              observedSequence:
+                meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence,
+            }),
+          );
+          const picked = eligibleSourceMessages(scan, { excluded: new Set(exclusions) }).slice(
+            0,
+            102,
+          );
+          const rows = picked.length
+            ? yield* query(
+                sql<{
+                  payload_json: string;
+                  sequence: number;
+                  event_id: string;
+                }>`SELECT payload_json,sequence,event_id FROM orchestration_events WHERE sequence IN (SELECT value FROM json_each(${JSON.stringify(picked.map((row) => row.sequence))})) ORDER BY sequence`,
+              )
+            : [];
           const messages: M.GenerateMemorySummaryInput["messages"][number][] = [];
           let bytes = 0;
           let last = rows[0];
@@ -254,6 +261,8 @@ const make = Effect.gen(function* () {
       ),
       meta.memoryId,
     );
+    // One pass over the source serves every evidence entry.
+    let scan: SourceScan | undefined;
     for (const evidence of payload.evidence) {
       if (evidence.origin === "model") continue;
       if (
@@ -274,17 +283,19 @@ const make = Effect.gen(function* () {
         )
       )
         return false;
-      const eligible = yield* query(sql<{ count: number }>`
-        SELECT count(*) AS count FROM orchestration_events e
-        WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.stream_id=${meta.sourceThread.threadId}
-        AND e.event_type='message.updated' AND e.sequence<=${evidence.watermark.throughSequence}
-        AND json_extract(e.payload_json,'$.id') IN (SELECT value FROM json_each(${yield* query(encodeIds(ids))}))
-        AND coalesce(json_extract(e.payload_json,'$.streaming'),0)=0 AND trim(json_extract(e.payload_json,'$.text'))!=''
-        AND json_extract(e.payload_json,'$.role') IN ('user','assistant')
-        AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='message.updated' AND json_extract(n.payload_json,'$.id')=json_extract(e.payload_json,'$.id') AND n.sequence>e.sequence)
-        AND (CASE WHEN json_extract(e.payload_json,'$.runId') IS NULL THEN '' ELSE coalesce((SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') ORDER BY r.sequence DESC LIMIT 1),'') END)!='rolled_back'
-        AND (json_extract(e.payload_json,'$.role')='user' OR (SELECT json_extract(r.payload_json,'$.status') FROM orchestration_events r WHERE r.application_event_version=2 AND r.aggregate_kind='thread' AND r.stream_id=e.stream_id AND r.event_type IN ('run.created','run.updated') AND json_extract(r.payload_json,'$.id')=json_extract(e.payload_json,'$.runId') ORDER BY r.sequence DESC LIMIT 1)='completed')`);
-      if (eligible[0]?.count !== ids.length) return false;
+      scan ??= yield* query(
+        scanSourceStream(sql, {
+          threadId: meta.sourceThread.threadId,
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          observedSequence: null,
+        }),
+      );
+      const through = evidence.watermark.throughSequence;
+      const eligible = eligibleSourceMessages(scan, { ids: new Set(ids) }).filter(
+        (message) => message.sequence <= through,
+      );
+      if (eligible.length !== ids.length) return false;
     }
     return payload.evidence.some((e) => e.origin !== "model" && e.messageIds.length > 0);
   });
