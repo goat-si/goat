@@ -43,6 +43,10 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   ) => Effect.Effect<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError>,
   avdOutput: ProcessRunner.ProcessRunOutput = processOutput(0),
   spawn?: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  options: {
+    readonly onReady?: (origin: string) => Effect.Effect<void>;
+    readonly net?: NetService.NetService["Service"];
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -59,7 +63,12 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     yield* fs.writeFileString(path.join(installDir, ".install-complete"), version!);
   }
   const host = yield* LocalDeviceHost.make().pipe(
-    Effect.provide(Layer.mergeAll(ServerConfig.layerTest(baseDir, baseDir), NetService.layer)),
+    Effect.provide(
+      Layer.mergeAll(
+        ServerConfig.layerTest(baseDir, baseDir),
+        options.net ? Layer.succeed(NetService.NetService, options.net) : NetService.layer,
+      ),
+    ),
     Effect.provideService(HostProcess.Environment, { HOME: baseDir, PATH: "" }),
     Effect.provideService(HostProcess.IsExecutable, false),
     Effect.provideService(HostProcess.Platform, "darwin"),
@@ -93,7 +102,9 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     Effect.provideService(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
-        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        (options.onReady?.(new URL(request.url).origin) ?? Effect.void).pipe(
+          Effect.as(HttpClientResponse.fromWeb(request, new Response("ok"))),
+        ),
       ),
     ),
   );
@@ -101,13 +112,16 @@ const agentFixture = Effect.fn("agentFixture")(function* (
   return { host, fs, stateDir };
 });
 
-const replacementFixture = Effect.fn("replacementFixture")(function* () {
+const replacementFixture = Effect.fn("replacementFixture")(function* (holdReadiness = false) {
   const firstExit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
   const failedReplacement = yield* Deferred.make<void>();
-  const replacementSpawned = yield* Deferred.make<void>();
+  const replacementPublished = yield* Deferred.make<void>();
+  const replacementReady = yield* Deferred.make<string>();
+  const allowReadiness = yield* Deferred.make<void>();
   const retryScheduled = yield* Deferred.make<void>();
   const clock = yield* Clock.Clock;
   let spawns = 0;
+  let reservedPorts = 0;
   const spawn = ChildProcessSpawner.make(() =>
     Effect.gen(function* () {
       const index = ++spawns;
@@ -115,13 +129,16 @@ const replacementFixture = Effect.fn("replacementFixture")(function* () {
         yield* Deferred.succeed(failedReplacement, undefined);
         return yield* Effect.die(new Error("transient replacement spawn failure"));
       }
-      if (index === 3) yield* Deferred.succeed(replacementSpawned, undefined);
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(120 + index),
         stdout: Stream.empty,
         stderr: Stream.empty,
         all: Stream.empty,
-        exitCode: index === 1 ? Deferred.await(firstExit) : Effect.never,
+        // A replacement's lifetime is observed after readiness and publishing its endpoint.
+        exitCode:
+          index === 1
+            ? Deferred.await(firstExit)
+            : Deferred.succeed(replacementPublished, undefined).pipe(Effect.andThen(Effect.never)),
         isRunning:
           index === 1
             ? Deferred.isDone(firstExit).pipe(Effect.map((done) => !done))
@@ -138,6 +155,19 @@ const replacementFixture = Effect.fn("replacementFixture")(function* () {
     () => Effect.succeed(processOutput(0)),
     processOutput(0),
     spawn,
+    {
+      net: {
+        ...NetService.make(),
+        reserveLoopbackPort: () => Effect.sync(() => 32100 + ++reservedPorts),
+      },
+      onReady: (origin) =>
+        spawns === 3
+          ? Deferred.succeed(replacementReady, origin).pipe(
+              Effect.andThen(holdReadiness ? Deferred.await(allowReadiness) : Effect.void),
+              Effect.asVoid,
+            )
+          : Effect.void,
+    },
   ).pipe(
     Effect.provideService(Clock.Clock, {
       ...clock,
@@ -148,26 +178,50 @@ const replacementFixture = Effect.fn("replacementFixture")(function* () {
         ).pipe(Effect.andThen(clock.sleep(duration))),
     }),
   );
+  const originalOrigin = (yield* host.current)?.hub.origin;
   yield* Deferred.succeed(firstExit, ChildProcessSpawner.ExitCode(1));
   yield* TestClock.adjust("0 millis");
   yield* Deferred.await(failedReplacement);
-  return { host, spawns: () => spawns, replacementSpawned, retryScheduled };
+  return {
+    host,
+    spawns: () => spawns,
+    replacementPublished,
+    replacementReady,
+    allowReadiness,
+    originalOrigin,
+    retryScheduled,
+  };
 });
 
-it.effect("retries a failed hub replacement without another ensureReady call", () =>
-  Effect.gen(function* () {
-    const { host, spawns, replacementSpawned, retryScheduled } = yield* replacementFixture();
-    expect(spawns()).toBe(2);
-    yield* TestClock.adjust("0 millis");
-    expect(yield* Deferred.isDone(retryScheduled)).toBe(true);
-    yield* TestClock.adjust("1 second");
-    yield* Deferred.await(replacementSpawned);
-    expect(spawns()).toBe(3);
-    expect(yield* host.current).not.toBeNull();
-    yield* host.stop;
-    yield* TestClock.adjust("1 minute");
-    expect(spawns()).toBe(3);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+it.effect(
+  "publishes the ready replacement endpoint after a failed hub replacement without another ensureReady call",
+  () =>
+    Effect.gen(function* () {
+      const {
+        host,
+        spawns,
+        replacementPublished,
+        replacementReady,
+        allowReadiness,
+        originalOrigin,
+        retryScheduled,
+      } = yield* replacementFixture(true);
+      expect(spawns()).toBe(2);
+      yield* TestClock.adjust("0 millis");
+      expect(yield* Deferred.isDone(retryScheduled)).toBe(true);
+      yield* TestClock.adjust("1 second");
+      const replacementOrigin = yield* Deferred.await(replacementReady);
+      expect(spawns()).toBe(3);
+      expect(originalOrigin).toBe("http://127.0.0.1:32101");
+      expect((yield* host.current)?.hub.origin).toBe(originalOrigin);
+      expect(replacementOrigin).toBe("http://127.0.0.1:32103");
+      yield* Deferred.succeed(allowReadiness, undefined);
+      yield* Deferred.await(replacementPublished);
+      expect((yield* host.current)?.hub.origin).toBe(replacementOrigin);
+      yield* host.stop;
+      yield* TestClock.adjust("1 minute");
+      expect(spawns()).toBe(3);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("does not resurrect a stopped hub while replacement retry is sleeping", () =>
