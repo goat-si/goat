@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { EnvironmentId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -84,12 +84,22 @@ vi.mock("../settings/components/SettingsScreen", () => ({
     actions,
   }: {
     children?: ReactNode;
-    actions: ReadonlyArray<{ onPress: () => void; disabled: boolean; loading: boolean }>;
+    actions: ReadonlyArray<{
+      icon: string;
+      onPress: () => void;
+      disabled: boolean;
+      loading: boolean;
+    }>;
   }) => (
     <>
       {children}
-      {actions.map((action, index) => (
-        <button key={index} aria-label="Submit" disabled={action.disabled} onClick={action.onPress}>
+      {actions.map((action) => (
+        <button
+          key={action.icon}
+          aria-label="Submit"
+          disabled={action.disabled}
+          onClick={action.onPress}
+        >
           {action.loading ? "Connecting" : "Connect"}
         </button>
       ))}
@@ -138,7 +148,7 @@ import {
 
 type Params = NonNullable<Parameters<typeof ConnectionsNewRouteScreen>[0]["route"]["params"]>;
 type Result = AsyncResult.AsyncResult<EnvironmentId, Error>;
-const failure = (message: string) => AsyncResult.failure(Cause.fail(new Error(message)));
+const failure = (message: string): Result => AsyncResult.failure(Cause.fail(new Error(message)));
 
 function setup(params: Params = { intent: "change-hub" }, dev = false) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -153,9 +163,11 @@ function setup(params: Params = { intent: "change-hub" }, dev = false) {
   let globalError: string | null = null;
   let clearPairingUrl = () => {};
   function ErrorProbe() {
-    const connections = useRemoteConnections();
-    globalError = connections.connectionError;
-    clearPairingUrl = () => connections.onChangeConnectionPairingUrl("");
+    const { connectionError, onChangeConnectionPairingUrl } = useRemoteConnections();
+    useEffect(() => {
+      globalError = connectionError;
+      clearPairingUrl = () => onChangeConnectionPairingUrl("");
+    }, [connectionError, onChangeConnectionPairingUrl]);
     return null;
   }
   function Screen({ params: nextParams }: { params: Params }) {
@@ -247,7 +259,7 @@ it.each(["failure", "success", "rejection", "unsupported"] as const)(
           outcome === "success"
             ? AsyncResult.success(EnvironmentId.make("stale-hub"))
             : outcome === "unsupported"
-              ? AsyncResult.failure(
+              ? AsyncResult.failure<EnvironmentId, Error>(
                   Cause.fail(
                     Object.assign(new Error("Old unsupported client"), { reason: "unsupported" }),
                   ),

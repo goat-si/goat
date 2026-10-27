@@ -39,8 +39,8 @@ import {
   type ConnectHubIntent,
   finishHubPairing,
   resolveConnectHubIntent,
+  selectHubEnvironmentId,
 } from "./connectHubIntent";
-import { selectHubEnvironmentId } from "./hubEnvironment";
 import { useStoredHubEnvironment } from "./useStoredHubEnvironment";
 import { useConnectionsReady } from "../../state/workspace";
 import { PairingDiagnostics } from "./PairingDiagnostics";
@@ -145,6 +145,7 @@ export function ConnectionsNewRouteScreen({
       attemptRef.current += 1;
       submittingRef.current = false;
     },
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must invalidate pending pairing attempts.
     [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId],
   );
 
@@ -167,9 +168,9 @@ export function ConnectionsNewRouteScreen({
     }
 
     const { host, code } = parsePairingUrl(routePairingUrl);
-    // oxlint-disable-next-line react/set-state-in-effect -- A pairing URL from the route reseeds the editable host and code fields.
     setHostInput(host);
     setCodeInput(code);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must reset the submission even when the pairing URL is unchanged.
   }, [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId]);
 
   const clearAttempt = () => {
