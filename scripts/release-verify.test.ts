@@ -206,6 +206,13 @@ describe("release payload helpers", () => {
     expect(exposureProblems(officeWasm, "/home/runner/work/goat/goat/x", hosted)).toEqual([
       `${officeWasm}: absolute build path`,
     ]);
+    // Only hosted runners' crate sources are set aside; any named user's paths still fail.
+    expect(
+      exposureProblems(officeWasm, "/Users/builder/.cargo/registry/src/x/", ["/Users/builder"]),
+    ).toEqual([`${officeWasm}: absolute build path`]);
+    expect(exposureProblems(officeWasm, "/Users/someone/src/lib.rs", [])).toEqual([
+      `${officeWasm}: absolute build path`,
+    ]);
     // Cua Driver is an upstream release; its Windows executables carry its hosted CI's paths.
     const cua = "win-unpacked/resources/cua-driver/cua-driver.exe";
     const windowsRunner = ["C:\\Users\\runneradmin", "C:\\a\\goat\\goat"];
