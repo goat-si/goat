@@ -18,6 +18,7 @@ import {
   revealServerTabs,
   startAgentOpenedPreviews,
 } from "./agentOpenedPreviews";
+import { selectAgentCardsShown, usePreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 vi.mock("../../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => true,
@@ -30,9 +31,20 @@ function setup() {
   resetPreviewStateForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   useRightPanelStore.setState({ byThreadKey: {} });
+  usePreviewSessionStack.setState({
+    hidden: true,
+    expanded: new Map(),
+    revealedThreads: new Set(),
+    focus: null,
+    hiddenLive: new Map(),
+  });
 }
 
 const miniPlayerSource = () => usePreviewMiniPlayerStore.getState().byThreadKey[threadKey]?.source;
+const largeCard = (thread = "thread-1") =>
+  usePreviewSessionStack.getState().expanded.get(`env-1|${thread}`) ?? null;
+const shownIn = (thread: string) =>
+  selectAgentCardsShown(`env-1|${thread}`)(usePreviewSessionStack.getState());
 
 describe("revealServerTabs", () => {
   const tab = (tabId: string, force?: boolean): PreviewSessionSnapshot => ({
@@ -74,6 +86,37 @@ describe("revealServerTabs", () => {
       browserSurfaceId,
     );
     expect(floatingTabId()).toBeNull();
+  });
+
+  // Browser use starts like computer use: as the thread's large card, never the mini player.
+  it("opens an agent's tab as its thread's large card, only forced ones when floating is off", () => {
+    setup();
+    const agentTab = (tabId: string, force?: boolean) => ({
+      ...tab(tabId, force),
+      automationOwner: "agent-session",
+    });
+    applyPreviewServerSnapshot(ref, agentTab("tab_quiet"));
+    revealServerTabs(ref, [agentTab("tab_quiet")], { autoShowFloatingPreview: false });
+    expect(largeCard()).toBeNull();
+
+    applyPreviewServerSnapshot(ref, agentTab("tab_agent"));
+    revealServerTabs(ref, [agentTab("tab_agent")], { autoShowFloatingPreview: true });
+    expect(floatingTabId()).toBeNull();
+    expect(largeCard()).toEqual({
+      kind: "browser",
+      threadId: "thread-1",
+      tabId: "tab_agent",
+      environmentId: "env-1",
+    });
+    // On its own it leaves the window's hidden cards alone; a forced reveal shows them, but only
+    // in its own thread.
+    expect(shownIn("thread-1")).toBe(false);
+    applyPreviewServerSnapshot(ref, agentTab("tab_forced", true));
+    revealServerTabs(ref, [agentTab("tab_forced", true)], { autoShowFloatingPreview: false });
+    expect(floatingTabId()).toBeNull();
+    expect(largeCard()).toMatchObject({ tabId: "tab_forced" });
+    expect(shownIn("thread-1")).toBe(true);
+    expect(shownIn("thread-2")).toBe(false);
   });
 });
 
@@ -178,6 +221,29 @@ describe("startAgentOpenedPreviews", () => {
       revision: 2,
     });
     expect(floatingTabId()).toBe("tab_agent");
+  });
+
+  it("starts an agent's new tab in any thread as that thread's large card, with no mini player", () => {
+    using _following = following();
+    const other = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2"));
+    reconcilePreviewServerSessions(other, { sessions: [], serverEpoch, revision: 1 });
+    const opened = serverTab({ threadId: "thread-2", tabId: "tab_b", automationOwner: "agent" });
+    applyPreviewServerEvent(other, {
+      type: "opened",
+      threadId: "thread-2",
+      tabId: opened.tabId,
+      createdAt: opened.updatedAt,
+      snapshot: opened,
+      serverEpoch,
+      revision: 2,
+    });
+    expect(usePreviewMiniPlayerStore.getState().byThreadKey).toEqual({});
+    expect(largeCard("thread-2")).toEqual({
+      kind: "browser",
+      threadId: "thread-2",
+      tabId: "tab_b",
+      environmentId: "env-1",
+    });
   });
 
   it("reveals an existing tab only for a new reveal request", () => {

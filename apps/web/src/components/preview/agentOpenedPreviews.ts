@@ -2,7 +2,7 @@ import { scopedThreadKey } from "@goat/client-runtime/environment";
 import type { PreviewSessionSnapshot, ScopedThreadRef } from "@goat/contracts";
 
 import { getClientSettings } from "../../hooks/useSettings";
-import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
+import { usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
 import {
   previewStateAtom,
   previewThreadRefsAtom,
@@ -11,10 +11,13 @@ import {
 import { useRightPanelStore } from "../../rightPanelStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readEnvironmentSupportsServerBrowser } from "../../state/entities";
+import { floatBrowserTab } from "./floatPreview";
 
 /**
- * Shows browsers an agent or another client revealed for a thread: floating
- * over chat, or focusing an existing panel tab when the reveal is forced.
+ * Shows browsers an agent or another client revealed for a thread, for every thread at once: an
+ * agent's tab as its thread's large card and anything else floating over chat (floatBrowserTab), or
+ * focusing an existing panel tab when the reveal is forced. This is the only place a revealed
+ * server tab opens, so a tab never shows twice.
  */
 export function revealServerTabs(
   threadRef: ScopedThreadRef,
@@ -33,7 +36,7 @@ export function revealServerTabs(
     if (surface && force) {
       useRightPanelStore.getState().activateSurface(threadRef, surface.id);
     } else if (!surface) {
-      usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(session.tabId));
+      floatBrowserTab(threadRef, session.tabId, { by: "agent", force });
     }
   }
 }
