@@ -54,7 +54,7 @@ it.effect(
       );
       expect(tool?.inputSchema).toMatchObject({
         required: ["purpose"],
-        properties: { foreground: { type: "boolean" } },
+        properties: { foreground: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
       });
       const purpose = "Check the build status";
       for (const route of ["direct", "goat_call"] as const) {

@@ -72,10 +72,9 @@ const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefin
   return { type: "object", properties, required: [tag, ...requiredByAll] };
 };
 
-const compact = (schema: Json, optional: boolean): Json => {
-  if (Array.isArray(schema)) return schema.map((item) => compact(item, false));
+const compact = (schema: Json): Json => {
+  if (Array.isArray(schema)) return schema.map(compact);
   if (!Predicate.isObject(schema)) return schema;
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
   let result: JsonObject = {};
   for (const [key, value] of Object.entries(schema)) {
     if (key === "additionalProperties" && value === true) continue;
@@ -87,12 +86,9 @@ const compact = (schema: Json, optional: boolean): Json => {
     result[key] =
       key === "properties" && Predicate.isObject(value)
         ? Object.fromEntries(
-            Object.entries(value).map(([name, property]) => [
-              name,
-              compact(property, !required.has(name)),
-            ]),
+            Object.entries(value).map(([name, property]) => [name, compact(property)]),
           )
-        : compact(value, false);
+        : compact(value);
   }
   if (Array.isArray(result.anyOf)) {
     const branches = [
@@ -102,8 +98,6 @@ const compact = (schema: Json, optional: boolean): Json => {
           .map((branch) => [JSON.stringify(branch), branch]),
       ).values(),
     ];
-    const nonNull = branches.filter((branch) => !isNullSchema(branch));
-    if (optional && nonNull.length > 0) branches.splice(0, branches.length, ...nonNull);
     if (
       branches.some(
         (branch) => Predicate.isObject(branch) && ["object", "array"].includes(String(branch.type)),
@@ -112,8 +106,11 @@ const compact = (schema: Json, optional: boolean): Json => {
       const preferred = branches.filter((branch) => !isJsonStringSchema(branch));
       branches.splice(0, branches.length, ...preferred);
     }
+    const merged = mergeTaggedObjects(branches.filter((branch) => !isNullSchema(branch)));
+    if (merged !== undefined)
+      branches.splice(0, branches.length, merged, ...branches.filter(isNullSchema));
     const { anyOf: _anyOf, ...rest } = result;
-    const only = branches.length === 1 ? branches[0] : mergeTaggedObjects(branches);
+    const only = branches.length === 1 ? branches[0] : undefined;
     result = Predicate.isObject(only) ? { ...only, ...rest } : { ...rest, anyOf: branches };
   }
   return result;
@@ -121,10 +118,10 @@ const compact = (schema: Json, optional: boolean): Json => {
 
 /**
  * Compact model-facing inputs only; runtime codecs still enforce each union branch.
- * Required nulls, explicit limits and schema-valued additional properties keep their meaning.
+ * Nullable alternatives may clear stored values even on optional properties; preserve them.
  */
 export const advertisedJsonSchema = (tool: Tool.Any) =>
-  compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+  compact(Tool.getJsonSchema(tool)) as ReturnType<typeof Tool.getJsonSchema>;
 
 export const advertisedRegistration = <Registration extends { readonly tool: McpSchema.Tool }>(
   registration: Registration,
@@ -132,8 +129,6 @@ export const advertisedRegistration = <Registration extends { readonly tool: Mcp
   ...registration,
   tool: new McpSchema.Tool({
     ...registration.tool,
-    inputSchema: compact(registration.tool.inputSchema, false) as ReturnType<
-      typeof Tool.getJsonSchema
-    >,
+    inputSchema: compact(registration.tool.inputSchema) as ReturnType<typeof Tool.getJsonSchema>,
   }),
 });

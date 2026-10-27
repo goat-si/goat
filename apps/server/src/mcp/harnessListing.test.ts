@@ -69,7 +69,7 @@ const threadTools = Object.values(agentSurfaceRegistry)
 const expectForegroundSchema = (inputSchema: unknown) => {
   expect(inputSchema).toMatchObject({
     required: ["purpose"],
-    properties: { foreground: { type: "boolean" } },
+    properties: { foreground: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
   });
 };
 
