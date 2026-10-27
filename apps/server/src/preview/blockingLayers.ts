@@ -320,21 +320,65 @@ const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
  * The part of the viewport a frame shows, clipped by every frame around it: a nested frame's own
  * box can be far larger than the window its parent gives it. Null when it cannot be measured.
  */
+type ClipRect = {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+};
+type ClipNode = { getBoundingClientRect(): ClipRect; readonly parentElement: ClipNode | null };
+
+/**
+ * Runs in the page: how much of a frame element its own document cuts off on each side, by
+ * ancestors that clip their overflow and by that document's viewport.
+ */
+const clipInsets = (element: ClipNode): ClipRect => {
+  const view = globalThis as unknown as {
+    getComputedStyle(node: ClipNode): { overflowX: string; overflowY: string };
+    innerWidth: number;
+    innerHeight: number;
+  };
+  const own = element.getBoundingClientRect();
+  let { left, top, right, bottom } = own;
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    if (style.overflowX !== "visible") {
+      left = Math.max(left, box.left);
+      right = Math.min(right, box.right);
+    }
+    if (style.overflowY !== "visible") {
+      top = Math.max(top, box.top);
+      bottom = Math.min(bottom, box.bottom);
+    }
+  }
+  return {
+    left: Math.max(left, 0) - own.left,
+    top: Math.max(top, 0) - own.top,
+    right: own.right - Math.min(right, view.innerWidth),
+    bottom: own.bottom - Math.min(bottom, view.innerHeight),
+  };
+};
+
 const visibleArea = async (frame: Frame, viewport: Sampled["viewport"]) => {
   let left = 0;
   let top = 0;
   let right = viewport.width;
   let bottom = viewport.height;
   for (let current: Frame | null = frame; current?.parentFrame();) {
-    const box = await current
+    const measured = await current
       .frameElement()
-      .then((element) => element.boundingBox())
+      .then(async (element) => {
+        const box = await element.boundingBox();
+        return box === null ? null : { box, insets: await element.evaluate(clipInsets) };
+      })
       .catch(() => null);
-    if (box === null) return null;
-    left = Math.max(left, box.x);
-    top = Math.max(top, box.y);
-    right = Math.min(right, box.x + box.width);
-    bottom = Math.min(bottom, box.y + box.height);
+    if (measured === null) return null;
+    const { box, insets } = measured;
+    left = Math.max(left, box.x + insets.left);
+    top = Math.max(top, box.y + insets.top);
+    right = Math.min(right, box.x + box.width - insets.right);
+    bottom = Math.min(bottom, box.y + box.height - insets.bottom);
     current = current.parentFrame();
   }
   return Math.max(0, right - left) * Math.max(0, bottom - top);

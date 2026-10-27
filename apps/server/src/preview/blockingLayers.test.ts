@@ -200,17 +200,21 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
         body: '<body style="margin:0"><iframe src="https://layers.test/inner" style="border:0;width:800px;height:800px"></iframe></body>',
       }),
     );
-    const framed = async (style: string) => {
+    const framed = async (style: string, wrapper = "") => {
       await page.route("https://layers.test/", (route) =>
         route.fulfill({
           contentType: "text/html",
           body:
             article +
-            `<iframe id="outer" src="https://layers.test/outer" style="position:absolute;border:0;${style}"></iframe>`,
+            `<div style="${wrapper}"><iframe id="outer" src="https://layers.test/outer" style="position:absolute;border:0;${style}"></iframe></div>`,
         }),
       );
       await page.goto("https://layers.test/");
-      await page.frameLocator("#outer").frameLocator("iframe").getByText("Sign in").waitFor();
+      await page
+        .frameLocator("#outer")
+        .frameLocator("iframe")
+        .getByText("Sign in")
+        .waitFor({ state: "attached" });
       await page.unroute("https://layers.test/");
       return describeLayers(page, control);
     };
@@ -219,6 +223,9 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     // 100 x 100 of a 1000 x 800 viewport, though the inner frame itself is 800 x 800.
     expect(clipped.blocking?.coverage).toBeLessThan(0.02);
     expect((await framed("left:-2000px;top:0;width:100px;height:100px")).blocking).toBeNull();
+    // A full-size frame inside a zero-size box that clips its overflow shows nothing.
+    const hidden = "position:absolute;top:0;left:0;width:0;height:0;overflow:hidden";
+    expect((await framed("left:0;top:0;width:900px;height:700px", hidden)).blocking).toBeNull();
   });
 
   it("names a consent wall whose message lives in a cross-origin frame by that frame's title", async () => {
