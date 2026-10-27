@@ -261,42 +261,6 @@ export function planAttachmentClaim(input: {
   };
 }
 
-export function sweepStalePendingAttachments(input: {
-  readonly attachmentsDir: string;
-  readonly nowMs: number;
-}): { readonly deleted: number } {
-  let entries: string[];
-  try {
-    entries = NodeFS.readdirSync(input.attachmentsDir);
-  } catch {
-    return { deleted: 0 };
-  }
-
-  let deleted = 0;
-  for (const entry of entries) {
-    const maxAgeMs = stalePendingAttachmentAge(entry);
-    if (maxAgeMs === undefined) continue;
-
-    const resolved = resolveAttachmentRelativePath({
-      attachmentsDir: input.attachmentsDir,
-      relativePath: entry,
-    });
-    if (!resolved) {
-      continue;
-    }
-    try {
-      if (input.nowMs - NodeFS.statSync(resolved).mtimeMs > maxAgeMs) {
-        NodeFS.unlinkSync(resolved);
-        deleted += 1;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return { deleted };
-}
-
 export function stalePendingAttachmentAge(entry: string): number | undefined {
   if (entry.endsWith(".part")) return PARTIAL_UPLOAD_MAX_AGE_MS;
   const attachmentId = parseAttachmentIdFromRelativePath(

@@ -27,10 +27,12 @@ import * as TestClock from "effect/testing/TestClock";
 
 import {
   createAttachmentId,
+  createPendingAttachmentId,
   resolveAttachmentPath,
   resolveAttachmentPathById,
-  sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
+import * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
+import { makeSweepCursor } from "../assets/PendingAttachmentSweepCursor.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
 import * as ServerConfig from "../config.ts";
@@ -726,10 +728,22 @@ it.effect("sends a guest's files as the guest's message and keeps them the guest
     const served = yield* guestShares.attachment(session, pending[0]!.id);
     assert.equal(served.attachment.mimeType, "image/png");
 
-    // The day-old pending-upload sweep leaves a waiting guest's files alone.
     const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-    // Any pending upload counts as stale at the end of time.
-    sweepStalePendingAttachments({ attachmentsDir, nowMs: Number.MAX_SAFE_INTEGER });
+    const fileSystem = yield* FileSystem.FileSystem;
+    const leases = yield* AttachmentFileLeases.AttachmentFileLeases;
+    const expiredPath = `${attachmentsDir}/${createPendingAttachmentId()}.png`;
+    yield* fileSystem.writeFile(expiredPath, PNG);
+    const report = yield* Effect.acquireUseRelease(
+      Effect.sync(() =>
+        makeSweepCursor({ attachmentsDir, withInactiveFile: leases.withInactiveFile }),
+      ),
+      (cursor) => cursor.step(Number.MAX_SAFE_INTEGER),
+      (cursor) => cursor.close.pipe(Effect.orDie),
+    );
+    assert.isTrue(report.complete);
+    assert.equal(report.deleted, 1);
+    assert.isFalse(yield* fileSystem.exists(expiredPath));
+    assert.isTrue(yield* fileSystem.exists(served.path));
     const copied = pending[0]!;
     yield* orchestrator.dispatch({
       type: "message.dispatch",
@@ -774,7 +788,7 @@ it.effect("sends a guest's files as the guest's message and keeps them the guest
     }
     assert.isFalse((yield* waitingMessages).some((next) => next.id === message!.id));
     assert.equal((yield* guestShares.attachment(session, copied.id)).attachment.id, copied.id);
-  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  }).pipe(Effect.scoped, Effect.provide(AttachmentFileLeases.layer), Effect.provide(layerTest)),
 );
 
 it.effect("serves the shared thread's files to its guest, never another thread's", () =>
