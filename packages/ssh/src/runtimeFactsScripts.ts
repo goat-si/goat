@@ -8,11 +8,11 @@ import {
 // those of one running server instance. Each answer is recorded under a key naming every input it
 // depends on, so an executable that changed, was reinstalled or removed, or a server that was
 // replaced or restarted misses and is asked again. Failures are never recorded, and a record is
-// kept only when its key still holds after the answer. Windows hosts ask every time.
-const REMOTE_FACTS_SCRIPT = `case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) GOAT_FACTS_DIR= ;;
-  *) GOAT_FACTS_DIR="$HOME/.goat/ssh-launch/facts" ;;
-esac
+// kept only when its key still holds after the answer. Windows hosts need this most: a goat.exe
+// start there has taken over 5 s, so a probe that asked every time ran past the 60 s SSH timeout.
+// MSYS stat keys executables by NTFS file ID and times; MSYS ps cannot report a process start
+// time, so answers from a live server are not recorded there and are asked every time.
+const REMOTE_FACTS_SCRIPT = `GOAT_FACTS_DIR="$HOME/.goat/ssh-launch/facts"
 FACT_NAME=; FACT_KEY=
 fact_nl='
 '

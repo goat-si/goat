@@ -80,6 +80,55 @@ describe("learnApps", () => {
     assert.deepEqual(readCalculator(listed), { _tag: "allow" });
   });
 
+  // A request may name an app without a bundle id by the executable it runs.
+  it.each([
+    {
+      host: "Windows, where the helper's list_apps gives the executable",
+      entry: { pid: 4100, name: "notes.exe", executable: "C:\\Apps\\notes.exe" },
+      approved: "c:\\apps\\notes.exe",
+      executableOf: undefined,
+    },
+    {
+      host: "Linux, where the proxy reads it from /proc",
+      entry: { pid: 4100, name: "xeyes" },
+      approved: "/usr/bin/xeyes",
+      executableOf: (pid: number) => (pid === 4100 ? "/usr/bin/xeyes" : undefined),
+    },
+  ])("allows an app approved by its executable path on $host", (input) => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [input.entry] }, listed, true, input.executableOf);
+    const judge = (apps: ReadonlyArray<string>) =>
+      scopeVerdict({
+        name: "click",
+        args: { pid: 4100, window_id: 9 },
+        apps: approvedApps(apps),
+        appOf: (pid) => listed.get(pid),
+        bundleIds: false,
+      });
+    assert.equal(judge([input.approved])._tag, "allow");
+    assert.deepInclude(judge(["/usr/bin/other"]), { _tag: "refuse", reason: "app_not_approved" });
+  });
+
+  it("matches a Linux executable path exactly, and a Windows one the way Windows spells it", () => {
+    const judge = (entry: Record<string, unknown>, apps: ReadonlyArray<string>) => {
+      const listed = new Map<number, ListedApp>();
+      learnApps({ apps: [{ pid: 4100, name: "notes", ...entry }] }, listed, true);
+      return scopeVerdict({
+        name: "click",
+        args: { pid: 4100, window_id: 9 },
+        apps: approvedApps(apps),
+        appOf: (pid) => listed.get(pid),
+        bundleIds: false,
+      })._tag;
+    };
+    assert.equal(judge({ executable: "/opt/notes" }, ["/opt/Notes"]), "refuse");
+    assert.equal(judge({ executable: "/opt/Notes" }, ["/opt/notes"]), "refuse");
+    assert.equal(judge({ executable: "/opt/Notes" }, ["/opt/Notes"]), "allow");
+    assert.equal(judge({ executable: "C:\\Apps\\Notes.exe" }, ["c:/apps//NOTES.EXE"]), "allow");
+    // A name still matches as before, whatever its case.
+    assert.equal(judge({}, ["NOTES"]), "allow");
+  });
+
   it("names a process without a desktop id by its listed name, never by what its windows say", () => {
     const listed = new Map<number, ListedApp>();
     // A window titles its app however it likes, even as another app's desktop id.
