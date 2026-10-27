@@ -326,16 +326,19 @@ export const fixture = (scenario: string) => {
     resume(id + 1, options.params ?? threadParams(cua), options.error, thread);
     return id + 2;
   };
-  // Each helper below drives the fixture's thread unless given another native thread.
+  // Each helper below drives the fixture's thread unless given another native thread. A turn on a
+  // prepared attachment session also carries the screen-code guide that session lists.
   const turnStart = (
     id: number,
     ordinal: number,
-    computerUse: boolean,
+    skills: boolean | { readonly computerUse: boolean; readonly screenCode: boolean },
     deferred = false,
     thread = nativeThreadId,
     text = `turn-${ordinal}`,
   ) =>
     Effect.gen(function* () {
+      const { computerUse, screenCode } =
+        typeof skills === "boolean" ? { computerUse: skills, screenCode: false } : skills;
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: thread,
         codexInput: [{ type: "text", text }],
@@ -345,6 +348,7 @@ export const fixture = (scenario: string) => {
         browserToolsAvailable: false,
         computerUse,
         computerUseDeferred: deferred,
+        screenCode,
       });
       entries.push({ type: "expect_outbound", frame: { id, method: "turn/start", params } });
       entries.push({
