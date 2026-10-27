@@ -173,6 +173,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   back, so it reports `unverifiable` even when it landed. Some apps drop pid-posted mouse events
   entirely, KakaoTalk reportedly among them, so an unchanged window after such a click is an unknown
   outcome to observe, not a coordinate bug ([token first](../../apps/server/src/cua/ComputerUseTokenFirst.ts)).
+  Preview and native results share the optional
+  [action safety contract](../../packages/contracts/src/actionOutcomeSafety.ts): an unknown or
+  cancelled write may have committed and must never replay automatically. Missing safety from an
+  older peer is unclassified; it is not evidence that input was never sent.
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
 - Refusals name their cause. A person's Stop and a person's takeover have their own
@@ -209,7 +213,11 @@ A cell whose result has arrived returns it with its receipts even when a Stop la
 collected. When the agent did not ask for the reset itself, its next cell's result lists
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
-observe again before deciding what to do. The cell never replays that input. Every effect needs a
+observe again before deciding what to do. The cell never replays that input. The first call that
+fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
+their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+unverifiable write is a success whose receipt says it may have committed, because the macOS
+driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.

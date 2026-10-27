@@ -1,3 +1,6 @@
+import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
+import type { ProviderDriverKind } from "@goat/contracts";
+
 export type ModelEsque = {
   slug: string;
   name: string;
@@ -47,8 +50,12 @@ export function getProviderRowLabel(
   return `${providerDisplayName} · ${sub}`;
 }
 
-export function getTriggerDisplayModelName(model: ModelEsque): string {
-  return getDisplayModelName(model, { preferShortName: true });
+export function getTriggerDisplayModelName(
+  model: ModelEsque,
+  driverKind?: ProviderDriverKind | null,
+): string {
+  const shortName = resolveModelShortName(model, driverKind);
+  return getDisplayModelName({ ...model, shortName }, { preferShortName: true });
 }
 
 export function getTriggerDisplayModelLabel(model: ModelEsque): string {

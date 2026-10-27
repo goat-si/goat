@@ -36,19 +36,35 @@ vi.mock("../../state/server", async () => {
   );
   harness.publish = (registry, value) => registry.set(progress, AsyncResult.success(value));
   return {
-    serverEnvironment: Object.fromEntries(
-      [
-        "openHandoff",
-        "respondHandoff",
-        "trustSshHost",
-        "prepareSshHost",
-        "mutateProviderInstance",
-        "refreshProviders",
-      ].map((label) => [
-        label,
-        { label, permissionAtom: () => (label === "mutateProviderInstance" ? canManage : allowed) },
-      ]),
-    ),
+    serverEnvironment: {
+      configValueAtom: () =>
+        Atom.make({
+          settings: { providerInstances: {} },
+          providers: [
+            {
+              instanceId: "codex",
+              driver: "codex",
+              models: [{ slug: "gpt-sol", name: "GPT-6.1-Sol", shortName: "Sol" }],
+            },
+          ],
+        }),
+      ...Object.fromEntries(
+        [
+          "openHandoff",
+          "respondHandoff",
+          "trustSshHost",
+          "prepareSshHost",
+          "mutateProviderInstance",
+          "refreshProviders",
+        ].map((label) => [
+          label,
+          {
+            label,
+            permissionAtom: () => (label === "mutateProviderInstance" ? canManage : allowed),
+          },
+        ]),
+      ),
+    },
     sshHost: { handoffProgress: () => progress, refreshHandoffProgress: harness.refresh },
   };
 });
@@ -73,8 +89,30 @@ vi.mock("@react-navigation/native", () => ({
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Pressable: ({
+    children,
+    accessibilityLabel,
+    onPress,
+  }: {
+    children: ReactNode;
+    accessibilityLabel: string;
+    onPress: () => void;
+  }) => (
+    <button aria-label={accessibilityLabel} onClick={onPress}>
+      {children}
+    </button>
+  ),
   Linking: { openURL: vi.fn(async (_url: string) => {}) },
 }));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
+vi.mock("../../components/ProviderIcon", () => ({
+  ProviderIcon: () => null,
+  ProviderInstanceIcon: () => null,
+}));
+vi.mock("./thread-context-divider", () => ({
+  ThreadContextDivider: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+vi.mock("../../state/threads", () => ({ environmentThreadDetails: {} }));
 vi.mock("../../components/ui/AppText", () => ({
   AppText: ({
     children,
@@ -100,6 +138,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { HumanHandoffCard } from "./HumanHandoffCard";
+import { ThreadHandoffDivider } from "./thread-handoff-row";
 
 const environmentId = EnvironmentId.make("origin");
 const handoff: Handoff = {
@@ -181,6 +220,31 @@ const click = async (label: string) => {
   expect(button).toBeDefined();
   await act(async () => button!.click());
 };
+
+it("announces full handoff model names while keeping compact text and missing-model fallbacks", async () => {
+  await act(async () =>
+    root.render(
+      <RegistryContext value={registry}>
+        <ThreadHandoffDivider
+          environmentId={environmentId}
+          endpoints={{
+            from: [{ instanceId: ProviderInstanceId.make("codex"), model: "gpt-sol" }],
+            to: { instanceId: ProviderInstanceId.make("codex"), model: "saved-model" },
+          }}
+          iconColor="#888"
+          surfaceColor="#fff"
+          label="Context handoff"
+        />
+      </RegistryContext>,
+    ),
+  );
+  const buttons = [...container.querySelectorAll("button")];
+  expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "GPT-6.1-Sol",
+    "saved-model",
+  ]);
+  expect(buttons.map((button) => button.textContent)).toEqual(["Sol", "saved-model"]);
+});
 describe("native SSH human handoff", () => {
   it("opens private fingerprints on review and uses Update now / Cancel for runtime approval", async () => {
     await render({ ...handoff, state: "pending" });
