@@ -226,6 +226,8 @@ namespace Goat.ComputerUse
             if (blocked != null) return Unavailable(blocked);
             byte[] jpeg;
             int width, height;
+            // Taken before the pixels are, so a cursor that moves during the capture counts as newer.
+            long capturedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             using (Bitmap native = CaptureGuard.CaptureNative(window))
             {
                 if (native == null) return Unavailable("captureFailed");
@@ -240,6 +242,7 @@ namespace Goat.ComputerUse
             frame["width"] = width;
             frame["height"] = height;
             frame["data"] = Convert.ToBase64String(jpeg);
+            frame["capturedAt"] = capturedAt;
             return frame;
         }
 
