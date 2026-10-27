@@ -18,10 +18,12 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -928,8 +930,11 @@ it.effect("queues a plain send behind the stopped queue and releases its hold", 
   ),
 );
 
-const goalHarness = Effect.fn("goalHarness")(function* (name: string) {
-  const harness = yield* nextTurnSelectionHarness(name);
+const goalHarness = Effect.fn("goalHarness")(function* (
+  name: string,
+  beforeCompaction: Effect.Effect<void> = Effect.void,
+) {
+  const harness = yield* nextTurnSelectionHarness(name, false, beforeCompaction);
   const send = (id: string, text: string, delivery: "queue" | "auto") =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -1046,22 +1051,29 @@ it.effect("promotes a queued goal by stopping the running turn", () =>
   ),
 );
 
-it.effect.each([
-  { promoted: "next", compactStarted: true },
-  { promoted: "/goal ship it", compactStarted: true },
-  { promoted: "next", compactStarted: false },
-  { promoted: "/goal ship it", compactStarted: false },
-])(
-  "promoting $promoted past a compaction (provider started: $compactStarted) sends it next",
-  ({ promoted, compactStarted }) =>
+it.effect.each(
+  ["next", "/goal ship it"].flatMap((promoted) =>
+    (["unclaimed", "suspended", "running"] as const).map((startup) => ({ promoted, startup })),
+  ),
+)(
+  "promoting $promoted past $startup compaction cancels pending startup and sends it next",
+  ({ promoted, startup }) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        const gate = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Deferred.succeed(cancelled, undefined)),
+        );
         const { events, layer, send, read, started, steered, startFirstTurn } = yield* goalHarness(
-          `compaction-promote-${promoted.length}-${compactStarted}`,
+          `compaction-promote-${promoted.length}-${startup}`,
+          startup === "suspended" ? gate : Effect.void,
         );
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
           const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
           const threadId = yield* startFirstTurn;
           yield* send("compact", "/compact", "queue");
           yield* send("older", "older", "queue");
@@ -1108,7 +1120,10 @@ it.effect.each([
           yield* Fiber.join(settled);
           yield* worker.drain();
           yield* orchestrator.resumeQueuedRuns;
-          if (compactStarted) {
+          const starting =
+            startup === "suspended" ? yield* worker.drain().pipe(Effect.forkScoped) : undefined;
+          if (starting !== undefined) yield* Deferred.await(entered);
+          if (startup === "running") {
             yield* worker.drain();
             yield* Fiber.join(compacting);
           }
@@ -1118,7 +1133,11 @@ it.effect.each([
           const nextRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
             (run) => run.userMessageId === MessageId.make("message:next"),
           )!;
-          assert.equal(compactRun.status, compactStarted ? "running" : "starting");
+          assert.equal(compactRun.status, startup === "unclaimed" ? "starting" : "running");
+          const startEffects = (yield* outbox.listByCommandId(
+            CommandId.make(`command:system:start-queued:${compactRun.id}`),
+          )).filter((effect) => effect.request.type === "provider-turn.start");
+          assert.lengthOf(startEffects, 1);
           yield* orchestrator.dispatch({
             type: "queued-message.promote-to-steer",
             commandId: CommandId.make("promote"),
@@ -1126,6 +1145,16 @@ it.effect.each([
             queuedRunId: nextRun.id,
             targetRunId: compactRun.id,
           });
+          if (startup !== "running") {
+            assert.equal(
+              Option.getOrThrow(yield* outbox.get(startEffects[0]!.id)).status,
+              "cancelled",
+            );
+          }
+          if (starting !== undefined) {
+            yield* Deferred.await(cancelled);
+            yield* Fiber.join(starting);
+          }
           yield* worker.drain();
 
           const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -1138,7 +1167,7 @@ it.effect.each([
           assert.deepEqual((yield* read(threadId)).queue, ["older", "queued"]);
           assert.deepEqual(
             started.map((turn) => turn.message.text),
-            compactStarted ? ["first", "/compact", promoted] : ["first", promoted],
+            startup === "running" ? ["first", "/compact", promoted] : ["first", promoted],
           );
         }).pipe(Effect.provide(layer));
       }),

@@ -32,6 +32,7 @@ export const runSelection = {
 export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
   name: string,
   canRestart = false,
+  beforeCompaction: Effect.Effect<void> = Effect.void,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -110,7 +111,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
             }),
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
           startTurn,
-          compactThread: startTurn,
+          compactThread: (turn) => beforeCompaction.pipe(Effect.andThen(startTurn(turn))),
           steerTurn: (turn) =>
             Effect.sync(() => {
               steered.push(turn.message.text);

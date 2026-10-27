@@ -9,7 +9,10 @@ import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
-import type { PendingOrchestrationEffectV2 } from "../EffectOutbox.ts";
+import type {
+  OrchestrationEffectRequestV2,
+  PendingOrchestrationEffectV2,
+} from "../EffectOutbox.ts";
 import type { OrchestratorV2Error } from "../Orchestrator.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "../QueuedRunOrder.ts";
 
@@ -27,7 +30,14 @@ interface QueuedCommandInterruptionDeps {
     command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }>,
     events: Events,
     effects: Effects,
-  ) => Effect.Effect<void, OrchestratorV2Error>;
+  ) => Effect.Effect<
+    | {
+        readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+        readonly reason: string;
+      }
+    | undefined,
+    OrchestratorV2Error
+  >;
 }
 
 export const makeQueuedCommandInterruption = ({
@@ -98,6 +108,7 @@ export const makeQueuedCommandInterruption = ({
       const enqueued = yield* Ref.get(interruptEffects);
       yield* Ref.update(events, (existing) => [...existing, ...written]);
       yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
+      return interrupted.value;
     },
   );
 
