@@ -119,13 +119,20 @@ export const CLOUD_AGENT_LAUNCH_HANDOFF_PATH = "cloud_agent.launch";
  */
 export const STORAGE_CLEAN_HANDOFF_PATH = "storage.clean";
 
+/**
+ * An agent asking a person to finish a step on the browser tab or desktop it drives.
+ * Handing the screen back completes it and Stop cancels it; either way the agent's hold ends.
+ */
+export const PREVIEW_HANDOFF_PATH = "preview.handoff";
+
 /** Handoffs that expire on their clock instead of when the requesting run ends. */
 export const isClockedHandoffPath = (path: string) =>
   isProviderHandoffPath(path) ||
   path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
   isHubDeviceHandoffPath(path) ||
   path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH ||
-  path === STORAGE_CLEAN_HANDOFF_PATH;
+  path === STORAGE_CLEAN_HANDOFF_PATH ||
+  path === PREVIEW_HANDOFF_PATH;
 
 /**
  * Steps that end with the run that asked: a secret card, whose caller collects it in that run,

@@ -420,4 +420,50 @@ describe("SessionControl", () => {
     });
     expect(dispatched).toEqual([]);
   });
+
+  it("holds a tab an agent handed to a person until they hand it back, not when their viewer drops", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    const before = control.generation;
+    expect(control.requestHandoff("Sign in with the code on your phone.")).toBe(true);
+    // Refs the agent took before asking expire, as at a takeover.
+    expect(control.generation).toBeGreaterThan(before);
+    await expect(control.agent("agent", async () => "typed")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await expect(control.secret("agent", async () => "filled")).rejects.toMatchObject({
+      reason: "humanControl",
+    });
+    await control.take("viewer");
+    await control.disconnect("viewer");
+    expect([control.handoffReason, ends]).toEqual(["Sign in with the code on your phone.", []]);
+    await control.take("viewer");
+    await control.release("viewer");
+    expect([control.handoffReason, ends]).toEqual([null, ["handedBack"]]);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+    control.requestHandoff("Solve the CAPTCHA.");
+    control.stopAgents();
+    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "ended"]]);
+  });
+
+  it("lets the request's own end free the tab without reporting a person's hand back", async () => {
+    const control = new SessionControl("agent");
+    const ends: string[] = [];
+    control.onHandoffEnd((end) => ends.push(end));
+    control.requestHandoff("Approve the sign-in.");
+    control.endHandoff(null);
+    expect(ends).toEqual([]);
+    await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+  });
+  it("refuses an agent's dialog answer or close on a tab it handed to a person", () => {
+    const control = new SessionControl("agent");
+    control.assertNoHumanControl();
+    control.requestHandoff("Decide whether to trust this device.", "handoff:dialog");
+    expect(() => control.assertNoHumanControl()).toThrow(
+      expect.objectContaining({ reason: "humanControl" }),
+    );
+    control.endHandoff(null);
+    control.assertNoHumanControl();
+  });
 });

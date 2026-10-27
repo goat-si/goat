@@ -110,6 +110,7 @@ const fakeLeases = (input: {
       input.detection ?? { humanInput: true, privateMode: true, frames: false },
     ),
     resume: Effect.die("unused"),
+    hold: () => Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),

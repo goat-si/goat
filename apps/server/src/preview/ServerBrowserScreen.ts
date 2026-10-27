@@ -7,7 +7,11 @@ import * as Effect from "effect/Effect";
 
 import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
-import { BrowserControlInterrupted, type SessionControl } from "./SessionControl.ts";
+import {
+  BrowserControlInterrupted,
+  type HandoffEnd,
+  type SessionControl,
+} from "./SessionControl.ts";
 
 /** The parts of a server browser tab that screen runs check and draw on. */
 export interface ScreenTab {
@@ -27,6 +31,34 @@ export interface AuthorityChange {
   readonly tabId: string;
 }
 export type AuthorityListener = (change: AuthorityChange) => void;
+
+/** A person ended an agent's request on a tab. */
+export interface HandoffEnded {
+  readonly threadId: string;
+  readonly tabId: string;
+  readonly end: HandoffEnd;
+  /** The request the person ended; a newer one on the same tab is not settled by it. */
+  readonly requestId: string;
+}
+
+/** What the screen surface adds to ServerBrowser; optional so test doubles can leave it out. */
+export interface SurfaceService {
+  readonly onAuthorityChange?: (listener: AuthorityListener) => () => void;
+  readonly cursorState?: CursorStateSink;
+  /** Holds an agent tab for a person; false when the tab is gone, a person's or stopped. */
+  readonly requestHandoff?: (input: {
+    readonly threadId: string;
+    readonly tabId: string;
+    readonly reason: string;
+    readonly requestId: string;
+  }) => Effect.Effect<boolean>;
+  /** Ends a tab's request because its record ended; no HandoffEnded is reported. */
+  readonly endHandoff?: (input: {
+    readonly threadId: string;
+    readonly tabId: string;
+  }) => Effect.Effect<void>;
+  readonly onHandoffEnd?: (listener: (ended: HandoffEnded) => void) => () => void;
+}
 
 /** The trusted screen host supplies the exact tab after claim admission. */
 export type CursorStateSink = (input: {
@@ -52,7 +84,7 @@ export const authorityReporter = (
           ? "private"
           : tab.control.isAgentStopped
             ? "stop"
-            : tab.control.controller !== null
+            : tab.control.controller !== null || tab.control.handoffReason !== null
               ? "takeover"
               : "handBack",
       threadId: tab.threadId,
@@ -168,6 +200,8 @@ export const makeSurface = <Tab extends ScreenTab>(
   ) => void,
 ) => {
   const listeners = new Set<AuthorityListener>();
+  const handoffListeners = new Set<(ended: HandoffEnded) => void>();
+  const watched = new WeakSet<Tab>();
   const cursorByTab = new WeakMap<Tab, AgentCursorSnapshot>();
   const notify: AuthorityListener = (change) => {
     for (const listener of listeners) listener(change);
@@ -195,7 +229,30 @@ export const makeSurface = <Tab extends ScreenTab>(
       if (sent) cursorByTab.set(tab, input.cursor);
       return sent;
     });
-  return { notify, nextPointer, service: { onAuthorityChange, cursorState } };
+  const requestHandoff: NonNullable<SurfaceService["requestHandoff"]> = (input) =>
+    Effect.sync(() => {
+      const tab = findTab(input.threadId, input.tabId);
+      if (!tab || tab.control.agentId === null) return false;
+      if (!watched.has(tab)) {
+        watched.add(tab);
+        tab.control.onHandoffEnd((end, requestId) => {
+          for (const listener of handoffListeners)
+            listener({ threadId: tab.threadId, tabId: tab.tabId, end, requestId });
+        });
+      }
+      return tab.control.requestHandoff(input.reason, input.requestId);
+    });
+  const endHandoff: NonNullable<SurfaceService["endHandoff"]> = (input) =>
+    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.endHandoff(null));
+  const onHandoffEnd = (listener: (ended: HandoffEnded) => void) => {
+    handoffListeners.add(listener);
+    return () => void handoffListeners.delete(listener);
+  };
+  return {
+    notify,
+    nextPointer,
+    service: { onAuthorityChange, cursorState, requestHandoff, endHandoff, onHandoffEnd },
+  };
 };
 
 type Size = { readonly width: number; readonly height: number };

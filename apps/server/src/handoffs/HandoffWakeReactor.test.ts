@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  PREVIEW_HANDOFF_PATH,
   PROVIDER_SETTINGS_HANDOFF_PATH,
   STORAGE_CLEAN_HANDOFF_PATH,
   StorageMcpCleanInput,
@@ -498,4 +499,35 @@ it.effect("keeps handoff wakes pending while held and dispatches after release",
       }),
     ).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
   }),
+);
+
+it.effect(
+  "tells an agent its screen is back after a hand back, and not to act after a person's stop",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const handedBack = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: handedBack.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, handedBack.handoffId));
+        const stopped = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: stopped.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, stopped.handoffId, "cancelled"));
+        const sent = yield* wakes(world);
+        const textOf = (handoffId: string, state: string) =>
+          sent.find((wake) => wake.id === `message:handoff-wake:${handoffId}:${state}`)?.text;
+        expect(textOf(handedBack.handoffId, "completed")).toContain(
+          "was handed back by a person. The screen is yours again.",
+        );
+        expect(textOf(stopped.handoffId, "cancelled")).toContain(
+          "Do not act on that tab or screen again unless they ask",
+        );
+      }),
+    ),
 );

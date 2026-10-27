@@ -43,6 +43,7 @@ import {
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as DesktopFrames from "./DesktopFrames.ts";
+import * as PreviewHandoffs from "./PreviewHandoffs.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import type { ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
@@ -65,9 +66,8 @@ export class PreviewSessions extends Context.Service<
 const platformOf = (platform: string): PreviewSessionPlatform =>
   platform === "darwin" ? "mac" : platform === "win32" ? "windows" : "linux";
 
-const browserId = (threadId: string, tabId: string) =>
-  `browser:${encodeURIComponent(threadId)}:${encodeURIComponent(tabId)}`;
-const DESKTOP_PREFIX = "desktop:";
+const browserId = PreviewHandoffs.browserSessionId;
+const DESKTOP_PREFIX = PreviewHandoffs.DESKTOP_SESSION_PREFIX;
 
 const parseBrowserId = (id: string) => {
   const [kind, threadId, tabId, ...rest] = id.split(":");
@@ -117,12 +117,14 @@ export const browserSession = (
   // A stopped agent stays stopped while a person holds the tab or types a secret in it.
   const status = tab.agentStopped
     ? "stopped"
-    : tab.private || tab.humanControls
-      ? "paused"
-      : "acting";
+    : tab.handoffReason !== null
+      ? "waiting-for-human"
+      : tab.private || tab.humanControls
+        ? "paused"
+        : "acting";
   const controls: ReadonlyArray<PreviewSessionControl> = tab.agentStopped
     ? ["handBack", "stopAll"]
-    : tab.humanControls
+    : tab.humanControls || tab.handoffReason !== null
       ? ["handBack", "stop", "stopAll"]
       : ["takeover", "stop", "stopAll"];
   return {
@@ -134,23 +136,27 @@ export const browserSession = (
     owner: tab.private ? "private" : tab.humanControls ? "human" : "agent",
     status,
     ...(tab.agentStopped ? { reason: "userStoppedSession" as const } : {}),
+    ...(tab.agentStopped || tab.handoffReason === null ? {} : { handoffReason: tab.handoffReason }),
     capabilities: { controls, frames: true, privateMode: true, humanInput: true },
   };
 };
 
 /**
  * A thread's computer use control as a session, while one of its turns is live or a person
- * stopped it. Between turns no agent acts on the screen, so it is left out (#1360).
+ * stopped it. Between turns no agent acts on the screen, so it is left out (#1360), unless its
+ * agent asked a person for a step that is still open.
  */
 export const desktopSession = (
   base: Base,
   control: ComputerUseLeases.ComputerUseControl,
   state: ComputerUseLeases.ComputerUseControlState,
   detection: ComputerUseLeases.ComputerUseDetection,
+  handoffReason?: string,
 ): PreviewSession | undefined => {
+  const waiting = handoffReason !== undefined && state._tag !== "ended";
   // A turn's provider gets a control whether or not its agent touches the screen; one that only
   // opened a browser tab would otherwise show a second, empty card beside it.
-  if (!hasCard(control, state)) return undefined;
+  if (!hasCard(control, state) && !waiting) return undefined;
   const reason: ComputerUseRefusalReason | undefined =
     state._tag === "ended"
       ? "userStoppedSession"
@@ -203,12 +209,13 @@ export const desktopSession = (
     status:
       state._tag === "ended"
         ? "stopped"
-        : state._tag === "paused"
-          ? state.reason === "human_input"
-            ? "waiting-for-human"
-            : "paused"
-          : "acting",
+        : waiting || (state._tag === "paused" && state.reason === "human_input")
+          ? "waiting-for-human"
+          : state._tag === "paused"
+            ? "paused"
+            : "acting",
     ...(reason === undefined ? {} : { reason }),
+    ...(waiting ? { handoffReason } : {}),
     lease: {
       threadId: control.threadId,
       expiresAt: DateTime.formatIso(control.expiresAt),
@@ -218,7 +225,7 @@ export const desktopSession = (
       controls:
         state._tag === "ended"
           ? ["stopAll"]
-          : state._tag === "paused"
+          : state._tag === "paused" || waiting
             ? ["handBack", "stop", "stopAll"]
             : ["takeover", "stop", "stopAll"],
       frames: detection.frames,
@@ -252,6 +259,7 @@ const make = Effect.gen(function* () {
   const desktopFrames = yield* DesktopFrames.DesktopFrames;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const handoffs = yield* Handoffs.Handoffs;
+  const requests = yield* Effect.serviceOption(PreviewHandoffs.PreviewHandoffs);
   const host = yield* HostProcess.Hostname;
   const platform = platformOf(yield* HostProcess.Platform);
 
@@ -265,8 +273,17 @@ const make = Effect.gen(function* () {
       }
     if (Option.isSome(leases)) {
       const detection = yield* leases.value.detection;
+      const reasons = Option.isSome(requests)
+        ? yield* requests.value.desktopReasons
+        : new Map<string, string>();
       for (const { control, state } of yield* leases.value.sessions) {
-        const session = desktopSession(base, control, state, detection);
+        const session = desktopSession(
+          base,
+          control,
+          state,
+          detection,
+          reasons.get(control.controlId),
+        );
         if (session) sessions.push(session);
       }
       for (const { threadId, block } of yield* leases.value.blockedTurns)
@@ -312,6 +329,7 @@ const make = Effect.gen(function* () {
         ? { applied: true }
         : ({ applied: false, reason: "not_allowed" } as const);
     }
+    // Agents ask through preview.request_handoff; a person's client cannot ask for them.
     if (input.control === "requestHandoff")
       return { applied: false, reason: "not_allowed" } as const;
     const id = input.sessionId ?? "";
@@ -347,8 +365,11 @@ const make = Effect.gen(function* () {
     if (cutoff) yield* fenceScreen(cutoff);
     // The pause is the host's: a person on the desktop holds every agent there.
     if (input.control === "takeover") yield* leases.value.pause("takeover");
-    else if (input.control === "handBack") yield* leases.value.resume;
-    else {
+    else if (input.control === "handBack") {
+      yield* leases.value.resume;
+      // Ends this control's request only; another thread's stays held for the person.
+      if (Option.isSome(requests)) yield* requests.value.handBackDesktop(controlId);
+    } else {
       const threadId = ThreadId.make(live.control.threadId);
       const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);
       if (cutoff) yield* cleanupScreen(cutoff);
@@ -363,6 +384,9 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(PreviewSessions, make).pipe(Layer.provide(DesktopFrames.layer));
+
+/** Agents' requests for a person, provided once beside the browser for MCP and these cards. */
+export const layerHandoffs = PreviewHandoffs.layer;
 
 /** The preview session RPCs, with the computer use controls they build on. */
 export const makePreviewSessionRpcHandlers = Effect.fn("PreviewSessions.rpcHandlers")(function* (

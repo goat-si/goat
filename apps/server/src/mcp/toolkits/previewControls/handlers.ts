@@ -1,5 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Preview from "../../../preview/Manager.ts";
+import * as PreviewHandoffs from "../../../preview/PreviewHandoffs.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { requireThreadMcpCapability } from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { unavailable } from "../../threadAccess.ts";
@@ -42,5 +44,21 @@ export const layer = McpToolAccess.toLayer(PreviewControlsToolkit, {
         return {};
       }),
     ),
+  ),
+  goat_preview_request_handoff: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const caller = yield* McpInvocationContext.requireThreadScope(
+        scope,
+        "goat_preview_request_handoff",
+      );
+      const requests = yield* PreviewHandoffs.PreviewHandoffs;
+      return yield* requests.request({
+        threadId: caller.thread.threadId,
+        providerInstanceId: caller.thread.providerInstanceId,
+        reason: input.reason,
+        ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
+      });
+    }),
   ),
 });

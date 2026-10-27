@@ -108,6 +108,7 @@ export const PreviewAutomationStatus = Schema.Struct({
       owner: PreviewAutomationTabOwner,
       ownedByCaller: Schema.Boolean,
       generation: Schema.Number,
+      waitingForPerson: Schema.optionalKey(Schema.Literal(true)),
     }),
   ),
   dialog: Schema.optional(
