@@ -33,6 +33,11 @@ import * as ServerSelfUpdate from "./selfUpdate.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
+const encodeUpdateError = Schema.encodeSync(ServerSelfUpdateError);
+const decodeUpdateError = Schema.decodeUnknownSync(ServerSelfUpdateError);
+const encodeProgressEvent = Schema.encodeSync(ServerSelfUpdateProgressEvent);
+const decodeProgressEvent = Schema.decodeUnknownSync(ServerSelfUpdateProgressEvent);
+
 interface HarnessOptions {
   readonly activity?: () => "idle" | "busy";
   readonly mode?: "web" | "desktop";
@@ -227,8 +232,8 @@ it.effect.each(["before progress", "after progress", "synchronous throw"] as con
         "The update progress producer exited unexpectedly. Check update status before retrying.",
       );
       expect(error.cause).toBeUndefined();
-      const encoded = Schema.encodeSync(ServerSelfUpdateError)(error);
-      expect(Schema.decodeUnknownSync(ServerSelfUpdateError)(encoded).reason).toBe(error.reason);
+      const encoded = encodeUpdateError(error);
+      expect(decodeUpdateError(encoded).reason).toBe(error.reason);
       expect(JSON.stringify(encoded)).not.toContain("/fixture/secret");
       expect(starts).toBe(1);
     }),
@@ -283,8 +288,8 @@ it.effect.each([
         { type: "complete", result },
       ]);
       for (const event of events) {
-        const encoded = Schema.encodeSync(ServerSelfUpdateProgressEvent)(event);
-        expect(Schema.decodeUnknownSync(ServerSelfUpdateProgressEvent)(encoded)).toEqual(event);
+        const encoded = encodeProgressEvent(event);
+        expect(decodeProgressEvent(encoded)).toEqual(event);
       }
     }),
 );
