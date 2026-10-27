@@ -81,8 +81,6 @@ describe("lease proxy cross-process primitive gate", () => {
                     },
             ),
           subscribe: PubSub.subscribe(signals),
-          streamOpened: () => Effect.void,
-          releaseApps: () => Effect.void,
           callReservation: (
             _thread: ThreadId,
             call: { action: string; reservationId?: string; connectionId: string },
