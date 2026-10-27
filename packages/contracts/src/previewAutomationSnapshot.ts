@@ -114,6 +114,8 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   ),
   treeComplete: Schema.optional(Schema.Boolean),
   refGeneration: Schema.optional(Schema.String),
+  /** The tab the snapshot read, so callers can key per-tab state when they omitted tabId. */
+  tabId: Schema.optional(TrimmedNonEmptyString),
   omitted: Schema.optional(
     Schema.Array(
       Schema.Literals(["tree_budget", "unread_frames", "text_budget", "transport_budget"]),

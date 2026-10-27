@@ -75,11 +75,30 @@ it("never returns data URL payloads or text under hidden ancestors", () =>
     );
     for (const selector of ["div[hidden] main", "#closed"])
       expect((await read({ scope: { selector } })).text).toBe("");
+    await page.setContent(
+      "<main hidden id=root>fictional-root-token</main><section id=host><p id=slotted>fictional-slot-token</p></section><script>document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<div hidden><slot></slot></div>'</script>",
+    );
+    for (const selector of ["#root", "#slotted"])
+      expect((await read({ scope: { selector } })).text).toBe("");
+    await page.route("https://outer.test/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<div hidden><iframe src="https://inner.test/"></iframe></div>',
+      }),
+    );
+    await page.route("https://inner.test/**", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<p>fictional-frame-token</p>" }),
+    );
+    await page.goto("https://outer.test/");
+    await page.frameLocator("iframe").locator("p").waitFor({ state: "attached" });
+    expect(
+      (await read({ scope: { selector: "iframe >> internal:control=enter-frame >> p" } })).text,
+    ).toBe("");
   }));
 
 it("pages encoded results without splitting emoji and restarts after mutation or navigation", () =>
   fixture(async (page, read) => {
-    const body = `<title>${"Title".repeat(1200)}</title><pre>${'A\n"\\ð'.repeat(5000)}</pre>`;
+    const body = `<title>${"Title".repeat(1200)}</title><pre>${`A\n"\\${String.fromCodePoint(0x1f600)}`.repeat(5000)}</pre>`;
     await page.route("https://read.test/**", (route) =>
       route.fulfill({ contentType: "text/html", body }),
     );

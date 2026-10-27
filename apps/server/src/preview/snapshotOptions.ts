@@ -1,6 +1,5 @@
 import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "@goat/contracts";
 import type { Locator, Page } from "playwright-core";
-import { HIDDEN_ABOVE } from "./pageScope.ts";
 
 const interactive =
   /^\s*- '?(?:button|link|textbox|searchbox|combobox|checkbox|radio|switch|tab|menuitem|option|slider|spinbutton|treeitem)(?=[\s"':])/;
@@ -64,6 +63,7 @@ export const snapshotOptionsResult = (
   else store.delete(caller);
   return {
     ...result,
+    ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
     ...(omitted.length ? { omitted } : {}),
     ...(diff ? { diff } : {}),
     ...(omitted.length
@@ -74,7 +74,7 @@ export const snapshotOptionsResult = (
   };
 };
 
-export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
+export const snapshotPageMetadata = async (page: Page, scope?: Locator, hidden = false) => {
   const metadata = (await page.evaluate(
     `({ url: location.href, title: document.title, loading: document.readyState !== "complete", visibleText: document.body?.innerText || "", interactiveElements: [] })`,
   )) as Pick<
@@ -84,11 +84,9 @@ export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
   return scope
     ? {
         ...metadata,
-        visibleText: await scope.evaluate(
-          new Function("node", `return (${HIDDEN_ABOVE})(node) ? "" : node.innerText || "";`) as (
-            node: unknown,
-          ) => string,
-        ),
+        visibleText: hidden
+          ? ""
+          : await scope.evaluate((node) => (node as { innerText?: string }).innerText || ""),
       }
     : metadata;
 };

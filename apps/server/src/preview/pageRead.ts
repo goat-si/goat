@@ -5,11 +5,11 @@ import type { CDPSession, Page } from "playwright-core";
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { dottedPattern, maskSecrets, openReaders, tabCookies } from "./pageSecrets.ts";
-import { HIDDEN_ABOVE, readFailure, resolvePageScope } from "./pageScope.ts";
+import { readFailure, resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { withoutDataPayload } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 
-const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
+const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, hidden }) => {
   const document = scope.ownerDocument;
   const window = document.defaultView;
   const deadline = performance.now() + timeoutMs;
@@ -56,7 +56,6 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
     const loading = document.readyState !== 'complete';
     let collapsedCount = 0, omittedFrames = 0, nodes = 0, truncatedRender = false;
     const formatNode = ${MARKDOWN_FORMAT};
-    const hiddenAbove = ${HIDDEN_ABOVE};
     const skipped = new Set(['script','style','template','noscript','input','textarea','select','option','head']);
     const hrefOf = element => {
       try {
@@ -98,7 +97,7 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
       if (tag === 'pre') return markdown ? '\\n\\n~~~\\n' + inner.replace(/\\n+$/, '') + '\\n~~~\\n\\n' : '\\n\\n' + inner + '\\n\\n';
       return formatNode(node, inner, markdown, hrefOf);
     };
-    return { url: document.location.href, title: document.title, text: hiddenAbove(scope) ? '' : render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
+    return { url: document.location.href, title: document.title, text: hidden ? '' : render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
   } finally {
     if (observer) observer.disconnect();
     clearTimeout(quietTimer);
@@ -182,6 +181,7 @@ export const pageRead = (
             settleMs: input.settleMs ?? 600,
             timeoutMs: Math.max(1, deadline - Date.now()),
             markdown: input.format !== "text",
+            hidden: input.scope ? await scopeHidden(scope) : false,
           };
           const render = new Function(
             "scope",

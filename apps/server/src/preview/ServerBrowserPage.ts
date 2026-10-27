@@ -22,7 +22,7 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { pointerInterception } from "./pointerInterception.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
-import { resolvePageScope } from "./pageScope.ts";
+import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import {
   narrowTree,
   resetSnapshotDiff,
@@ -490,6 +490,7 @@ const capture = async (
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
   const scoped = input.scope ? await resolvePageScope(input.page, input.scope) : undefined;
+  const hidden = scoped ? await scopeHidden(scoped) : false;
   invalidateRefs(input.page, true);
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
@@ -509,7 +510,7 @@ const capture = async (
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    snapshotPageMetadata(input.page, scoped),
+    snapshotPageMetadata(input.page, scoped, hidden),
     readLayersHeader(input.page),
     input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),
@@ -521,11 +522,13 @@ const capture = async (
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
-    tree = await (scoped ?? input.page).ariaSnapshot({
-      mode: "ai",
-      boxes: true,
-      timeout: Math.max(1, deadline - Date.now() - 2_000),
-    });
+    tree = hidden
+      ? ""
+      : await (scoped ?? input.page).ariaSnapshot({
+          mode: "ai",
+          boxes: true,
+          timeout: Math.max(1, deadline - Date.now() - 2_000),
+        });
     const image =
       input.annotate && input.captureImage !== false
         ? withRefAnnotations(

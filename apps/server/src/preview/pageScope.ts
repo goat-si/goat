@@ -1,5 +1,5 @@
 import { previewReadRefusalMessage, type PreviewAutomationScope } from "@goat/contracts";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { targetLocator } from "./ServerBrowserPage.ts";
 
@@ -17,23 +17,46 @@ export const readFailure = (
   });
 
 /**
- * Page-side check for a scope root that an ancestor hides, crossing shadow and same-origin frame
- * boundaries. innerText of an element that is not rendered falls back to its full text content.
+ * Page-side check that a scope root or anything it is composed into (slots, shadow hosts,
+ * closed details) is hidden. Stops at its document; scopeHidden walks embedding frames.
  */
-export const HIDDEN_ABOVE = `node => {
-  let child = node;
-  for (;;) {
-    let parent = child.parentElement || (child.parentNode && child.parentNode.host) || null;
-    if (!parent && child.parentNode && child.parentNode.nodeType === 9) {
-      try { parent = child.parentNode.defaultView.frameElement; } catch { return false; }
+const HIDDEN_IN_DOCUMENT = `node => {
+  for (let element = node; element; ) {
+    if (element.nodeType === 1) {
+      const style = element.ownerDocument.defaultView.getComputedStyle(element);
+      if (element.hasAttribute('hidden') || element.hasAttribute('inert') || element.getAttribute('aria-hidden') === 'true' || style.display === 'none' || (element === node && style.visibility === 'hidden')) return true;
     }
-    if (!parent) return false;
-    const style = parent.ownerDocument.defaultView.getComputedStyle(parent);
-    if (parent.hasAttribute('hidden') || parent.hasAttribute('inert') || parent.getAttribute('aria-hidden') === 'true' || style.display === 'none') return true;
-    if (parent.localName === 'details' && !parent.hasAttribute('open') && !(child.localName === 'summary' && child.parentElement === parent)) return true;
-    child = parent;
+    const parent = element.assignedSlot || element.parentElement || (element.parentNode && element.parentNode.host) || null;
+    if (parent && parent.localName === 'details' && !parent.hasAttribute('open') && !(element.localName === 'summary' && element.parentElement === parent)) return true;
+    element = parent;
   }
+  return false;
 }`;
+const hiddenInDocument = new Function("node", `return (${HIDDEN_IN_DOCUMENT})(node);`) as (
+  node: unknown,
+) => boolean;
+
+/** True when the scope root, an ancestor, or any frame element embedding it is hidden. */
+export const scopeHidden = async (scope: Locator): Promise<boolean> => {
+  const handle = await scope.elementHandle({ timeout: 2_000 });
+  if (!handle) throw readFailure("scope_not_found");
+  try {
+    if (await handle.evaluate(hiddenInDocument)) return true;
+    let frame = await handle.ownerFrame();
+    while (frame?.parentFrame()) {
+      const element = await frame.frameElement();
+      try {
+        if (await element.evaluate(hiddenInDocument)) return true;
+      } finally {
+        void element.dispose().catch(() => undefined);
+      }
+      frame = frame.parentFrame();
+    }
+    return false;
+  } finally {
+    void handle.dispose().catch(() => undefined);
+  }
+};
 
 export const resolvePageScope = async (page: Page, scope?: PreviewAutomationScope) => {
   if (!scope) return page.locator("body");

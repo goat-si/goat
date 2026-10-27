@@ -440,7 +440,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               const png = new Uint8Array(Buffer.from(data, "base64"));
               const saving = payload?.save === true && screenshot !== undefined;
               const screenshotPath = saving ? yield* saveScreenshot(snapshot.url, png) : undefined;
-              const deliveryKey = snapshotDeliveryKey(invocation, payload?.tabId);
+              const deliveryKey = snapshotDeliveryKey(invocation, snapshot.tabId);
               // Images stay out of tool history unless asked for: providers replay them on every
               // later request, and some reject inline images outright.
               const includeImage = payload?.includeImage === true;

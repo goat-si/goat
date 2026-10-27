@@ -60,6 +60,14 @@ it("narrows snapshots before budgeting, preserves actionable refs and isolates d
     expect(JSON.stringify(await take({ scope: { selector: "div[hidden] main" } }))).not.toContain(
       "fictional-hidden-token",
     );
+    await page.setContent(
+      '<main hidden id=a>fictional-a</main><main style="display:none" id=b>fictional-b</main><main inert id=c>fictional-c</main><main aria-hidden=true id=d>fictional-d</main>',
+    );
+    for (const id of ["a", "b", "c", "d"]) {
+      const scoped = await take({ scope: { selector: `#${id}` }, tabId: "tab-1" });
+      expect(JSON.stringify(scoped)).not.toContain(`fictional-${id}`);
+      expect(scoped.tabId).toBe("tab-1");
+    }
     await page.setContent("<main>" + "<p>Long paragraph</p>".repeat(4000) + "</main>");
     expect((await take()).omitted).toContain("tree_budget");
   } finally {
