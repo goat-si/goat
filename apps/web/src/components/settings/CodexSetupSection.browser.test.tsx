@@ -139,10 +139,12 @@ const provider: ServerProvider = {
 
 function deferred<A>() {
   let resolve!: (value: A) => void;
-  const promise = new Promise<A>((settle) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<A>((settle, fail) => {
     resolve = settle;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function setup({ update = false, local = true, primary = false } = {}) {
@@ -421,36 +423,57 @@ it("does not submit a cancelled desktop page manually opened from shared auth st
   expect(mocks.completeAuth).not.toHaveBeenCalled();
 });
 
-it.each(["new shared flow", "failed cancellation"])(
+it.each(["new shared flow", "failed cancellation", "failed cancellation with native abort"])(
   "completes a manually reopened desktop sign-in after %s",
   async (recovery) => {
     const state = setup();
     const cancelled = deferred<string>();
     const reopened = deferred<string>();
-    const receive = vi
-      .fn()
-      .mockReturnValueOnce(cancelled.promise)
-      .mockReturnValueOnce(reopened.promise);
+    const released = deferred<void>();
+    const listeners = new Set<string>();
+    let attempt = 0;
+    const receive = vi.fn((url: string) => {
+      if (listeners.has(url))
+        return Promise.reject(new Error("This sign-in is already open on this computer."));
+      listeners.add(url);
+      const response = ++attempt === 1 ? cancelled : reopened;
+      return response.promise.finally(async () => {
+        if (response === cancelled) await released.promise;
+        listeners.delete(url);
+      });
+    });
+    const cancel = vi.fn().mockResolvedValue(undefined);
     using _desktop = stubGlobal("desktopBridge", {
       receiveProviderAuthCallback: receive,
-      cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
+      cancelProviderAuthCallback: cancel,
     });
-    if (recovery === "failed cancellation")
+    if (recovery !== "new shared flow")
       mocks.cancelAuth.mockRejectedValueOnce(new Error("Connection interrupted"));
     await using screen = await render(ui());
     await screen.getByRole("button", { name: "Continue with ChatGPT" }).click();
     await publish(state.auth, waiting());
     await screen.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(cancel).toHaveBeenCalledWith("https://example.com/ours");
     if (recovery === "new shared flow") {
       await publish(state.auth, authState({ flowId: "ours", phase: "cancelled" }));
       await publish(state.auth, waiting("other-client"));
     }
     const flowId = recovery === "new shared flow" ? "other-client" : "ours";
     await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+    expect(receive).toHaveBeenCalledTimes(1);
+    await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
+    await act(() => {
+      if (recovery === "failed cancellation with native abort")
+        cancelled.reject(new Error("Sign-in cancelled on this computer."));
+      else cancelled.resolve("http://localhost/callback?code=cancelled");
+    });
+    expect(mocks.completeAuth).not.toHaveBeenCalled();
+    expect(receive).toHaveBeenCalledTimes(1);
+    await act(() => released.resolve());
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2));
     expect(receive).toHaveBeenLastCalledWith(`https://example.com/${flowId}`);
     await screen.getByRole("button", { name: "Open sign-in page", exact: true }).click();
     expect(receive).toHaveBeenCalledTimes(2);
-    await act(() => cancelled.resolve("http://localhost/callback?code=cancelled"));
     expect(mocks.completeAuth).not.toHaveBeenCalled();
     await act(() => reopened.resolve("http://localhost/callback?code=reopened"));
     expect(mocks.completeAuth).toHaveBeenCalledExactlyOnceWith({

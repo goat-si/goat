@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
 import { isLoopbackHost } from "@goat/shared/preview";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentPresentations } from "../../state/presentation";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { readPreparedConnection } from "../../state/session";
+import { ensureLocalApi } from "../../localApi";
 
 export const isLoopbackUrl = (url: string | null) =>
   url !== null && isLoopbackHost(new URL(url).hostname);
@@ -51,6 +52,50 @@ export function useCodexSetupOperation() {
       ? operation.current.signal
       : beginOperation();
   return { beginOperation, abortOperation, getOrBeginOperation };
+}
+
+export function useCodexAuthCallback() {
+  const receiver = useRef<{
+    url: string;
+    signal: AbortSignal;
+    promise: Promise<string>;
+    cancelled: boolean;
+  } | null>(null);
+  const cancelCallback = useCallback((url?: string) => {
+    const active = receiver.current;
+    if (!active || active.cancelled || (url !== undefined && active.url !== url)) return;
+    active.cancelled = true;
+    void window.desktopBridge?.cancelProviderAuthCallback?.(active.url).catch(() => undefined);
+  }, []);
+  const receiveCallback = async (url: string, signal: AbortSignal): Promise<string | null> => {
+    if (signal.aborted) return null;
+    const previous = receiver.current;
+    if (previous) {
+      if (previous.url === url && !previous.cancelled && !previous.signal.aborted) {
+        await ensureLocalApi().shell.openExternal(url);
+        return null;
+      }
+      cancelCallback(previous.url);
+      // Native cancellation acknowledges abort before receive releases its listener and port.
+      await previous.promise.catch(() => undefined);
+    }
+    if (signal.aborted) return null;
+    if (receiver.current) return receiveCallback(url, signal);
+    const receive = window.desktopBridge?.receiveProviderAuthCallback;
+    if (!receive) return null;
+    const active = { url, signal, promise: receive(url), cancelled: false };
+    receiver.current = active;
+    const abort = () => cancelCallback(url);
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const callbackUrl = await active.promise;
+      return signal.aborted || active.cancelled ? null : callbackUrl;
+    } finally {
+      signal.removeEventListener("abort", abort);
+      if (receiver.current === active) receiver.current = null;
+    }
+  };
+  return { receiveCallback, cancelCallback };
 }
 
 export function readCodexReturnUrl(environmentId: EnvironmentId, instanceId: ProviderInstanceId) {

@@ -54,6 +54,7 @@ import {
   readSignInRouting,
   readCodexReturnUrl,
   useCodexSetupOperation,
+  useCodexAuthCallback,
 } from "./CodexSetupSection.flow";
 
 const noop = () => undefined;
@@ -380,9 +381,9 @@ function ManagedCodexSetup({
     );
     setHandoff(null);
   }
-  const receivingCallback = useRef<string | null>(null);
+  const { receiveCallback, cancelCallback } = useCodexAuthCallback();
   const cancelSignIn = () => {
-    receivingCallback.current = null;
+    cancelCallback();
     setAwaitingProvider(null);
     if (handoff) {
       setHandoff(null);
@@ -400,14 +401,8 @@ function ManagedCodexSetup({
     try {
       const receive = window.desktopBridge?.receiveProviderAuthCallback;
       if (receive && viaClientCallback && flowId) {
-        if (receivingCallback.current === authorizationUrl) {
-          await ensureLocalApi().shell.openExternal(authorizationUrl);
-          return;
-        }
-        receivingCallback.current = authorizationUrl;
-        const callbackUrl = await receive(authorizationUrl);
-        if (signal?.aborted || receivingCallback.current !== authorizationUrl) return;
-        receivingCallback.current = null;
+        const callbackUrl = await receiveCallback(authorizationUrl, signal);
+        if (signal.aborted || callbackUrl === null) return;
         await run(() =>
           completeAuth({ environmentId, input: { instanceId, flowId, callbackUrl } }),
         );
@@ -415,6 +410,7 @@ function ManagedCodexSetup({
         await ensureLocalApi().shell.openExternal(authorizationUrl);
       }
     } catch {
+      if (signal.aborted) return;
       setError(
         "Could not finish sign-in on this computer. Try again or paste the redirect URL below.",
       );
@@ -533,11 +529,8 @@ function ManagedCodexSetup({
 
   useEffect(() => {
     if (!clientCallback || !url || !window.desktopBridge?.cancelProviderAuthCallback) return;
-    return () => {
-      if (receivingCallback.current === url) receivingCallback.current = null;
-      void window.desktopBridge?.cancelProviderAuthCallback?.(url).catch(() => undefined);
-    };
-  }, [clientCallback, url]);
+    return () => cancelCallback(url);
+  }, [clientCallback, url, cancelCallback]);
 
   const runtimeDescription =
     installation?.phase === "downloading"
