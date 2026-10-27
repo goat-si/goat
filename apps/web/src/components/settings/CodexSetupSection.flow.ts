@@ -88,13 +88,12 @@ export function useCodexAuthCallback() {
     receiver.current = active;
     const abort = () => cancelCallback(url);
     signal.addEventListener("abort", abort, { once: true });
-    try {
-      const callbackUrl = await active.promise;
-      return signal.aborted || active.cancelled ? null : callbackUrl;
-    } finally {
-      signal.removeEventListener("abort", abort);
-      if (receiver.current === active) receiver.current = null;
-    }
+    return active.promise
+      .then((callbackUrl) => (signal.aborted || active.cancelled ? null : callbackUrl))
+      .finally(() => {
+        signal.removeEventListener("abort", abort);
+        if (receiver.current === active) receiver.current = null;
+      });
   };
   return { receiveCallback, cancelCallback };
 }
