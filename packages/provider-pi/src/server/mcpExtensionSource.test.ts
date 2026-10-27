@@ -54,6 +54,41 @@ async function loadHooks(commands: ReadonlyArray<SkillCommand> = []) {
 }
 
 describe("Pi orchestration prompt section", () => {
+  it.each([false, true])(
+    "gates browser routing in both prompt carriers, browser=%s",
+    async (browser) => {
+      const bridge = await loadMcpBridge({ browser });
+      const start = bridge.handlers.get("before_agent_start")!;
+      const context = { ui: { notify: assert.fail } };
+      const sections: Record<string, string> = {};
+      await start({ systemPrompt: "base", systemPromptOptions: { sections } }, context);
+      assert.equal(Object.values(sections).join("\n").includes("## GOAT browser"), browser);
+      const fallback = await start({ systemPrompt: "base" }, context);
+      assert.equal(fallback?.systemPrompt.includes("## GOAT browser"), browser);
+    },
+  );
+
+  it("refreshes browser guidance from the per-turn gate and closes it on an unreadable gate", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-browser-guide-"));
+    try {
+      const gate = NodePath.join(directory, "turn-skills");
+      const bridge = await loadMcpBridge({ browser: true, screenSkillGate: gate });
+      const start = bridge.handlers.get("before_agent_start")!;
+      const sections: Record<string, string> = {};
+      const context = { ui: { notify: assert.fail } };
+      for (const browser of [true, false]) {
+        await NodeFSP.writeFile(gate, JSON.stringify({ screenCode: false, browser }));
+        await start({ systemPrompt: "base", systemPromptOptions: { sections } }, context);
+        assert.equal(Object.values(sections).join("\n").includes("## GOAT browser"), browser);
+      }
+      await NodeFSP.writeFile(gate, "unreadable");
+      await start({ systemPrompt: "base", systemPromptOptions: { sections } }, context);
+      assert.notInclude(Object.values(sections).join("\n"), "## GOAT browser");
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("a browser-only turn installs screen-code and removes it on the next disabled turn", async () => {
     const directory = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "goat-pi-screen-guide-"),

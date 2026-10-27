@@ -859,7 +859,7 @@ describe("AcpAdapterV2", () => {
         assert.equal(firstDefault.textBlockCount, 2);
         assert.include(firstDefault.prompt, "GOAT interaction mode: Default");
         if (attached) {
-          assert.include(firstDefault.prompt, "GOAT collaborative browser");
+          assert.notInclude(firstDefault.prompt, "GOAT browser");
           assert.include(firstDefault.prompt, "GOAT orchestration");
         }
         assert.notInclude(
@@ -7852,7 +7852,7 @@ describe("AcpAdapterV2", () => {
   ) {
     const text = blocks[0]?.text ?? "";
     assert.include(text, "GOAT interaction mode: Default");
-    assert.include(text, "GOAT collaborative browser");
+    assert.include(text, "GOAT browser");
     assert.include(text, "GOAT orchestration");
     assert.include(text, `<user_request>\n${request}\n</user_request>`);
   }

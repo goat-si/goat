@@ -144,6 +144,12 @@ describe("computer use skill text", () => {
     );
   });
 
+  it("keeps the resident screen guide within 300 bytes", () => {
+    expect(
+      new TextEncoder().encode(builtInSkillSections(["screen-code"]).join("\n\n")).byteLength,
+    ).toBeLessThanOrEqual(300);
+  });
+
   it("points later turns at the installed screen guide within the 300-byte budget, and inlines it when none is installed", () => {
     const skillPath = "/state/skills/screen-code/SKILL.md";
     const base = buildRuntimeInstructions({ harness: "Cursor" });

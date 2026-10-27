@@ -2421,7 +2421,6 @@ describe("OpenCodeAdapterV2", () => {
     );
     assert.isUndefined(openCodeBoundaryAfterProviderTurn([first, synthetic, third], third.id));
   });
-
   it.effect.each([false, true])(
     "WP4 OpenCode v1 memory framed delivery and clear external=%s",
     (external) =>
@@ -2439,7 +2438,7 @@ describe("OpenCodeAdapterV2", () => {
           providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
           endpoint: "http://fixture.invalid/mcp",
           authorizationHeader: "Bearer memory-fixture",
-          browserToolsAvailable: false,
+          browserToolsAvailable: !external,
           grantedScopes: ["memory:read", "memory:write", "orchestration:read"] as const,
         };
         yield* sessions.set(config);
@@ -2505,6 +2504,7 @@ describe("OpenCodeAdapterV2", () => {
           });
         yield* harness.startTurn();
         yield* finish();
+        assert.equal(payloads[0]?.system?.includes("## GOAT browser") ?? false, !external);
         assert.include(payloads[0]?.system ?? "", memoryContextText(snapshot));
         assert.equal(registrations.length, external ? 0 : 1);
         if (external) assert.notInclude(payloads[0]?.system ?? "", "GOAT memory tools:");

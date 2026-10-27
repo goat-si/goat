@@ -20,6 +20,55 @@ const ALWAYS_INJECTED_BUDGET_BYTES = 5_632;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
 describe("GOAT provider instructions", () => {
+  it("keeps browser routing explicit within its resident budget", () => {
+    assert.isAtMost(bytes(GOAT_BROWSER_TOOL_INSTRUCTIONS), 500);
+    for (const text of [
+      "## GOAT browser",
+      "goat_preview_read",
+      "goat_preview_snapshot",
+      "diff:true",
+      "goat_screen_run",
+      "goat_preview_open",
+      "unclaimed",
+      "saved screenshot",
+    ])
+      assert.include(GOAT_BROWSER_TOOL_INSTRUCTIONS, text);
+  });
+
+  it("resends ACP instructions when browser availability changes and omits unavailable guidance", () => {
+    const available = { interactionMode: "default" as const, hasGoatMcp: true, browser: true };
+    const unavailable = { ...available, browser: false };
+    const first = goatAcpPromptWithInstructions({ prompt: "Read the page", state: available });
+    assert.include(first, "## GOAT browser");
+    const disabled = goatAcpPromptWithInstructions({
+      prompt: "Continue",
+      state: unavailable,
+      previousState: available,
+    });
+    assert.include(disabled, GOAT_DEVELOPMENT_INSTRUCTIONS);
+    assert.notInclude(disabled, "## GOAT browser");
+    assert.equal(
+      goatAcpPromptWithInstructions({
+        prompt: "Continue",
+        state: unavailable,
+        previousState: unavailable,
+      }),
+      "Continue",
+    );
+    assert.include(
+      goatAcpPromptWithInstructions({
+        prompt: "Continue",
+        state: available,
+        previousState: unavailable,
+      }),
+      "## GOAT browser",
+    );
+    assert.notInclude(
+      goatAcpPromptWithInstructions({ prompt: "Read", state: { ...available, hasGoatMcp: false } }),
+      "## GOAT browser",
+    );
+  });
+
   it("instructs every provider to write GOAT thread links", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "[title](goat-thread://v1/<threadId>)");
     assert.notInclude(GOAT_ORCHESTRATION_INSTRUCTIONS, "t3-thread://");

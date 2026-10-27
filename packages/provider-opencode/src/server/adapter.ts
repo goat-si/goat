@@ -938,11 +938,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ? { serverPassword: options.settings.serverPassword }
             : {}),
         });
-
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const hasGoatMcp = mcpSession !== undefined && !connection.external;
         let installedMcpSession = hasGoatMcp ? mcpSession : undefined;
-        const orchestrationSystemPrompt = goatOrchestrationSystemPrompt(hasGoatMcp);
+        const orchestrationSystemPrompt = goatOrchestrationSystemPrompt(
+          hasGoatMcp,
+          mcpSession?.browserToolsAvailable,
+        );
         if (hasGoatMcp) {
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
@@ -986,7 +988,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           installedCuaKey = added ? wanted : "";
           return added;
         });
-
         const now = yield* DateTime.now;
         let sessionEntity: OrchestrationV2ProviderSession = {
           id: input.providerSessionId,
@@ -1023,7 +1024,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const abortController = new AbortController();
         let closing = false;
         let hasConnected = false;
-
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
 

@@ -47,16 +47,23 @@ interface Builders {
     readonly GOAT_ORCHESTRATION_INSTRUCTIONS: string;
     readonly GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS: string;
     readonly GOAT_BROWSER_TOOL_INSTRUCTIONS: string;
+    readonly goatBrowserInstructions: (browser: boolean) => string;
     readonly goatAcpPromptWithInstructions: (input: {
       readonly prompt: string;
-      readonly state: { readonly interactionMode: "default"; readonly hasGoatMcp: boolean };
+      readonly state: {
+        readonly interactionMode: "default" | "plan";
+        readonly hasGoatMcp: boolean;
+        readonly browser: boolean;
+        readonly screenCodeSkill?: boolean;
+      };
     }) => string;
     readonly goatOrchestrationPromptForFirstRun: (input: {
       readonly prompt: string;
       readonly runOrdinal: number;
       readonly hasGoatMcp: boolean;
+      readonly browser: boolean;
     }) => string;
-    readonly goatOrchestrationSystemPrompt: (hasGoatMcp: boolean) => string;
+    readonly goatOrchestrationSystemPrompt: (hasGoatMcp: boolean, browser: boolean) => string;
   };
   readonly development: { readonly GOAT_DEVELOPMENT_INSTRUCTIONS: string };
   readonly runtime: {
@@ -64,6 +71,9 @@ interface Builders {
       readonly harness: string;
       readonly model?: string;
       readonly reasoningEffort?: string;
+      readonly screenCode?: boolean;
+      readonly screenCodeSkillPath?: string;
+      readonly screenCodeCompact?: boolean;
     }) => string;
   };
   readonly memory: { readonly MEMORY_DATA_BOUNDARY_REMINDER: string };
@@ -134,7 +144,8 @@ const harnesses: ReadonlyArray<Harness> = [
     ],
     firstTurn: (b) =>
       [
-        b.runtime.buildRuntimeInstructions({ harness: "Claude Code" }),
+        b.runtime.buildRuntimeInstructions({ harness: "Claude Code" }) +
+          b.orchestration.goatBrowserInstructions(true),
         b.memory.MEMORY_DATA_BOUNDARY_REMINDER,
         b.development.GOAT_DEVELOPMENT_INSTRUCTIONS +
           b.orchestration.GOAT_ORCHESTRATION_INSTRUCTIONS +
@@ -149,13 +160,13 @@ const harnesses: ReadonlyArray<Harness> = [
     composedIn: "packages/provider-opencode/src/server/v2/adapter.ts",
     mustContain: [
       'harness: "OpenCode"',
-      "goatOrchestrationSystemPrompt(mcpAvailable)",
+      "goatOrchestrationSystemPrompt(mcpAvailable, mcpSession?.browserToolsAvailable)",
       "GOAT memory tools: read=",
     ],
     firstTurn: (b) =>
       [
         b.runtime.buildRuntimeInstructions({ harness: "OpenCode", model: MODEL }),
-        b.orchestration.goatOrchestrationSystemPrompt(true),
+        b.orchestration.goatOrchestrationSystemPrompt(true, true),
         MEMORY_TOOLS_LINE,
       ].join("\n\n"),
     laterTurn: () => "",
@@ -176,6 +187,7 @@ const harnesses: ReadonlyArray<Harness> = [
           prompt: PROMPT,
           runOrdinal: 1,
           hasGoatMcp: true,
+          browser: true,
         }),
         b.runtime.buildRuntimeInstructions({ harness: "Cursor", model: MODEL }),
         MEMORY_TOOLS_LINE,
@@ -200,7 +212,7 @@ const harnesses: ReadonlyArray<Harness> = [
     firstTurn: (b) =>
       b.orchestration.goatAcpPromptWithInstructions({
         prompt: PROMPT,
-        state: { interactionMode: "default", hasGoatMcp: true },
+        state: { interactionMode: "default", hasGoatMcp: true, browser: true },
       }) + b.runtime.buildRuntimeInstructions({ harness: "ACP", model: MODEL }),
     laterTurn: (b) => b.runtime.buildRuntimeInstructions({ harness: "ACP", model: MODEL }),
   },
@@ -217,6 +229,7 @@ const harnesses: ReadonlyArray<Harness> = [
       [
         b.development.GOAT_DEVELOPMENT_INSTRUCTIONS,
         b.orchestration.GOAT_ORCHESTRATION_INSTRUCTIONS.trim(),
+        b.orchestration.GOAT_BROWSER_TOOL_INSTRUCTIONS.trim(),
       ].join("\n\n"),
     laterTurn: () => "",
   },
@@ -340,6 +353,41 @@ const rows = harnesses.map((harness) => {
     laterTurnBytes: laterTurn,
   };
 });
+const screenCodeSkillPath = "/state/skills/screen-code/SKILL.md";
+const screenConfigurations = [
+  ...(["default", "plan"] as const).map((interactionMode) => ({
+    harness: interactionMode === "default" ? "ACP no-path" : "ACP Plan with path",
+    instructionBytes: bytes(
+      builders.orchestration.goatAcpPromptWithInstructions({
+        prompt: PROMPT,
+        state: { interactionMode, hasGoatMcp: true, browser: true, screenCodeSkill: true },
+      }) +
+        builders.runtime.buildRuntimeInstructions({
+          harness: "ACP",
+          model: MODEL,
+          screenCode: true,
+          screenCodeCompact: true,
+          ...(interactionMode === "plan" ? { screenCodeSkillPath } : {}),
+        }),
+    ),
+  })),
+  {
+    harness: "Cursor later turn with path",
+    laterTurnBytes: bytes(
+      [
+        "",
+        builders.runtime.buildRuntimeInstructions({
+          harness: "Cursor",
+          model: MODEL,
+          screenCode: true,
+          screenCodeCompact: true,
+          screenCodeSkillPath,
+        }),
+        MEMORY_TOOLS_LINE,
+      ].join("\n\n"),
+    ),
+  },
+];
 /** The always-injected targets every harness keeps (D21 in docs/internals/agent-surface.md). */
 const BUDGET = {
   instructionBytes: 6 * 1024,
@@ -373,6 +421,7 @@ const report = {
   listing,
   coreClientListing,
   harnesses: rows,
+  screenConfigurations: { screenCodeSkillPath, measurements: screenConfigurations },
   budget: BUDGET,
   overBudget,
   wakes: dbPath === undefined ? null : await wakeMessages(dbPath),
@@ -429,6 +478,19 @@ if (argv.includes("--json")) {
         row.carrier +
         " |",
     ),
+    "",
+    "Existing screen configurations (separate from harness gates), guide path " +
+      screenCodeSkillPath +
+      ": " +
+      screenConfigurations
+        .map(
+          (row) =>
+            row.harness +
+            " " +
+            n("instructionBytes" in row ? row.instructionBytes : row.laterTurnBytes) +
+            " B",
+        )
+        .join("; "),
     "",
     "Largest tools (model-facing bytes): " +
       listing.largest.map((tool) => tool.name + " " + n(tool.bytes)).join(", "),

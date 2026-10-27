@@ -10,6 +10,7 @@ export const acpInstructionState = (
   ({
     interactionMode: turnInput.runtimePolicy.interactionMode,
     hasGoatMcp: mcpContext.servers.length > 0,
+    browser: mcpContext.browser === true,
     screenCodeSkill: mcpContext.screenCodeSkill === true,
   }) satisfies GoatAcpInstructionState;
 
