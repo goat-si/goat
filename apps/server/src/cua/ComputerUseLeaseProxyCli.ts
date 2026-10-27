@@ -48,6 +48,7 @@ import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
+import { helperCursorListing } from "./ComputerUseCursorTools.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
@@ -591,7 +592,11 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         () => undefined,
       ).pipe(Stream.catchCause(() => Stream.empty)),
       output: (line: string, context?: { readonly tool?: string | undefined }) =>
-        Effect.sync(() => void process.stdout.write(guide(line, context) + "\n")),
+        Effect.sync(() => {
+          const listed = drawsOverlay ? helperCursorListing(line) : line;
+          process.stdout.write(guide(listed, context) + "\n");
+        }),
+      answersCursorTools: drawsOverlay,
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its
       // overlay and input feed only when the proxy opens their channel.

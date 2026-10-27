@@ -112,7 +112,8 @@ const makeAgentCursorReports = Effect.fn("agentCursorReports.make")(function* (
 
 /**
  * The proxy's overlay: each event updates what it shows, tells the preview where the cursor is,
- * and waits until the current helper (when it draws one) has drawn it.
+ * and waits until the current helper (when it draws one) has drawn it. The agent can turn the
+ * on-screen cursor off; hides still reach the helper, which interrupts its work on a pause or end.
  */
 export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer")(function* (
   send: ((cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>) | undefined,
@@ -122,6 +123,9 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
   const report = yield* makeAgentCursorReports(send);
   const scopedReport = sendScoped ? yield* makeScopedAgentCursorReports(sendScoped) : undefined;
   let state = initialOverlayState;
+  let enabled = true;
+  const toHelper = (command: ComputerUseOverlayCommand): ComputerUseOverlayCommand =>
+    enabled || command.op !== "show" ? command : { op: "hide", reason: "idle" };
   return {
     draw: Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
       const [next, commands] = overlayStep(state, event);
@@ -131,10 +135,18 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
       for (const command of commands) {
         if (next.scoped === undefined || (command.op === "hide" && command.reason === "capture"))
           yield* report(command);
-        if (draw !== undefined) yield* draw(command);
+        if (draw !== undefined) yield* draw(toHelper(command));
       }
     }),
-    /** A fresh helper draws nothing yet. */
+    view: () => ({ enabled, visible: enabled && state.shown?.op === "show" }),
+    setEnabled: Effect.fn("ComputerUseLeaseProxy.setCursorEnabled")(function* (next: boolean) {
+      if (next === enabled) return;
+      enabled = next;
+      const draw = sink();
+      if (draw !== undefined && state.shown?.op === "show")
+        yield* draw(next ? state.shown : toHelper(state.shown));
+    }),
+    /** A fresh helper draws nothing yet; the agent's choice to hide the cursor stays. */
     reset: () => {
       state = initialOverlayState;
     },

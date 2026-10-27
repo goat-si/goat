@@ -59,6 +59,11 @@ describe("cuaDriverManifest", () => {
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
   });
 
+  it("offers the read-only get_config while set_config stays out", () => {
+    expect(CUA_DRIVER_ALLOWED_TOOLS).toContain("get_config");
+    expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain("set_config");
+  });
+
   it("offers only list_apps identities outside the manifest's protected apps", () => {
     expect(
       cuaRequestableApps(

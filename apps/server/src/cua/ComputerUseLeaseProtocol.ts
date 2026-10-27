@@ -44,6 +44,7 @@ export const DISPLAY_PROOF_FREE: ReadonlySet<string> = new Set([
   "get_session",
   "list_sessions",
   "get_agent_cursor_state",
+  "get_config",
 ]);
 
 /**

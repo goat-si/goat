@@ -33,6 +33,7 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_session",
   "list_sessions",
   "get_agent_cursor_state",
+  "get_config",
   "set_agent_cursor_enabled",
   "set_agent_cursor_motion",
   "set_agent_cursor_theme",

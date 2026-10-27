@@ -23,6 +23,7 @@ const READS = new Set([
   "get_session",
   "list_sessions",
   "get_agent_cursor_state",
+  "get_config",
   "start_session",
   "end_session",
 ]);
