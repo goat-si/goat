@@ -14,7 +14,6 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 
 import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
-import { formatWorkingDurationLabel } from "@goat/client-runtime/state/models";
 import { type EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import {
@@ -50,6 +49,7 @@ import {
   memo,
   useRef,
   useState,
+  type AnimationEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -85,7 +85,6 @@ import {
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
-  resolveWorkingStartedAt,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
   isSidebarThreadWoke,
@@ -125,7 +124,6 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
-import { useNowSecond } from "../../hooks/useNowSecond";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
 // status and auth on every provider; leaving those out keeps each
@@ -156,17 +154,15 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
-function WorkingDuration(props: { startedAt: string | null }) {
-  const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
-  if (Number.isNaN(startedMs)) return null;
-  return <WorkingDurationLabel startedMs={startedMs} />;
-}
+function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
+  if (event.animationName !== "spin") return;
 
-function WorkingDurationLabel(props: { startedMs: number }) {
-  const nowMs = useNowSecond();
-  return (
-    <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - props.startedMs)}</span>
-  );
+  // Every running row shares the document timeline phase.
+  for (const animation of event.currentTarget.getAnimations()) {
+    if ("animationName" in animation && animation.animationName === "spin") {
+      animation.startTime = 0;
+    }
+  }
 }
 
 function terminalProcessLabel(count: number): string {
@@ -334,13 +330,13 @@ function SnoozeMenuButton(props: {
                   aria-label="Snooze thread"
                   onClick={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                 />
               }
             />
           }
         >
-          <ClockIcon className="size-3" />
+          <ClockIcon className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup>Snooze thread</TooltipPopup>
       </Tooltip>
@@ -688,7 +684,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ? {
           label: thread.goal?.status === "active" ? "Goal" : "Working",
           icon: "working" as const,
-          className: "text-info-foreground",
+          className: "text-muted-foreground",
         }
       : status === "waiting"
         ? {
@@ -706,7 +702,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ? {
                 label: "Input",
                 icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
+                className: "text-info-foreground",
               }
             : status === "request"
               ? {
@@ -1309,29 +1305,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {externalLauncherBadge}
               {historyArchiveHint}
               {pinIndicator}
-              {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title
                 </span>
               ) : null}
-              {/* Reserve both states' widths so revealing actions cannot move the pin or Woke label. */}
+              {/* The title runs to the status cluster; hover or keyboard focus swaps the
+                cluster for the row actions, so no width sits reserved for them. */}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
                 <span
                   className={cn(
-                    "group/sidebar-status-slot ml-auto grid h-5 min-w-8 shrink-0 items-stretch justify-end text-xs",
+                    "group/sidebar-status-slot ml-auto flex h-5 shrink-0 items-center justify-end gap-1.5 text-xs",
                     props.sweepAction !== null && "hidden",
                   )}
                 >
+                  {/* Stays put through hover so its path tooltip remains reachable. */}
+                  {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
                   <span
                     className={cn(
                       isWokeStatus
                         ? "pointer-events-auto"
-                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:opacity-0",
-                      "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity [grid-area:1/1]",
-                      snoozeMenuOpen && "pointer-events-none opacity-0",
+                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:hidden group-any-hover/sidebar-row:hidden",
+                      "flex items-center gap-1.5 tabular-nums text-secondary-label empty:hidden",
+                      snoozeMenuOpen && "hidden",
                     )}
                   >
                     {topStatus ? (
@@ -1363,11 +1361,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           )}
                         >
                           {topStatus.icon === "working" ? (
-                            // oxlint-disable shadcn/no-arbitrary-values -- The approved sidebar spinner uses an eight-step 0.9s rotation.
+                            // oxlint-disable shadcn/no-arbitrary-values -- The sidebar spinner uses a twelve-step 1.6s rotation.
                             <svg
                               aria-hidden
                               viewBox="0 0 16 16"
-                              className="size-3.5 shrink-0 animate-[spin_0.9s_steps(8)_infinite] motion-reduce:animate-none"
+                              className="size-3.5 shrink-0 animate-[spin_1.6s_steps(12)_infinite] motion-reduce:animate-none"
+                              onAnimationStart={synchronizeSidebarSpinner}
                               fill="none"
                             >
                               <circle
@@ -1397,13 +1396,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           ) : topStatus.icon === "failed" ? (
                             <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
                           ) : topStatus.icon === "done" ? (
-                            // oxlint-disable shadcn/no-raw-colors -- Blue is reserved for unread completion in the approved sidebar design.
-                            <span
-                              aria-hidden
-                              className="size-2 shrink-0 rounded-full bg-blue-500"
-                            />
+                            <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
                           ) : (
-                            // oxlint-enable shadcn/no-raw-colors
                             <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />
                           )}
                           {/* The open thread announces its own status, so its row
@@ -1418,15 +1412,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           >
                             {topStatus.label}
                           </span>
-                          {status === "working" ? (
-                            <span aria-hidden>
-                              <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
-                            </span>
-                          ) : status === "waiting" ? (
-                            <span aria-hidden>
-                              <WorkingDuration startedAt={thread.latestRun?.completedAt ?? null} />
-                            </span>
-                          ) : null}
                         </span>
                       )
                     ) : null}
@@ -1434,14 +1419,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
                     <span
                       className={cn(
-                        // focus-visible, not focus-within: a mouse click leaves
-                        // the Settle button focused, and a plain focus-within
-                        // would keep the controls pinned over the status label
-                        // once the pointer moves away (e.g. after a failed
-                        // settle) instead of cross-fading back.
-                        "pointer-events-none flex items-stretch justify-self-end opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                        isWokeStatus ? "[grid-area:1/2]" : "[grid-area:1/1]",
-                        snoozeMenuOpen && "pointer-events-auto opacity-100",
+                        // Collapsed rather than display:none so the buttons stay
+                        // reachable by Tab. focus-visible, not focus-within: a mouse
+                        // click leaves Settle focused and would pin the actions open.
+                        "pointer-events-none -ml-1.5 flex w-0 items-center gap-0.5 overflow-hidden opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:ml-0 has-[:focus-visible]:w-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:ml-0 group-any-hover/sidebar-row:w-auto group-any-hover/sidebar-row:opacity-100",
+                        snoozeMenuOpen && "pointer-events-auto ml-0 w-auto opacity-100",
                       )}
                     >
                       {hasUnsentDraft ? (
@@ -1452,7 +1434,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                 type="button"
                                 aria-label="Discard draft"
                                 onClick={handleDiscardDraftClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                               />
                             }
                           >
@@ -1486,7 +1468,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                     : handleSettleClick
                                 }
                                 onPointerDown={handleActionPointerDown}
-                                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                               />
                             }
                           >
@@ -1495,7 +1477,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             ) : (
                               <CheckIcon className="size-3.5" />
                             )}
-                            {variantAction === "unsettle" ? "Un-settle" : "Settle"}
                           </TooltipTrigger>
                           <TooltipPopup>
                             {variantAction === "unsettle" ? "Un-settle thread" : "Settle thread"}

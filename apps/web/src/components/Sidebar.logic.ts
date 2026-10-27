@@ -1,7 +1,6 @@
 import { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
 export { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@goat/shared/threadPullRequests";
 import * as React from "react";
@@ -1583,12 +1582,6 @@ export function reduceSidebarProjectScopeMenuState(
   }
 }
 
-export function resolveWorkingStartedAt(
-  thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
-): string | null {
-  return resolveThreadWorkingStartedAt(thread);
-}
-
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
@@ -1606,8 +1599,8 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
     return {
       label: "Awaiting Input",
-      colorClass: "text-indigo-600 dark:text-indigo-300/90",
-      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: false,
     };
   }
@@ -1627,8 +1620,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }
@@ -1640,8 +1633,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: "Connecting",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }

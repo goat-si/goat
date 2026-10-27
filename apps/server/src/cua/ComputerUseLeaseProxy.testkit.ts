@@ -122,6 +122,8 @@ export const harness = Effect.fn(function* (
     readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
     /** Decorates each line for the provider, as the CLI's app guide does. */
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
+    /** The helper draws the agent cursor, so the proxy answers the cursor tools. */
+    readonly answersCursorTools?: boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -178,6 +180,7 @@ export const harness = Effect.fn(function* (
         ),
       ),
     controlId: options.controlId ?? CONTROL,
+    ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),

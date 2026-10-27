@@ -501,6 +501,30 @@ describe("CDP relay screencasts", () => {
   });
 });
 
+describe("CDP relay cookies", () => {
+  // Snapshot, evaluate and fetch all mask cookie values read through Playwright's context.cookies().
+  it("answers Playwright's browser-level cookie read with the tab's own cookies", async () => {
+    const cookie = { name: "sid", value: "one-time", domain: "example.test", path: "/" };
+    const send = vi.fn(async (method: string) =>
+      method === "Network.getAllCookies" ? { cookies: [cookie] } : {},
+    );
+    const written: Array<Record<string, unknown>> = [];
+    const relay = createCdpRelayConnection(makeTarget(send), (raw) =>
+      written.push(JSON.parse(raw)),
+    );
+    relay.receive(
+      JSON.stringify({
+        id: 1,
+        method: "Storage.getCookies",
+        params: { browserContextId: "goat-preview" },
+      }),
+    );
+    await settle();
+    expect(send).toHaveBeenCalledWith("Network.getAllCookies", {}, undefined);
+    expect(written).toEqual([{ id: 1, result: { cookies: [cookie] } }]);
+  });
+});
+
 describe("CDP relay downloads", () => {
   it("applies the server's download directory and reports downloads on the root session", async () => {
     const send = vi.fn(async () => ({}));

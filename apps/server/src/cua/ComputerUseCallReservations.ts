@@ -23,6 +23,7 @@ const READS = new Set([
   "get_session",
   "list_sessions",
   "get_agent_cursor_state",
+  "get_config",
   "start_session",
   "end_session",
 ]);
@@ -121,6 +122,20 @@ export const makeCallReservations = () => {
   // A delayed POST must never reopen a driver generation already cut off by its proxy.
   const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
   return {
+    reclaimStopped(canAct: (holder: ThreadId, controlId: string) => boolean, now: number) {
+      for (const [id, ticket] of tickets) {
+        if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
+          ticket.stoppedAt = now;
+        if (ticket.stoppedAt === undefined || now - ticket.stoppedAt < ORPHAN_CALL_GRACE_MS)
+          continue;
+        // A delayed reserve must not restart grace for a driver that has already been cut off.
+        closed.set(connectionKey(ticket.threadId, ticket.call), {
+          threadId: ticket.threadId,
+          controlId: ticket.call.controlId,
+        });
+        tickets.delete(id);
+      }
+    },
     /**
      * Whether another control's ticket holds what this call would reserve. It takes nothing; a
      * window ticket answers before the app lease around it (D17), as the narrower refusal.

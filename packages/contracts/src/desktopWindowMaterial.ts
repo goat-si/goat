@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 export const MIN_GLASS_OPACITY = 40;
@@ -9,7 +10,43 @@ export const GlassOpacity = Schema.Int.check(
   }),
 );
 export type GlassOpacity = typeof GlassOpacity.Type;
-export const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
+const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
+
+const AppearancePreset = Schema.Literals(["default", "liquid-glass"]);
+export type AppearancePreset = typeof AppearancePreset.Type;
+
+const GlassBackdrop = Schema.Literals(["built-in", "custom"]);
+export type GlassBackdrop = typeof GlassBackdrop.Type;
+
+// Spread into ClientSettingsSchema and ClientSettingsPatch, which sit at their code budget.
+export const GlassClientSettingFields = {
+  glassOpacity: GlassOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
+  ),
+  desktopSystemMaterialEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  appearancePreset: AppearancePreset.pipe(
+    Schema.withDecodingDefault(Effect.succeed<AppearancePreset>("default")),
+  ),
+  glassBackdrop: GlassBackdrop.pipe(
+    Schema.withDecodingDefault(Effect.succeed<GlassBackdrop>("built-in")),
+  ),
+};
+export const GlassClientSettingPatchFields = {
+  glassOpacity: Schema.optionalKey(GlassOpacity),
+  desktopSystemMaterialEnabled: Schema.optionalKey(Schema.Boolean),
+  appearancePreset: Schema.optionalKey(AppearancePreset),
+  glassBackdrop: Schema.optionalKey(GlassBackdrop),
+};
+
+/** The Liquid Glass style asks for the system material without changing the System glass switch. */
+export function isSystemMaterialRequested(settings: {
+  readonly desktopSystemMaterialEnabled: boolean;
+  readonly appearancePreset: AppearancePreset;
+}): boolean {
+  return settings.desktopSystemMaterialEnabled || settings.appearancePreset === "liquid-glass";
+}
 
 export const DesktopWindowMaterialKind = Schema.Literals(["none", "macos-glass", "windows-mica"]);
 export type DesktopWindowMaterialKind = typeof DesktopWindowMaterialKind.Type;

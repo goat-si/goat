@@ -135,6 +135,8 @@ it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
           );
         // Client-only tools are refused to every thread before any profile is consulted.
         if (entry.requires === "client") continue;
+        // Screen attachment, not the profile, gates goat_screen_run; its own test covers it.
+        if (row.path === "surface.screen_run") continue;
         // Arguments never decode for a caller the gate refuses, so empty ones reach it.
         const gated = refusedByProfile(yield* http.callTool("thread", row.name, {}));
         if (gated) refused += 1;

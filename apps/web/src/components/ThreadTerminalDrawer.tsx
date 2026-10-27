@@ -557,6 +557,7 @@ function TerminalSessionViewport({
       terminal: settings.fontSizeTerminal,
     }),
   );
+  const liquidGlass = useClientSettings((s) => s.appearancePreset === "liquid-glass");
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
   // Keyed by the launch (see TerminalViewport), so the atom is fixed for this surface.
   const terminalSessionAtom = attachedTerminalSessionAtom(environmentId, {
@@ -615,13 +616,11 @@ function TerminalSessionViewport({
     (url: string, forceBrowser: boolean, fallbackToBrowser: () => void) =>
       openTerminalLinkInPreview({ url, threadRef, openPreview, fallbackToBrowser, forceBrowser }),
   );
-
   useLayoutEffect(() => {
     if (terminalRef.current) terminalRef.current.input.readOnly = !canOperateTerminal;
     if (canOperateTerminal && visibleRef.current)
       consumePendingTerminalFocus(threadRef, terminalId);
   }, [canOperateTerminal, terminalId, threadRef]);
-
   // Links re-read the grant on activation; only the hovered link's styling needs a nudge.
   const linkActivationScopeRef = useRef(canOpenHostEditor);
   useEffect(() => {
@@ -629,21 +628,18 @@ function TerminalSessionViewport({
     linkActivationScopeRef.current = canOpenHostEditor;
     terminalRef.current?.refreshLinkActivation();
   }, [canOpenHostEditor]);
-
   useLayoutEffect(() => {
     visibleRef.current = visible;
     terminalRef.current?.setVisible(visible);
     // A request made while this viewport was hidden could not focus it.
     if (visible) consumePendingTerminalFocus(threadRef, terminalId);
   }, [terminalId, threadRef, visible]);
-
   useEffect(() => {
     const current = terminalFontRef.current;
     if (current.family === terminalFontFamily && current.size === terminalFontSize) return;
     terminalFontRef.current = { family: terminalFontFamily, size: terminalFontSize };
     void terminalRef.current?.setFont(terminalFontOptions(terminalFontFamily, terminalFontSize));
   }, [terminalFontFamily, terminalFontSize]);
-
   useEffect(() => {
     const mount = containerRef.current;
     if (!mount) return;
@@ -660,6 +656,7 @@ function TerminalSessionViewport({
       const terminalOptions = withLiveVisibility(visibleRef, {
         theme: terminalThemeFromApp(mount),
         font: terminalFontOptions(setupFont.family, setupFont.size),
+        transparentBackground: liquidGlass,
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
@@ -1109,7 +1106,7 @@ function TerminalSessionViewport({
         mount.focus({ preventScroll: true });
       }
     };
-  }, [cwd, environmentId, terminalId]);
+  }, [cwd, environmentId, terminalId, liquidGlass]);
 
   const attachContainer = (mount: HTMLDivElement) => {
     containerRef.current = mount;
@@ -1140,6 +1137,7 @@ function TerminalSessionViewport({
   return (
     <div
       ref={attachContainer}
+      data-glass-layer
       tabIndex={-1}
       className="relative h-full w-full overflow-hidden bg-(--terminal-background)"
     />
@@ -1717,6 +1715,7 @@ export default function ThreadTerminalDrawer({
       <aside
         ref={drawerRef}
         data-thread-terminal-drawer
+        data-glass-pane="terminal"
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
         className={cn(
           "relative flex min-w-0 flex-col overflow-hidden bg-background",
@@ -1753,6 +1752,7 @@ export default function ThreadTerminalDrawer({
     <aside
       ref={drawerRef}
       data-thread-terminal-drawer
+      data-glass-pane="terminal"
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
       className={cn(
         "relative flex min-w-0 flex-col overflow-hidden bg-background",
@@ -1820,9 +1820,9 @@ export default function ThreadTerminalDrawer({
           </div>
         </div>
       )}
-
       <div className="min-h-0 w-full flex-1">
         <div
+          data-glass-layer
           className={cn(
             "flex h-full min-h-0 bg-(--terminal-background)",
             hasTerminalSidebar && "gap-1.5",

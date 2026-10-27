@@ -34,7 +34,8 @@ provider bills.
 
 - **Listing** counts what a harness hands the model per tool: name, description, input schema,
   and annotations. Output schemas travel in `tools/list` too and are reported separately, since
-  harnesses differ in whether the model sees them.
+  harnesses differ in whether the model sees them. The report also names input schemas over
+  5,000 bytes, the size above which Codex compacts an MCP tool's schema.
 - **Instructions** is GOAT's block for one default-mode turn with GOAT MCP and browser tools
   attached, and device tools, computer use, and memory content left out.
 - **First prompt** is instructions plus the full listing. Claude Code, Codex, and Pi have a native

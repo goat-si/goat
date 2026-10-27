@@ -58,8 +58,12 @@ const callers: Readonly<
 };
 
 const names = (tools: ReadonlyArray<ListedTool>) => tools.map((tool) => tool.name).sort();
+// These callers have no browser or computer use attached, so goat_screen_run is withheld.
 const listed = (filter: (entry: (typeof entries)[number]) => boolean) =>
-  entries.filter(filter).map(listedToolName).sort();
+  entries
+    .filter((entry) => entry.path !== "surface.screen_run" && filter(entry))
+    .map(listedToolName)
+    .sort();
 const textOf = (result: { readonly content: ReadonlyArray<unknown> }) =>
   JSON.stringify(result.content);
 /** The message of a refusal, which travels as an encoded OrchestratorMcpFailure. */
@@ -135,6 +139,20 @@ it.effect.each(["core", "full"] as const)(
           ? ["goat_call", "goat_describe"]
           : listed((entry) => entry.requires !== "client" && entry.resource !== "device"),
       );
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect.each(["core", "full"] as const)(
+  "lists goat_screen_run only to a thread whose turn has a screen surface attached (setting %s)",
+  (setting) =>
+    Effect.gen(function* () {
+      const screen = {
+        ...callers.thread,
+        capabilities: new Set([...callers.thread.capabilities, "screen" as const]),
+      };
+      const http = yield* serveCatalogOverHttp({ screen, thread: callers.thread }, setting);
+      expect(names(yield* http.listTools("screen"))).toContain("goat_screen_run");
+      expect(names(yield* http.listTools("thread"))).not.toContain("goat_screen_run");
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 

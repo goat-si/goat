@@ -114,6 +114,10 @@ export function createCdpRelayConnection(
         };
       case "Target.getBrowserContexts":
         return { browserContextIds: [] };
+      // Playwright reads context cookies here and filters them by URL itself; only the tab's page
+      // target can read its Electron session's cookies.
+      case "Storage.getCookies":
+        return target.send("Network.getAllCookies", {}, undefined);
       case "Target.getTargets":
         return { targetInfos: [await targetInfo()] };
       case "Target.attachToBrowserTarget":

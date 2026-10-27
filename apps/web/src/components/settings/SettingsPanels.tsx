@@ -438,11 +438,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
-
+  const { appearancePreset, glassBackdrop } = settings;
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(!followSystem ? ["Follow system"] : []),
     ...(themeHalves !== null ? ["Theme mix"] : []),
+    ...(appearancePreset !== "default" || glassBackdrop !== "built-in" ? ["Style"] : []),
     ...(settings.appearanceContrast !== DEFAULT_UNIFIED_SETTINGS.appearanceContrast
       ? ["Contrast"]
       : []),
@@ -584,7 +585,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Agent browser access"]
       : []),
   ];
-
   const restoreDefaults = async () => {
     if (changedSettingLabels.length === 0) return;
     const api = readLocalApi();
@@ -595,7 +595,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       { variant: "destructive" },
     );
     if (!confirmed) return;
-
     // Reset only dirty theme keys so storage failures cannot block other settings; re-read after confirmation
     // for safe rollback.
     let previousTheme = theme;
@@ -637,6 +636,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      appearancePreset: DEFAULT_UNIFIED_SETTINGS.appearancePreset,
+      glassBackdrop: DEFAULT_UNIFIED_SETTINGS.glassBackdrop,
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
@@ -709,7 +710,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     });
     onRestored?.();
   };
-
   return {
     changedSettingLabels,
     restoreDefaults,

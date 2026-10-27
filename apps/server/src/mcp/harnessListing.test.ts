@@ -55,9 +55,15 @@ const session = (endpoint: string): McpProviderSessionConfig => ({
 });
 
 const CORE = ["goat_call", "goat_describe"];
-// The thread has no device grant, so its listing withholds the device tools (#1196).
+// The thread has no device grant, so its listing withholds the device tools (#1196), and no
+// screen surface attached to its MCP scope, so goat_screen_run is withheld too.
 const threadTools = Object.values(agentSurfaceRegistry)
-  .filter((entry) => entry.requires !== "client" && entry.resource !== "device")
+  .filter(
+    (entry) =>
+      entry.requires !== "client" &&
+      entry.resource !== "device" &&
+      entry.path !== "surface.screen_run",
+  )
   .map(listedToolName);
 
 const expectForegroundSchema = (inputSchema: unknown) => {
