@@ -1,5 +1,9 @@
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
-import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
+import {
+  decodeCodexHomeCatalogArg as decodeRouteCatalogArg,
+  mergeCodexHomeThreadParams,
+} from "../../provider/CodexHomeRouteConfig.ts";
+import { codexNativeSubagentConfig } from "./CodexNativeSubagentConfig.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { MemoryContextSnapshot } from "@goat/contracts";
 import type { CuaDriverMcpConfiguration, RunId } from "@goat/contracts";
@@ -184,7 +188,6 @@ import {
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
 
-const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
@@ -1379,46 +1382,7 @@ export const CODEX_THREAD_CONFIG = {
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
-// openai/codex 2f19a57704 (0.147.0) keeps a boolean `features.multi_agent_v2` enabled when a table
-// overlays it. Earlier releases drop the boolean, so the v2 cap would switch the feature off.
-const CODEX_MULTI_AGENT_V2_CAP_VERSION = "0.147.0";
-// `agents.enabled` arrived in 0.145.0 (03bb3b1236); older Codex rejects unknown `agents` keys.
-const CODEX_AGENTS_ENABLED_VERSION = "0.145.0";
-
-/** Codex settings that hold native subagents to the thread's goatclaw `maxLanes`. */
-export function codexNativeSubagentConfig(
-  limit: number | undefined,
-  codexVersion: string | undefined,
-): {
-  readonly config: Readonly<Record<string, Schema.Json>>;
-  readonly omitted: ReadonlyArray<string>;
-} {
-  if (limit === undefined) return { config: {}, omitted: [] };
-  const supports = (minimum: string) =>
-    codexVersion !== undefined &&
-    parseSemver(codexVersion) !== null &&
-    compareSemverVersions(codexVersion, minimum) >= 0;
-  if (limit === 0) {
-    // Model metadata can choose multi-agent v2 by itself; only `agents.enabled = false` overrides
-    // that, and an enabled v2 feature overrides `agents.enabled`.
-    const off = { "features.multi_agent": false, "features.multi_agent_v2": false };
-    return supports(CODEX_AGENTS_ENABLED_VERSION)
-      ? { config: { ...off, "agents.enabled": false }, omitted: [] }
-      : { config: off, omitted: ["agents.enabled"] };
-  }
-  // V1 reads `agents.max_threads` as is. V2 counts the root thread, and an explicit v2 cap in the
-  // user's config outranks the `agents` fallback.
-  const threads = { "agents.max_threads": limit };
-  return supports(CODEX_MULTI_AGENT_V2_CAP_VERSION)
-    ? {
-        config: {
-          ...threads,
-          "features.multi_agent_v2.max_concurrent_threads_per_session": limit + 1,
-        },
-        omitted: [],
-      }
-    : { config: threads, omitted: ["features.multi_agent_v2.max_concurrent_threads_per_session"] };
-}
+export { codexNativeSubagentConfig };
 
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
@@ -2213,18 +2177,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             }
             return {
-              params: codexThreadRuntimeParams({
-                mcpSession: input.mcpSession,
-                ...(input.modelSelection === undefined
-                  ? {}
-                  : { modelSelection: input.modelSelection }),
-                ...(input.runtimePolicy === undefined
-                  ? {}
-                  : { runtimePolicy: input.runtimePolicy }),
-                userCuaDriver: configured,
-                previousCuaDriver,
-                codexVersion,
-              }),
+              params: mergeCodexHomeThreadParams(
+                launchSettings,
+                codexThreadRuntimeParams({
+                  mcpSession: input.mcpSession,
+                  ...(input.modelSelection === undefined
+                    ? {}
+                    : { modelSelection: input.modelSelection }),
+                  ...(input.runtimePolicy === undefined
+                    ? {}
+                    : { runtimePolicy: input.runtimePolicy }),
+                  userCuaDriver: configured,
+                  previousCuaDriver,
+                  codexVersion,
+                }),
+              ),
               cuaDriver: codexManagedCuaDriver(input.mcpSession, configured),
               subagentKey: Object.entries(subagents.config)
                 .map(([key, value]) => `${key}=${String(value)}`)
@@ -3515,6 +3482,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         .request("thread/resume", {
                           threadId: input.nativeThreadId,
                           excludeTurns: true,
+                          ...mergeCodexHomeThreadParams(launchSettings, { config: {} }),
                         })
                         .pipe(Effect.flatMap(decodeCodexChildModel)),
                   ),
