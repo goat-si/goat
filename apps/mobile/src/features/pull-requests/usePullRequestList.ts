@@ -178,7 +178,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
                   pages: {
                     ...pages,
                     entries: pages.entries.map((entry) => {
-                      const stat = stats.get(statKey(entry));
+                      const stat = stats.stats.get(statKey(entry));
                       return stat
                         ? { ...entry, additions: stat.additions, deletions: stat.deletions }
                         : entry;
@@ -254,8 +254,13 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   if (shown.counts !== counts)
     setShown({ counts, answers: retainPullRequestStatsAnswers(answered(), shown.answers) });
   const entries = useMemo(
-    () => withShownPullRequestStats(data.entries, shown.answers),
-    [data.entries, shown.answers],
+    () =>
+      withShownPullRequestStats(
+        data.entries,
+        shown.answers,
+        new Map(sources.map(({ target, stats }) => [target.environmentId, stats])),
+      ),
+    [data.entries, shown.answers, sources],
   );
 
   const updateEntry = useCallback(

@@ -7,6 +7,7 @@ import {
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListResult,
+  type PullRequestListStatsInput,
   type ScopedProjectRef,
 } from "@goat/contracts";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
@@ -50,6 +51,62 @@ export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry)
 export const pullRequestStatKey = (
   row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
 ) => `${row.projectId}:${row.repository}:${row.number}`;
+
+export interface PullRequestStatsCache {
+  readonly stats: ReadonlyMap<string, PullRequestDiffStat>;
+  readonly answeredBy: ReadonlyMap<string, PullRequestListStatsInput>;
+  readonly updatedAt: ReadonlyMap<string, string>;
+}
+
+export const EMPTY_PULL_REQUEST_STATS_CACHE: PullRequestStatsCache = {
+  stats: new Map(),
+  answeredBy: new Map(),
+  updatedAt: new Map(),
+};
+
+// Stats have no head identity; a changed list timestamp invalidates both the counts and their query.
+export function withListedPullRequests(
+  cache: PullRequestStatsCache,
+  entries: readonly Pick<
+    PullRequestListEntry,
+    "projectId" | "repository" | "number" | "updatedAt"
+  >[],
+): {
+  readonly cache: PullRequestStatsCache;
+  readonly refresh: readonly PullRequestListStatsInput[];
+} {
+  const moved = entries.filter(
+    (entry) => cache.updatedAt.get(pullRequestStatKey(entry)) !== entry.updatedAt,
+  );
+  if (!moved.length) return { cache, refresh: [] };
+  const stats = new Map(cache.stats);
+  const answeredBy = new Map(cache.answeredBy);
+  const updatedAt = new Map(cache.updatedAt);
+  const refresh = new Set<PullRequestListStatsInput>();
+  for (const entry of moved) {
+    const key = pullRequestStatKey(entry);
+    const query = answeredBy.get(key);
+    if (query) refresh.add(query);
+    stats.delete(key);
+    answeredBy.delete(key);
+    updatedAt.set(key, entry.updatedAt);
+  }
+  return { cache: { stats, answeredBy, updatedAt }, refresh: [...refresh] };
+}
+
+export function withAnsweredPullRequestStats(
+  cache: PullRequestStatsCache,
+  input: PullRequestListStatsInput,
+  answered: readonly PullRequestDiffStat[],
+): PullRequestStatsCache {
+  const stats = new Map(cache.stats);
+  const answeredBy = new Map(cache.answeredBy);
+  for (const row of answered) {
+    stats.set(pullRequestStatKey(row), row);
+    answeredBy.set(pullRequestStatKey(row), input);
+  }
+  return { ...cache, stats, answeredBy };
+}
 
 type PullRequestStatsAnswer = {
   readonly environmentId: EnvironmentId;
@@ -101,6 +158,7 @@ export function withShownPullRequestStats(
     readonly environmentId: EnvironmentId;
     readonly stats: readonly PullRequestDiffStat[];
   }[],
+  listedStats?: ReadonlyMap<EnvironmentId, PullRequestStatsCache>,
 ): readonly EnvironmentPullRequestListEntry[] {
   const shown = new Map(
     answers.flatMap(({ environmentId, stats }) =>
@@ -110,6 +168,9 @@ export function withShownPullRequestStats(
   if (!shown.size) return entries;
   let changed = false;
   const next = entries.map((entry) => {
+    // Live rows use recorded stats; a retained offline answer must not refill an evicted count.
+    if (listedStats?.get(entry.environmentId)?.updatedAt.has(pullRequestStatKey(entry)))
+      return entry;
     const stat = shown.get(`${entry.environmentId}:${pullRequestStatKey(entry)}`);
     if (!stat || entry.additions + entry.deletions !== 0) return entry;
     if (stat.additions + stat.deletions === 0) return entry;
