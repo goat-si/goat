@@ -48,16 +48,39 @@ function replaceInBatches(
   return result;
 }
 
-/**
- * Replaces every occurrence of long literals in one scan: a pattern of their first few
- * characters finds where one may start, and the longest literal that starts there is replaced.
- */
-function replaceLong(text: string, forms: ReadonlyArray<string>) {
+/** Long literals grouped by their first characters, longest first within each group. */
+function indexByPrefix(forms: ReadonlyArray<string>) {
   const byPrefix = new Map<string, Array<string>>();
   for (const form of longestFirst(forms)) {
     const prefix = form.slice(0, MIN_SECRET_LENGTH);
     byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), form]);
   }
+  return byPrefix;
+}
+
+/**
+ * A text cut to a limit can end partway through a long value, and that start no longer matches
+ * it. The last token's tail goes when it is the start of one.
+ */
+function redactCutTail(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
+  const tail = /\S+$/u.exec(text);
+  if (tail === null) return text;
+  const token = tail[0];
+  for (let at = 0; at + MIN_SECRET_LENGTH <= token.length; at++) {
+    const rest = token.slice(at);
+    const cut = byPrefix
+      .get(rest.slice(0, MIN_SECRET_LENGTH))
+      ?.some((form) => form.length > rest.length && form.startsWith(rest));
+    if (cut === true) return text.slice(0, tail.index + at) + REDACTED;
+  }
+  return text;
+}
+
+/**
+ * Replaces every occurrence of long literals in one scan: a pattern of their first few
+ * characters finds where one may start, and the longest literal that starts there is replaced.
+ */
+function replaceLong(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
   if (byPrefix.size === 0) return text;
   const starts = [...byPrefix.keys()].map(literal);
   // Prefixes are short, so even thousands of them stay a small pattern; batch past that anyway.
@@ -105,10 +128,10 @@ export const redactCookieValues = (
   if (valued.length === 0) return text;
   const formsOf = ({ value }: { readonly value: string }) => [value, encodeURIComponent(value)];
   // A long value goes wherever it appears, which covers name=value too.
-  let result = replaceLong(
-    text,
+  const byPrefix = indexByPrefix(
     valued.filter(({ value }) => value.length >= MIN_SECRET_LENGTH).flatMap(formsOf),
   );
+  let result = redactCutTail(replaceLong(text, byPrefix), byPrefix);
   const short = valued.filter(({ value }) => value.length < MIN_SECRET_LENGTH);
   result = replaceInBatches(
     result,

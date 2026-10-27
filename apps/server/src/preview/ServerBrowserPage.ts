@@ -732,7 +732,7 @@ const capture = async (
     `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
-  const masked = <A>(value: A) => redactValue(value, mask) as A;
+  const masked = <A>(value: A) => redactValue(value, mask, { keys: false }) as A;
   return {
     ...page,
     url: mask(page.url),

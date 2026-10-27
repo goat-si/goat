@@ -138,4 +138,26 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(snapshot.visibleText).toContain('yes, {"api":"');
     expect(JSON.stringify(logs)).toContain("yes, {");
   });
+  it("keeps the field names of console, network and action entries in a snapshot", async () => {
+    // Unrelated and never sent to this page, but long enough to be masked anywhere.
+    await context.addCookies([
+      { name: "preference", value: "timestamp", url: "http://unrelated.test" },
+    ]);
+    const { page, cdp } = await open();
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [{ level: "log", text: "hello", timestamp: "2026-10-28T00:00:00.000Z" }],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    expect(snapshot.consoleEntries[0]).toEqual({
+      level: "log",
+      text: "hello",
+      timestamp: "2026-10-28T00:00:00.000Z",
+    });
+  });
 });

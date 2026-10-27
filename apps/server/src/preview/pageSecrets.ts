@@ -42,13 +42,23 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(dotted ? text.replace(dotted, MASKED_VALUE) : text, cookies);
 
-/** Masks every string in an evaluation result, object keys included. */
-export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
+/**
+ * Masks every string in a value. An evaluation result's keys are the page's own text and are
+ * masked too; GOAT's own records keep their field names.
+ */
+export const redactValue = (
+  value: unknown,
+  mask: (text: string) => string,
+  options: { readonly keys: boolean } = { keys: true },
+): unknown => {
   if (typeof value === "string") return mask(value);
-  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask));
+  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, options));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask)]),
+    Object.entries(value).map(([key, each]) => [
+      options.keys ? mask(key) : key,
+      redactValue(each, mask, options),
+    ]),
   );
 };
 

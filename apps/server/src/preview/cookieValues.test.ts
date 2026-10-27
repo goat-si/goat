@@ -30,4 +30,9 @@ describe("redactCookieValues", () => {
     const text = `start ${cookies[1_234]!.value} end`;
     expect(redactCookieValues(text, cookies)).toBe(`start ${REDACTED} end`);
   });
+  it("redacts the start of a long value cut off at the end of a text, and nothing else", () => {
+    const cookies = [{ name: "sid", value: "SessionSecret77" }];
+    expect(redactCookieValues("x sid=SessionSec", cookies)).toBe(`x sid=${REDACTED}`);
+    expect(redactCookieValues("Session is over", cookies)).toBe("Session is over");
+  });
 });
