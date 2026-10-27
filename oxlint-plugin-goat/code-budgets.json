@@ -751,7 +751,7 @@
     "nonNull": 10
   },
   "packages/provider-acp-registry/src/server/driver.ts": { "nonNull": 1 },
-  "packages/provider-acp/src/server/AcpSessionRuntime.ts": { "lines": 2892, "nonNull": 5 },
+  "packages/provider-acp/src/server/AcpSessionRuntime.ts": { "lines": 2872, "nonNull": 5 },
   "packages/provider-acp/src/server/adapter.ts": { "lines": 8602, "nonNull": 7 },
   "packages/provider-acp/src/server/clientTerminals.ts": { "nonNull": 2 },
   "packages/provider-acp/src/server/runtimeModel.test.ts": { "lines": 1530 },
