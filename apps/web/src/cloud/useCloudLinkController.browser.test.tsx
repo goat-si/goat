@@ -17,12 +17,17 @@ const testState = vi.hoisted(() => ({
   renderedSnapshot: null as EnvironmentCloudLinkStateResult | null,
   relayProviderKind: null as RelayManagedEndpointProviderKind | null,
   getToken: vi.fn<() => Promise<string | null>>(),
+  reverify: vi.fn<() => Promise<void>>(),
   link: vi.fn(),
   unlink: vi.fn(),
   preferences: vi.fn(),
   refreshDiscovery: vi.fn(),
   refreshLink: vi.fn(),
   toast: vi.fn(),
+}));
+
+vi.mock("./useConnectReverification", () => ({
+  useConnectReverification: () => testState.reverify,
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -151,6 +156,7 @@ function setup() {
   testState.renderedSnapshot = linkedState;
   testState.relayProviderKind = null;
   testState.getToken.mockReset().mockResolvedValue("clerk-token");
+  testState.reverify.mockReset().mockResolvedValue(undefined);
   for (const command of [
     testState.link,
     testState.unlink,
@@ -212,6 +218,16 @@ describe("useCloudLinkController", () => {
     });
 
     expect(await screen.reconcile({ managedTunnel: true, publish: true })).toBe(false);
+    expectNoMutations();
+  });
+
+  it("does not link or save preferences when MFA verification is cancelled", async () => {
+    using _setup = setup();
+    testState.snapshot = { ...linkedState, linked: false };
+    testState.renderedSnapshot = testState.snapshot;
+    await using screen = await mountController();
+    testState.reverify.mockRejectedValueOnce(new Error("Verification cancelled"));
+    expect(await screen.reconcile({ managedTunnel: true, publish: false })).toBe(false);
     expectNoMutations();
   });
 

@@ -16,6 +16,7 @@ import { relayEnvironmentLinks } from "../persistence/schema.ts";
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
+  readonly connectAuthPolicyVersion?: number | null;
 }
 
 export interface AgentAwarenessDeliveryUserRecord {
@@ -193,6 +194,7 @@ const make = Effect.gen(function* () {
           userId: input.userId,
           environmentId,
           holdWebhooksWhileOffline: inheritedHoldWebhooks,
+          connectAuthPolicyVersion: proof.descriptor.connectAuthPolicyVersion ?? null,
           environmentLabel: proof.descriptor.label,
           environmentPublicKey: proof.environmentPublicKey,
           endpointHttpBaseUrl: endpoint.httpBaseUrl,
@@ -209,6 +211,7 @@ const make = Effect.gen(function* () {
         .onConflictDoUpdate({
           target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
           set: {
+            connectAuthPolicyVersion: proof.descriptor.connectAuthPolicyVersion ?? null,
             environmentPublicKey: proof.environmentPublicKey,
             environmentLabel: proof.descriptor.label,
             endpointHttpBaseUrl: endpoint.httpBaseUrl,
@@ -317,6 +320,7 @@ const make = Effect.gen(function* () {
           environmentId: relayEnvironmentLinks.environmentId,
           environmentLabel: relayEnvironmentLinks.environmentLabel,
           environmentPublicKey: relayEnvironmentLinks.environmentPublicKey,
+          connectAuthPolicyVersion: relayEnvironmentLinks.connectAuthPolicyVersion,
           endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
@@ -348,6 +352,7 @@ const make = Effect.gen(function* () {
                       row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
                   },
                   environmentPublicKey: row.environmentPublicKey,
+                  connectAuthPolicyVersion: row.connectAuthPolicyVersion,
                   linkedAt: row.createdAt,
                 }
               : null;
@@ -373,6 +378,7 @@ const make = Effect.gen(function* () {
           environmentId: relayEnvironmentLinks.environmentId,
           environmentLabel: relayEnvironmentLinks.environmentLabel,
           environmentPublicKey: relayEnvironmentLinks.environmentPublicKey,
+          connectAuthPolicyVersion: relayEnvironmentLinks.connectAuthPolicyVersion,
           endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
@@ -406,6 +412,7 @@ const make = Effect.gen(function* () {
                   row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
               },
               environmentPublicKey: row.environmentPublicKey,
+              connectAuthPolicyVersion: row.connectAuthPolicyVersion,
               linkedAt: row.createdAt,
               holdWebhooksWhileOffline: row.holdWebhooksWhileOffline,
             })),

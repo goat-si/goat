@@ -1,4 +1,8 @@
 import {
+  type ConnectSessionAssurance,
+  RelayConnectUpgradeRequiredError,
+} from "@goat/contracts/connectAssurance";
+import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
@@ -126,6 +130,7 @@ export class EnvironmentMintResponseInvalid extends Schema.TaggedError<Environme
 
 export type EnvironmentConnectorError =
   | EnvironmentConnectNotAuthorized
+  | RelayConnectUpgradeRequiredError
   | EnvironmentMintRequestFailed
   | EnvironmentMintRequestTimedOut
   | EnvironmentMintResponseInvalid
@@ -142,6 +147,7 @@ export class EnvironmentConnector extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
       readonly clientProofKeyThumbprint: string;
+      readonly assurance?: ConnectSessionAssurance;
       readonly deviceId?: string;
     }) => Effect.Effect<RelayEnvironmentConnectResponse, EnvironmentConnectorError>;
     readonly status: (input: {
@@ -244,6 +250,7 @@ function verifyEnvironmentResponse(input: {
     Effect.map(
       (proof) =>
         proof !== null &&
+        proof.connectAuthPolicyVersion === 1 &&
         proof.environmentId === input.environmentId &&
         proof.requestNonce === input.requestNonce &&
         proof.clientProofKeyThumbprint === input.clientProofKeyThumbprint &&
@@ -437,6 +444,12 @@ const make = Effect.gen(function* () {
           reason: "environment_link_not_found",
         });
       }
+      if (link.connectAuthPolicyVersion !== 1)
+        return yield* new RelayConnectUpgradeRequiredError({
+          code: "connect_upgrade_required",
+          requiredPolicyVersion: 1,
+          traceId: "connect-host",
+        });
       const endpoint = yield* resolveManagedEndpoint({
         operation: "status",
         link,
@@ -455,6 +468,7 @@ const make = Effect.gen(function* () {
         ),
       );
       const payload = {
+        connectAuthPolicyVersion: 1,
         iss: relayIssuer,
         aud: `goat-env:${link.environmentId}`,
         sub: input.userId,
@@ -599,6 +613,12 @@ const make = Effect.gen(function* () {
           reason: "environment_link_not_found",
         });
       }
+      if (link.connectAuthPolicyVersion !== 1)
+        return yield* new RelayConnectUpgradeRequiredError({
+          code: "connect_upgrade_required",
+          requiredPolicyVersion: 1,
+          traceId: "connect-host",
+        });
       const endpoint = yield* resolveManagedEndpoint({
         operation: "connect",
         link,
@@ -617,6 +637,8 @@ const make = Effect.gen(function* () {
         ),
       );
       const payload = {
+        connectAuthPolicyVersion: 1,
+        ...(input.assurance ? { assurance: input.assurance } : {}),
         iss: relayIssuer,
         aud: `goat-env:${link.environmentId}`,
         sub: input.userId,

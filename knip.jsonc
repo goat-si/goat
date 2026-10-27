@@ -161,7 +161,12 @@
       ],
     },
     "infra/relay": {
-      "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
+      "entry": [
+        "alchemy.run.ts!",
+        "src/persistence/schema.ts!",
+        "postgres.vite.config.ts",
+        "src/**/*.postgres.ts",
+      ],
     },
     "infra/ingest": {
       // Wrangler loads the Worker's default export by path (wrangler.jsonc "main").

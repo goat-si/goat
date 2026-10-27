@@ -392,7 +392,7 @@ jobs:
       name: production
     outputs:
       clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ steps.public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ steps.public_config.outputs.relay_url }}
     env:
@@ -401,7 +401,7 @@ jobs:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
-      CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      GOAT_HOSTED_APP_URL: ${{ vars.GOAT_HOSTED_APP_URL }}
       CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
     steps:
       - name: Checkout
@@ -469,7 +469,7 @@ jobs:
           required=(
             relay_domain
             CLERK_PUBLISHABLE_KEY
-            CLERK_JWT_TEMPLATE
+            GOAT_HOSTED_APP_URL
             CLERK_CLI_OAUTH_CLIENT_ID
           )
           missing=()
@@ -484,7 +484,8 @@ jobs:
           fi
 
           echo "clerk_publishable_key=$CLERK_PUBLISHABLE_KEY" >> "$GITHUB_OUTPUT"
-          echo "clerk_jwt_template=$CLERK_JWT_TEMPLATE" >> "$GITHUB_OUTPUT"
+          node --input-type=module -e 'const u = new URL(process.env.GOAT_HOSTED_APP_URL); if (u.protocol !== "https:" || u.port || u.pathname !== "/" || u.username || u.password || u.search || u.hash) process.exit(1);'
+          echo "hosted_app_url=$GOAT_HOSTED_APP_URL" >> "$GITHUB_OUTPUT"
           echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
 
@@ -502,7 +503,7 @@ jobs:
     timeout-minutes: 30
     env:
       GOAT_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      GOAT_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      GOAT_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       GOAT_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
     steps:
@@ -601,7 +602,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: macOS arm64
@@ -625,7 +626,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: macOS x64
@@ -652,7 +653,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: Linux x64
@@ -678,7 +679,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: Linux arm64
@@ -707,7 +708,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: Windows x64
@@ -732,7 +733,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.ref }}
       release_channel: ${{ needs.preflight.outputs.release_channel }}
       clerk_publishable_key: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      clerk_jwt_template: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      hosted_app_url: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       clerk_cli_oauth_client_id: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.relay_public_config.outputs.relay_url }}
       label: Windows arm64
@@ -1015,7 +1016,7 @@ jobs:
       deployment_url: ${{ steps.deploy.outputs.deployment_url }}
     env:
       GOAT_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      GOAT_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
+      GOAT_HOSTED_APP_URL: ${{ needs.relay_public_config.outputs.hosted_app_url }}
       GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       GOAT_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -1074,7 +1075,7 @@ jobs:
             exit 1
           fi
 
-          router_url="${T3CODE_WEB_ROUTER_URL:-https://app.t3.codes}"
+          router_url="${GOAT_HOSTED_APP_URL:?GOAT_HOSTED_APP_URL must be configured for this build}"
           if [[ "${{ needs.preflight.outputs.release_channel }}" == "stable" ]]; then
             channel_name="latest"
           else
@@ -1092,7 +1093,7 @@ jobs:
               --scope "${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}" \
               --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
               --build-env "GOAT_CLERK_PUBLISHABLE_KEY=${GOAT_CLERK_PUBLISHABLE_KEY:-}" \
-              --build-env "GOAT_CLERK_JWT_TEMPLATE=${GOAT_CLERK_JWT_TEMPLATE:-}" \
+              --build-env "GOAT_HOSTED_APP_URL=${GOAT_HOSTED_APP_URL:?}" \
               --build-env "GOAT_CLERK_CLI_OAUTH_CLIENT_ID=${GOAT_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
               --build-env "GOAT_RELAY_URL=${GOAT_RELAY_URL:-}" \
               --build-env "GOAT_RELAY_CLIENT_OTLP_TRACES_URL=${GOAT_RELAY_CLIENT_OTLP_TRACES_URL:-}" \
@@ -1118,6 +1119,7 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
+      GOAT_HOSTED_APP_URL: ${{ vars.GOAT_HOSTED_APP_URL }}
       DEPLOYMENT_URL: ${{ needs.build_web.outputs.deployment_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -1153,9 +1155,9 @@ jobs:
             exit 1
           fi
 
-          router_url="${T3CODE_WEB_ROUTER_URL:-https://app.t3.codes}"
-          latest_domain="${T3CODE_WEB_LATEST_DOMAIN:-latest.app.t3.codes}"
-          nightly_domain="${T3CODE_WEB_NIGHTLY_DOMAIN:-nightly.app.t3.codes}"
+          router_url="${GOAT_HOSTED_APP_URL:?GOAT_HOSTED_APP_URL must be configured for this build}"
+          latest_domain="${T3CODE_WEB_LATEST_DOMAIN:-app.trygoat.ai}"
+          nightly_domain="${T3CODE_WEB_NIGHTLY_DOMAIN:-staging.app.trygoat.ai}"
           router_domain="${router_url#http://}"
           router_domain="${router_domain#https://}"
           router_domain="${router_domain%%/*}"

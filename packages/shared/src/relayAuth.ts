@@ -81,9 +81,8 @@ export function clerkFrontendApiHostnameFromPublishableKey(publishableKey: strin
   return parseClerkFrontendApi(publishableKey).hostname;
 }
 
-export function relayClerkTokenOptions(template: string) {
+export function relayClerkTokenOptions(_legacyTemplate?: string) {
   return {
-    template,
     skipCache: true,
   } as const;
 }

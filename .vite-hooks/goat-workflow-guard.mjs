@@ -11,6 +11,7 @@ const [sha, ref] = NodeProcess.argv.slice(2);
 const workflowPath = ".github/workflows/goat-ci.yml";
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const closeOutsidePrsPath = ".github/workflows/close-outside-prs.yml";
+const connectHostedPath = ".github/workflows/connect-hosted.yml";
 const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
 const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
@@ -34,6 +35,7 @@ const goatCiGateJobs = new Set([
 // goat-ci-result for an ignored event, and refresh-republished re-runs that ignored run after a
 // re-run of the real one (#1691). It alone may write to Actions.
 const goatCiJobs = new Set([
+  "connect-auth-postgres",
   "scope",
   "ci",
   "screenshot-gate",
@@ -149,7 +151,7 @@ function validateWorkflow(source, yaml) {
     Object.keys(workflow.jobs).some((name) => !goatCiJobs.has(name))
   ) {
     return refuse(
-      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished",
+      "jobs must contain ci and optionally scope, screenshot-gate, result, republish, refresh-republished, connect-auth-postgres",
     );
   }
   if (isMapping(workflow.permissions) && Object.hasOwn(workflow.permissions, "actions")) {
@@ -192,6 +194,8 @@ function validateWorkflow(source, yaml) {
     if (Object.hasOwn(job, "container") || Object.hasOwn(job, "services")) {
       return refuse(`jobs.${name}.container and jobs.${name}.services are forbidden`);
     }
+    if (name === "connect-auth-postgres" && job["runs-on"] !== goatCiHostedRunner)
+      return refuse("PostgreSQL fixtures must run only on the disposable hosted runner");
     const runners = job["runs-on"];
     const isExpression = (expected) =>
       typeof runners === "string" &&
@@ -228,6 +232,71 @@ function validateWorkflow(source, yaml) {
       } else if (Object.hasOwn(step, "uses") && !actions.has(step.uses)) {
         refuse(`step ${index}.uses is not an allowed action`);
       }
+    }
+  }
+}
+
+function validateConnectHostedWorkflow(source, yaml) {
+  const workflow = parseWorkflow(source, yaml);
+  if (
+    !isMapping(workflow) ||
+    !isMapping(workflow.on) ||
+    Object.keys(workflow.on).length !== 1 ||
+    !Object.hasOwn(workflow.on, "workflow_dispatch")
+  )
+    return refuse("hosted delivery must be manual only", connectHostedPath);
+  if (workflow.on.workflow_dispatch?.inputs?.deploy?.default !== false)
+    return refuse("hosted deployment must default off", connectHostedPath);
+  if (JSON.stringify(workflow.permissions) !== JSON.stringify({ contents: "read" }))
+    return refuse("hosted delivery grants contents: read only", connectHostedPath);
+  const environments = {
+    staging: "connect-staging",
+    staging_acceptance: "connect-staging-acceptance",
+    production: "connect-production",
+    production_acceptance: "connect-production-acceptance",
+  };
+  if (!isMapping(workflow.jobs) || Object.keys(workflow.jobs).length !== 4)
+    return refuse(
+      "hosted delivery requires both origin builds and acceptance gates",
+      connectHostedPath,
+    );
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (
+      !isMapping(job) ||
+      environments[name] !== job.environment ||
+      job["runs-on"] !== goatCiHostedRunner ||
+      job.permissions ||
+      job.services ||
+      job.container ||
+      job.uses
+    )
+      return refuse(
+        "hosted jobs must use their exact protected environment on the disposable runner",
+        connectHostedPath,
+      );
+    if (
+      !Array.isArray(job.steps) ||
+      job.steps.some(
+        (step) =>
+          !isMapping(step) ||
+          Object.hasOwn(step, "run") === Object.hasOwn(step, "uses") ||
+          (step.uses && !actions.has(step.uses)),
+      )
+    )
+      return refuse(
+        "hosted delivery uses only reviewed actions and explicit commands",
+        connectHostedPath,
+      );
+    for (const step of job.steps) {
+      if (
+        typeof step.run === "string" &&
+        step.run.includes("wrangler@") &&
+        normalizeExpression(step.if) !== "inputs.deploy"
+      )
+        return refuse(
+          "hosted deploy commands require the explicit deploy input",
+          connectHostedPath,
+        );
     }
   }
 }
@@ -602,6 +671,7 @@ for (const path of paths) {
     path !== nightlyPath &&
     path !== closeOutsidePrsPath &&
     path !== marketingPagesPath &&
+    path !== connectHostedPath &&
     /\.ya?ml$/.test(path) &&
     !disabled.has(path)
   ) {
@@ -609,7 +679,13 @@ for (const path of paths) {
     status = 1;
   }
 }
-for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath, marketingPagesPath]) {
+for (const path of [
+  workflowPath,
+  nightlyPath,
+  closeOutsidePrsPath,
+  marketingPagesPath,
+  connectHostedPath,
+]) {
   if (!paths.includes(path)) continue;
   let source;
   try {
@@ -635,7 +711,8 @@ for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath, marketingPag
     );
     NodeProcess.exit(1);
   }
-  if (path === workflowPath) validateWorkflow(source, yaml);
+  if (path === connectHostedPath) validateConnectHostedWorkflow(source, yaml);
+  else if (path === workflowPath) validateWorkflow(source, yaml);
   else if (path === nightlyPath) validateNightlyWorkflow(source, yaml);
   else if (path === marketingPagesPath) validateMarketingPagesWorkflow(source, yaml);
   else validateCloseOutsidePrsWorkflow(source, yaml);

@@ -1,3 +1,5 @@
+import { normalizeConnectHostedOrigin } from "@goat/shared/connectAuth";
+import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { createClerkBridge } from "@clerk/electron";
 import * as NodeURL from "node:url";
@@ -23,6 +25,8 @@ import * as DesktopUserData from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 
+declare const __GOAT_BUILD_RELAY_URL__: string | undefined;
+declare const __GOAT_BUILD_HOSTED_APP_URL__: string | undefined;
 declare const __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 
 export class DesktopClerkBridgeInitializationError extends Schema.TaggedError<DesktopClerkBridgeInitializationError>()(
@@ -121,7 +125,21 @@ export const make = Effect.gen(function* () {
     handleSecondInstance(argv);
   });
 
-  if (isGoatConnectEnabled()) {
+  const cloudConfigured =
+    resolveDesktopClerkFrontendApiHostname(
+      typeof __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__ === "undefined"
+        ? undefined
+        : __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__,
+    ) !== undefined &&
+    normalizeSecureRelayUrl(
+      typeof __GOAT_BUILD_RELAY_URL__ === "undefined" ? "" : (__GOAT_BUILD_RELAY_URL__ ?? ""),
+    ) !== null &&
+    normalizeConnectHostedOrigin(
+      typeof __GOAT_BUILD_HOSTED_APP_URL__ === "undefined"
+        ? ""
+        : (__GOAT_BUILD_HOSTED_APP_URL__ ?? ""),
+    ) !== null;
+  if (isGoatConnectEnabled() && cloudConfigured) {
     yield* Effect.acquireRelease(
       Effect.try({
         try: () => createDesktopClerkBridge(environment.stateDir, environment.isDevelopment),

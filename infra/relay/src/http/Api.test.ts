@@ -1,3 +1,7 @@
+import * as ConnectLinkReservations from "../environments/ConnectLinkReservations.ts";
+import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
+import * as DpopProofs from "../auth/DpopProofs.ts";
+import * as ClientKeys from "../auth/ClientKeys.ts";
 import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
 import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 import { relayProtectedErrorMessage } from "@goat/client-runtime/relay";
@@ -12,11 +16,9 @@ import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync.
 import * as NodeCrypto from "node:crypto";
-import { createClerkClient, verifyToken } from "@clerk/backend";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
@@ -47,7 +49,6 @@ import {
   relayDpopFailureReason,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
-  verifyRelayClientBearerToken,
   verifyEnvironmentTunnelRecoveryProof,
   withoutCapturedParentSpan,
 } from "./Api.ts";
@@ -63,11 +64,6 @@ import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvide
 import * as AgentActivityPublisher from "../agentActivity/AgentActivityPublisher.ts";
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 
-vi.mock("@clerk/backend", () => ({
-  createClerkClient: vi.fn(),
-  verifyToken: vi.fn(),
-}));
-
 const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
   apns: {
@@ -78,8 +74,10 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
     environment: "sandbox",
   },
   clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "goat-relay",
+  clerkPublishableKey: `pk_test_${btoa("clerk.example.test$")}`,
+  clerkAuthorizedParties: ["https://app.example.test"],
+  clerkCliOAuthClientId: "cli-client",
+  clerkJwtAudience: "https://relay.example.test",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
@@ -96,10 +94,15 @@ describe("managed endpoint provisioning errors", () => {
     const handlers = RelayHttpApi.layerClientApi.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
+            withdraw: (_input, revoke) => revoke,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -107,6 +110,9 @@ describe("managed endpoint provisioning errors", () => {
         Layer.mergeAll(
           Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
           NodeCryptoLayer.layer,
+          Layer.mock(CliLinkApprovals.CliLinkApprovals, {}),
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
+          Layer.mock(ClientKeys.ClientKeys, {}),
           Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
           Layer.mock(EnvironmentLinker.EnvironmentLinker, {
             link: () =>
@@ -213,10 +219,15 @@ describe("device listing compatibility", () => {
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
+            withdraw: (_input, revoke) => revoke,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -224,6 +235,9 @@ describe("device listing compatibility", () => {
         Layer.mergeAll(
           Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
           NodeCryptoLayer.layer,
+          Layer.mock(CliLinkApprovals.CliLinkApprovals, {}),
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
+          Layer.mock(ClientKeys.ClientKeys, {}),
           Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
           Layer.mock(EnvironmentLinker.EnvironmentLinker, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
@@ -298,10 +312,15 @@ describe("Cloudflare rate-limit retry hint", () => {
     const layerHandlers = RelayHttpApi.layerClientApi.pipe(
       HttpRouter.provideRequest(
         Layer.mergeAll(
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
           Layer.mock(EnvironmentCredentials.EnvironmentCredentials, {}),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
           Layer.mock(ManagedEndpointProvider.ManagedEndpointProvider, {}),
           Layer.mock(RelayDb.RelayTransactions, {}),
+          Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+            exclusive: (_userId, use) => use(Effect.void),
+            withdraw: (_input, revoke) => revoke,
+          }),
           Layer.mock(HookInbox.HookInbox, {}),
         ),
       ),
@@ -309,6 +328,9 @@ describe("Cloudflare rate-limit retry hint", () => {
         Layer.mergeAll(
           Layer.succeed(RelayConfiguration.RelayConfiguration, relaySettings),
           NodeCryptoLayer.layer,
+          Layer.mock(CliLinkApprovals.CliLinkApprovals, {}),
+          Layer.mock(DpopProofs.DpopProofReplay, {}),
+          Layer.mock(ClientKeys.ClientKeys, {}),
           Layer.mock(RelayTokens.RelayTokens, { resolveDpopAccessTokenScopes: () => null }),
           Layer.mock(EnvironmentLinker.EnvironmentLinker, { link: () => Effect.fail(failure) }),
           Layer.mock(EnvironmentLinks.EnvironmentLinks, {}),
@@ -371,62 +393,6 @@ describe("Cloudflare rate-limit retry hint", () => {
       expect(other.status).toBe(503);
       expect(other.headers.get("retry-after")).toBeNull();
     }).pipe(Effect.scoped),
-  );
-});
-
-describe("relay client authentication", () => {
-  it.effect("preserves the existing Clerk session JWT path", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockResolvedValue({
-        sub: "user_session",
-        aud: relaySettings.clerkJwtAudience,
-      } as never);
-
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "session-token")).toEqual({
-        sub: "user_session",
-        mode: "clerk_session_bearer",
-      });
-      expect(verifyToken).toHaveBeenCalledWith("session-token", {
-        secretKey: "clerk-secret-key",
-        audience: relaySettings.clerkJwtAudience,
-      });
-      expect(createClerkClient).not.toHaveBeenCalled();
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
-    ),
-  );
-
-  it.effect("falls back to Clerk OAuth token verification for the headless CLI", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockRejectedValue(new Error("not a session JWT"));
-      vi.mocked(createClerkClient).mockReturnValue({
-        authenticateRequest: vi.fn().mockResolvedValue({
-          isAuthenticated: true,
-          toAuth: () => ({ userId: "user_oauth" }),
-        }),
-      } as never);
-
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "oauth-token")).toEqual({
-        sub: "user_oauth",
-        mode: "clerk_oauth_bearer",
-      });
-      expect(createClerkClient).toHaveBeenCalledWith({
-        secretKey: "clerk-secret-key",
-        publishableKey: "pk_test_test",
-      });
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
-    ),
   );
 });
 
@@ -510,6 +476,10 @@ function layerRelayUnlinkTest(input?: {
   readonly clearInbox?: HookInbox.HookInbox["Service"]["clear"];
 }) {
   return Layer.mergeAll(
+    Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+      exclusive: (_userId, use) => use(Effect.void),
+      withdraw: (_input, revoke) => revoke,
+    }),
     Layer.mock(HookInbox.HookInbox, {
       clear: input?.clearInbox ?? (() => Effect.void),
     }),
@@ -1014,6 +984,7 @@ describe("relay managed tunnel recovery", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "replacement-generation",
       generation: 3,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1088,6 +1059,7 @@ describe("relay environment unlink", () => {
                 origin: null,
                 updatedAt: "2026-07-28T00:00:00.000Z",
                 generation: 1,
+                incarnationId: "allocation-test",
               }),
             clearInbox: (input) =>
               clearFails
@@ -1122,6 +1094,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "generation-before-unlink",
       generation: 1,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 
@@ -1269,6 +1242,7 @@ describe("relay environment unlink", () => {
       origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       updatedAt: "original-generation",
       generation: 1,
+      incarnationId: "allocation-test",
       tunnelReleasedAt: null,
     } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
 

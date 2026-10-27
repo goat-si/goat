@@ -36,6 +36,7 @@ describe("loadRepoEnv", () => {
           GOAT_CLERK_JWT_TEMPLATE: "template_ci",
           GOAT_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
           GOAT_RELAY_URL: "https://ci.example.test",
+          GOAT_HOSTED_APP_URL: "https://app.trygoat.ai",
         },
         repoRoot,
       }),
@@ -49,6 +50,9 @@ describe("loadRepoEnv", () => {
       EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
       GOAT_RELAY_URL: "https://ci.example.test",
       VITE_GOAT_RELAY_URL: "https://ci.example.test",
+      VITE_HOSTED_APP_URL: "https://app.trygoat.ai",
+      GOAT_HOSTED_APP_URL: "https://app.trygoat.ai",
+      EXPO_PUBLIC_HOSTED_APP_URL: "https://app.trygoat.ai",
     });
   });
 });

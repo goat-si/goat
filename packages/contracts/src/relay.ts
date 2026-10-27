@@ -1,3 +1,15 @@
+import { RelayClientBearerAuthorization } from "./connectAssurance.ts";
+import { RelayEnvironmentLinkChallengeResponse } from "./connectAssurance.ts";
+export { RelayEnvironmentLinkChallengeResponse } from "./connectAssurance.ts";
+import { RelayClientPrincipal, ConnectAuthenticationErrors } from "./connectAssurance.ts";
+export { RelayClientPrincipal } from "./connectAssurance.ts";
+import { ConnectLinkChallengeRequest as RelayEnvironmentLinkChallengeRequest } from "./connectAssurance.ts";
+export { ConnectLinkChallengeRequest as RelayEnvironmentLinkChallengeRequest } from "./connectAssurance.ts";
+import {
+  ConnectSessionAssurance,
+  CliLinkApprovalRequest,
+  CliLinkApprovalResponse,
+} from "./connectAssurance.ts";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -220,6 +232,7 @@ export const RelayLinkProofRequest = Schema.Struct({
 export type RelayLinkProofRequest = typeof RelayLinkProofRequest.Type;
 
 export const RelayEnvironmentConfigRequest = Schema.Struct({
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   relayUrl: Schema.String,
   relayIssuer: Schema.optional(Schema.String),
   cloudUserId: Schema.String,
@@ -299,26 +312,6 @@ export type RelayEnvironmentLinkProofPayload = typeof RelayEnvironmentLinkProofP
 export const RelayEnvironmentLinkProof = TrimmedNonEmptyString;
 export type RelayEnvironmentLinkProof = typeof RelayEnvironmentLinkProof.Type;
 
-export const RelayEnvironmentLinkChallengeRequest = Schema.Struct({
-  notificationsEnabled: Schema.Boolean.annotate({
-    description: "Whether this link may deliver push notifications.",
-  }),
-  liveActivitiesEnabled: Schema.Boolean.annotate({
-    description: "Whether this link may update Live Activities.",
-  }),
-  managedTunnelsEnabled: Schema.Boolean.annotate({
-    description: "Whether the relay should provision a managed tunnel for this environment.",
-  }),
-}).annotate({ description: "Requested capabilities for a new environment-link challenge." });
-export type RelayEnvironmentLinkChallengeRequest = typeof RelayEnvironmentLinkChallengeRequest.Type;
-
-export const RelayEnvironmentLinkChallengeResponse = Schema.Struct({
-  challenge: TrimmedNonEmptyString,
-  expiresAt: TrimmedNonEmptyString,
-});
-export type RelayEnvironmentLinkChallengeResponse =
-  typeof RelayEnvironmentLinkChallengeResponse.Type;
-
 export const RelayEnvironmentLinkRequest = Schema.Struct({
   deviceId: Schema.optional(
     TrimmedNonEmptyString.annotate({
@@ -335,6 +328,7 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
 export const RelayEnvironmentLinkResponse = Schema.Struct({
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   ok: Schema.Boolean,
   cloudUserId: TrimmedNonEmptyString,
   environmentId: EnvironmentId,
@@ -608,6 +602,7 @@ export class RelayInternalError extends Schema.TaggedError<RelayInternalError>()
 }
 
 export const RelayProtectedError = Schema.Union([
+  ...ConnectAuthenticationErrors,
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
@@ -623,9 +618,14 @@ export const RelayProtectedError = Schema.Union([
 ]);
 export type RelayProtectedError = typeof RelayProtectedError.Type;
 
-const RelayAuthAndInternalErrors = [RelayAuthInvalidError, RelayInternalError] as const;
+const RelayAuthAndInternalErrors = [
+  ...ConnectAuthenticationErrors,
+  RelayAuthInvalidError,
+  RelayInternalError,
+] as const;
 
 const RelayEnvironmentLinkErrors = [
+  ...ConnectAuthenticationErrors,
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
@@ -636,6 +636,7 @@ const RelayEnvironmentLinkErrors = [
 ] as const;
 
 const RelayEnvironmentConnectErrors = [
+  ...ConnectAuthenticationErrors,
   RelayAuthInvalidError,
   RelayEnvironmentConnectNotAuthorizedError,
   RelayEnvironmentEndpointUnavailableError,
@@ -650,16 +651,6 @@ const RelayAgentActivityPublishErrors = [
   RelayInternalError,
 ] as const;
 
-export class RelayClientPrincipal extends Context.Service<
-  RelayClientPrincipal,
-  {
-    readonly userId: string;
-    readonly token: string;
-    readonly proofKeyThumbprint?: string;
-    readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
-  }
->()("@goat/contracts/relay/RelayClientPrincipal") {}
-
 export class RelayEnvironmentPrincipal extends Context.Service<
   RelayEnvironmentPrincipal,
   {
@@ -668,18 +659,11 @@ export class RelayEnvironmentPrincipal extends Context.Service<
   }
 >()("@goat/contracts/relay/RelayEnvironmentPrincipal") {}
 
-const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
-  HttpApiSecurity.annotate(
-    OpenApi.Description,
-    "Clerk session or OAuth bearer token for the signed-in GOAT Connect user.",
-  ),
-);
-
 export class RelayClientAuth extends HttpApiMiddleware.Service<
   RelayClientAuth,
   { provides: RelayClientPrincipal }
 >()("RelayClientAuth", {
-  error: RelayAuthInvalidError,
+  error: [RelayAuthInvalidError, ...ConnectAuthenticationErrors, RelayInternalError],
   security: { clientBearer: RelayClientBearerAuthorization },
 }) {}
 
@@ -709,7 +693,7 @@ export class RelayDpopClientAuth extends HttpApiMiddleware.Service<
   RelayDpopClientAuth,
   { provides: RelayClientPrincipal }
 >()("RelayDpopClientAuth", {
-  error: RelayAuthInvalidError,
+  error: [RelayAuthInvalidError, RelayInternalError],
   security: { relayDpop: RelayDpopAuthorization },
 }) {}
 
@@ -765,6 +749,8 @@ export const RelayMobileClientId = "goat-mobile" as const;
 export const RelayWebClientId = "goat-web" as const;
 
 export const RelayDpopAccessTokenRequest = Schema.Struct({
+  readmitClientKey: Schema.optionalKey(Schema.Boolean.pipe(Schema.toCodecStringTree)),
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1).pipe(Schema.toCodecStringTree)),
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
   subject_token: TrimmedNonEmptyString.annotate({
     description: "Clerk bearer token for the signed-in cloud user.",
@@ -856,6 +842,8 @@ export const RelayEnvironmentStatusResponse = Schema.Struct({
 export type RelayEnvironmentStatusResponse = typeof RelayEnvironmentStatusResponse.Type;
 
 export const RelayCloudMintCredentialProofPayload = Schema.Struct({
+  assurance: Schema.optionalKey(ConnectSessionAssurance),
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   ...RelaySignedJwtRegisteredClaims,
   environmentId: EnvironmentId,
   clientProofKeyThumbprint: TrimmedNonEmptyString,
@@ -877,6 +865,7 @@ export const RelayCloudMintCredentialRequest = Schema.Struct({
 export type RelayCloudMintCredentialRequest = typeof RelayCloudMintCredentialRequest.Type;
 
 export const RelayCloudEnvironmentHealthProofPayload = Schema.Struct({
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   ...RelaySignedJwtRegisteredClaims,
   environmentId: EnvironmentId,
   nonce: TrimmedNonEmptyString,
@@ -924,6 +913,7 @@ export const RelayEnvironmentHealthResponse = Schema.Struct({
 export type RelayEnvironmentHealthResponse = typeof RelayEnvironmentHealthResponse.Type;
 
 export const RelayEnvironmentMintResponseProofPayload = Schema.Struct({
+  connectAuthPolicyVersion: Schema.optionalKey(Schema.Literal(1)),
   ...RelaySignedJwtRegisteredClaims,
   environmentId: EnvironmentId,
   clientProofKeyThumbprint: TrimmedNonEmptyString,
@@ -1056,6 +1046,11 @@ const RelayMobileGroup = HttpApiGroup.make("mobile")
 
 const RelayClientGroup = HttpApiGroup.make("client")
   .add(
+    HttpApiEndpoint.post("createCliLinkApproval", "/v1/client/cli-link-approvals", {
+      payload: CliLinkApprovalRequest,
+      success: CliLinkApprovalResponse,
+      error: RelayAuthAndInternalErrors,
+    }),
     HttpApiEndpoint.get("listEnvironments", "/v1/environments", {
       headers: RelayBearerRequestHeaders,
       success: RelayListEnvironmentsResponse,

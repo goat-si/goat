@@ -1,5 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no generateKeyPairSync or sign.
-import * as NodeCrypto from "node:crypto";
+import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
@@ -9,7 +8,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -21,91 +19,17 @@ import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinker from "./EnvironmentLinker.ts";
 import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
 
-const relayKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-  privateKeyEncoding: { format: "pem", type: "pkcs8" },
-  publicKeyEncoding: { format: "pem", type: "spki" },
-});
-const environmentKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-  privateKeyEncoding: { format: "pem", type: "pkcs8" },
-  publicKeyEncoding: { format: "pem", type: "spki" },
-});
-const config = RelayConfiguration.RelayConfiguration.of({
-  relayIssuer: "https://relay.example.test",
-  apns: {
-    environment: "sandbox",
-    teamId: "team-id",
-    keyId: "key-id",
-    privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.t3code.dev",
-  },
-  apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "goat-relay",
-  cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
-  cloudMintPublicKey: relayKeyPair.publicKey,
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
-});
+import {
+  config,
+  environmentKeyPair,
+  makeAssurance,
+  intent,
+  makeRequest,
+  signTestJwt,
+} from "./EnvironmentLinker.testkit.ts";
+import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
+import * as ConnectLinkReservations from "./ConnectLinkReservations.ts";
 const isEnvironmentLinkProofInvalid = Schema.is(EnvironmentLinker.EnvironmentLinkProofInvalid);
-
-function signTestJwt(payload: object, typ: string, privateKey: string): string {
-  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ })).toString("base64url");
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signingInput = `${header}.${encodedPayload}`;
-  return `${signingInput}.${NodeCrypto.sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
-}
-
-const makeRequest = Effect.gen(function* () {
-  const now = yield* DateTime.now;
-  const expiresAt = DateTime.add(now, { minutes: 5 });
-  const relayTokens = yield* RelayTokens.RelayTokens;
-  const challenge = yield* relayTokens.issueLinkChallenge({
-    userId: "user_123",
-    request: {
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
-      managedTunnelsEnabled: true,
-    },
-    jti: "challenge-jti",
-    issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
-    expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
-  });
-  const payload = {
-    iss: "goat-env:env-link-test",
-    aud: "https://relay.example.test",
-    sub: "env-link-test",
-    jti: "link-proof-jti",
-    iat: Math.floor(now.epochMilliseconds / 1_000),
-    exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
-    challenge,
-    environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-    descriptor: {
-      environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-      label: "Link Test Environment",
-      platform: { os: "darwin", arch: "arm64" },
-      serverVersion: "0.0.0-test",
-      capabilities: { repositoryIdentity: true },
-    },
-    environmentPublicKey: environmentKeyPair.publicKey.trim(),
-    endpoint: {
-      httpBaseUrl: "https://env.example.test/",
-      wsBaseUrl: "wss://env.example.test/",
-      providerKind: "manual",
-    },
-    origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-    scopes: ["agent_activity_notifications", "managed_tunnels"],
-  } satisfies RelayEnvironmentLinkProofPayload;
-  return {
-    request: {
-      proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
-      managedTunnelsEnabled: false,
-    } satisfies RelayEnvironmentLinkRequest,
-    payload,
-  };
-});
 
 function layerTest(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
@@ -113,6 +37,22 @@ function layerTest(input?: {
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
+    Layer.provide(NodeCryptoLayer.layer),
+    Layer.provide(
+      Layer.mock(ConnectLinkReservations.ConnectLinkReservations, {
+        exclusive: (_userId, use) => use(Effect.void),
+        recover: () => Effect.void,
+        reserve: (_input, consume) => consume.pipe(Effect.as(null)),
+        complete: (_input, commit) => commit,
+        failed: () => Effect.void,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ConnectAccounts.ConnectAccounts, {
+        authorize: () => Effect.succeed(1),
+        check: () => Effect.succeed(true),
+      }),
+    ),
     Layer.provideMerge(RelayTokens.layer),
     Layer.provide(
       Layer.mergeAll(
@@ -157,6 +97,91 @@ function layerTest(input?: {
 }
 
 describe("EnvironmentLinker", () => {
+  it.effect.each([undefined, "another-cli-key"])(
+    "denies CLI linking without a matching approved key (%s) before persistence",
+    (approvedKey) => {
+      let persisted = false;
+      return Effect.gen(function* () {
+        const { request, payload } = yield* makeRequest;
+        const relayTokens = yield* RelayTokens.RelayTokens;
+        const challenge = yield* relayTokens.issueLinkChallenge({
+          assurance: makeAssurance(payload.iat),
+          intent,
+          userId: "user_123",
+          request,
+          ...(approvedKey ? { cliKeyThumbprint: approvedKey } : {}),
+          jti: "cli-challenge",
+          issuedAtEpochSeconds: payload.iat,
+          expiresAtEpochSeconds: payload.exp,
+        });
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* linker
+          .link({
+            userId: "user_123",
+            cliKeyThumbprint: "cli-key",
+            request: {
+              ...request,
+              proof: signTestJwt(
+                { ...payload, challenge },
+                RELAY_LINK_PROOF_TYP,
+                environmentKeyPair.privateKey,
+              ),
+            },
+          })
+          .pipe(Effect.result);
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({
+            _tag: "RelayAuthenticationStrengthError",
+            code: "authentication_strength_required",
+            reason: "unsupported_authentication_flow",
+          });
+        }
+        expect(persisted).toBe(false);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            upsert: () =>
+              Effect.sync(() => {
+                persisted = true;
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("allows CLI linking with a fresh challenge bound to its approved key", () =>
+    Effect.gen(function* () {
+      const { request, payload } = yield* makeRequest;
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const challenge = yield* relayTokens.issueLinkChallenge({
+        assurance: makeAssurance(payload.iat),
+        intent,
+        userId: "user_123",
+        request,
+        cliKeyThumbprint: "cli-key",
+        jti: "cli-challenge",
+        issuedAtEpochSeconds: payload.iat,
+        expiresAtEpochSeconds: payload.exp,
+      });
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const result = yield* linker.link({
+        userId: "user_123",
+        cliKeyThumbprint: "cli-key",
+        request: {
+          ...request,
+          proof: signTestJwt(
+            { ...payload, challenge },
+            RELAY_LINK_PROOF_TYP,
+            environmentKeyPair.privateKey,
+          ),
+        },
+      });
+      expect(result.environmentCredential).toBe("goatenv_credential_secret");
+    }).pipe(Effect.provide(layerTest())),
+  );
+
   it.effect("uses verified JWT claims when linking an environment", () => {
     let persistedEnvironmentId: string | null = null;
     return Effect.gen(function* () {
@@ -186,10 +211,12 @@ describe("EnvironmentLinker", () => {
       const expiresAt = DateTime.add(now, { minutes: 5 });
       const relayTokens = yield* RelayTokens.RelayTokens;
       const challenge = yield* relayTokens.issueLinkChallenge({
+        assurance: makeAssurance(Math.floor(now.epochMilliseconds / 1000)),
+        intent,
         userId: "user_123",
         request: {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
+          notificationsEnabled: false,
+          liveActivitiesEnabled: false,
           managedTunnelsEnabled: false,
         },
         jti: "publish-only-challenge-jti",
@@ -206,6 +233,7 @@ describe("EnvironmentLinker", () => {
         challenge,
         environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
         descriptor: {
+          connectAuthPolicyVersion: 1,
           environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
           label: "Link Test Environment",
           platform: { os: "darwin", arch: "arm64" },
@@ -223,8 +251,8 @@ describe("EnvironmentLinker", () => {
       } satisfies RelayEnvironmentLinkProofPayload;
       const request = {
         proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-        notificationsEnabled: true,
-        liveActivitiesEnabled: true,
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
         managedTunnelsEnabled: false,
       } satisfies RelayEnvironmentLinkRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;

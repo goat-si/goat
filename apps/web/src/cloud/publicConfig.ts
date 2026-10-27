@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 export class CloudPublicConfigMissingError extends Schema.TaggedError<CloudPublicConfigMissingError>()(
   "CloudPublicConfigMissingError",
   {
-    key: Schema.Literal("GOAT_CLERK_JWT_TEMPLATE"),
+    key: Schema.Literal("GOAT_CLERK_PUBLISHABLE_KEY"),
   },
 ) {
   override get message(): string {
@@ -90,7 +90,7 @@ export function resolveRelayTracingConfig() {
 
 export function hasCloudPublicConfig(): boolean {
   const config = resolveCloudPublicConfig();
-  if (!config.clerkPublishableKey || !config.clerkJwtTemplate || !config.relayUrl) {
+  if (!config.clerkPublishableKey || !config.relayUrl) {
     return false;
   }
 
@@ -121,9 +121,7 @@ export function hasCloudPublicConfig(): boolean {
 }
 
 export function resolveRelayClerkTokenOptions() {
-  const { clerkJwtTemplate } = resolveCloudPublicConfig();
-  if (!clerkJwtTemplate) {
-    throw new CloudPublicConfigMissingError({ key: "GOAT_CLERK_JWT_TEMPLATE" });
-  }
-  return relayClerkTokenOptions(clerkJwtTemplate);
+  if (!hasCloudPublicConfig())
+    throw new CloudPublicConfigMissingError({ key: "GOAT_CLERK_PUBLISHABLE_KEY" });
+  return relayClerkTokenOptions();
 }

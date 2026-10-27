@@ -1,3 +1,4 @@
+import { useConnectReverification } from "./useConnectReverification";
 import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
 import { findErrorTraceId } from "@goat/client-runtime/errors";
@@ -48,6 +49,7 @@ function isManagedTunnelActive(
 
 export function useCloudLinkController() {
   const { getToken, isSignedIn } = useAuth();
+  const reverify = useConnectReverification();
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
   });
@@ -164,9 +166,19 @@ export function useCloudLinkController() {
         currentLinkState.linkRevoked === true ||
         currentManagedTunnel !== desired.managedTunnel
       ) {
+        const verification = await settlePromise(reverify);
+        if (verification._tag === "Failure") {
+          reportUpdateFailure(squashAtomCommandFailure(verification));
+          return false;
+        }
+        const freshToken = await getToken(resolveRelayClerkTokenOptions());
+        if (!freshToken) {
+          reportUpdateFailure(new Error("Sign in with MFA to link this computer."));
+          return false;
+        }
         const linkResult = await linkPrimaryEnvironment({
           target,
-          clerkToken,
+          clerkToken: freshToken,
           mode: desired.managedTunnel ? "managed" : "publish_only",
         });
         if (linkResult._tag === "Failure") {

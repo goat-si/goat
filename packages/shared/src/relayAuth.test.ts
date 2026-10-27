@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ClerkPublishableKeyFrontendApiError,
+  relayClerkTokenOptions,
   clerkFrontendApiHostnameFromPublishableKey,
   clerkFrontendApiUrlFromPublishableKey,
 } from "./relayAuth.ts";
@@ -18,6 +19,11 @@ const captureError = (run: () => unknown): unknown => {
 };
 
 describe("Clerk relay auth", () => {
+  it("requests fresh session evidence without using a legacy JWT template", () => {
+    expect(relayClerkTokenOptions()).toEqual({ skipCache: true });
+    expect(relayClerkTokenOptions("legacy-template")).toEqual({ skipCache: true });
+  });
+
   it("derives a custom Frontend API hostname from a Clerk publishable key", () => {
     expect(clerkFrontendApiHostnameFromPublishableKey(clerkPublishableKey("clerk.exa.test"))).toBe(
       "clerk.exa.test",

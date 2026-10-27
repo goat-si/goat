@@ -1,3 +1,4 @@
+import { makeManagedRelayTestClient } from "../relay/managedRelayTestClient.ts";
 import { vi } from "vite-plus/test";
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
@@ -918,7 +919,7 @@ describe("EnvironmentSupervisor", () => {
         createProof: () => Effect.succeed("test-proof"),
       });
       const unused = () => Effect.die("Unexpected relay operation.");
-      const relay = ManagedRelay.ManagedRelayClient.of({
+      const relay = makeManagedRelayTestClient({
         relayUrl: "https://relay.example.test",
         listEnvironments: unused,
         listDevices: unused,
@@ -946,7 +947,6 @@ describe("EnvironmentSupervisor", () => {
         unregisterDevice: unused,
         registerLiveActivity: unused,
         getAgentActivitySnapshot: unused,
-        resetTokenCache: Effect.void,
       });
       const layerHttp = RpcHttp.layerRemoteHttpClient(fetchFn);
       const remoteAuthorization = yield* RemoteEnvironmentAuthorization.make.pipe(

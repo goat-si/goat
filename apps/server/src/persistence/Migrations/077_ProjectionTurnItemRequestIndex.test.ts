@@ -30,7 +30,7 @@ it.effect(
         ('approval', 'thread', 'node', 'command', 'pending', '2026-10-14', '{}')
     `;
 
-      assert.deepStrictEqual(yield* runMigrations(), [
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), [
         [77, "ProjectionTurnItemRequestIndex"],
         [78, "Memory"],
         [79, "MemoryHubSync"],
@@ -68,7 +68,7 @@ it.effect(
         [111, "NotificationCursorRepair"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 111 }), []);
 
       const indexes = yield* sql<{ readonly name: string; readonly partial: number }>`
       PRAGMA index_list(orchestration_v2_projection_turn_items)

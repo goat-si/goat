@@ -29,7 +29,7 @@ describe("connectCliAuth", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
-  it("sends the sign-in redirect to the authorize endpoint, not back to /connect", () => {
+  it("reloads the approval screen after sign-in while preserving the CLI intent", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", TEST_PUBLISHABLE_KEY);
     vi.stubEnv("VITE_CLERK_CLI_OAUTH_CLIENT_ID", "oauthapp_123");
 
@@ -41,7 +41,9 @@ describe("connectCliAuth", () => {
     );
 
     expect(redirectUrl).not.toBe(connectUrl);
-    expect(new URL(redirectUrl).pathname).toBe("/oauth/authorize");
+    expect(new URL(redirectUrl).hash).toBe(new URL(connectUrl).hash);
+    expect(new URL(redirectUrl).searchParams.get("connect-sign-in")).toBe("1");
+    expect(new URL(redirectUrl).pathname).toBe("/connect");
   });
 });
 

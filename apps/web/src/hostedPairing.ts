@@ -6,7 +6,7 @@ export interface HostedPairingRequest {
   readonly label: string;
 }
 
-/** GOAT has no hosted web app; a build sets one only through VITE_HOSTED_APP_URL. */
+/** Hosted artifacts recognize only their configured exact origin. */
 export function configuredHostedAppUrl(): string | null {
   return import.meta.env.VITE_HOSTED_APP_URL?.trim() || null;
 }

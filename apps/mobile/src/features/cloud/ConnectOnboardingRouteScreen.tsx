@@ -28,7 +28,7 @@ export function ConnectOnboardingRouteScreen() {
 function ConfiguredConnectOnboardingRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
+  const { isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: true });
   const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =
     useRemoteConnections();
   const { refreshRelayEnvironments } = useConnectionController();

@@ -80,13 +80,12 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const agentAwarenessPushAvailable = supportsAgentAwarenessPush();
   const agentAwarenessPlatform = resolveAgentAwarenessPlatformPresentation(Platform.OS);
-  const agentAwarenessSubtitle =
-    Platform.OS === "android" && !agentAwarenessPushAvailable
-      ? "Install a newer app build to enable notifications"
-      : agentAwarenessPlatform.subtitle;
+  const agentAwarenessSubtitle = !agentAwarenessPushAvailable
+    ? "Push notifications and Live Activities are unavailable in the Connect beta"
+    : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [notificationStatus, setNotificationStatus] = useNotificationPermissionStatus();
   const [liveActivityStatus, setLiveActivityStatus] = useState<LiveActivityStatus>("checking");

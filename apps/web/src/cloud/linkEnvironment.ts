@@ -1,3 +1,4 @@
+import { connectLinkIntentFromProof } from "@goat/shared/connectAuth";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -284,12 +285,32 @@ export const linkPrimaryEnvironmentToCloud: (input: {
     yield* ensureRelayClientAvailable(EnvironmentId.make(input.target.environmentId));
   }
 
+  const intentProof = yield* environmentClient.connect
+    .linkProof({
+      headers: {},
+      payload: {
+        challenge: "connect-intent",
+        relayIssuer: configuredRelayUrl,
+        endpoint: {
+          httpBaseUrl: input.target.httpBaseUrl,
+          wsBaseUrl: input.target.wsBaseUrl,
+          providerKind,
+        },
+        origin: endpointOrigin(input.target.httpBaseUrl),
+      },
+    })
+    .pipe(Effect.mapError(environmentApiError("Could not read environment identity.")));
+  const intent = yield* Effect.try({
+    try: () => connectLinkIntentFromProof(intentProof, managedTunnelsEnabled),
+    catch: environmentApiError("Update the GOAT host before linking Connect."),
+  });
   const challenge = yield* relayClient
     .createEnvironmentLinkChallenge({
       clerkToken: input.clerkToken,
       payload: {
-        notificationsEnabled: true,
-        liveActivitiesEnabled: true,
+        ...intent,
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
         managedTunnelsEnabled,
       },
     })
@@ -320,8 +341,8 @@ export const linkPrimaryEnvironmentToCloud: (input: {
       clerkToken: input.clerkToken,
       payload: {
         proof,
-        notificationsEnabled: true,
-        liveActivitiesEnabled: true,
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
         managedTunnelsEnabled,
       },
     })
@@ -345,6 +366,7 @@ export const linkPrimaryEnvironmentToCloud: (input: {
         cloudUserId: link.cloudUserId,
         environmentCredential: link.environmentCredential,
         cloudMintPublicKey: link.cloudMintPublicKey,
+        connectAuthPolicyVersion: 1,
         endpointRuntime: link.endpointRuntime,
       },
     })

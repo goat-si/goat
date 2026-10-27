@@ -160,3 +160,102 @@ describe("mobile DPoP", () => {
     }).pipe(Effect.provide(Dpop.layer)),
   );
 });
+
+it.effect("a retained secure-store key is explicitly readmitted after fresh MFA sign-in", () =>
+  Effect.gen(function* () {
+    secureStore.clear();
+    const retained = yield* loadOrCreateDpopProofKeyPair();
+    const { ManagedRelay } = yield* Effect.promise(() => import("@goat/client-runtime/relay"));
+    const ManagedRelayLayer = yield* Effect.promise(() => import("./managedRelayLayer"));
+    const { HttpClient, HttpClientResponse } = yield* Effect.promise(() => import("effect/http"));
+    const Layer = yield* Effect.promise(() => import("effect/Layer"));
+    const freshToken = `${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ sub: "account", session: "fresh-mfa" }))}.signature`;
+    const seen: string[] = [];
+    const clientLayer = ManagedRelayLayer.layer("https://relay.example.test").pipe(
+      Layer.provide(Dpop.layer),
+      Layer.provide(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              const verified = verifyDpopProof({
+                proof: request.headers.dpop,
+                method: request.method,
+                url: request.url,
+                expectedThumbprint: retained.thumbprint,
+                nowEpochSeconds: proofIat(request.headers.dpop ?? ""),
+              });
+              expect(verified.ok).toBe(true);
+              const body =
+                request.body._tag === "Uint8Array"
+                  ? new URLSearchParams(new TextDecoder().decode(request.body.body))
+                  : null;
+              expect(body?.get("readmitClientKey")).toBe("true");
+              seen.push(body?.get("subject_token") ?? "");
+              return HttpClientResponse.fromWeb(
+                request,
+                body?.get("subject_token") === freshToken
+                  ? Response.json({
+                      access_token: "admitted",
+                      issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+                      token_type: "DPoP",
+                      expires_in: 1800,
+                      scope: "environment:status",
+                    })
+                  : Response.json(
+                      {
+                        code: "authentication_strength_required",
+                        reason: "reauthentication_required",
+                        requiredLevel: "multi_factor",
+                        maxAgeSeconds: 600,
+                        traceId: "native-readmit",
+                      },
+                      { status: 403 },
+                    ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+    const denied = yield* ManagedRelay.ManagedRelayClient.pipe(
+      Effect.flatMap((client) =>
+        client
+          .requestKeyReadmission({
+            accountId: "account",
+            clerkToken: `${btoa("{}")}.${btoa(JSON.stringify({ sub: "account" }))}.signature`,
+          })
+          .pipe(Effect.result),
+      ),
+      Effect.provide(clientLayer),
+    );
+    expect(denied._tag).toBe("Failure");
+    yield* ManagedRelay.ManagedRelayClient.pipe(
+      Effect.flatMap((client) =>
+        client.resetTokenCache.pipe(
+          Effect.andThen(
+            client.requestKeyReadmission({ accountId: "account", clerkToken: freshToken }),
+          ),
+        ),
+      ),
+      Effect.provide(clientLayer),
+    );
+    expect(seen).toHaveLength(2);
+    expect((yield* loadOrCreateDpopProofKeyPair()).thumbprint).toBe(retained.thumbprint);
+  }).pipe(Effect.provide(Dpop.layer)),
+);
+
+vi.mock("./managedRelayTokenStore", async () => {
+  const Effect = await import("effect/Effect");
+  return {
+    managedRelayAccessTokenStore: {
+      load: Effect.succeed([]),
+      save: () => Effect.void,
+      clear: Effect.void,
+    },
+  };
+});
+vi.mock("@goat/shared/goatConnect", async (original) => ({
+  ...(await original<typeof import("@goat/shared/goatConnect")>()),
+  isGoatConnectEnabled: () => true,
+}));
