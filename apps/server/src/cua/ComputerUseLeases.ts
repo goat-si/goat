@@ -68,6 +68,7 @@ import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import { makeLeaseSafety } from "./ComputerUseLeaseSafety.ts";
+import { startHelperWatch } from "./ComputerUseLeaseWatch.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -106,7 +107,6 @@ export type {
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
-const WATCH_RETRY_MS = 1_000;
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
@@ -666,98 +666,19 @@ const make = Effect.gen(function* () {
   // them only with privateModeOn in ComputerUsePrivateMode.ts.
   const privateHost = false;
 
-  // The helper watches for secret fields and a person's input only while an agent controls this
-  // host (D7): from the first live control until the last one ends or expires. The desktop's
-  // helper hears it over the control pipe; the server's own Linux helper directly.
-  if (Option.isSome(desktop) || Option.isSome(linuxHelper)) {
-    const kicks = yield* PubSub.subscribe(watchKick);
-    const receiver = Option.getOrUndefined(desktop);
-    yield* Effect.gen(function* () {
-      // What the desktop last heard; it starts out not watching. After a failed write it may
-      // have heard either value, so the current one goes out until a write succeeds.
-      let delivered = false;
-      let deliveredApps: ReadonlyArray<string> = [];
-      let unsure = false;
-      for (;;) {
-        // A grant cancelled or expired under a control ends it, though nothing here ended it.
-        let endedAny = false;
-        for (const record of Array.from(controls.values())) {
-          if (record.ended !== undefined || record.handoffId === undefined) continue;
-          const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
-          // The lookup yields: a newer control for the thread is not judged by this grant.
-          if (
-            Option.isSome(grant) &&
-            grant.value._tag === "ended" &&
-            controls.get(record.threadId)?.controlId === record.controlId
-          )
-            endedAny = end(record.threadId, grant.value.reason) || endedAny;
-        }
-        // Proxies waiting on a pause hear their control ended.
-        if (endedAny) yield* PubSub.publish(signals, undefined);
-        // Read approvals independently of pause state: a paused helper must keep watching. A
-        // failed read never holds back whether the desktop watches (secret fields, #1235): the
-        // apps it last heard stand, and the read is tried again.
-        const listed = yield* live().pipe(Effect.option);
-        const grants = Option.getOrElse(listed, () => []);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const current = [...controls.values()].filter(
-          (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
-        );
-        const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
-        const approved = new Set<string>();
-        for (const record of current) {
-          if (record.everyApp !== undefined) {
-            for (const app of record.named ?? []) approved.add(app);
-            continue;
-          }
-          const held = grants.filter(
-            (grant) =>
-              grant.threadId === record.threadId &&
-              (record.handoffId === undefined || grant.handoffId === record.handoffId),
-          );
-          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
-          for (const app of rememberScope(controls, record, appsOf(held)) ?? []) approved.add(app);
-        }
-        const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
-        const appsChanged =
-          apps.length !== deliveredApps.length ||
-          apps.some((app, index) => app !== deliveredApps[index]);
-        // Only a driver this server runs itself offers a refresh; a desktop host refreshes its own.
-        const refresh = Option.isSome(driver) ? driver.value.refreshManifest : undefined;
-        if (appsChanged && refresh)
-          yield* refresh(apps).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
-        const active = current.length > 0;
-        let retry = false;
-        // The server's own helper takes the wanted state as is, so it cannot fall behind.
-        if (Option.isSome(linuxHelper)) yield* linuxHelper.value.setWatch(active);
-        if (active !== delivered || appsChanged || unsure) {
-          const sent =
-            receiver === undefined
-              ? true
-              : yield* receiver.setCuaWatch(active, apps).pipe(
-                  Effect.as(true),
-                  Effect.orElseSucceed(() => false),
-                );
-          if (sent) {
-            delivered = active;
-            deliveredApps = apps;
-            unsure = false;
-          } else {
-            unsure = true;
-            retry = true;
-          }
-        }
-        const waits = [
-          ...(active ? [Math.min(...expiries) - now] : []),
-          // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
-          // So is a failed approval read.
-          ...(retry || Option.isNone(listed) ? [WATCH_RETRY_MS] : []),
-        ];
-        const woken = PubSub.take(kicks);
-        yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
-      }
-    }).pipe(Effect.forkScoped);
-  }
+  if (Option.isSome(desktop) || Option.isSome(linuxHelper))
+    yield* startHelperWatch({
+      controls,
+      acting,
+      grantState: state,
+      end,
+      signals,
+      watchKick,
+      live: live(),
+      receiver: Option.getOrUndefined(desktop),
+      linuxHelper,
+      driver,
+    });
 
   const calls = makeCallReservation({
     admission,
