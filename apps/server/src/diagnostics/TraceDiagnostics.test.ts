@@ -133,7 +133,7 @@ describe("TraceDiagnostics", () => {
                   opens++;
                   yield* Deferred.succeed(entered, undefined);
                   yield* Deferred.await(release);
-                  if (failed) return yield* Effect.fail(problem);
+                  if (failed) return yield* problem;
                   return new TextEncoder().encode(
                     record({
                       name: "recovered",
