@@ -37,6 +37,7 @@ export function floatPreview(
         focus: { kind: "browser", threadId: threadRef.threadId, tabId: source.tabId },
         expand: true,
         automatic: request.by === "agent" && request.force !== true,
+        scope: request.by === "agent" ? "thread" : "window",
       });
       return;
     }

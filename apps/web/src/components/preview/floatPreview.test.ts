@@ -6,7 +6,11 @@ import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previe
 import { applyPreviewServerSnapshot, resetPreviewStateForTests } from "../../previewStateStore";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { floatPreview } from "./floatPreview";
-import { usePreviewSessionStack } from "./sessions/previewSessionStackStore";
+import {
+  openPreviewSessionStack,
+  selectAgentCardsShown,
+  usePreviewSessionStack,
+} from "./sessions/previewSessionStackStore";
 
 const ref = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-1"));
 const threadKey = scopedThreadKey(ref);
@@ -32,7 +36,12 @@ function setup() {
   resetPreviewStateForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   useRightPanelStore.setState({ byThreadKey: {} });
-  usePreviewSessionStack.setState({ hidden: true, expanded: null, focus: null });
+  usePreviewSessionStack.setState({
+    hidden: true,
+    expanded: new Map(),
+    revealedThreads: new Set(),
+    focus: null,
+  });
 }
 
 const floating = () => usePreviewMiniPlayerStore.getState().byThreadKey[threadKey]?.source;
@@ -52,10 +61,35 @@ it("floats a person's own tab, and sends a tab an agent drives to its large card
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   floatPreview(ref, browserMiniPlayerSource("tab_agent"), { by: "person" });
   expect(floating()).toBeUndefined();
-  expect(usePreviewSessionStack.getState()).toMatchObject({
-    hidden: false,
-    expanded: { kind: "browser", threadId: "thread-1", tabId: "tab_agent", environmentId: "env-1" },
+  expect(usePreviewSessionStack.getState().hidden).toBe(false);
+  expect(usePreviewSessionStack.getState().expanded.get("env-1|thread-1")).toEqual({
+    kind: "browser",
+    threadId: "thread-1",
+    tabId: "tab_agent",
+    environmentId: "env-1",
   });
+});
+
+it("leaves the thread on screen's large card and hidden cards alone when another thread's agent opens a tab", () => {
+  setup();
+  const other = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-2"));
+  applyPreviewServerSnapshot(ref, tab("tab_mine", "agent-session"));
+  applyPreviewServerSnapshot(other, {
+    ...tab("tab_theirs", "agent-session"),
+    threadId: "thread-2",
+  });
+  openPreviewSessionStack({
+    environmentId: ref.environmentId,
+    focus: { kind: "browser", threadId: "thread-1", tabId: "tab_mine" },
+    expand: true,
+    automatic: true,
+  });
+  floatPreview(other, browserMiniPlayerSource("tab_theirs"), { by: "agent", force: true });
+  const state = usePreviewSessionStack.getState();
+  expect(state.expanded.get("env-1|thread-1")).toMatchObject({ tabId: "tab_mine" });
+  expect(state.expanded.get("env-1|thread-2")).toMatchObject({ tabId: "tab_theirs" });
+  expect(selectAgentCardsShown("env-1|thread-1")(state)).toBe(false);
+  expect(selectAgentCardsShown("env-1|thread-2")(state)).toBe(true);
 });
 
 it("opens a device an agent started as a background panel tab, and floats one a person asks for", () => {

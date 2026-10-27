@@ -200,7 +200,8 @@ function setup(
     revealedWhileNarrow: false,
     dismissed: new Set(),
     hiddenLive: new Map(),
-    expanded: null,
+    expanded: new Map(),
+    revealedThreads: new Set(),
     focus: null,
     focusRequest: 0,
   });

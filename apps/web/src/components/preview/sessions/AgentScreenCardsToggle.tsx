@@ -8,7 +8,11 @@ import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewSessions";
 
-import { selectAgentCardsShown, usePreviewSessionStack } from "./previewSessionStackStore";
+import {
+  selectAgentCardsShown,
+  stackThreadKey,
+  usePreviewSessionStack,
+} from "./previewSessionStackStore";
 import {
   useAgentScreenSessions,
   useHiddenLiveAgentSessions,
@@ -31,7 +35,12 @@ export function AgentScreenCardsToggle() {
   const stoppable = usePreviewSessions(environmentId).some((session) =>
     session.capabilities.controls.includes("stop"),
   );
-  const shown = usePreviewSessionStack(selectAgentCardsShown) && closed === 0;
+  const shown =
+    usePreviewSessionStack(
+      selectAgentCardsShown(
+        threadRef ? stackThreadKey(threadRef.environmentId, threadRef.threadId) : null,
+      ),
+    ) && closed === 0;
   const setShown = usePreviewSessionStack((state) => state.setShown);
   const stopAll = useStopAllAgents(environmentId);
   const canControl = useAtomValue(previewSessionsEnvironment.control.permissionAtom(environmentId));

@@ -18,7 +18,7 @@ import {
   revealServerTabs,
   startAgentOpenedPreviews,
 } from "./agentOpenedPreviews";
-import { usePreviewSessionStack } from "./sessions/previewSessionStackStore";
+import { selectAgentCardsShown, usePreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 vi.mock("../../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => true,
@@ -33,14 +33,18 @@ function setup() {
   useRightPanelStore.setState({ byThreadKey: {} });
   usePreviewSessionStack.setState({
     hidden: true,
-    expanded: null,
+    expanded: new Map(),
+    revealedThreads: new Set(),
     focus: null,
     hiddenLive: new Map(),
   });
 }
 
 const miniPlayerSource = () => usePreviewMiniPlayerStore.getState().byThreadKey[threadKey]?.source;
-const largeCard = () => usePreviewSessionStack.getState().expanded;
+const largeCard = (thread = "thread-1") =>
+  usePreviewSessionStack.getState().expanded.get(`env-1|${thread}`) ?? null;
+const shownIn = (thread: string) =>
+  selectAgentCardsShown(`env-1|${thread}`)(usePreviewSessionStack.getState());
 
 describe("revealServerTabs", () => {
   const tab = (tabId: string, force?: boolean): PreviewSessionSnapshot => ({
@@ -104,13 +108,15 @@ describe("revealServerTabs", () => {
       tabId: "tab_agent",
       environmentId: "env-1",
     });
-    // On its own it leaves the window's hidden cards alone; a forced reveal shows them.
-    expect(usePreviewSessionStack.getState().hidden).toBe(true);
+    // On its own it leaves the window's hidden cards alone; a forced reveal shows them, but only
+    // in its own thread.
+    expect(shownIn("thread-1")).toBe(false);
     applyPreviewServerSnapshot(ref, agentTab("tab_forced", true));
     revealServerTabs(ref, [agentTab("tab_forced", true)], { autoShowFloatingPreview: false });
     expect(floatingTabId()).toBeNull();
     expect(largeCard()).toMatchObject({ tabId: "tab_forced" });
-    expect(usePreviewSessionStack.getState().hidden).toBe(false);
+    expect(shownIn("thread-1")).toBe(true);
+    expect(shownIn("thread-2")).toBe(false);
   });
 });
 
@@ -232,7 +238,7 @@ describe("startAgentOpenedPreviews", () => {
       revision: 2,
     });
     expect(usePreviewMiniPlayerStore.getState().byThreadKey).toEqual({});
-    expect(largeCard()).toEqual({
+    expect(largeCard("thread-2")).toEqual({
       kind: "browser",
       threadId: "thread-2",
       tabId: "tab_b",

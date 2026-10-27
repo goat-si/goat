@@ -22,6 +22,7 @@ import { useDocumentVisible } from "./PreviewSessionThumbnail";
 import {
   matchesFocus,
   selectAgentCardsShown,
+  stackThreadKey,
   usePreviewSessionStack,
 } from "./previewSessionStackStore";
 import {
@@ -52,12 +53,10 @@ function FloatingStopAll(props: { readonly environmentId: EnvironmentId }) {
 }
 
 /**
- * What the thread on screen has agents drive, one card per browser tab and one for its desktop,
- * waiting ones first, at the thread pane's top right where the floating mini player starts. Other
- * threads' sessions never show here, and their pictures are never requested. One
- * session at a time can be enlarged in place. The cards hide when the pane has no room beside the
- * conversation, and the header's toggle shows or hides them. Pictures stream only while cards show
- * and the window is visible (D11, #1215).
+ * What agents drive for the thread on screen, one card per browser tab and one for its desktop, at
+ * the pane's top right; other threads' sessions never show or stream here. One can be enlarged in
+ * place, and the cards hide when the pane has no room. Pictures stream only while cards show and
+ * the window is visible (D11).
  */
 export function PreviewSessionStack(props: {
   readonly environmentId: EnvironmentId | null;
@@ -65,6 +64,9 @@ export function PreviewSessionStack(props: {
   readonly threadRef: ScopedThreadRef | null;
 }) {
   const threadKey = props.threadRef ? scopedThreadKey(props.threadRef) : null;
+  const stackKey = props.threadRef
+    ? stackThreadKey(props.threadRef.environmentId, props.threadRef.threadId)
+    : null;
   // An open right panel is the expanded view; the cards step aside until it closes.
   const panelOpen = useRightPanelStore((state) =>
     props.threadRef ? selectActiveRightPanel(state.byThreadKey, props.threadRef) !== null : false,
@@ -78,11 +80,13 @@ export function PreviewSessionStack(props: {
   const sessions = useAgentScreenSessions(props.environmentId, props.threadRef);
   const control = useAtomCommand(previewSessionsEnvironment.control);
   const stopAll = useStopAllAgents(props.environmentId);
-  const shown = usePreviewSessionStack(selectAgentCardsShown);
+  const shown = usePreviewSessionStack(selectAgentCardsShown(stackKey));
   const dismiss = usePreviewSessionStack((state) => state.dismiss);
   const expand = usePreviewSessionStack((state) => state.expand);
   const collapse = usePreviewSessionStack((state) => state.collapse);
-  const expanded = usePreviewSessionStack((state) => state.expanded);
+  const expanded = usePreviewSessionStack((state) =>
+    stackKey === null ? null : (state.expanded.get(stackKey) ?? null),
+  );
   const focus = usePreviewSessionStack((state) => state.focus);
   const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const probe = useRef<HTMLDivElement>(null);
@@ -232,7 +236,9 @@ export function PreviewSessionStack(props: {
                         setTakeOver((current) => new Set(current).add(session.id));
                       expand(session);
                     }}
-                    onCollapse={collapse}
+                    onCollapse={() => {
+                      if (stackKey !== null) collapse(stackKey);
+                    }}
                     onControl={(next) => void send({ sessionId: session.id, control: next })}
                     onDismiss={() => dismiss(session)}
                   />
