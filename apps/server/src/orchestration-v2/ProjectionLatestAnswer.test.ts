@@ -348,3 +348,25 @@ it.effect("an answer on a node that has not arrived waits for it, in SQL as in m
     yield* expectExcerpt(scenario(true), "Answer on a late node");
   }),
 );
+
+it.effect(
+  "editing a completed run's /compact prompt into an ordinary message makes its answer count",
+  () =>
+    expectExcerpt((input) => {
+      const idle = idleCompaction(input);
+      if (idle.prompt.type !== "message.updated") return [];
+      const edited: OrchestrationV2DomainEvent = {
+        ...idle.prompt,
+        id: EventId.make("prompt-edited"),
+        occurredAt: input.at(5),
+        payload: {
+          ...idle.prompt.payload,
+          text: "Summarize the work so far",
+          createdBy: "user",
+          creationSource: "web",
+          updatedAt: input.at(5),
+        },
+      };
+      return [idle.prompt, ...idle.before, edited];
+    }, "Compacted the context"),
+);

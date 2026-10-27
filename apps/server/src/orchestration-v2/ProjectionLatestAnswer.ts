@@ -42,8 +42,13 @@ export const changesLatestAnswer = (event: OrchestrationV2DomainEvent) =>
   (event.type === "message.updated" &&
     event.payload.role === "assistant" &&
     !event.payload.streaming) ||
-  // An idle compaction's prompt and its compaction item decide whether its run counts.
-  (event.type === "message.updated" && idleCompactionOf(event.payload) !== undefined) ||
+  // An idle compaction's prompt and its compaction item decide whether its run counts. Editing a
+  // prompt can turn an idle one ordinary; a fresh message (never edited) cannot change a run.
+  (event.type === "message.updated" &&
+    (idleCompactionOf(event.payload) !== undefined ||
+      (event.payload.role === "user" &&
+        DateTime.toEpochMillis(event.payload.updatedAt) >
+          DateTime.toEpochMillis(event.payload.createdAt)))) ||
   (event.type === "turn-item.updated" && event.payload.type === "compaction");
 
 const byId = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
