@@ -1,3 +1,5 @@
+import { RelayConfiguration } from "../Config.ts";
+import { managedEndpointTunnelNamePrefix } from "../deploymentConfig.ts";
 import * as zeroTrust from "@distilled.cloud/cloudflare/zero-trust";
 import * as Cloudflare from "alchemy/Cloudflare";
 import type * as Alchemy from "alchemy";
@@ -21,6 +23,10 @@ export const layer = (
   Layer.effect(
     RetiredEndpointInventory,
     Effect.gen(function* () {
+      const config = yield* RelayConfiguration;
+      if (!config.managedEndpointNamespace)
+        return yield* Effect.die(new Error("Retired inventory requires the deployed relay stage"));
+      const prefix = managedEndpointTunnelNamePrefix(config.managedEndpointNamespace);
       const pause = yield* CloudflareApiPause;
       const gate = makeCloudflareApiGate(runtime)(pause);
       const mutate = <A, E>(
@@ -34,7 +40,9 @@ export const layer = (
         );
       return RetiredEndpointInventory.of({
         tunnels: Effect.fn("RetiredEndpointInventory.tunnels")((page) =>
-          gate(tunnels.list({ page, perPage: INVENTORY_PAGE_SIZE, isDeleted: false })).pipe(
+          gate(
+            tunnels.list({ name: prefix, page, perPage: INVENTORY_PAGE_SIZE, isDeleted: false }),
+          ).pipe(
             Effect.map((r) => r.result.map((t) => ({ id: t.id ?? "", name: t.name ?? "" }))),
             Effect.mapError(
               (cause) => new RetiredInventoryError({ operation: "list-tunnels", cause }),
