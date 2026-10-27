@@ -9,6 +9,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import { makeShellThreadRows } from "./ProjectionShellThreadRows.ts";
 
 export interface CompletionNotificationInput {
   readonly threadId: ThreadId;
@@ -57,13 +58,18 @@ export const preserveThreadNotification = (
     : {}),
 });
 
-export function notificationCompletions(events: ReadonlyArray<OrchestrationV2DomainEvent>) {
+// quietRunIds: runs the shell hides (GOAT's own successful idle compactions) never advance unread.
+export function notificationCompletions(
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  quietRunIds: ReadonlySet<RunId> = new Set(),
+) {
   const completions = new Map<ThreadId, DateTime.Utc>();
   for (const event of events) {
     if (
       (event.type !== "run.created" && event.type !== "run.updated") ||
       event.payload.completedAt === null ||
-      event.payload.completionNotification === "silent"
+      event.payload.completionNotification === "silent" ||
+      quietRunIds.has(event.payload.id)
     )
       continue;
     const prior = completions.get(event.threadId);
@@ -100,7 +106,23 @@ export const threadNotificationPayload = (sql: SqlClient.SqlClient) => {
 export const recordNotificationCompletions = Effect.fn(
   "ProjectionRunNotification.recordCompletions",
 )(function* (sql: SqlClient.SqlClient, events: ReadonlyArray<OrchestrationV2DomainEvent>) {
-  for (const [threadId, at] of notificationCompletions(events)) {
+  const runIds = [
+    ...new Set(
+      events.flatMap((event) =>
+        (event.type === "run.created" || event.type === "run.updated") &&
+        event.payload.completedAt !== null
+          ? [event.payload.id]
+          : [],
+      ),
+    ),
+  ];
+  if (runIds.length === 0) return;
+  const quiet = yield* sql<{
+    readonly run_id: RunId;
+  }>`SELECT r.run_id FROM orchestration_v2_projection_runs r
+    WHERE r.run_id IN ${sql.in(runIds)} AND ${makeShellThreadRows(sql).isSilentShellRun("r")}`;
+  const quietRunIds = new Set(quiet.map((row) => row.run_id));
+  for (const [threadId, at] of notificationCompletions(events, quietRunIds)) {
     const iso = DateTime.formatIso(at);
     yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.notificationCompletedAt',${iso})
       WHERE thread_id=${threadId} AND COALESCE(json_extract(payload_json,'$.notificationCompletedAt'),'') < ${iso}`;

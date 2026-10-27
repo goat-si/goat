@@ -945,7 +945,9 @@ export function applyToProjection(
   const next = applyToProjectionEvent(projection, event);
   const completedAt = options.deferNotificationCursor
     ? undefined
-    : RunNotification.notificationCompletions([event]).get(event.threadId);
+    : RunNotification.notificationCompletions([event], quietRunIds(next, [event])).get(
+        event.threadId,
+      );
   return {
     ...next,
     thread: RunNotification.preserveThreadNotification(
@@ -1918,6 +1920,19 @@ function isSilentRunForShell(
       (item) => item.runId === run.id && item.type === "compaction" && item.status === "failed",
     )
   );
+}
+
+function quietRunIds(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages" | "turnItems">,
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+): ReadonlySet<RunId> {
+  const quiet = new Set<RunId>();
+  for (const event of events) {
+    if (event.type !== "run.created" && event.type !== "run.updated") continue;
+    const run = projection.runs.find((candidate) => candidate.id === event.payload.id);
+    if (run !== undefined && isSilentRunForShell(run, projection)) quiet.add(run.id);
+  }
+  return quiet;
 }
 
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
@@ -7259,7 +7274,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         }),
       recordNotificationCompletions: (events) =>
         Ref.update(replayState, (state) => {
-          for (const [threadId, at] of RunNotification.notificationCompletions(events)) {
+          const quiet = new Set<RunId>();
+          for (const threadId of new Set(events.map((event) => event.threadId))) {
+            const projection = state.projections.get(threadId);
+            if (projection === undefined) continue;
+            const threadEvents = events.filter((event) => event.threadId === threadId);
+            for (const id of quietRunIds(projection, threadEvents)) quiet.add(id);
+          }
+          for (const [threadId, at] of RunNotification.notificationCompletions(events, quiet)) {
             const projection = state.projections.get(threadId);
             if (projection)
               state.projections.set(threadId, {
