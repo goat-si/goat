@@ -150,4 +150,29 @@ describe("app chip provider note", () => {
     expect(projected).toContain("app: KakaoTalk");
     expect(projected).toContain("appId: com.kakao.KakaoTalkMac");
   });
+
+  it("regression #1698: a saved record whose app differs from its chip's id names no app", () => {
+    const prefix = "C:\\Users\\someone\\AppData\\Local\\Programs\\Vendor Tools\\";
+    const cut = `app_${[...new TextEncoder().encode(prefix + "xxxxxxxxxxxxxxxxxxxxxxxxxx")]
+      .slice(0, 62)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}` as import("@goat/contracts").ComposerContextId;
+    // An older build saved app A's record under the id it cut, then showed app B's chip there.
+    const saved = {
+      version: 1 as const,
+      kind: "capability" as const,
+      contextId: cut,
+      label: "Beta",
+      capability: "computer-use" as const,
+      app: { id: `${prefix}Alpha\\alpha.exe`, name: "Alpha" },
+    };
+    const text = `${formatComposerContextReference(saved)} open it`;
+    expect(screenBindingHintsFromOrigin({ text, records: [saved] })).toMatchObject({
+      computerRequested: true,
+      appIds: [],
+    });
+    const projected = projectComposerContextForProvider({ text, records: [saved] });
+    expect(projected).toContain("capability: computer-use");
+    expect(projected).not.toContain("Alpha");
+  });
 });

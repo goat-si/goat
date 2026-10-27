@@ -172,5 +172,8 @@ describe("composer app entries", () => {
     const id = "C:\\Users\\someone\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe";
     const [editor] = matchComposerAppItems("code", ready, [{ id, name: "Code" }]);
     expect(editor?.availability).toMatchObject({ state: "unavailable", setup: false });
+    expect(editor && composerCapabilityDetail(editor)).toBe(
+      "This app's id is too long to mention. Use @computer and name the app instead.",
+    );
   });
 });
