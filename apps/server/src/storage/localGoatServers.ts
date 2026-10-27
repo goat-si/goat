@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- reads other GOAT servers' databases read-only.
 import * as NodeFSP from "node:fs/promises";
-import * as NodeSqlite from "node:sqlite";
+import * as AuxiliarySqlite from "./AuxiliarySqlite.ts";
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -114,41 +114,13 @@ function heldDatabases(files: ReadonlyArray<HeldDatabase>): ReadonlyArray<HeldDa
 
 const LINUX_DELETED = " (deleted)";
 
-interface ReadRows {
-  readonly worktreePaths: ReadonlyArray<string>;
-  readonly projectRoots: ReadonlyArray<string>;
-}
-
-/**
- * One short read-only query pair. Another server writes this database in WAL mode, which lets a
- * read-only reader in without blocking it.
- */
-const readDatabase = (file: string) =>
-  Effect.try({
-    try: (): ReadRows => {
-      const db = new NodeSqlite.DatabaseSync(file, { readOnly: true });
-      try {
-        db.exec("PRAGMA busy_timeout = 2000;");
-        const threads = db
-          .prepare(
-            "SELECT json_extract(payload_json, '$.worktreePath') AS path FROM orchestration_v2_projection_threads WHERE json_extract(payload_json, '$.worktreePath') IS NOT NULL",
-          )
-          .all();
-        const projects = db
-          .prepare(
-            "SELECT workspace_root AS root FROM projection_projects WHERE deleted_at IS NULL",
-          )
-          .all();
-        return {
-          worktreePaths: threads.flatMap((row) => (typeof row.path === "string" ? [row.path] : [])),
-          projectRoots: projects.flatMap((row) => (typeof row.root === "string" ? [row.root] : [])),
-        };
-      } finally {
-        db.close();
-      }
-    },
-    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
-  });
+const readDatabase = Effect.fn("localGoatServers.readDatabase")(function* (file: string) {
+  const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
+  return yield* reader.read({ kind: "bindings", file }).pipe(
+    Effect.map(({ worktreePaths, projectRoots }) => ({ worktreePaths, projectRoots })),
+    Effect.mapError((cause) => cause.message),
+  );
+});
 
 /**
  * Whether a database file is there. Only a missing file or folder counts as absent: a folder this
@@ -382,7 +354,10 @@ export const layer = Layer.effect(
   LocalGoatServers,
   Effect.gen(function* () {
     const context = yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
+      | FileSystem.FileSystem
+      | Path.Path
+      | ProcessRunner.ProcessRunner
+      | AuxiliarySqlite.AuxiliarySqlite
     >();
     return LocalGoatServers.of({
       otherServers: (ownDatabase) =>

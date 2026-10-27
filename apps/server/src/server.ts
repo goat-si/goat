@@ -1,3 +1,4 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import * as VoiceTranscription from "./voiceTranscription.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
@@ -811,8 +812,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  // The same hub layer backs routes, descriptors and future L4 application consumers.
-  Layer.provideMerge(layerMemoryHub),
+  Layer.provideMerge(Layer.merge(AuxiliarySqlite.layer, layerMemoryHub)),
   // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
   // Same EventSink layer reference as orchestration, so memoization shares one instance.
   // Remote channel workers reach other machines through the same SshRemoteDispatch layer
@@ -821,7 +821,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ChannelLayers.layer.pipe(
       Layer.provide(RuntimeLayer.layerEventSink),
       Layer.provide(SshRemoteDispatchLive.layer),
-      // GOAT Bot searches memory when it answers; same references, so one memory instance.
       Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
     ),
   ),
