@@ -1620,8 +1620,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }
@@ -1633,8 +1633,8 @@ export function resolveThreadStatusPill(input: {
   ) {
     return {
       label: "Connecting",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      colorClass: "text-info-foreground",
+      dotClass: "bg-info",
       pulse: true,
     };
   }

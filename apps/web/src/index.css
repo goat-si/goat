@@ -99,11 +99,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 }
 
 :root {
-  --channel-dev: var(--color-blue-700);
+  --channel-dev: var(--blue);
   --channel-nightly: var(--color-indigo-600);
 
   @variant dark {
-    --channel-dev: var(--color-blue-400);
     --channel-nightly: var(--color-indigo-300);
   }
 
@@ -1282,15 +1281,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
 :root {
   color-scheme: light;
-  --goat-bubble-out-top: #1f74e0;
-  --goat-bubble-out: #1466d0;
+  --goat-bubble-out-top: var(--blue);
+  --goat-bubble-out: var(--blue);
   --goat-bubble-in: #e9e9eb;
   --goat-bubble-in-foreground: #000;
   --goat-composer-fill: #f3f3f3;
   --goat-hairline: rgb(0 0 0 / 8%);
   --radius: 0.5rem;
-  /* Neutral grays without a cool cast, an ink primary, and blue kept for focus
-     and updates, after the ChatGPT desktop palette. */
+  /* Neutral grays without a cool cast and an ink primary, after the ChatGPT
+     desktop palette. Every blue in the default look (links, focus, info,
+     updates, unread) is this one token. */
+  --blue: #0169cc;
   --background: #ffffff;
   --app-chrome-background: var(--background);
   --toolbar-background: var(--app-chrome-background);
@@ -1328,10 +1329,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --destructive: var(--error);
   --border: #ececec;
   --input: #dfdfdf;
-  --ring: #0285ff;
+  --ring: var(--blue);
   --destructive-foreground: var(--error-foreground);
-  --info: var(--color-blue-500);
-  --info-foreground: var(--color-blue-700);
+  --info: var(--blue);
+  --info-foreground: var(--blue);
   /* Messages from a guest link, and the sidebar Request status. */
   --guest: var(--color-fuchsia-500);
   --guest-foreground: var(--color-fuchsia-600);
@@ -1348,7 +1349,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --heat-hot: var(--color-orange-500);
   --heat-burning: var(--color-red-500);
   --heat-ember: var(--color-amber-400);
-  --update: #0169cc;
+  --update: var(--blue);
   --update-foreground: var(--update);
   --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
@@ -1373,8 +1374,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
 
   @variant dark {
     color-scheme: dark;
-    --goat-bubble-out-top: #3574d4;
-    --goat-bubble-out: #2b66c6;
+    --blue: #339cff;
     --goat-bubble-in: #3a3a3c;
     --goat-bubble-in-foreground: #fff;
     --goat-composer-fill: #262626;
@@ -1405,8 +1405,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
     --border: --alpha(var(--color-white) / 10%);
     --input: --alpha(var(--color-white) / 14%);
-    --ring: #339cff;
-    --info-foreground: var(--color-blue-400);
+    --ring: var(--blue);
     --guest-foreground: var(--color-fuchsia-300);
     --success-foreground: var(--color-emerald-400);
     --merged-foreground: var(--color-violet-400);
@@ -1416,8 +1415,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --heat-hot: var(--color-orange-400);
     --heat-burning: var(--color-red-500);
     --heat-ember: var(--color-amber-200);
-    --update: #339cff;
-    --update-foreground: #66b5ff;
     --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
     --sidebar: var(--card);
     --sidebar-control-surface: var(--muted);
@@ -2539,7 +2536,7 @@ code {
 }
 
 :root[data-diff-color-scheme="blue-orange"] {
-  --diff-addition: light-dark(var(--color-blue-600), var(--color-blue-400));
+  --diff-addition: var(--blue);
   --diff-deletion: light-dark(var(--color-orange-600), var(--color-orange-400));
   --diff-addition-foreground: var(--diff-addition);
   --diff-deletion-foreground: var(--diff-deletion);

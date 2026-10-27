@@ -702,7 +702,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ? {
                 label: "Input",
                 icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
+                className: "text-info-foreground",
               }
             : status === "request"
               ? {
@@ -1317,20 +1317,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : (
                 <span
                   className={cn(
-                    "group/sidebar-status-slot ml-auto flex h-5 shrink-0 items-stretch justify-end text-xs",
+                    "group/sidebar-status-slot ml-auto flex h-5 shrink-0 items-center justify-end gap-1.5 text-xs",
                     props.sweepAction !== null && "hidden",
                   )}
                 >
+                  {/* Stays put through hover so its path tooltip remains reachable. */}
+                  {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
                   <span
                     className={cn(
                       isWokeStatus
                         ? "pointer-events-auto"
                         : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:hidden group-any-hover/sidebar-row:hidden",
-                      "flex items-center gap-1.5 self-center tabular-nums text-secondary-label",
+                      "flex items-center gap-1.5 tabular-nums text-secondary-label empty:hidden",
                       snoozeMenuOpen && "hidden",
                     )}
                   >
-                    {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
                     {topStatus ? (
                       isWokeStatus ? (
                         <Tooltip>
@@ -1395,13 +1396,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           ) : topStatus.icon === "failed" ? (
                             <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
                           ) : topStatus.icon === "done" ? (
-                            // oxlint-disable shadcn/no-raw-colors -- Blue is reserved for unread completion in the approved sidebar design.
-                            <span
-                              aria-hidden
-                              className="size-2 shrink-0 rounded-full bg-blue-500"
-                            />
+                            <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
                           ) : (
-                            // oxlint-enable shadcn/no-raw-colors
                             <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />
                           )}
                           {/* The open thread announces its own status, so its row
@@ -1426,9 +1422,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         // Collapsed rather than display:none so the buttons stay
                         // reachable by Tab. focus-visible, not focus-within: a mouse
                         // click leaves Settle focused and would pin the actions open.
-                        "pointer-events-none flex w-0 items-center gap-0.5 overflow-hidden opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:w-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:w-auto group-any-hover/sidebar-row:opacity-100",
-                        isWokeStatus && "ml-1",
-                        snoozeMenuOpen && "pointer-events-auto w-auto opacity-100",
+                        "pointer-events-none -ml-1.5 flex w-0 items-center gap-0.5 overflow-hidden opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:ml-0 has-[:focus-visible]:w-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:ml-0 group-any-hover/sidebar-row:w-auto group-any-hover/sidebar-row:opacity-100",
+                        snoozeMenuOpen && "pointer-events-auto ml-0 w-auto opacity-100",
                       )}
                     >
                       {hasUnsentDraft ? (

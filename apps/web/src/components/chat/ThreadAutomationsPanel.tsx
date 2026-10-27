@@ -33,7 +33,7 @@ import {
 
 const STATUS_DOT_CLASS = {
   outline: "bg-muted-foreground/40",
-  info: "bg-sky-500",
+  info: "bg-info",
   success: "bg-emerald-500",
   error: "bg-destructive",
   warning: "bg-amber-500",
