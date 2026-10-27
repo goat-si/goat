@@ -460,7 +460,7 @@ function LiveActivityContent({
             <ToolActivityIconView
               icon={toolIcon}
               fallbackName={iconName}
-              className="block size-4 shrink-0 stroke-2"
+              className="block size-3.5 shrink-0 stroke-2"
               muted={!highlighted}
             />
           </span>
@@ -525,7 +525,7 @@ export function LiveWorkEntryTimelineRow({
               <ToolActivityIconView
                 icon={undefined}
                 fallbackName="brain"
-                className="block size-4 shrink-0 stroke-2"
+                className="block size-3.5 shrink-0 stroke-2"
                 muted
               />
             </span>
@@ -632,7 +632,7 @@ function WorkGroupHeader(props: {
         <ToolActivityIconView
           icon={props.toolIcon}
           fallbackName={props.iconName}
-          className="size-4 shrink-0 stroke-2 text-icon-muted"
+          className="size-3.5 shrink-0 stroke-2 text-icon-muted"
           muted
         />
       }

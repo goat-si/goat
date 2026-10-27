@@ -330,13 +330,13 @@ function SnoozeMenuButton(props: {
                   aria-label="Snooze thread"
                   onClick={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                 />
               }
             />
           }
         >
-          <ClockIcon className="size-3" />
+          <ClockIcon className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup>Snooze thread</TooltipPopup>
       </Tooltip>
@@ -1305,19 +1305,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {externalLauncherBadge}
               {historyArchiveHint}
               {pinIndicator}
-              {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title
                 </span>
               ) : null}
-              {/* Reserve both states' widths so revealing actions cannot move the pin or Woke label. */}
+              {/* The title runs to the status cluster; hover or keyboard focus swaps the
+                cluster for the row actions, so no width sits reserved for them. */}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
                 <span
                   className={cn(
-                    "group/sidebar-status-slot ml-auto grid h-5 min-w-8 shrink-0 items-stretch justify-end text-xs",
+                    "group/sidebar-status-slot ml-auto flex h-5 shrink-0 items-stretch justify-end text-xs",
                     props.sweepAction !== null && "hidden",
                   )}
                 >
@@ -1325,11 +1325,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     className={cn(
                       isWokeStatus
                         ? "pointer-events-auto"
-                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:opacity-0",
-                      "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity [grid-area:1/1]",
-                      snoozeMenuOpen && "pointer-events-none opacity-0",
+                        : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:hidden group-any-hover/sidebar-row:hidden",
+                      "flex items-center gap-1.5 self-center tabular-nums text-secondary-label",
+                      snoozeMenuOpen && "hidden",
                     )}
                   >
+                    {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
                     {topStatus ? (
                       isWokeStatus ? (
                         <Tooltip>
@@ -1422,14 +1423,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
                     <span
                       className={cn(
-                        // focus-visible, not focus-within: a mouse click leaves
-                        // the Settle button focused, and a plain focus-within
-                        // would keep the controls pinned over the status label
-                        // once the pointer moves away (e.g. after a failed
-                        // settle) instead of cross-fading back.
-                        "pointer-events-none flex items-stretch justify-self-end opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
-                        isWokeStatus ? "[grid-area:1/2]" : "[grid-area:1/1]",
-                        snoozeMenuOpen && "pointer-events-auto opacity-100",
+                        // Collapsed rather than display:none so the buttons stay
+                        // reachable by Tab. focus-visible, not focus-within: a mouse
+                        // click leaves Settle focused and would pin the actions open.
+                        "pointer-events-none flex w-0 items-center gap-0.5 overflow-hidden opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:w-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:w-auto group-any-hover/sidebar-row:opacity-100",
+                        isWokeStatus && "ml-1",
+                        snoozeMenuOpen && "pointer-events-auto w-auto opacity-100",
                       )}
                     >
                       {hasUnsentDraft ? (
@@ -1440,7 +1439,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                 type="button"
                                 aria-label="Discard draft"
                                 onClick={handleDiscardDraftClick}
-                                className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                               />
                             }
                           >
@@ -1474,7 +1473,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                                     : handleSettleClick
                                 }
                                 onPointerDown={handleActionPointerDown}
-                                className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
                               />
                             }
                           >
@@ -1483,7 +1482,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             ) : (
                               <CheckIcon className="size-3.5" />
                             )}
-                            {variantAction === "unsettle" ? "Un-settle" : "Settle"}
                           </TooltipTrigger>
                           <TooltipPopup>
                             {variantAction === "unsettle" ? "Un-settle thread" : "Settle thread"}
