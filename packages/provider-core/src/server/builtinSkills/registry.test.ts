@@ -144,18 +144,25 @@ describe("computer use skill text", () => {
     );
   });
 
-  it("adds only a bounded screen tool pointer to later-turn runtime instructions", () => {
+  it("points later turns at the installed screen guide within the 300-byte budget, and inlines it when none is installed", () => {
+    const skillPath = "/state/skills/screen-code/SKILL.md";
     const base = buildRuntimeInstructions({ harness: "Cursor" });
     const withScreen = buildRuntimeInstructions({
       harness: "Cursor",
       screenCode: true,
+      screenCodeSkillPath: skillPath,
       screenCodeCompact: true,
     });
     expect(withScreen).toContain("Screen: goat_screen_run");
+    expect(withScreen).toContain(skillPath);
     expect(withScreen).not.toContain("<screen_code>");
     expect(
       new TextEncoder().encode(withScreen).byteLength - new TextEncoder().encode(base).byteLength,
-    ).toBeLessThanOrEqual(24);
+    ).toBeLessThanOrEqual(300);
+    // Without a guide on disk the pointer would lead nowhere, so the turn carries the guide itself.
+    expect(
+      buildRuntimeInstructions({ harness: "Cursor", screenCode: true, screenCodeCompact: true }),
+    ).toContain("<screen_code>");
   });
 });
 
