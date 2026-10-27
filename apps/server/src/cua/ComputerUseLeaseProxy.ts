@@ -607,7 +607,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       idle: () => idle,
       apps: () => apps,
       listed,
-      bundleIds: options.bundleIds,
+      host: options,
       shared: sharedNow,
       toFile: () => refuseCaptureFileArguments(message.params?.arguments),
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),

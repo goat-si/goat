@@ -51,7 +51,11 @@ export interface ListedApp {
 }
 
 export type ScopeVerdict =
-  | { readonly _tag: "allow" }
+  | {
+      readonly _tag: "allow";
+      /** Allowed only by the executable the pid ran when last listed, which a caller confirms. */
+      readonly byExecutable?: { readonly pid: number; readonly executable: string };
+    }
   /** The pid's app is not known yet; list the apps and judge again. */
   | { readonly _tag: "resolve"; readonly pid: number }
   | {
@@ -92,12 +96,30 @@ export function takesScreen(name: unknown, args: unknown): boolean {
   return foreground(args);
 }
 
-const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>
-  names.some((name) => name !== undefined && apps.has(name.toLowerCase()));
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/u;
 
-/** The apps a control allows, as a lowercase set; undefined allows every app. */
+/**
+ * One spelling per app: a Windows path as the driver compares it (\\?\ and \\?\UNC\ prefixes off,
+ * / as \, repeated separators collapsed, case folded), any other path exactly as written, since
+ * Linux paths differ by case, and an id or name in lowercase.
+ */
+export const appKey = (app: string) => {
+  const trimmed = app.trim();
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return trimmed;
+  if (!WINDOWS_PATH.test(trimmed)) return trimmed.toLowerCase();
+  let path = trimmed.replaceAll("/", "\\");
+  if (path.toLowerCase().startsWith("\\\\?\\unc\\")) path = "\\\\" + path.slice(8);
+  else if (path.startsWith("\\\\?\\")) path = path.slice(4);
+  const unc = path.startsWith("\\\\");
+  return ((unc ? "\\\\" : "") + path.split("\\").filter(Boolean).join("\\")).toLowerCase();
+};
+
+const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>
+  names.some((name) => name !== undefined && apps.has(appKey(name)));
+
+/** The apps a control allows, each by appKey; undefined allows every app. */
 export const approvedApps = (apps: ReadonlyArray<string> | undefined) =>
-  apps === undefined ? undefined : new Set(apps.map((app) => app.toLowerCase()));
+  apps === undefined ? undefined : new Set(apps.map(appKey));
 
 export function scopeVerdict(input: {
   readonly name: unknown;
@@ -133,8 +155,9 @@ export function scopeVerdict(input: {
   if (app === undefined) return { _tag: "resolve", pid };
   // Only the id list_apps reports counts, or the exact executable it runs: a display name would
   // let two grants that name the same app differently both reach it.
-  return approves(input.apps, app.id, app.executable)
-    ? { _tag: "allow" }
+  if (approves(input.apps, app.id)) return { _tag: "allow" };
+  return app.executable !== undefined && approves(input.apps, app.executable)
+    ? { _tag: "allow", byExecutable: { pid, executable: app.executable } }
     : { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
 
@@ -170,7 +193,17 @@ export function learnApps(
         ...(entry.bundleId === undefined ? {} : { bundleId: entry.bundleId }),
         ...(executable === undefined ? {} : { executable }),
       });
-    } else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
+    } else {
+      // A reply naming another app or binary for the pid makes it unknown until listed again.
+      const known = into.get(entry.pid);
+      if (
+        known?.id !== entry.id ||
+        (entry.executable !== undefined &&
+          known.executable !== undefined &&
+          appKey(entry.executable) !== appKey(known.executable))
+      )
+        into.delete(entry.pid);
+    }
   }
 }
 
