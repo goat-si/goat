@@ -209,9 +209,13 @@ describe("orchestration V2 wire projection", () => {
       data: "iVBORw0KGgo=",
     });
     // A short value is masked as a whole token, never inside a longer one.
-    expect(redactComputerUseTypedOutput(item.toolName, item.input, "code 1234 and 123")).toBe(
-      "code 1234 and [typed text]",
-    );
+    expect(
+      redactComputerUseTypedOutput(
+        "cua-driver.run_steps",
+        { steps: [{ set_value: { value: "123" } }] },
+        "code 1234 and 123",
+      ),
+    ).toBe("code 1234 and [typed text]");
   });
 
   it("keeps copied handoff transcripts out of activity items and live events", () => {
