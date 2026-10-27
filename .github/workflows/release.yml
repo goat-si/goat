@@ -1119,6 +1119,7 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
+      GOAT_HOSTED_APP_URL: ${{ vars.GOAT_HOSTED_APP_URL }}
       DEPLOYMENT_URL: ${{ needs.build_web.outputs.deployment_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}

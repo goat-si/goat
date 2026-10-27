@@ -447,9 +447,33 @@ jobs:
           GOAT_SCREENSHOT_GATE: ${{ vars.GOAT_SCREENSHOT_GATE }}
         run: node .github/scripts/pr-screenshot-gate.cjs
 
+  connect-auth-postgres:
+    name: Connect auth PostgreSQL boundaries
+    needs: scope
+    if: needs.scope.result == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      CONNECT_TEST_DATABASE_URL: postgres://connect_test@127.0.0.1:6543/connect_test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: Start an isolated PostgreSQL cluster on the disposable runner
+        run: |
+          pg_bin="$(pg_config --bindir)"
+          "$pg_bin/initdb" -D "$RUNNER_TEMP/connect-pg" -U connect_test --auth=trust
+          "$pg_bin/pg_ctl" -D "$RUNNER_TEMP/connect-pg" -l "$RUNNER_TEMP/connect-pg.log" -o "-h 127.0.0.1 -p 6543 -k $RUNNER_TEMP" -w start
+          "$pg_bin/createdb" -h 127.0.0.1 -p 6543 -U connect_test connect_test
+      - run: vp test run --config infra/relay/postgres.vite.config.ts
+      - name: Stop the cluster owned by this job
+        if: always()
+        run: '"$(pg_config --bindir)/pg_ctl" -D "$RUNNER_TEMP/connect-pg" -m immediate stop'
+
   result:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-ci-result' || 'goat-ci (event ignored)' }}
-    needs: [scope, ci, screenshot-gate]
+    needs: [scope, ci, screenshot-gate, connect-auth-postgres]
     # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
@@ -459,6 +483,7 @@ jobs:
         env:
           SCOPE: ${{ needs.scope.result }}
           CI: ${{ needs.ci.result }}
+          CONNECT_AUTH_POSTGRES: ${{ needs.connect-auth-postgres.result }}
           SCREENSHOT_GATE: ${{ needs.screenshot-gate.result }}
           # From goat-scope: whether this was a quick run and how to start the full one.
           NOTE: ${{ needs.scope.outputs.note }}
@@ -470,6 +495,7 @@ jobs:
           fi
           test "$SCOPE" = success || { echo "::error::goat-scope did not succeed ($SCOPE)"; exit 1; }
           test "$CI" = success || { echo "::error::a selected ci task did not succeed ($CI)"; exit 1; }
+          test "$CONNECT_AUTH_POSTGRES" = success || { echo "::error::Connect PostgreSQL boundaries failed ($CONNECT_AUTH_POSTGRES)"; exit 1; }
           case "$SCREENSHOT_GATE" in
             success | skipped) ;;
             *) echo "::error::goat-screenshot-gate did not succeed ($SCREENSHOT_GATE)"; exit 1 ;;

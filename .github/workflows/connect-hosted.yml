@@ -1,0 +1,152 @@
+name: Connect hosted artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Published host/client source SHA containing wp2/wp3/wp7
+        required: true
+        type: string
+      release_tag:
+        description: Published goat-releases tag (must exist before hosted publication)
+        required: true
+        type: string
+      deploy:
+        description: Deploy after environment approval
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: connect-hosted
+  cancel-in-progress: false
+jobs:
+  staging:
+    runs-on: ubuntu-24.04
+    environment: connect-staging
+    outputs:
+      artifact: ${{ steps.receipt.outputs.manifest }}
+    env:
+      CONNECT_SOURCE_SHA: ${{ inputs.source_sha }}
+      GOAT_HOSTED_APP_URL: https://staging.app.trygoat.ai
+      VITE_HOSTED_APP_URL: https://staging.app.trygoat.ai
+      GOAT_CLERK_PUBLISHABLE_KEY: ${{ vars.GOAT_CLERK_PUBLISHABLE_KEY }}
+      GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.GOAT_CLERK_CLI_OAUTH_CLIENT_ID }}
+      GOAT_RELAY_URL: ${{ vars.GOAT_RELAY_URL }}
+      VITE_HTTP_URL: ""
+      VITE_WS_URL: ""
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: Require published clients before hosted delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo goat-si/goat-releases --json isDraft > "$RUNNER_TEMP/release.json"
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/release.json")); if(r.isDraft) throw Error("Host/client release is still draft")'
+          gh release download "$RELEASE_TAG" --repo goat-si/goat-releases --pattern 'goat-*-runtime.json' --dir "$RUNNER_TEMP/published-runtime"
+          node --input-type=module -e 'import fs from "node:fs"; const dir=process.env.RUNNER_TEMP+"/published-runtime"; const files=fs.readdirSync(dir); if(files.length!==1 || JSON.parse(fs.readFileSync(dir+"/"+files[0])).commit !== process.env.CONNECT_SOURCE_SHA) throw Error("Published runtime does not identify exact source SHA")'
+      - run: vp run --filter @goat/web build
+      - name: Record staging bytes and public config
+        id: receipt
+        run: |
+          node scripts/connect-hosted-artifact.ts staging > "$RUNNER_TEMP/connect-receipt.json"
+          echo "manifest=$(cat "$RUNNER_TEMP/connect-receipt.json")" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/connect-receipt.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy staging
+        if: inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: vp dlx wrangler@4.152.0 deploy --config infra/connect-hosted/wrangler.json --env staging
+      - if: inputs.deploy
+        run: node scripts/connect-hosted-smoke.ts
+  staging_acceptance:
+    needs: staging
+    if: inputs.deploy
+    runs-on: ubuntu-24.04
+    environment: connect-staging-acceptance
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Require live staging browser and normal CLI evidence
+        env:
+          CONNECT_EXPECTED_ARTIFACT: ${{ needs.staging.outputs.artifact }}
+          CONNECT_ACCEPTANCE_EVIDENCE: ${{ vars.CONNECT_ACCEPTANCE_EVIDENCE }}
+        run: node scripts/connect-hosted-acceptance.ts
+  production:
+    needs: [staging, staging_acceptance]
+    if: always() && needs.staging.result == 'success' && (!inputs.deploy || needs.staging_acceptance.result == 'success')
+    runs-on: ubuntu-24.04
+    environment: connect-production
+    outputs:
+      artifact: ${{ steps.receipt.outputs.manifest }}
+    env:
+      CONNECT_SOURCE_SHA: ${{ inputs.source_sha }}
+      GOAT_HOSTED_APP_URL: https://app.trygoat.ai
+      VITE_HOSTED_APP_URL: https://app.trygoat.ai
+      GOAT_CLERK_PUBLISHABLE_KEY: ${{ vars.GOAT_CLERK_PUBLISHABLE_KEY }}
+      GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.GOAT_CLERK_CLI_OAUTH_CLIENT_ID }}
+      GOAT_RELAY_URL: ${{ vars.GOAT_RELAY_URL }}
+      VITE_HTTP_URL: ""
+      VITE_WS_URL: ""
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: Rebuild for production origin
+        run: vp run --filter @goat/web build
+      - name: Record production bytes and public config
+        id: receipt
+        run: |
+          node scripts/connect-hosted-artifact.ts production > "$RUNNER_TEMP/connect-receipt.json"
+          echo "manifest=$(cat "$RUNNER_TEMP/connect-receipt.json")" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/connect-receipt.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy production
+        if: inputs.deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: vp dlx wrangler@4.152.0 deploy --config infra/connect-hosted/wrangler.json --env production
+      - name: Final production root and deep-link smoke
+        if: inputs.deploy
+        run: node scripts/connect-hosted-smoke.ts
+      - name: Production CLI origin and callback boundary smoke
+        if: inputs.deploy
+        run: vp test run apps/server/src/cloud/CliTokenManager.approval.test.ts apps/web/src/hostedPairing.test.ts apps/web/src/cloud/connectCliAuth.test.ts
+  production_acceptance:
+    needs: production
+    if: inputs.deploy
+    runs-on: ubuntu-24.04
+    environment: connect-production-acceptance
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          run-install: false
+      - name: Require final production root/deep-link and normal CLI evidence
+        env:
+          CONNECT_EXPECTED_ARTIFACT: ${{ needs.production.outputs.artifact }}
+          CONNECT_ACCEPTANCE_EVIDENCE: ${{ vars.CONNECT_ACCEPTANCE_EVIDENCE }}
+        run: node scripts/connect-hosted-acceptance.ts
