@@ -28,7 +28,7 @@ it.effect("reopens a failed reactor at its last handled sequence", () =>
     const fiber = yield* runResumableReactor(
       "test.reactor",
       10,
-      (cursor) => {
+      (cursor): Stream.Stream<{ readonly sequence: number }> => {
         cursors.push(cursor);
         return cursors.length === 1
           ? Stream.concat(
@@ -170,7 +170,7 @@ it.effect("interrupts an active supervised attempt and releases its scope withou
           }),
         );
         yield* Deferred.succeed(started, undefined);
-        yield* Effect.never;
+        return yield* Effect.never;
       }),
     ).pipe(Effect.forkScoped);
     yield* Deferred.await(started);

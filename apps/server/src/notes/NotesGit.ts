@@ -20,7 +20,7 @@ export class NotesGit extends Context.Service<
 
 class NotesGitCommandError extends Schema.TaggedError<NotesGitCommandError>()(
   "NotesGitCommandError",
-  { exitCode: Schema.Number },
+  { exitCode: Schema.NullOr(Schema.Number) },
 ) {}
 
 const make = Effect.gen(function* () {
@@ -58,7 +58,7 @@ const make = Effect.gen(function* () {
     allowed: ReadonlyArray<number> = [0],
   ) {
     const result = yield* run(args);
-    if (!allowed.includes(result.code))
+    if (result.code === null || !allowed.includes(result.code))
       return yield* new NotesGitCommandError({ exitCode: result.code });
     return result;
   });
