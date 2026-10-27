@@ -1,5 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { type OrchestrationV2Run, RunId, ThreadId } from "@goat/contracts";
+import {
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadLauncher,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { withLauncherRun, withSenderRun } from "./senderProvenance.ts";
@@ -11,8 +16,11 @@ const store = (runs: ReadonlyArray<readonly [string, OrchestrationV2Run["status"
 });
 const recorded = (runs: ReadonlyArray<readonly [string, OrchestrationV2Run["status"]]>) =>
   Effect.gen(function* () {
-    const message = yield* withSenderRun(store(runs), { senderThreadId: sender });
-    const launch = yield* withLauncherRun(store(runs), {
+    const command: { readonly senderThreadId: ThreadId; readonly senderRunId?: RunId } = {
+      senderThreadId: sender,
+    };
+    const message = yield* withSenderRun(store(runs), command);
+    const launch: OrchestrationV2ThreadLauncher = yield* withLauncherRun(store(runs), {
       kind: "launch",
       threadId: sender,
       environmentId: null,
