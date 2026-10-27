@@ -274,18 +274,8 @@ export function sweepStalePendingAttachments(input: {
 
   let deleted = 0;
   for (const entry of entries) {
-    const isPartial = entry.endsWith(".part");
-    if (!isPartial) {
-      const attachmentId = parseAttachmentIdFromRelativePath(
-        entry.endsWith(".txt") && entry.slice(0, -4).includes(".") ? entry.slice(0, -4) : entry,
-      );
-      if (
-        !attachmentId ||
-        parseThreadSegmentFromAttachmentId(attachmentId) !== PENDING_ATTACHMENT_THREAD_SEGMENT
-      ) {
-        continue;
-      }
-    }
+    const maxAgeMs = stalePendingAttachmentAge(entry);
+    if (maxAgeMs === undefined) continue;
 
     const resolved = resolveAttachmentRelativePath({
       attachmentsDir: input.attachmentsDir,
@@ -295,7 +285,6 @@ export function sweepStalePendingAttachments(input: {
       continue;
     }
     try {
-      const maxAgeMs = isPartial ? PARTIAL_UPLOAD_MAX_AGE_MS : PENDING_ATTACHMENT_MAX_AGE_MS;
       if (input.nowMs - NodeFS.statSync(resolved).mtimeMs > maxAgeMs) {
         NodeFS.unlinkSync(resolved);
         deleted += 1;
@@ -306,6 +295,17 @@ export function sweepStalePendingAttachments(input: {
   }
 
   return { deleted };
+}
+
+export function stalePendingAttachmentAge(entry: string): number | undefined {
+  if (entry.endsWith(".part")) return PARTIAL_UPLOAD_MAX_AGE_MS;
+  const attachmentId = parseAttachmentIdFromRelativePath(
+    entry.endsWith(".txt") && entry.slice(0, -4).includes(".") ? entry.slice(0, -4) : entry,
+  );
+  return attachmentId !== null &&
+    parseThreadSegmentFromAttachmentId(attachmentId) === PENDING_ATTACHMENT_THREAD_SEGMENT
+    ? PENDING_ATTACHMENT_MAX_AGE_MS
+    : undefined;
 }
 
 function parseAttachmentIdFromRelativePath(relativePath: string): string | null {

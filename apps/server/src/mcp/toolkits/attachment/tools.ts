@@ -18,6 +18,8 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as AttachmentFileLeases from "../../../assets/AttachmentFileLeases.ts";
+import * as PendingAttachmentSweep from "../../../assets/PendingAttachmentSweep.ts";
 import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -32,6 +34,8 @@ const shared = {
     ServerSecretStore.ServerSecretStore,
     FileSystem.FileSystem,
     Crypto.Crypto,
+    AttachmentFileLeases.AttachmentFileLeases,
+    PendingAttachmentSweep.PendingAttachmentSweep,
   ],
 };
 const AttachmentUploadTool = Tool.make(agentSurfaceRegistry["attachment.prepare_upload"].name, {

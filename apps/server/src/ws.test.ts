@@ -77,7 +77,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as DocumentText from "./provider/DocumentText.ts";
+import * as AttachmentLifecycle from "./assets/AttachmentLifecycle.testkit.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -648,7 +648,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(RemoteLaunchCatalog.RemoteLaunchCatalog)({}),
   Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
   Layer.mock(SshHostSetup.SshHostSetup)({}),
-  Layer.mock(DocumentText.DocumentText)({}),
+  AttachmentLifecycle.layerUnused,
   Layer.mock(PreviewSessions.PreviewSessions)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),

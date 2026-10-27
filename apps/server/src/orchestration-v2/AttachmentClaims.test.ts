@@ -17,6 +17,7 @@ import {
   createPendingAttachmentId,
   parseThreadSegmentFromAttachmentId,
 } from "../attachmentStore.ts";
+import * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
 import * as ServerConfig from "../config.ts";
 import {
   attachmentIsPendingUpload,
@@ -24,7 +25,7 @@ import {
   releaseClaimedAttachments,
 } from "./AttachmentClaims.ts";
 
-const layerTest = Layer.mergeAll(NodeServices.layer).pipe(
+const layerTest = Layer.merge(NodeServices.layer, AttachmentFileLeases.layer).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-attachment-claims-" })),
   Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
 );

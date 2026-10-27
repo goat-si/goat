@@ -10,7 +10,7 @@ import {
 import { launchInput, projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import { makeObservedSetup } from "../project/testkit/ProjectScriptRunnerHarness.ts";
 import { fakeCloudCapabilities, fakeCloudDriver } from "./testkit/FakeCloudAdapter.ts";
-import * as DocumentText from "../provider/DocumentText.ts";
+import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1724,9 +1724,7 @@ it.effect("creates a strong provider-thread mapping for an imported native sessi
 
 it.effect("shared intake preserves durable attachment bytes after a lost launch result", () => {
   const harness = makeHarness();
-  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "goat-message-intake-" }).pipe(
-    Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
-  );
+  const layerFiles = AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-message-intake-");
   return Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
@@ -2495,10 +2493,7 @@ it.effect("records launcher before preparation and preserves it on receipt repla
       Effect.provide(
         Layer.mergeAll(
           harness.layer,
-          DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
-          ServerConfig.layerTest(process.cwd(), { prefix: "goat-foundation-intake-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
-          ),
+          AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-foundation-intake-"),
         ),
       ),
     );
@@ -2525,9 +2520,7 @@ it.effect.each([
 
 it.effect("replays an accepted send after the project disables the instance", () => {
   const harness = makeHarness();
-  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "goat-send-retry-" }).pipe(
-    Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
-  );
+  const layerFiles = AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-send-retry-");
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;
     const settings = yield* ServerSettings.ServerSettingsService;

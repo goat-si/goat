@@ -73,8 +73,7 @@ import { layerPermissionProfilesOff, liveThreadsLayer } from "./McpToolAccess.te
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as DocumentText from "../provider/DocumentText.ts";
+import * as AttachmentLifecycle from "../assets/AttachmentLifecycle.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -155,7 +154,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
-  DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
+  AttachmentLifecycle.layerUnused,
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
