@@ -27,7 +27,7 @@ export class ServerLifecycleEvents extends Context.Service<
 >()("goat/serverLifecycleEvents") {}
 
 const make = Effect.gen(function* () {
-  const pubsub = yield* PubSub.unbounded<ServerLifecycleStreamEvent>();
+  const pubsub = yield* PubSub.sliding<void>(1);
   const state = yield* Ref.make<SnapshotState>({
     sequence: 0,
     events: [],
@@ -46,10 +46,28 @@ const make = Effect.gen(function* () {
           ...current.events.filter((entry) => entry.type !== nextEvent.type),
         ];
         return [nextEvent, { sequence: nextSequence, events: nextEvents }] as const;
-      }).pipe(Effect.tap((event) => PubSub.publish(pubsub, event))),
+      }).pipe(Effect.tap(() => PubSub.publish(pubsub, undefined))),
     snapshot: Ref.get(state),
     get stream() {
-      return Stream.fromPubSub(pubsub);
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(pubsub);
+          let afterSequence = 0;
+          const sample = Ref.get(state).pipe(
+            Effect.map((current) => {
+              const events = current.events
+                .filter((event) => event.sequence > afterSequence)
+                .toSorted((left, right) => left.sequence - right.sequence);
+              afterSequence = current.sequence;
+              return events;
+            }),
+          );
+          return Stream.concat(
+            Stream.fromEffect(sample),
+            Stream.fromSubscription(subscription).pipe(Stream.mapEffect(() => sample)),
+          ).pipe(Stream.flatMap((events) => Stream.fromIterable(events)));
+        }),
+      );
     },
   } satisfies ServerLifecycleEvents["Service"];
 });
