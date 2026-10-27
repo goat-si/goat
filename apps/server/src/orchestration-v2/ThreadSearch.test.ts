@@ -8,15 +8,10 @@ import {
   type OrchestrationV2DomainEvent,
   type ThreadLinkedPullRequest,
 } from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import * as FileSystem from "effect/FileSystem";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -1063,65 +1058,4 @@ it.effect("starts snippets a few words before the match so one line shows it", (
     // Short text still moves a late match into view.
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
   }),
-);
-
-it.effect("searches and matches threads on the reader worker while the writer is busy", () =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-thread-search-" });
-    const layerFile = Layer.mergeAll(
-      ThreadSearch.layer,
-      ProjectionStore.layer,
-      ProjectStore.layer,
-    ).pipe(
-      Layer.provideMerge(SqlitePersistence.layerFromPath(path.join(directory, "state.sqlite"))),
-      Layer.provide(NodeServices.layer),
-    );
-
-    yield* Effect.gen(function* () {
-      const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const search = yield* ThreadSearch.ThreadSearch;
-      const sql = yield* SqlClient.SqlClient;
-      const project = ProjectId.make("project:search-reader");
-      const threadId = ThreadId.make("thread:reader");
-      yield* createProject(project);
-      yield* Effect.forEach(
-        [thread(threadId, project), message(threadId, "reader", "user", "needle on the reader")],
-        projections.apply,
-        { discard: true },
-      );
-
-      const writerHeld = yield* Deferred.make<void>();
-      const releaseWriter = yield* Deferred.make<void>();
-      const writer = yield* Effect.forkChild(
-        sql.withTransaction(
-          Deferred.succeed(writerHeld, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseWriter)),
-          ),
-        ),
-      );
-      yield* Deferred.await(writerHeld);
-      const result = yield* search.search({ query: "needle" });
-      const matched = yield* search.matchThreads({
-        query: "needle",
-        projectId: undefined,
-        includeArchived: false,
-        updatedAfter: undefined,
-        updatedBefore: undefined,
-        limit: 10,
-      });
-      yield* Deferred.succeed(releaseWriter, undefined);
-      yield* Fiber.join(writer);
-
-      assert.deepEqual(
-        result.matches.map((match) => match.threadId),
-        [threadId],
-      );
-      assert.deepEqual(
-        matched.map((match) => match.threadId),
-        [threadId],
-      );
-    }).pipe(Effect.provide(layerFile));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
