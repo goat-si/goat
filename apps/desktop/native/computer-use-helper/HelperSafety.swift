@@ -38,6 +38,16 @@ enum HelperSafety {
     }
   }
 
+  /// The window a focus answer pauses agents for. Only a secure field known to have focus
+  /// pauses: an unreadable focus kept every agent on the host paused (#1695), so it only keeps
+  /// windows out of frames (isPrivate).
+  static func pausingWindow(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
+    switch focus {
+    case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
+    case .none, .unknown: return nil
+    }
+  }
+
   /// The frame refusal for a shareable-content lookup. A nil list is never "the window closed":
   /// the error says why it failed (SCStreamError.userDeclined, -3801, is the Screen Recording
   /// refusal even when CGPreflightScreenCaptureAccess reported a grant).

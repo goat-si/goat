@@ -278,6 +278,16 @@ PreviewSession {
   `privateMode` refusals until it ends. The browser's
   `apps/server/src/preview/PreviewPrivateMode.ts` and desktop's
   `apps/server/src/cua/ComputerUseLeases.ts` lift the pause when the private step ends.
+- Desktop private mode is switched off for now (#1695): `privateModeOn` in
+  `apps/server/src/cua/ComputerUsePrivateMode.ts` and `HelperSafety.privateModeDisabled` in the
+  macOS helper. While it is off the server counts no host as detecting secret fields, whatever
+  its helper advertises, so unattended computer use is refused on every platform. Turning it back
+  on means flipping both switches and restoring the server's handling of private reports
+  (`privateHost` in `ComputerUseLeases.ts`); that lifts the refusal. Only a focused secure field
+  may pause agents, because pausing on an unreadable focus stalled every agent on the host. Once
+  the switch is on, the macOS helper keeps an unreadable focus out of frames and pauses nothing
+  (`HelperSafety.pausingWindow`); the Windows (`Signals.cs`) and Linux (`linuxSignals.ts`)
+  helpers still report an unreadable focus as private and need the same rule first.
 - Browser tab claims belong to the current turn; a handoff keeps the person's tab open. Browser
   profile policy and login isolation remain separate work.
 - Frames stream only to a viewer that is open, at a bounded rate, dropping frames instead of

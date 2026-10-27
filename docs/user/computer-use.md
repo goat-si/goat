@@ -60,7 +60,9 @@ to approve an app or finish a private step.
 Watch the browser and app tiles while it works. Use **Take control** or **Stop**
 on the affected tile, or **Stop all** to end every agent's screen work on that
 computer. The agent checks the screen again after you hand control back. A
-password or passkey step pauses its view and input.
+password or passkey step in a browser tab pauses its view and input. In desktop
+apps this is switched off for now; see
+[Work that runs on its own](#work-that-runs-on-its-own).
 
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
@@ -99,15 +101,17 @@ automatically only on its next turn.
 
 Full access skips only the app approval. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
-secret field still pauses agents, each action stays within what its call may
-reach, and work that runs on its own still asks for foreground control, still
+secret field in a browser tab still pauses agents, each action stays within
+what its call may reach, and work that runs on its own still asks for
+foreground control, still
 needs a computer that can tell when you type a secret, and still shares the
 screen one thread at a time. **Stop**, **Stop all** and turning computer use off
 end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
 **Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
-password, one-time code, or passkey field still pauses them automatically.
+password, one-time code, or passkey field in a browser tab still pauses them
+automatically.
 
 ## Watching agents
 
@@ -150,6 +154,9 @@ it in a GOAT app; a reply in a chat channel does not count.
 
 Such work only gets the screen on a computer whose GOAT can tell when you enter
 a password or another secret; elsewhere the request is refused and says why.
+For now no computer qualifies: detecting secret fields in desktop apps is
+switched off while it is being fixed, so such work is refused everywhere and a
+secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts
 until the time shown and does not approve each action. If the agent already has
 the tools, it continues in the same turn; otherwise, GOAT wakes it in a new turn
