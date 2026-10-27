@@ -22,22 +22,15 @@ import { captureX11Window } from "./linuxHelper/x11WindowCapture.ts";
  * Withholding fails closed: every driver line is read, not just a tool result's top-level image
  * blocks, and anything that looks like image data (an image block, a resource blob, a data: URL
  * or base64 PNG/JPEG/GIF/WebP bytes, including inside text) becomes a line of text saying why.
- * Calls that ask the driver to write its capture to a file, at any depth of their arguments or
- * in a script's text, are refused before they run, since the agent could read the file without
- * any of this.
+ * Calls that ask the driver to write its capture to a file are refused on every desktop
+ * (ComputerUseCaptureFiles.ts).
  */
 
 /** Calls whose image is one window's screenshot, taken at the size in their structured result. */
 const WINDOW_READS: ReadonlySet<string> = new Set(["get_window_state", "wait_for_window_settle"]);
 
-/** Arguments that make the driver write pixels to a path (cua-driver-sdk remote_receiver.rs). */
-const FILE_ARGUMENTS: ReadonlyArray<string> = ["screenshot_out_file", "image_path", "file_path"];
-
 export const UNVERIFIED_IMAGE =
   "On this desktop GOAT shows an agent only a window's own capture, and this result's image is not one. Read the window with get_window_state to see it.";
-
-export const SCREENSHOT_FILE_REFUSED =
-  "On this desktop GOAT does not let Cua Driver write screenshots to a file; it shows the agent only a window's own capture, checked first. Call it without screenshot_out_file, image_path or file_path.";
 
 const WITHHELD = "GOAT withheld a screenshot from this result. ";
 
@@ -63,8 +56,6 @@ export interface LinuxScreenshotPolicy {
   readonly admit: (reply: DriverReply) => Effect.Effect<string>;
   /** Any other driver line as delivered, with anything image-like withheld. */
   readonly scrub: (line: string) => string;
-  /** Why a call's arguments cannot run, or undefined. */
-  readonly refuseArguments: (args: unknown) => string | undefined;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -97,20 +88,6 @@ function withhold(value: unknown, reason: string, keep?: unknown): unknown {
   }
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, withhold(item, reason, keep)]),
-  );
-}
-
-/**
- * Whether a call's arguments, at any depth, ask for a file: run_steps passes an observe step's
- * arguments through, and a script names them in its text, so nested keys and any string that
- * names one count too.
- */
-function asksForFile(value: unknown): boolean {
-  if (typeof value === "string") return FILE_ARGUMENTS.some((name) => value.includes(name));
-  if (Array.isArray(value)) return value.some(asksForFile);
-  if (!isRecord(value)) return false;
-  return Object.entries(value).some(
-    ([key, item]) => (FILE_ARGUMENTS.includes(key) && item !== undefined) || asksForFile(item),
   );
 }
 
@@ -223,8 +200,5 @@ export function linuxScreenshotPolicy(route: CaptureRoute): LinuxScreenshotPolic
     );
   });
 
-  const refuseArguments = (args: unknown) =>
-    asksForFile(args) ? SCREENSHOT_FILE_REFUSED : undefined;
-
-  return { admit, scrub, refuseArguments };
+  return { admit, scrub };
 }

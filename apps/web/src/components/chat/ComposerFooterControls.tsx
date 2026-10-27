@@ -14,6 +14,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import type { ComposerVoiceButtonProps } from "./ComposerVoiceButton";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { runtimeModeConfig } from "./runtimeModeConfig";
@@ -146,6 +147,7 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
 });
 
 export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
+  voiceControl?: ComposerVoiceButtonProps | undefined;
   compact: boolean;
   canOperateThread: boolean;
   isPreparingWorktree: boolean;
@@ -182,6 +184,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
 }) {
   return (
     <ComposerPrimaryActions
+      voiceControl={props.voiceControl}
       compact={props.compact}
       canOperateThread={props.canOperateThread}
       pendingAction={props.pendingAction}

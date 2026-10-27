@@ -79,7 +79,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   readonly listed: ReadonlyMap<number, ListedApp>;
   readonly bundleIds: boolean;
   readonly shared: () => boolean;
-  /** On Linux, refuses arguments that would write a capture to a file. */
+  /** Refuses arguments that would write a capture to a file. */
   readonly toFile: () => string | undefined;
   readonly tokenFirstRefuses: () => boolean;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;

@@ -45,8 +45,10 @@ import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import { AGENT_CURSOR_TOOLS, answerCursorTool } from "./ComputerUseCursorTools.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
+import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
 import {
   type Envelope,
+  decodeProviderIngress,
   namedWindows,
   OWN_ID,
   parse,
@@ -605,7 +607,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       listed,
       bundleIds: options.bundleIds,
       shared: sharedNow,
-      toFile: () => options.screenshots?.refuseArguments(message.params?.arguments),
+      toFile: () => refuseCaptureFileArguments(message.params?.arguments),
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),
       foreground: () => foreground,
       listApps,
@@ -651,6 +653,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
+    const decoded = decodeProviderIngress(line);
+    if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
+    const message = decoded.message;
     const primitiveCurrent = () =>
       primitive === undefined || options.primitiveCancelled?.(primitive.requestId) !== true;
     const primitiveDeadline = primitive?.deadlineMillis ?? Infinity;
@@ -658,12 +663,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Effect.map((now) => primitiveCurrent() && now < primitiveDeadline),
     );
     if (expectedConnection !== undefined && lifecycle.current?.connectionId !== expectedConnection)
-      return yield* sink.answer(
-        staleGeneration(parse(line)?.id ?? "", "tools/call"),
-        "not_started",
-      );
-    const message = parse(line);
-    const id = message?.id;
+      return yield* sink.answer(staleGeneration(message.id ?? "", "tools/call"), "not_started");
+    const id = message.id;
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
     // The proxy's own ids are reserved: an answer under one would pass for the proxy's own
     // list_apps lookup and could teach it which app a pid is.

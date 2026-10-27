@@ -382,6 +382,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
+  It lists the apps open when the driver starts. An app opened later joins only when an approval,
+  or a full access `computer_use.request`, names it; the desktop then rewrites the manifest with
+  the same exclusions. That is how an agent reaches a GOAT dev build it launched (its own
+  per-worktree bundle id) while the host GOAT it runs in stays out.
   The approval card names the app and machine, warns when the app is high risk, explains on first
   use that screenshots of its windows reach the model, and offers "Allow this conversation",
   "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
@@ -441,8 +445,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   driver under the helper that reports the helper's bundle identity and service pid, reads a
   non-empty accessibility tree and captures a non-blank window. The desktop verify
   (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
-  permission guide should drag the helper bundle into System Settings;
-  `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
+  permission guide drags the app that holds the grants into System Settings: the helper bundle
+  when one runs, GOAT.app otherwise (`apps/desktop/src/ipc/methods/cua.ts`,
+  `apps/desktop/src/permissions/MacPermissionHelper.ts`). The desktop expects its channel's
+  helper id (`computerUseHelperBundleIdForChannel` in `packages/shared/src/cuaDriverRelease.ts`),
+  never one derived from a dev checkout's own app id, so every dev checkout runs the one
+  `si.goat.desktop.dev.computer-use` helper and macOS keeps one set of its grants (#1275).
 - **Guided macOS grant** (lead decision D14, Jun's highest priority). Onboarding walks two steps,
   Accessibility, then Screen & System Audio Recording. Each step opens the exact System Settings
   pane and places a small always-on-top guide panel next to it that shows the helper's real app

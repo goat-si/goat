@@ -211,6 +211,8 @@ import {
 } from "./ComposerAttachmentStrip";
 import { ComposerPrimaryActions, composerRoundActionClassName } from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
+import { ComposerVoiceRecorderBar } from "./ComposerVoiceRecorderBar";
+import { readDraftSnapshot, useChatComposerVoiceController } from "./useComposerVoiceController";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
@@ -1892,28 +1894,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const applyPromptReplacementStable = useStableCallback(applyPromptReplacement);
 
-  const readComposerSnapshot = (): {
-    value: string;
-    cursor: number;
-    expandedCursor: number;
-    contextIds: string[];
-  } => {
-    const editorSnapshot = composerEditorRef.current?.readSnapshot();
-    if (editorSnapshot) {
-      return editorSnapshot;
-    }
-    return {
-      value: promptRef.current,
-      cursor: composerCursor,
-      expandedCursor: expandCollapsedComposerCursor(
-        promptRef.current,
-        composerCursor,
-        isLiteralPendingAnswer,
-      ),
-      contextIds: isLiteralPendingAnswer ? [] : collectInlineContextIds(promptRef.current),
-    };
-  };
+  const readComposerSnapshot = () =>
+    readDraftSnapshot(
+      composerEditorRef.current,
+      promptRef.current,
+      composerCursor,
+      isLiteralPendingAnswer,
+    );
   const readComposerSnapshotStable = useStableCallback(readComposerSnapshot);
+
+  const voice = useChatComposerVoiceController({
+    draftTarget: composerDraftTarget,
+    onStart: expandComposerForEditorChangeStable,
+    editorRef: composerEditorRef,
+    promptRef,
+    replacePrompt: applyPromptReplacementStable,
+    environmentId,
+    threadId: activeThreadId,
+    providerInstanceId: selectedInstanceId,
+    cwd: gitCwd ?? null,
+    enabled:
+      canOperateThread &&
+      !isConnecting &&
+      !isSendBusy &&
+      !isPreparingWorktree &&
+      environmentUnavailable === null &&
+      !noProviderAvailable &&
+      !projectSelectionRequired &&
+      pendingUserInputs.length === 0 &&
+      activePendingApproval === null &&
+      !isEditingQueuedMessage,
+    onSubmit: () => submitComposerStable(),
+  });
 
   const resolveActiveComposerTrigger = (): {
     snapshot: { value: string; cursor: number; expandedCursor: number };
@@ -2126,6 +2138,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submissionIntent?: ComposerSubmissionIntent,
   ) => {
     if (
+      voice.blocksSubmission() ||
       noProviderAvailable ||
       isSendDisabled ||
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
@@ -2376,14 +2389,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     providerInputSubmissionError !== null ||
     hasImageAttachmentAttention ||
     preparingComposerImages.length > 0;
-  const isComposerResting = shouldUseRestingComposerLayout({
-    isExistingThread: routeKind === "server" && activeThreadId !== null,
-    isMobileViewport,
-    isScrollCollapsed: isComposerScrollCollapsed,
-    hasExpandedChrome: composerHasExpandedChrome,
-    hasMultilinePrompt,
-    timelineOverflows,
-  });
+  const isComposerResting =
+    !voice.isVoiceActive &&
+    shouldUseRestingComposerLayout({
+      isExistingThread: routeKind === "server" && activeThreadId !== null,
+      isMobileViewport,
+      isScrollCollapsed: isComposerScrollCollapsed,
+      hasExpandedChrome: composerHasExpandedChrome,
+      hasMultilinePrompt,
+      timelineOverflows,
+    });
   const expandedComposerImages = isComposerResting
     ? standaloneComposerImages.filter((image) => pendingSnapShotIdSet.has(image.id))
     : standaloneComposerImages;
@@ -3901,10 +3916,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             </div>
 
             <ComposerPromptLengthValidation
-              message={providerInputSubmissionError ?? composerSubmissionError}
+              message={providerInputSubmissionError ?? composerSubmissionError ?? voice.state.error}
             />
 
-            {isComposerCollapsedMobile ? null : (
+            {voice.isVoiceActive ? (
+              <div className="px-3 pb-2 sm:px-4">
+                <ComposerVoiceRecorderBar controller={voice} disabled={isSendDisabled} />
+              </div>
+            ) : null}
+            {isComposerCollapsedMobile || voice.isVoiceActive ? null : (
               <div
                 data-chat-composer-footer="true"
                 data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
@@ -3943,6 +3963,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
                   <ComposerFooterPrimaryActions
+                    voiceControl={voice.voiceControl}
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}

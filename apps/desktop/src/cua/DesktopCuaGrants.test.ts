@@ -65,14 +65,14 @@ describe("DesktopCuaDriver grants for setup", () => {
               granted: true,
               fails: new ComputerUseHelperError(
                 "bundle_mismatch",
-                "GOAT Computer Use is si.goat.desktop.dev.computer-use, expected codes.t3.host-test.computer-use.",
+                "GOAT Computer Use is si.goat.desktop.dev.computer-use, expected si.goat.desktop.computer-use.",
               ),
             },
           });
           assert.deepEqual(yield* mismatched.grants, {
             principal: "unusable",
             message:
-              "GOAT Computer Use cannot be used: GOAT Computer Use is si.goat.desktop.dev.computer-use, expected codes.t3.host-test.computer-use.",
+              "GOAT Computer Use cannot be used: GOAT Computer Use is si.goat.desktop.dev.computer-use, expected si.goat.desktop.computer-use.",
           });
 
           const vanished = yield* fixture({
