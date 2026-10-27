@@ -8,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 
@@ -25,6 +26,7 @@ const fixture = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 const gone = { id: "thread-gone", deleted: "2026-01-01" };
+const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 const now = 2 * 86_400_000;
 const attachment = Effect.fn("test.attachment")(function* (segment = gone.id) {
   const fs = yield* FileSystem.FileSystem;
@@ -176,7 +178,7 @@ it.effect.each(referenceSources)("keeps attachments referenced by $name", (sourc
     const sql = yield* SqlClient.SqlClient;
     const { scan, fs, file } = yield* attachment();
     yield* thread();
-    yield* sql`INSERT INTO ${sql(source.table)} ${sql.insert({ ...source.values, [source.field]: source.field === "payload_json" ? JSON.stringify({ reference: gone.id }) : gone.id })}`;
+    yield* sql`INSERT INTO ${sql(source.table)} ${sql.insert({ ...source.values, [source.field]: source.field === "payload_json" ? encodeJson({ reference: gone.id }) : gone.id })}`;
     const result = yield* scan;
     assert.equal(result.removable.length, 0);
     assert.equal(result.kept.count, 1);
@@ -187,7 +189,7 @@ it.effect.each(referenceSources)("keeps attachments referenced by $name", (sourc
 it.effect("keeps attachments when a survivor payload exceeds the bounded scan", () =>
   Effect.gen(function* () {
     const { scan, fs, file } = yield* attachment();
-    yield* thread(JSON.stringify({ text: "x".repeat(20_000) }));
+    yield* thread(encodeJson({ text: "x".repeat(20_000) }));
     const result = yield* scan;
     assert.equal(result.removable.length, 0);
     assert.equal(result.kept.count, 1);
@@ -270,7 +272,7 @@ it.effect("ignores deleted history and completed outbox work within the physical
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const { scan, file } = yield* attachment();
-    yield* thread(JSON.stringify({ reference: gone.id }), "2026-01-01");
+    yield* thread(encodeJson({ reference: gone.id }), "2026-01-01");
     for (const source of referenceSources.filter(
       (item) =>
         item.table.endsWith("_messages") ||
@@ -280,7 +282,7 @@ it.effect("ignores deleted history and completed outbox work within the physical
       yield* sql`INSERT OR REPLACE INTO ${sql(source.table)} ${sql.insert({
         ...source.values,
         [source.field]:
-          source.field === "payload_json" ? JSON.stringify({ reference: gone.id }) : gone.id,
+          source.field === "payload_json" ? encodeJson({ reference: gone.id }) : gone.id,
         ...(source.table.endsWith("_outbox") ? { status: "succeeded" } : {}),
       })}`;
     }
@@ -358,7 +360,7 @@ it.effect("checks every full deleted ID sharing a truncated segment", () =>
     const segment = "a".repeat(80);
     const { dir, file, fs } = yield* attachment(segment);
     const fullId = segment.toUpperCase() + "-SECOND";
-    yield* thread(JSON.stringify({ reference: fullId }));
+    yield* thread(encodeJson({ reference: fullId }));
     const result = yield* deletedThreadAttachments({
       attachmentsDir: dir,
       now,
@@ -461,8 +463,9 @@ it.effect("invalidates negative proof after a same-connection mutation between p
     const { scan, file, fs } = yield* attachment();
     yield* pagedThreads;
     const mutate = sql`UPDATE orchestration_v2_projection_threads
-      SET payload_json = ${JSON.stringify({ reference: gone.id })} WHERE thread_id = 'live-1'`.pipe(
+      SET payload_json = ${encodeJson({ reference: gone.id })} WHERE thread_id = 'live-1'`.pipe(
       Effect.asVoid,
+      Effect.orDie,
     );
     assert.isNull(yield* survivorMentions([gone.id], mutate));
     assert.equal((yield* scan).kept.count, 1);
@@ -513,8 +516,14 @@ it.effect("returns a positive match without requiring unread later sources", () 
 
 it.effect("does not query survivor sources for an empty candidate set", () =>
   Effect.gen(function* () {
-    assert.deepEqual(yield* survivorMentions([]), new Set<string>());
-  }),
+    const rejectQuery: Statement.Transformer = () => Effect.die("Empty scans must not query SQL");
+    assert.deepEqual(
+      yield* survivorMentions([]).pipe(
+        Effect.provideService(Statement.CurrentTransformer, rejectQuery),
+      ),
+      new Set<string>(),
+    );
+  }).pipe(Effect.provide(fixture), Effect.scoped),
 );
 
 it.effect("revalidates a selected file against references committed after review", () =>
@@ -527,7 +536,7 @@ it.effect("revalidates a selected file against references committed after review
     );
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* thread(JSON.stringify({ reference: gone.id }));
+        yield* thread(encodeJson({ reference: gone.id }));
         const fresh = yield* deletedThreadAttachments({
           attachmentsDir: dir,
           now,

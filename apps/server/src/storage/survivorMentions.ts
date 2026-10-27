@@ -55,7 +55,7 @@ export const survivorMentions = Effect.fn("storage.survivorMentions")(
       const version = yield* sql<{ readonly data_version: number }>`PRAGMA data_version`;
       const changes = yield* sql<{ readonly changes: number }>`SELECT total_changes() AS changes`;
       if (version[0] === undefined || changes[0] === undefined) return null;
-      return JSON.stringify([version[0].data_version, changes[0].changes]);
+      return `${version[0].data_version}:${changes[0].changes}`;
     });
     const before = yield* fence();
     if (before === null) return null;
