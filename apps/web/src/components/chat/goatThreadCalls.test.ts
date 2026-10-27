@@ -207,6 +207,47 @@ describe("findSendingCall", () => {
     expect(sendingCallRowIndex(rows, inSecond, () => "run-1")).toBe(2);
   });
 
+  it("goes past an open turn and an open attempt to the closed tool group holding the call", () => {
+    const runId = RunId.make("run-1");
+    const rows: MessagesTimelineRow[] = [
+      { kind: "turn-fold", id: "turn", createdAt: "", runId, label: "", expanded: true },
+      {
+        kind: "attempt-fold",
+        id: "attempt",
+        createdAt: "",
+        runId,
+        attemptId: RunAttemptId.make("attempt-1"),
+        label: "Superseded attempt",
+        expanded: true,
+      },
+      {
+        kind: "work-toggle",
+        id: "group",
+        createdAt: "2026-10-27T00:00:00.000Z",
+        runId,
+        groupId: "group",
+        hiddenCount: 2,
+        expanded: false,
+        summary: "",
+        summaryKind: "dynamic-tool",
+        hasFailure: false,
+      },
+    ];
+    const call = {
+      ...secondSend,
+      entry: { ...secondSend.entry, runId },
+      attempt: {
+        id: RunAttemptId.make("attempt-1"),
+        runId,
+        attemptOrdinal: 1,
+        rootNodeId: NodeId.make("node-1"),
+        status: "interrupted",
+        completedAt: null,
+      },
+    } satisfies typeof secondSend;
+    expect(sendingCallRowIndex(rows, call, () => "run-1")).toBe(2);
+  });
+
   it("picks the collapsed tool group the call falls in, not an earlier one", () => {
     const runId = RunId.make("run-1");
     const toggle = (id: string, createdAt: string) => ({

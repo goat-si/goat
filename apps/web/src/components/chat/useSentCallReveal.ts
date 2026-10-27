@@ -55,7 +55,7 @@ export function sendingCallRowIndex(
   const attemptId = call.attempt?.id;
   if (attemptId !== undefined) {
     const attempt = rows.findIndex(
-      (row) => row.kind === "attempt-fold" && row.attemptId === attemptId,
+      (row) => row.kind === "attempt-fold" && !row.expanded && row.attemptId === attemptId,
     );
     if (attempt >= 0) return attempt;
   }
