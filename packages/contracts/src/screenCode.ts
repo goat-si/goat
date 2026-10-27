@@ -72,6 +72,7 @@ export const ScreenMethod = Schema.Literals([
   "forward_tab",
   "close_tab",
   "observe",
+  "tab_status",
   "select",
   "select_text",
   "wait_for",
@@ -284,6 +285,7 @@ export const ScreenRunError = Schema.Struct({
   limit: Schema.optionalKey(Schema.Struct({ name: text(80), maximum: natural })),
   receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt).check(Schema.isMaxLength(16))),
   nextStep: text(1024),
+  message: Schema.optionalKey(text(200)),
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 

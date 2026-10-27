@@ -84,6 +84,69 @@ it.live("a later cell keeps computation values in the same child", () =>
   ),
 );
 
+it.live("screen state keeps a tab handle across cells and reset clears it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 5000 });
+      const bridge = new ScreenHostBridge();
+      const ref = {
+        id: "tab",
+        kind: "tab" as const,
+        environmentId: "env",
+        runId: "r",
+        turnId: "t",
+        generation: 0,
+      };
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: (call) =>
+          Effect.succeed({
+            value:
+              call.method === "select_tab"
+                ? { targetRef: ref }
+                : call.method === "tab_status"
+                  ? { title: "Workspace" }
+                  : [{ tabId: "tab" }],
+            category: "confirmed",
+            evidence: ["Current tab observed"],
+          }),
+      });
+      const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      const authorized = (cellId: string) => ({
+        ...context(cellId, limits),
+        invocation: {
+          ...context(cellId, limits).invocation,
+          capabilities: new Set(["preview"] as const),
+          reauthorize: () => Effect.void,
+        },
+      });
+      const first = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: authorized("one") },
+        "screen.state.tab = await screen.tab({tabId: 'tab'}); return typeof screen.state.tab.status;",
+        false,
+      );
+      expect(first).toMatchObject({ status: "completed", value: "function" });
+      const second = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: authorized("two") },
+        "return [await screen.state.tab.status(), await screen.listTabs(), await screen.list_tabs()];",
+        false,
+      );
+      expect(second).toMatchObject({
+        status: "completed",
+        value: [{ title: "Workspace" }, [{ tabId: "tab" }], [{ tabId: "tab" }]],
+      });
+      const reset = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: authorized("three") },
+        "return Object.hasOwn(screen.state, 'tab');",
+        true,
+      );
+      expect(reset).toMatchObject({ status: "completed", value: false });
+    }),
+  ),
+);
+
 it.live("a thrown guest error reports its message and preserves values for the next cell", () =>
   Effect.gen(function* () {
     const asset = yield* resolveScreenRuntimeAsset("dev");

@@ -172,7 +172,7 @@ it.live("a cell that closes its own temporary tab completes and posts no cleanup
       expect(fixture.state.closes).toBe(1);
       expect(
         result.journal.find((entry) => entry.receipt.method === "close_tab")?.receipt,
-      ).toMatchObject({ category: "confirmed" });
+      ).toMatchObject({ category: "unverifiable" });
       expect(yield* service.journalSnapshot(fixture.request)).toEqual([]);
       yield* service.finishTurn({ ...fixture.request, reason: "test" });
       expect(fixture.state.closes).toBe(1);

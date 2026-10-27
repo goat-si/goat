@@ -61,6 +61,7 @@ const methods = [
   "forward_tab",
   "close_tab",
   "observe",
+  "tab_status",
   "select",
   "select_text",
   "wait_for",
@@ -206,6 +207,7 @@ export async function runScreenChild(
         };
         return Object.freeze(ref.kind === 'tab' ? {
           ...common,
+          status: () => call('tab_status'),
           claim: () => call('claim_tab'),
           keep: (reason = 'deliverable') => call('keep_tab', { reason }),
           navigate: (url) => call('navigate_tab', { url }),
@@ -223,7 +225,7 @@ export async function runScreenChild(
           endForeground: () => call('end_foreground'),
         });
       };
-      globalThis.screen = Object.freeze({ values: __values,
+      globalThis.screen = Object.freeze({ values: __values, state: {},
         discover: async () => {
           const result = { apps: [], windows: [], tabs: [], unavailable: {} };
           try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }
@@ -235,6 +237,7 @@ export async function runScreenChild(
         app: async (query = {}) => __target(await __call('bind_app', query)),
         tab: async (query = {}) => __target(await __call('select_tab', query)),
         openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
+        listTabs: () => __call('list_tabs', {}),
         ${methods
           .map(
             (method) =>
