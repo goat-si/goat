@@ -26,7 +26,7 @@ import { useSideChatStore } from "./sideChatStore";
 const ChatView = lazy(() => import("../ChatView"));
 
 const PARENT_TONE_CLASSES: Record<SideChatParentTone, { text: string; dot: string }> = {
-  active: { text: "text-sky-600 dark:text-sky-300/80", dot: "bg-sky-500 dark:bg-sky-300/80" },
+  active: { text: "text-info-foreground", dot: "bg-info" },
   attention: {
     text: "text-amber-600 dark:text-amber-300/90",
     dot: "bg-amber-500 dark:bg-amber-300/90",

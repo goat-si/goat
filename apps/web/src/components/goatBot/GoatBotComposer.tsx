@@ -62,7 +62,7 @@ export function GoatBotComposer({
           aria-label="Send"
           disabled={disabled || trimmed.length === 0}
           className={cn(
-            "goat-bubble-out-fill flex size-7 shrink-0 items-center justify-center rounded-full text-white",
+            "goat-bubble-out-fill flex size-7 shrink-0 items-center justify-center rounded-full text-goat-bubble-out-foreground",
             trimmed.length === 0 && "invisible",
           )}
         >
