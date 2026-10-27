@@ -120,7 +120,8 @@ export function withTurnCapabilities(
 /**
  * The chip for `@Finder`: computer use for this turn, aimed at one app. The app travels in the
  * context id itself (`app_<hex id>`), so a draft keeps no record for it and the chip survives a
- * copy or a reload like `@computer` does.
+ * copy or a reload like `@computer` does. Throws for an id that does not fit (see
+ * appIdFitsContextId): cutting it would name a different app.
  */
 export function appCapabilityContextRecord(app: CapabilityContextApp): CapabilityContextRecord {
   return {
@@ -134,11 +135,21 @@ export function appCapabilityContextRecord(app: CapabilityContextApp): Capabilit
 }
 
 const APP_CONTEXT_PREFIX = "app_";
-/** Longest app id an id-encoded chip carries; context ids hold at most 128 characters. */
-const APP_CONTEXT_ID_MAX_BYTES = (128 - APP_CONTEXT_PREFIX.length) / 2;
+/**
+ * Longest app id, in UTF-8 bytes, a chip carries; context ids hold at most 128 characters. One
+ * byte short of the full width, because older builds cut longer ids to exactly that width.
+ */
+export const APP_CONTEXT_ID_MAX_BYTES = (128 - APP_CONTEXT_PREFIX.length) / 2 - 1;
+
+/** Whether an app id fits in a chip's context id, so the app can be mentioned. */
+export function appIdFitsContextId(id: string): boolean {
+  return new TextEncoder().encode(id).length <= APP_CONTEXT_ID_MAX_BYTES;
+}
 
 function appContextId(id: string): ComposerContextId {
-  const bytes = new TextEncoder().encode(id).slice(0, APP_CONTEXT_ID_MAX_BYTES);
+  const bytes = new TextEncoder().encode(id);
+  if (bytes.length > APP_CONTEXT_ID_MAX_BYTES)
+    throw new Error(`App id is longer than ${APP_CONTEXT_ID_MAX_BYTES} bytes.`);
   const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   return `${APP_CONTEXT_PREFIX}${hex}` as ComposerContextId;
 }
@@ -147,7 +158,9 @@ function appContextId(id: string): ComposerContextId {
 export function appIdForContextId(contextId: string): string | undefined {
   if (!contextId.startsWith(APP_CONTEXT_PREFIX)) return undefined;
   const hex = contextId.slice(APP_CONTEXT_PREFIX.length);
-  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return undefined;
+  if (hex.length === 0 || hex.length % 2 !== 0 || hex.length > APP_CONTEXT_ID_MAX_BYTES * 2)
+    return undefined;
+  if (!/^[0-9a-f]+$/.test(hex)) return undefined;
   const bytes = new Uint8Array(hex.length / 2);
   for (let index = 0; index < bytes.length; index++)
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
