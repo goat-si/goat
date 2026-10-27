@@ -262,10 +262,11 @@ const compile = (form: string): Form => {
  * Where `form` occurs in `text`, overlaps included, merged into spans. Knuth-Morris-Pratt keeps
  * this linear, so a long or repetitive secret neither builds a huge pattern nor stalls the loop.
  */
-const spansOf = (text: string, { text: form, fallback }: Form) => {
+const spansOf = (text: string, { text: form, fallback }: Form, cut: boolean) => {
   const spans: Array<[number, number]> = [];
-  if (form.length > text.length) return spans;
-  for (let i = 0, k = 0; i < text.length; i++) {
+  if (form.length > text.length && !cut) return spans;
+  let k = 0;
+  for (let i = 0; i < text.length; i++) {
     while (k > 0 && text.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
     if (text.charCodeAt(i) === form.charCodeAt(k)) k++;
     if (k < form.length) continue;
@@ -275,6 +276,8 @@ const spansOf = (text: string, { text: form, fallback }: Form) => {
     else spans.push([start, i + 1]);
     k = fallback[k - 1] ?? 0;
   }
+  // A cut text can end partway through the value: a tail that starts it goes too.
+  if (cut && k > 0) spans.push([text.length - k, text.length]);
   return spans;
 };
 
@@ -283,9 +286,9 @@ const maskWith = (values: ReadonlySet<string>) => {
   const forms = [...new Set([...values].flatMap(encodedForms).map(foldHex))]
     .filter((form) => form !== "")
     .map(compile);
-  return (text: string) => {
+  return (text: string, cut = false) => {
     const searched = foldHex(text);
-    const spans = forms.flatMap((form) => spansOf(searched, form));
+    const spans = forms.flatMap((form) => spansOf(searched, form, cut));
     if (spans.length === 0) return text;
     let masked = "";
     let shown = 0;
@@ -315,7 +318,7 @@ const walk = (value: unknown, mask: (text: string) => string, keys: boolean): un
 const maskResult = (
   operation: PreviewAutomationRequest["operation"],
   result: unknown,
-  mask: (text: string) => string,
+  mask: (text: string, cut?: boolean) => string,
 ): unknown => {
   if (operation === "evaluate") return walk(result, mask, true);
   if (result === null || typeof result !== "object" || Array.isArray(result))
@@ -324,6 +327,8 @@ const maskResult = (
   const masked = walk(record, mask, false) as Record<string, unknown>;
   if (operation === "scrollCollect" && Array.isArray(record.items))
     masked.items = walk(record.items, mask, true);
+  if (operation === "fetch" && record.truncated === true && typeof record.text === "string")
+    masked.text = mask(record.text, true);
   const screenshot = record.screenshot as { readonly data?: unknown } | undefined;
   // Chromium encodes these pixels; text replacement would only corrupt them.
   if (operation === "snapshot" && typeof screenshot?.data === "string")

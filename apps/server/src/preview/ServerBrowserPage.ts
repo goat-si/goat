@@ -628,6 +628,8 @@ type SnapshotInput = {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** The tab's filled-secret mask, run before the text limits cut a value into a start. */
+  readonly diagnostics?: { readonly mask: (text: string) => string };
   /** What remains of the request's deadline, the one its timeout error names. */
   readonly timeoutMs: number;
 };
@@ -720,12 +722,14 @@ const capture = async (
   }
   const [page, layersLine, screenshot, cookies] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
-  const mask = maskSecrets(dotted, cookies);
+  const filled = input.diagnostics?.mask ?? ((text: string) => text);
+  const secrets = maskSecrets(dotted, cookies);
+  const mask = (text: string) => filled(secrets(text));
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
   const { accessibilityTree, ...treeFields } = screenTree(
-    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
+    `${mask(layersLine)}\n${filled(maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted))}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
   return {

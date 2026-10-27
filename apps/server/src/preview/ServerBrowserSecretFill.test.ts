@@ -264,6 +264,28 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   );
 });
 
+it.live("masks the start of a filled value that a cut fetch answer ends on", () => {
+  const { tab } = makeTab();
+  return withFill(
+    async (fill) => {
+      await fill.fill(tab, fillRequest, later(), record);
+      const fetched = (text: string, truncated: boolean) =>
+        fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
+      expect(fetched("echo alpha ", true)).toEqual({
+        ok: true,
+        result: { text: "echo [secret]", truncated: true },
+      });
+      // An answer that was not cut ends where the page's text ends.
+      expect(fetched("echo alpha ", false)).toEqual({
+        ok: true,
+        result: { text: "echo alpha ", truncated: false },
+      });
+    },
+    undefined,
+    ["alpha beta gamma"],
+  );
+});
+
 it.live("masks a very long filled value without failing the answer", () => {
   const { tab } = makeTab();
   const long = "a".repeat(40_000);

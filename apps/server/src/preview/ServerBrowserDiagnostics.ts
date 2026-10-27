@@ -149,7 +149,7 @@ export class ServerBrowserDiagnostics {
   private disposed = false;
   private readonly page: Page;
   /** Masks filled secrets before a limit cuts one into a start that no longer matches it. */
-  private readonly mask: (text: string) => string;
+  readonly mask: (text: string) => string;
 
   constructor(page: Page, mask: (text: string) => string = (text) => text) {
     this.page = page;

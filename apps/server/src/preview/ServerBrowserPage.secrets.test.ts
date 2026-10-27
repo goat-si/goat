@@ -75,6 +75,25 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(snapshot.url).toContain(`${origin}/?echo=`);
   });
 
+  it("masks a filled secret before the snapshot's text limit can cut it", async () => {
+    const filled = "alpha beta gamma";
+    const page = await context.newPage();
+    // The page echoes a filled password right where the snapshot's text limit cuts.
+    await page.setContent(`<p>${"x".repeat(19_990)} ${filled}</p>`);
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp: await context.newCDPSession(page),
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      diagnostics: { mask: (text) => text.replaceAll(filled, "[secret]") },
+      timeoutMs: 30_000,
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("alpha");
+  });
+
   it("keeps cookie and password values out of evaluation results", async () => {
     const { page, cdp } = await open();
     const evaluate = (expression: string) =>
