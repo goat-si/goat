@@ -916,3 +916,33 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     expect(await nextChange()).toBe(false);
   });
 });
+
+describe("a gate reused across a click's presses", () => {
+  it("refuses the second press without claiming the first was never sent", async () => {
+    const control = new SessionControl("agent");
+    const presses: Array<string> = [];
+    const page = {
+      once: () => undefined,
+      off: () => undefined,
+      mouse: {
+        click: async () => {
+          presses.push("first");
+          // A person takes over and hands back between the presses.
+          void control.take("person").catch(() => undefined);
+          void control.release("person").catch(() => undefined);
+        },
+        down: async () => void presses.push("second"),
+        up: async () => undefined,
+      },
+    } as unknown as Page;
+    await expect(
+      ServerBrowserPage.click(
+        page,
+        { x: 1, y: 2, clickCount: 2 },
+        undefined,
+        control.dispatchGate(),
+      ),
+    ).rejects.toMatchObject({ reason: "interrupted", beforeInput: false });
+    expect(presses).toEqual(["first"]);
+  });
+});

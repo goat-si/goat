@@ -172,11 +172,24 @@ export class SessionControl {
    */
   dispatchGate(expectedGeneration?: number) {
     const epoch = this.epoch;
-    const gate = () => {
+    // Clicks and scroll collection reuse one gate; once input went out, a later refusal is not
+    // "before input" for the action as a whole.
+    let passed = false;
+    const check = () => {
       this.assertAgentMayDispatch();
       if (expectedGeneration !== undefined && this.epoch !== expectedGeneration)
         throw refused("Browser control changed; refresh the tab snapshot.");
       if (this.epoch !== epoch) throw refused();
+    };
+    const gate = () => {
+      try {
+        check();
+      } catch (cause) {
+        if (passed && cause instanceof BrowserControlInterrupted && cause.beforeInput)
+          throw new BrowserControlInterrupted(cause.message, cause.reason, false);
+        throw cause;
+      }
+      passed = true;
       this.activeAgentDispatching = true;
     };
     const linger = (work: Promise<unknown>) => {
