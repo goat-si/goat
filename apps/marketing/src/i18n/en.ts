@@ -23,7 +23,7 @@ export const en = {
       "Download the GOAT desktop app for macOS, Windows and Linux, or install the goat command and a server-only machine.",
     legalTitle: "Legal",
     legalDescription:
-      "Which GOAT policies are published, what this website does with your visit, product usage data and the license.",
+      "Privacy, terms and security disclosure for the GOAT Connect invite-only beta, plus website and product usage data practices.",
     privacyTitle: "Privacy",
     termsTitle: "Terms",
     securityTitle: "Security",
@@ -233,10 +233,151 @@ export const en = {
   },
   legal: {
     title: "Legal",
-    lede: "What is and is not published yet, stated plainly.",
-    notPublishedTitle: "Policies that are not published yet",
-    notPublished:
-      "GOAT has not published its own privacy policy, terms of service or security contact yet. They will appear on this page before GOAT launches. Until then, nothing on this site is an agreement with you, and GOAT does not adopt policies written for other projects, including T3 Code, the project GOAT is forked from.",
+    lede: "Policies for the GOAT Connect invite-only beta, limited to 50 users.",
+    updated: "Updated 28 October 2026",
+    operatorTitle: "Operator and contact",
+    operator:
+      "GOAT Connect is operated by 김병준 (Kim Byungjun), who also handles security incidents. For privacy requests, account deletion, support or abuse reports, email:",
+    policyLinks: "Beta policies",
+    privacy: {
+      lede: "How the GOAT Connect invite-only beta processes your data. The beta is limited to 50 users.",
+      sections: [
+        {
+          id: "scope",
+          title: "What this policy covers",
+          paragraphs: [
+            "This policy covers the hosted GOAT Connect service and this marketing website. Connect is optional: running GOAT on your own machines does not by itself upload your projects or conversations to Connect. Your coding agent providers have their own data practices.",
+          ],
+        },
+        {
+          id: "account",
+          title: "Sign-in and account data",
+          paragraphs: [
+            "Clerk handles Connect sign-in, account identifiers, email addresses, profile information you supply and authentication data. The relay verifies Clerk credentials and uses your account identifier to associate your devices and environments. The sign-in service uses session credentials and may use cookies; the static marketing website does not set cookies.",
+          ],
+        },
+        {
+          id: "connections",
+          title: "Environment and device records",
+          paragraphs: [
+            "To link your machines and route connections, the relay stores account and environment identifiers, labels, public keys, endpoint URLs, tunnel and DNS allocation details, the local tunnel origin, link preferences and timestamps. It also stores hashed environment credentials, revocation records and short-lived proof identifiers used to prevent replay.",
+            "For mobile notifications, it stores device identifiers and labels, platform and OS version, app version and bundle identifier, notification preferences, APNs or FCM push tokens, and iOS Live Activity tokens when supplied. These tokens let us deliver updates to your device.",
+          ],
+        },
+        {
+          id: "activity",
+          title: "Activity updates and push notifications",
+          paragraphs: [
+            "The relay processes agent activity updates: environment and thread identifiers, project and thread titles, model names, status, headline, optional detail, timestamps and links back to the thread. Titles and status text can contain information about your work. Updates and notification payloads may be held in delivery queues and sent to Apple APNs or Google FCM, depending on your device and preferences.",
+            "Delivery records include account, environment, thread and device identifiers, delivery results, errors and a token suffix. Notification content can appear on your lock screen. You can disable notifications or Live Activities in your preferences.",
+          ],
+        },
+        {
+          id: "traffic",
+          title: "Tunnel traffic and optional held webhooks",
+          paragraphs: [
+            "Cloudflare provides the managed tunnels and handles network requests, including IP addresses and request metadata. After connection bootstrap, normal HTTP and WebSocket application traffic goes through Cloudflare to your environment, rather than through the relay Worker. Cloudflare terminates HTTPS; this is not end-to-end encryption that hides application content from the infrastructure provider. The relay is a trusted connection broker, not a zero-knowledge service.",
+            "Automation webhooks are forwarded by the relay. By default it does not persist webhook requests. If you enable holding webhooks while offline, a Cloudflare Durable Object stores the raw request, including its body, headers, query and hook token, so it can retry delivery. Do not send secrets or personal data you do not need in webhooks.",
+          ],
+        },
+        {
+          id: "providers",
+          title: "Service providers and diagnostics",
+          paragraphs: [
+            "We use this data to authenticate you, connect your machines, deliver notifications and webhooks, diagnose failures and protect the service. The configured infrastructure uses Clerk for identity, Cloudflare for the relay, tunnels, queues and held webhooks, PlanetScale Postgres for relay records, Axiom for diagnostics, Apple APNs for iOS delivery and Google FCM for Android delivery.",
+            "Axiom tracing is configured for relay requests and first-party client diagnostics. Traces can include identifiers, request methods and paths, response status, timing and errors. The webhook forwarding path redacts hook tokens and does not attach webhook bodies to its traces. Turning off GOAT product usage telemetry does not turn off Connect operational diagnostics.",
+            "These providers may process data outside your country. The current relay database configuration selects PlanetScale's US West region. Other processing locations and provider retention depend on the service and deployment; this policy does not promise that data stays in Korea.",
+          ],
+        },
+        {
+          id: "retention",
+          title: "How long data remains",
+          paragraphs: [
+            "Held webhooks are removed after an environment response, after 24 hours, or when the environment has no remaining linked user. Expiry is enforced by background processing, so cleanup can be delayed by failures. Maintenance also removes expired replay proofs and terminal activity rows older than 30 minutes. The Axiom trace dataset is configured for 30-day retention.",
+            "The current relay has no automatic expiry for several other records, including delivery attempts, revoked credentials and non-terminal activity. Unlinking an environment revokes its link and attempts tunnel cleanup; it is not account-wide erasure. We cannot promise an automatic deletion deadline for all Connect data or provider backups.",
+          ],
+        },
+        {
+          id: "rights",
+          title: "Access, correction and account deletion",
+          paragraphs: [
+            "Email the contact above to request access to or correction of your data, stop using Connect, or request deletion of your Connect account and associated hosted data. Use your account email and describe the request; do not send passwords, authentication codes or push tokens. We may need to verify that the account is yours.",
+            "Account-wide self-service deletion is not available in the current beta implementation. Requests require operator follow-up across Clerk, relay records, push registrations, held webhooks and tunnel resources. Signing out, unlinking, or deleting a Clerk account alone should not be treated as deletion of all Connect data or revocation of every existing environment session. Your local project files and thread history remain on your machines; manage them there.",
+            "If you have a privacy concern or want to exercise rights available under applicable law, use the same contact. We will post policy revisions here with an updated date.",
+          ],
+        },
+      ],
+    },
+    terms: {
+      lede: "Terms for the GOAT Connect invite-only beta, limited to 50 users.",
+      sections: [
+        {
+          id: "beta",
+          title: "Joining and using the beta",
+          paragraphs: [
+            "These terms apply to the hosted GOAT Connect beta operated by 김병준 (Kim Byungjun). By using Connect, you agree to these terms. Access is by invitation only, with a maximum of 50 beta users; an invitation is not a promise of continued access or a public launch. The open-source GOAT software remains governed by its own license.",
+            "Connect lets your signed-in devices reach linked GOAT environments and receive notifications. Link only machines you own or have permission to control. Protect your account, devices and recovery methods: access to a linked environment can allow running agents and terminal commands on that machine.",
+          ],
+        },
+        {
+          id: "acceptable-use",
+          title: "Acceptable use",
+          paragraphs: [
+            "Do not use Connect for phishing, malware, unauthorized access, harassment, unlawful activity or attacks on other users or services. Do not resell access, operate an open proxy, bypass invitations or limits, or overload the service. You are responsible for the content and actions you send through your environments, including agent actions and webhooks, and for respecting third-party rights and service terms.",
+          ],
+        },
+        {
+          id: "availability",
+          title: "Availability and support",
+          paragraphs: [
+            "This is an experimental beta provided as available. There is no service-level agreement (SLA), uptime guarantee, guaranteed support response time or promise that notifications and webhooks will arrive. Features, limits and availability may change, and the beta may end. Keep backups and another way to reach your machines; do not rely on Connect for emergency or safety-critical work.",
+            "To the extent permitted by applicable law, the beta comes without warranties of uninterrupted, error-free or fit-for-purpose service. Nothing in these terms excludes rights or liability that applicable law does not allow us to exclude.",
+          ],
+        },
+        {
+          id: "suspension",
+          title: "Suspension and ending access",
+          paragraphs: [
+            "The operator may suspend or end access to address abuse, security risks, legal requirements or capacity constraints, or to end the beta. Urgent action may happen without advance notice. Suspension or sign-out does not necessarily terminate sessions already established directly with an environment; secure your machines separately if you suspect compromise.",
+          ],
+        },
+        {
+          id: "leaving",
+          title: "Leaving, deletion and contact",
+          paragraphs: [
+            "You may stop using Connect at any time. To request account deletion, email the contact above from your account address. Deletion currently needs operator follow-up; signing out or unlinking is not account-wide erasure. The privacy policy explains the data involved and the current cleanup limits. Deleting hosted Connect data does not delete the projects or thread history on your own machines.",
+            "Send support, abuse reports and questions about these terms to the same contact. Revisions will be posted on this page with an updated date; review them before continuing to use the beta.",
+          ],
+        },
+      ],
+    },
+    security: {
+      lede: "Report GOAT or GOAT Connect vulnerabilities privately. Connect is an invite-only beta limited to 50 users.",
+      sections: [
+        {
+          id: "report",
+          title: "How to report a vulnerability",
+          paragraphs: [
+            "Email the contact above in Korean or English. 김병준 (Kim Byungjun) is the incident owner. Include the affected component and version, a description of the impact and minimal steps to reproduce. Use a subject such as GOAT security report. Do not include live credentials, private conversations or other users' data.",
+            "Do not publish exploit details in a public issue before we can assess and coordinate a fix. If you encounter exposed personal data, stop accessing it and describe where you found it without copying it into your report. We will work with you on disclosure timing; the beta has no guaranteed response or remediation deadline and no promised bounty.",
+          ],
+        },
+        {
+          id: "research",
+          title: "Research boundaries",
+          paragraphs: [
+            "Use your own accounts and environments, or obtain explicit permission from their owners. Do not access another person's data, disrupt service, run destructive tests or use social engineering. This page does not authorize testing of third-party providers or systems you do not control.",
+          ],
+        },
+        {
+          id: "incident",
+          title: "If your account or environment is at risk",
+          paragraphs: [
+            "Contact us promptly, secure your sign-in and recovery methods, and revoke affected access on your own environments. Connect sign-in can grant control of linked machines. Signing out alone is not a guarantee that existing environment sessions have ended. The operator coordinates incident response; this page does not claim that every planned beta security control is already deployed.",
+          ],
+        },
+      ],
+    },
     siteTitle: "This website",
     site: [
       "This site loads no analytics scripts and sets no cookies.",
@@ -252,10 +393,6 @@ export const en = {
     ],
     usageGuide: "Product usage data guide",
     usageGuideHref: guide("telemetry"),
-    securityTitle: "Security",
-    security:
-      "GOAT has not published a security contact yet. Please do not post details of a vulnerability in a public issue. The security policy file in the repository was written for T3 Code and does not name a GOAT contact.",
-    securityFile: "Inherited security policy file",
     licenseTitle: "License",
     license:
       "GOAT's source code is available under the MIT License. The license file keeps the original T3 Code copyright notice next to GOAT's.",

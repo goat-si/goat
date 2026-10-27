@@ -163,6 +163,12 @@ If GOAT on the host disappears when SSH closes, see
 
 ## Report a problem
 
+For privacy requests and account deletion, see the
+[Connect privacy policy](https://trygoat.ai/privacy-policy/). The invite-only beta's
+[terms](https://trygoat.ai/terms-of-service/) explain its availability and support limits.
+Report vulnerabilities privately through the
+[security contact](https://trygoat.ai/security-policy/), rather than a public issue.
+
 If none of this helps, open an issue on
 [GitHub](https://github.com/goat-si/goat/issues). Include:
 
