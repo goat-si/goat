@@ -134,6 +134,22 @@ To show Claude task lists in the web and desktop apps, add
 **Environment** section in **Settings > Providers**. Unfinished tasks stay visible
 between turns in the same Claude session.
 
+## Use OpenCodex Home
+
+A Claude Code instance can send its model requests through your
+[OpenCodex Home](./providers-codex.md#use-opencodex-home) and use Home's
+accounts and shared quota. In the instance's settings in **Settings →
+Providers**, set **Model route** to **OpenCodex Home**. **OpenCodex address** is
+OpenCodex on the machine running the instance, `http://127.0.0.1:10100/v1` by
+default. An agent can also ask you to approve the change. A routed instance
+uses only the models Home offers. If Home is unavailable, requests fail; GOAT
+never switches to another account. Set **Model route** back to **Provider
+settings** to stop.
+
+GOAT refuses the route when Claude Code's managed settings on that machine would
+override it, including a managed policy helper that runs at startup. Keep the
+instance on its own route, or ask your administrator to remove that setting.
+
 ## OpenRouter
 
 Create a Claude instance with its own config directory, such as

@@ -5,8 +5,10 @@ desktop, web, or mobile app. Set up the machine where the agents will work first
 
 ## Requirements
 
-You need an installed, authenticated provider before starting a thread. You can
-launch GOAT and configure providers afterwards.
+You need a working provider before starting a thread. You can launch GOAT and
+configure one afterwards. A machine connected to your OpenCodex Home can use
+Home's accounts without a provider sign-in on that machine; see
+[OpenCodex Home](./providers-codex.md#use-opencodex-home).
 
 ## Command line
 
@@ -79,11 +81,13 @@ prefix. For a custom prefix, use `npm --prefix <prefix> install --global <URL>`
 and put that prefix's executable directory on `PATH`. Native `goat update` can
 update the server runtime but does not change an npm-owned launcher pin.
 
-For a clean Linux or cloud machine, set up its
-[OpenCodex Child](./providers-codex.md#use-opencodex-home) on that same machine,
-install GOAT above, then run `goat serve`. Add the environment's
-[MCP URL](./outside-agents.md#get-the-mcp-url) to your agent and authorize it
-through the normal sign-in flow. OpenCodex serves the provider; GOAT serves MCP.
+For a fresh Linux or cloud machine, use the
+[server installer](#a-server-only-machine) with `--opencodex`, then join it to
+your [OpenCodex Home](./providers-codex.md#use-opencodex-home). Home keeps the
+provider accounts and relays requests; every Child shares Home's quota. Add the
+environment's [MCP URL](./outside-agents.md#get-the-mcp-url) to your agent and
+authorize it through the normal sign-in flow. Access to GOAT and provider
+sign-in are separate: OpenCodex serves the provider; GOAT serves MCP.
 
 ### Intel Macs
 
@@ -125,6 +129,25 @@ it. Leave it out when you reach the machine another way, such as
 background service and run `goat serve` yourself. To install a CLI archive you
 already downloaded, for example on a machine without internet access, pass
 `--archive goat-<version>-<platform>-<arch>.tar.gz`.
+
+Add `--opencodex` to also install OpenCodex, without Node or npm, so the
+machine can become an [OpenCodex Child](./providers-codex.md#use-opencodex-home):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install-goat-server.sh | sh -s -- --tailscale --opencodex
+```
+
+With GOAT already installed, run `goat opencodex install` instead. A supported
+OpenCodex that is already installed is kept; otherwise GOAT installs a release
+it has tested. Home and its Children do not need the same version. Installing
+does not join Home or make the machine **Ready**; continue in
+[Hub devices](./hub.md#add-repair-or-remove-a-device).
+
+If OpenCodex installation fails, GOAT stays installed and the installer stops
+with the command to retry. If `goat opencodex install` is not a known command,
+update GOAT first. `--archive` supplies only GOAT's archive, so `--opencodex`
+still needs network access to download OpenCodex unless a supported one is
+already installed.
 
 ## Desktop app
 

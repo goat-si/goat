@@ -1,6 +1,6 @@
 # Codex
 
-Use your ChatGPT plan or an existing Codex CLI login to code in GOAT.
+Use your ChatGPT plan, an existing Codex CLI login, or OpenCodex Home to code in GOAT.
 
 ## Connect with ChatGPT
 
@@ -27,29 +27,45 @@ covers installation and custom configuration.
 
 ## Use OpenCodex Home
 
-Install and connect OpenCodex on the machine where Codex runs. GOAT uses that
-machine's local OpenCodex service; a remote GOAT server needs its own Child.
-On your Home machine, GOAT shows “This machine is your OpenCodex Home.”
+OpenCodex Home keeps your provider accounts on one machine and relays model
+requests from your other machines, its Children. Every Child shares Home's
+quota. On your Home machine, GOAT shows “This machine is your OpenCodex Home.”
+GOAT uses OpenCodex on the machine where Codex runs, so a remote GOAT server
+needs its own Child.
 
-In **Settings → Providers**, select the environment and add a Codex instance
-that uses your Codex CLI. Name it **Codex · OpenCodex Home**, then choose
-**OpenCodex Home** as its model route. The default address is
-`http://127.0.0.1:10100/v1` on that environment's machine. Instances connected
-through GOAT's ChatGPT sharing need a separate instance that uses your Codex CLI.
-On mobile, add the instance in web or desktop Settings first.
+To make a new Linux or macOS machine a Child, install GOAT and OpenCodex there
+with the [server installer's `--opencodex` option](./install.md#a-server-only-machine),
+then join it from [Hub devices](./hub.md#add-repair-or-remove-a-device) on
+Home. For an SSH host with **Join as OpenCodex Child after each SSH setup**
+turned on, or a cloud machine Home created, GOAT also installs Codex there and
+adds a Codex instance that uses Home without a sign-in on that machine. The
+Child is **Ready** after one small model request from that instance succeeds
+through Home; the request counts against Home's quota. If setup stops, the
+device's row in Hub devices says what to do next, such as updating OpenCodex
+on the Child.
 
-Choose this instance in the thread's model picker. Instances using the same
-**CODEX_HOME path** can continue compatible threads. GOAT reports the Home link
-status and stops with an explicit error if it becomes unavailable. GOAT never
-automatically switches the selected account, instance, model, or route on failure.
-Check OpenCodex on the named machine, refresh provider status, and try again.
+To route another Codex instance, open **Settings → Providers**, select the
+environment and the instance, and choose **Use OpenCodex Home** under **Model
+route**. The default address is `http://127.0.0.1:10100/v1` on that
+environment's machine. **Home authentication** sets what the instance sends to
+Home: **None** needs no sign-in on that machine, and **OpenAI** keeps the
+instance's own sign-in. A Codex instance that GOAT manages always uses
+**None**. On mobile, change the route in web or desktop Settings.
+
+Choose the instance in the thread's model picker. Instances using the same
+**CODEX_HOME path** can continue compatible threads; after you change Home
+authentication, whether a thread continues depends on Codex, so keep the
+original instance if it cannot. GOAT reports the Home link status and stops
+with an explicit error if Home becomes unavailable. GOAT never automatically
+switches the selected account, instance, model, or route on failure. Check
+OpenCodex on the named machine, select **Check status**, and try again.
 OpenCodex manages its own account selection within Home.
 
 Use **Connect to Home** to follow the connection steps on the named host.
 Use **Stop using OpenCodex Home** to return this instance to Codex's own settings.
-This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` on that
-machine to do that. Your own Codex settings may still point at OpenCodex;
-check the displayed endpoint before starting work.
+This doesn't disconnect OpenCodex from Home: use **Leave** in Hub devices, or
+run `ocx disconnect` on that machine. Your own Codex settings may still point
+at OpenCodex; check the displayed endpoint before starting work.
 
 When an agent asks to use or stop using Home, review the execution host,
 Codex instance, current route, and requested route in the approval request.
@@ -57,11 +73,17 @@ Approving lets GOAT change that instance's model route; it does not install
 OpenCodex, connect or disconnect its Home link, or give the agent permission
 to manage providers. Complete any OpenCodex connection steps on that host first.
 Declining leaves the route unchanged. After approving, check provider status
-for the result; approval alone does not mean the change succeeded. If the request
-expired or the instance changed while you reviewed it, ask the agent to request
-approval again.
+for the result; approval alone does not mean the route works or the Child is
+Ready. If the request expired or the instance changed while you reviewed it,
+ask the agent to request approval again.
 
-End this instance's active sessions and turns before changing its route.
+End this instance's active sessions and turns before changing its route or
+Home authentication.
+
+[Claude Code](./providers-claude.md#use-opencodex-home),
+[OpenCode](./providers-opencode.md#use-opencodex-home), and
+[Pi](./providers-pi.md#use-opencodex-home) can use Home too, once you route
+them there.
 
 ## Use multiple accounts
 

@@ -51,6 +51,22 @@ Pi loads its normal user and project extensions. Blocking `select`, `confirm`, `
 dialogs work in GOAT. Notifications appear in the work log. Pi terminal decoration such as
 titles, status lines, and widgets does not have a GOAT equivalent.
 
+## Use OpenCodex Home
+
+A Pi instance can send its model requests through your
+[OpenCodex Home](./providers-codex.md#use-opencodex-home) and use Home's
+accounts and shared quota. In the instance's settings in **Settings →
+Providers**, set **Model route** to **OpenCodex Home**. **OpenCodex address** is
+OpenCodex on the machine running the instance, `http://127.0.0.1:10100/v1` by
+default. An agent can also ask you to approve the change. A routed instance
+uses only the models Home offers. If Home is unavailable, requests fail; GOAT
+never switches to another account. Set **Model route** back to **Provider
+settings** to stop.
+
+While routed, Pi runs with a separate GOAT configuration: your Pi sign-ins,
+settings, and extensions are not copied into it. Your Pi sessions stay where
+they are, so threads continue after you change the route.
+
 ## Permission Modes
 
 GOAT applies the composer permission mode through Pi's blocking tool hook:
