@@ -1,4 +1,4 @@
-import type { DesktopTrayThread } from "@goat/contracts";
+import type { DesktopTrayThread } from "./trayMenu.ts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { trayLabel, trayMenuTemplate } from "./trayMenu.ts";

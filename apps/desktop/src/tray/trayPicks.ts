@@ -1,4 +1,4 @@
-import type { DesktopTrayThread } from "@goat/contracts";
+import type { DesktopTrayThread } from "./trayMenu.ts";
 
 export type TrayPick = Pick<DesktopTrayThread, "environmentId" | "threadId">;
 

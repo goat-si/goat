@@ -1,4 +1,4 @@
-import type { DesktopTrayMenu, DesktopTrayThread } from "@goat/contracts";
+import type { DesktopTrayMenu, DesktopTrayThread } from "./trayMenu.ts";
 import * as Electron from "electron";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

@@ -1,5 +1,5 @@
 /** A thread row in the desktop tray menu. */
-export interface DesktopTrayThread {
+interface DesktopTrayThread {
   readonly environmentId: string;
   readonly threadId: string;
   readonly title: string;
@@ -7,7 +7,7 @@ export interface DesktopTrayThread {
 }
 
 /** Each thread appears in at most one section, in this order of precedence. */
-export interface DesktopTrayMenu {
+interface DesktopTrayMenu {
   readonly attention: readonly DesktopTrayThread[];
   readonly running: readonly DesktopTrayThread[];
   readonly pinned: readonly DesktopTrayThread[];

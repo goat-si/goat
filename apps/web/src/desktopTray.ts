@@ -1,4 +1,4 @@
-import type { DesktopTrayMenu, DesktopTrayThread } from "@goat/contracts";
+import type { DesktopBridge } from "@goat/contracts";
 import { classifyFleetThread } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import { sortPinnedThreadsByOrderKey } from "@goat/client-runtime/state/thread-sort";
@@ -9,6 +9,10 @@ import type { AtomRegistry } from "effect/reactivity";
 import { environmentProjects } from "./state/projects";
 import { liveShellEnvironmentIdsAtom } from "./state/shell";
 import { environmentThreadShells } from "./state/threads";
+
+// Read through the bridge so the contracts index, which most tests import, stays untouched.
+type DesktopTrayMenu = Parameters<NonNullable<DesktopBridge["setTrayMenu"]>>[0];
+type DesktopTrayThread = DesktopTrayMenu["attention"][number];
 
 // The tray shows a handful; the cap keeps the IPC payload small however many threads exist.
 const SECTION_LIMIT = 20;

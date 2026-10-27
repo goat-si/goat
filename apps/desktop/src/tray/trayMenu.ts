@@ -1,5 +1,8 @@
-import type { DesktopTrayMenu, DesktopTrayThread } from "@goat/contracts";
+import type { DesktopBridge } from "@goat/contracts";
 import type * as Electron from "electron";
+
+export type DesktopTrayMenu = Parameters<NonNullable<DesktopBridge["setTrayMenu"]>>[0];
+export type DesktopTrayThread = DesktopTrayMenu["attention"][number];
 
 const SECTION_ROWS = 5;
 const TITLE_CODE_POINTS = 40;

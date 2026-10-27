@@ -21,7 +21,6 @@ export * from "./remoteAccess.ts";
 export * from "./sshHost.ts";
 export * from "./ipc.ts";
 export * from "./desktopWindowMaterial.ts";
-export * from "./desktopTray.ts";
 export * from "./terminal.ts";
 export * from "./provider.ts";
 export * from "./providerInstance.ts";
