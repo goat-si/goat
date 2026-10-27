@@ -81,12 +81,10 @@ export interface ComputerUseAttachmentInput {
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | undefined;
   readonly interactionMode: ProviderInteractionMode | undefined;
-  /** The thread's mode; full access skips grants for a person's runs, and when the host allows it. */
+  /** The thread's mode; full access skips grants and foreground approval for every run (D16). */
   readonly runtimeMode?: RuntimeMode | undefined;
   /** The run this session is prepared for; absent outside a turn. */
   readonly runId?: RunId | undefined;
-  /** A person caused that run (ComputerUseOrigin.personStarted). */
-  readonly personStarted?: boolean | undefined;
   readonly readOnly: boolean;
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
@@ -125,12 +123,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   const current = Option.isNone(settings)
     ? undefined
     : yield* settings.value.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-  const kind = everyAppKind({
-    runtimeMode: input.runtimeMode,
-    unattended,
-    personStarted: input.personStarted === true && input.runId !== undefined,
-  });
-  const everyApp = kind !== undefined;
+  const everyApp = everyAppKind({ runtimeMode: input.runtimeMode, unattended }) !== undefined;
   const leases = input.leases;
   const lease =
     unattended && !everyApp && Option.isSome(leases)
@@ -179,10 +172,11 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   // refuses unattended work that lost a race for the screen.
   const control = everyApp
     ? yield* leases.value
-        .everyAppControl(input.threadId, unattended, {
-          person: kind === "person",
-          ...(input.runId === undefined ? {} : { runId: input.runId }),
-        })
+        .everyAppControl(
+          input.threadId,
+          unattended,
+          input.runId === undefined ? {} : { runId: input.runId },
+        )
         .pipe(Effect.orElseSucceed(() => Option.none()))
     : Option.some(yield* leases.value.control(input.threadId, lease, input.runId));
   if (Option.isNone(control)) return none("held", blockUserConfig);

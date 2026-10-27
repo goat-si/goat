@@ -114,26 +114,21 @@ it.effect("an approved foreground request lets this turn's control take the fore
   ),
 );
 
-it.effect.each([
-  { from: "remote", unattended: false, kind: "available" },
-  { from: "schedule", unattended: true, kind: "needs_human" },
-] as const)(
-  "a full access turn from $from waits for its foreground approval only when launched from another environment",
-  ({ from, unattended, kind }) =>
+it.effect.each(["remote", "schedule"] as const)(
+  "D16: a full access turn from %s takes the foreground without asking",
+  (from) =>
     withWaiting(
-      ({ request, handoffs, leases, runId, created }) =>
+      ({ request, leases, orchestrator, runId }) =>
         Effect.gen(function* () {
           // The every-app control the attachment gives this origin in full access.
           assert.isTrue(
-            Option.isSome(yield* leases.everyAppControl(threadId, unattended, { runId })),
+            Option.isSome(yield* leases.everyAppControl(threadId, from === "schedule", { runId })),
           );
-          const waiting = yield* request({ foreground: true }, WAIT).pipe(
-            Effect.forkChild({ startImmediately: true }),
-          );
-          const card = yield* created();
-          if (kind === "available") yield* answer(handoffs, card, "completed");
-          assert.equal((yield* Fiber.join(waiting)).kind, kind);
-          assert.equal(yield* leases.foregroundAvailable(threadId, purpose), kind === "available");
+          // No wait budget: the answer comes without a card or a person.
+          assert.equal((yield* request({ foreground: true }, Duration.zero)).kind, "available");
+          assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
         }),
       undefined,
       from,
@@ -255,7 +250,7 @@ it.effect(
   () =>
     withWaiting(({ request, leases, orchestrator, runId }) =>
       Effect.gen(function* () {
-        yield* leases.everyAppControl(threadId, false, { person: true, runId });
+        yield* leases.everyAppControl(threadId, false, { runId });
         assert.equal((yield* request({ apps: [APP] }, WAIT)).kind, "available");
         assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
         assert.deepInclude(yield* request({ foreground: true, apps: [APP] }, WAIT), {
@@ -277,7 +272,7 @@ it.effect(
       yield* withWaiting(
         ({ request, leases, runId }) =>
           Effect.gen(function* () {
-            yield* leases.everyAppControl(threadId, false, { person: true, runId });
+            yield* leases.everyAppControl(threadId, false, { runId });
             assert.deepEqual(yield* Queue.take(watched), []);
             assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
             assert.deepEqual(yield* Queue.take(watched), [devBuild]);

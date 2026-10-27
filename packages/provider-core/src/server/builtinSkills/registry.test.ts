@@ -281,9 +281,8 @@ describe("computer use skill against what agents receive today", () => {
     const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
     expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
     expect(line).toContain(
-      "Full-access turns a person directs already have foreground authority without asking",
+      "Full-access turns already have foreground authority without asking, whatever started them.",
     );
-    expect(line).toContain("unattended full-access work still needs foreground approval");
     expect(line).toContain("it waits for the answer in this turn");
     expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
     expect(line).toContain("full-access foreground returns automatically only next turn");

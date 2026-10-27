@@ -432,12 +432,15 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling unchanged. In full access, a thread launched from another environment, and turns it
-  launches or sends here (`launched_remotely`), use every app like a person's threads, beside
-  them rather than holding the screen alone, and wait in the same turn for a foreground approval
-  (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
-  cannot read the turn that launched it, so it stays unattended for steering a person's turn and
-  outside full access, and asks for foreground like any run no person started. A user's own
+  ceiling outside full access. In full access every run uses every app and takes the foreground
+  without asking, whatever started it (`implyFocus` in `ComputerUseLeases.ts`; owner decision,
+  Jun, 2026-10-28). Unattended full access work still holds the screen one thread at a time,
+  because two such threads would mix their input. A thread launched from another environment, and
+  turns it launches or sends here (`launched_remotely`), work beside other threads like a
+  person's (`usesScreenLikePerson` in `ComputerUseOrigin.ts`). This host cannot read the turn
+  that launched it, so it stays unattended for steering a person's turn and outside full access.
+  Which run sent a message is not recorded, so steering is weighed by the sending thread's
+  latest run; recording it is roadmap 400 work. A user's own
   `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
   Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
   behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).

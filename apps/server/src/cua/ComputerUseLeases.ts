@@ -147,7 +147,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
-      run?: { readonly person?: boolean; readonly runId?: RunId },
+      run?: { readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
      * Apps a run with every app or the whole screen named in a request. The host adds them to the
@@ -363,9 +363,9 @@ const make = Effect.gen(function* () {
         DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now),
     );
 
-  // A person's full access run takes the foreground without asking; see ComputerUseForeground.
+  // Any full access run takes the foreground without asking; see ComputerUseForeground.
   const implyFocus = (record: ControlRecord) => {
-    if (record.everyApp !== "person" || record.runId === undefined) return false;
+    if (record.everyApp === undefined || record.runId === undefined) return false;
     if (paused !== undefined || privateHost) return false;
     return foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
   };
@@ -442,17 +442,10 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly person?: boolean; readonly runId?: RunId },
+    run?: { readonly runId?: RunId },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(
-        yield* mint(
-          threadId,
-          Option.none(),
-          run?.person === true ? "person" : "interactive",
-          run?.runId,
-        ),
-      );
+      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "person", run?.runId));
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))

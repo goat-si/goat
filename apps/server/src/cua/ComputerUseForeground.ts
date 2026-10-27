@@ -28,7 +28,7 @@ interface Implied {
 /**
  * Durable admission cannot recreate focus authority after a pause, replacement or restart.
  *
- * A run a person started in a full access thread holds foreground authority without an approval
+ * Any run in a full access thread holds foreground authority without an approval
  * (`imply`), bound to its control and run. Every revocation that ends approved authority ends it
  * too and remembers the run, so a pause, private field, Stop or the run's end leaves that run
  * without it even if its session attaches again; the thread's next run gets it afresh.
