@@ -883,7 +883,6 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
     reason: Schema.optional(PreviewAutomationControlReason),
-    // false when GOAT refused the request before any input left for the page.
     dispatched: Schema.optional(Schema.Boolean),
   },
 ) {

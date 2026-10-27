@@ -52,7 +52,6 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      // Older readers take a bare reason; the object form adds that nothing was sent.
       cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;

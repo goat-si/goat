@@ -274,6 +274,8 @@ const classifyResponseError = (
       });
     }
     case "PreviewAutomationControlInterruptedError": {
+      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left;
+      // dispatched: false carries that to the classifier.
       const detail = error.detail;
       const object = typeof detail === "object" && detail !== null ? detail : undefined;
       const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
