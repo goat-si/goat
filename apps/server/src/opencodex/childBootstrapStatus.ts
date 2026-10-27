@@ -4,6 +4,7 @@ import {
   type ChildReadyResult,
   childReadyProofIsCurrent,
   OpenCodexChildBootstrapStatus,
+  withoutUnprovenReady,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -21,7 +22,11 @@ const actionable = (action: ChildReadyNextAction) =>
  * continue_setup; GOAT update guidance comes only from a real outdated refusal or the Child's
  * own setup, and is never actionable here.
  */
-export const presentSetupAction = (status: Status): Status => {
+export const presentSetupAction = (recorded: Status): Status => {
+  const status =
+    recorded.setup === undefined
+      ? recorded
+      : { ...recorded, setup: withoutUnprovenReady(recorded.setup) };
   const failure = status.setup === undefined ? status.failure : status.setup.failure;
   if (isTimeout(failure) && failure !== undefined) {
     const timedOut = { ...failure, retryable: true, message: TIMEOUT_MESSAGE };
@@ -137,6 +142,8 @@ const decodeEntries = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
 const decodeStatus = Schema.decodeUnknownOption(OpenCodexChildBootstrapStatus);
+const withoutUnprovenStatus = (status: Status): Status =>
+  status.setup === undefined ? status : { ...status, setup: withoutUnprovenReady(status.setup) };
 
 /**
  * Stored records, each decoded on its own: one corrupt alias shows as a storage failure and
@@ -147,7 +154,7 @@ export const decodeStoredRecords = (text: string, now: number): Record<string, S
   return Object.fromEntries(
     Object.entries(entries).map(([alias, raw]): [string, Status] => [
       alias,
-      Option.getOrElse(decodeStatus(raw), () => ({
+      Option.getOrElse(Option.map(decodeStatus(raw), withoutUnprovenStatus), () => ({
         state: "blocked" as const,
         checkedAt: now,
         reason: "unreachable" as const,

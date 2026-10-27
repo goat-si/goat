@@ -28,6 +28,27 @@ const operation: Journal.ChildReadyOperation = {
   },
 };
 
+const proof = {
+  version: 1,
+  operationId: "op-1",
+  destinationEnvironmentId: "child-env",
+  homeEnvironmentId: home,
+  instanceId: "goat_ocx_0123456789abcdef01234567",
+  configFingerprint: "config",
+  executablePath: "/fixture/codex",
+  executableVersion: "0.156.1",
+  linkId: "link-1",
+  listenerInstanceId: "listener-1",
+  linkConnectionGeneration: "connection-1",
+  settingsDigest: "settings",
+  catalogDigest: "catalog",
+  model: "fixture-model",
+  completedAt: 1,
+  expiresAt: 1 + 24 * 60 * 60 * 1000,
+  attribution: "home_zero_local_accounts",
+  localAccountsDigest: "zero-local",
+};
+
 /** Builds a journal over one state directory, so a second build reads what the first wrote. */
 const journalAt = Effect.fn("ChildReadyJournal.test.journalAt")(function* (stateDir: string) {
   const config = yield* ServerConfig.ServerConfig;
@@ -75,6 +96,40 @@ it.layer(layer)("ChildReadyJournal", (it) => {
       expect(restarted?.setup).toMatchObject({
         readiness: "invalid",
         failure: { code: "interrupted", step: "inference_verified" },
+        nextAction: "retry",
+      });
+    }),
+  );
+
+  it.effect("reads a Ready whose older proof no longer decodes as unverified with a retry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "child-journal-" });
+      const { linkConnectionGeneration: _missing, ...olderProof } = proof;
+      yield* fs.writeFileString(
+        path.join(dir, "opencodex-child-ready.json"),
+        JSON.stringify({
+          version: 1,
+          operations: {
+            [home]: {
+              ...operation,
+              probeRequestedFor: "op-1",
+              setup: {
+                ...operation.setup,
+                readiness: "ready",
+                attribution: "home_zero_local_accounts",
+                proof: olderProof,
+              },
+            },
+          },
+        }),
+      );
+      const stored = yield* (yield* journalAt(dir)).read(home);
+      expect(stored?.setup?.proof).toBeUndefined();
+      expect(stored?.setup).toMatchObject({
+        readiness: "linked",
+        attribution: "unproven",
         nextAction: "retry",
       });
     }),

@@ -13,6 +13,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   ServerSettingsError,
+  withoutUnprovenReady,
 } from "@goat/contracts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as Clock from "effect/Clock";
@@ -707,7 +708,8 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       const operation = yield* journal.read(home);
       const setup = operation?.setup;
       const proof = setup?.proof;
-      if (operation === undefined || setup === undefined || proof === undefined) return setup;
+      if (operation === undefined || setup === undefined) return setup;
+      if (proof === undefined) return withoutUnprovenReady(setup);
       const step = "inference_verified" as const;
       const code = bindingFailure(proof, yield* currentFacts(observed, proof.instanceId, step));
       if (code === undefined) return setup;

@@ -191,6 +191,19 @@ export const OpenCodexChildSetup = Schema.Struct({
   proof: ForwardCompatibleOptional(ChildReadyProof),
 });
 export type OpenCodexChildSetup = typeof OpenCodexChildSetup.Type;
+/**
+ * Ready and Home attribution stand only with a proof. A record whose proof is missing, or was
+ * dropped because it no longer decodes (an older shape), reads as unverified with retry.
+ */
+export const withoutUnprovenReady = (setup: OpenCodexChildSetup): OpenCodexChildSetup =>
+  setup.proof !== undefined || (setup.readiness !== "ready" && setup.attribution === "unproven")
+    ? setup
+    : {
+        ...setup,
+        readiness: setup.readiness === "ready" ? "linked" : setup.readiness,
+        attribution: "unproven",
+        nextAction: setup.readiness === "ready" ? "retry" : setup.nextAction,
+      };
 export const ChildReadyAddress = Schema.Struct({
   destinationEnvironmentId: EnvironmentId,
   homeEnvironmentId: EnvironmentId,

@@ -371,4 +371,47 @@ it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
       expect(status?.setup?.failure?.code).toBe("unreachable");
     }),
   );
+
+  it.effect("shows a recorded Ready whose older proof no longer decodes as unverified", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ readyProof: true });
+      const fs = yield* FileSystem.FileSystem;
+      const ready = {
+        ...setupForTest("none", "probe_failed"),
+        readiness: "ready",
+        attribution: "home_zero_local_accounts",
+        failure: undefined,
+        // A proof from before link continuity was bound: it has no connection generation.
+        proof: {
+          version: 1,
+          operationId: "r2-status",
+          destinationEnvironmentId: "child",
+          homeEnvironmentId: "home",
+          instanceId: "r2-instance",
+          configFingerprint: "config",
+          executablePath: "/fixture/codex",
+          executableVersion: "0.156.0",
+          linkId: "r2-link",
+          listenerInstanceId: "listener",
+          settingsDigest: "settings",
+          catalogDigest: "catalog",
+          model: "fixture-model",
+          completedAt: 0,
+          expiresAt: 24 * 60 * 60 * 1000,
+          attribution: "home_zero_local_accounts",
+          localAccountsDigest: "zero-local",
+        },
+      };
+      yield* fs.writeFileString(
+        `${home.stateDir}/opencodex-child-bootstrap.json`,
+        JSON.stringify({ "boat-builder": { state: "child", checkedAt: 1, setup: ready } }),
+      );
+      const reloaded = yield* build(home.baseDir, home.machine, home.calls);
+      const status = yield* reloaded.bootstrap.status("boat-builder");
+      expect(status?.setup?.proof).toBeUndefined();
+      expect(status?.setup).toMatchObject({ readiness: "linked", attribution: "unproven" });
+      expect(status).toMatchObject({ nextAction: "retry", actionable: true });
+      expect(home.machine.statusReads).toBe(0);
+    }),
+  );
 });

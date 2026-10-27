@@ -5,6 +5,7 @@ import {
   ProviderInstanceConfig,
   ProviderInstanceId,
   TrimmedNonEmptyString,
+  withoutUnprovenReady,
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- temporary file names only, no secrets.
 import * as NodeCrypto from "node:crypto";
@@ -116,6 +117,11 @@ const interrupted = (operation: ChildReadyOperation): ChildReadyOperation => {
       };
 };
 
+const withoutUnprovenSetup = (operation: ChildReadyOperation): ChildReadyOperation =>
+  operation.setup === undefined
+    ? operation
+    : { ...operation, setup: withoutUnprovenReady(operation.setup) };
+
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -139,7 +145,7 @@ export const make = Effect.gen(function* () {
       operations: Object.fromEntries(
         Object.entries(current.operations).map(([home, operation]) => [
           home,
-          interrupted(operation),
+          withoutUnprovenSetup(interrupted(operation)),
         ]),
       ),
     })),
