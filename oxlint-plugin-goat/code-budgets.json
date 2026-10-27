@@ -344,7 +344,7 @@
   "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8690 },
   "apps/server/src/orchestration-v2/testkit/FakeCloudAdapter.ts": { "nonNull": 4 },
   "apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 3083 },
+  "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 3097 },
   "apps/server/src/orchestration-v2/testkit/fixtures/grok_auto_blocked_command/output.ts": {
     "nonNull": 1
   },
