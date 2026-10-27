@@ -13,7 +13,9 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import { PiSettings } from "@goat/provider-pi/settings";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -177,3 +179,30 @@ it.effect("refuses a runtime hydrated from a superseded snapshot and binds the n
     assert.equal((yield* open(current, "native/model"))._tag, "Success");
   }).pipe(Effect.provide(layerOpenCodex(() => [])), Effect.scoped),
 );
+
+it.effect("rebuilds a reconnected Pi runtime with Home's current models and files together", () => {
+  let models: ReadonlyArray<string> = ["provider/a", "provider/b"];
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { driver, launches } = fakeDriver();
+    const routed = { modelRoute: "opencodex", opencodexBaseUrl: HOME };
+    const before = yield* create(driver, { ...routed, opencodexRouteRevision: "approval-1" });
+    // Home's catalog changes; the next approved connect records a new route revision.
+    models = ["provider/b", "provider/c"];
+    const after = yield* create(driver, { ...routed, opencodexRouteRevision: "approval-2" });
+    const slugs = (instance: ProviderInstance) =>
+      instance.snapshot.getSnapshot.pipe(
+        Effect.map(({ models }) => models.map(({ slug }) => slug)),
+      );
+    assert.deepEqual(yield* slugs(before), ["opencodex/provider/a", "opencodex/provider/b"]);
+    assert.deepEqual(yield* slugs(after), ["opencodex/provider/b", "opencodex/provider/c"]);
+    assert.equal((yield* open(after, "opencodex/provider/a"))._tag, "Failure");
+    assert.equal((yield* open(after, "opencodex/provider/c"))._tag, "Success");
+    assert.equal((yield* open(before, "opencodex/provider/b"))._tag, "Failure");
+    const agentDir = launches[1]?.find(({ name }) => name === "PI_CODING_AGENT_DIR")?.value ?? "";
+    const published = yield* fs.readFileString(path.join(agentDir, "models.json"));
+    assert.include(published, "provider/c");
+    assert.notInclude(published, "provider/a");
+  }).pipe(Effect.provide(layerOpenCodex(() => models)), Effect.scoped);
+});

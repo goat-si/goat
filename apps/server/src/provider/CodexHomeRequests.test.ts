@@ -640,3 +640,24 @@ it.effect.each(["busy", "stale"] as const)(
       assert.equal(f.finished(), 1);
     }).pipe(Effect.provide(layer)),
 );
+
+it.effect("commits a new route revision when an already routed Pi instance reconnects", () =>
+  Effect.gen(function* () {
+    const calls: Array<Runner.ProcessRunInput> = [];
+    const f = yield* approval("connect", "pi", {
+      config: { modelRoute: "opencodex" },
+      openCodex: piOpenCodex(calls),
+    });
+    const before = yield* f.routes.capture(instanceId);
+    yield* commitAndApply(f.requests.resumeContinuations);
+    const after = yield* f.routes.capture(instanceId);
+    // A changed entry is what makes the registry rebuild the runtime from Home's catalog.
+    assert.notEqual(after.fingerprint, before.fingerprint);
+    assert.equal(
+      decodeRoute(after.instance.config).opencodexRouteRevision,
+      "provider-home-approval-a",
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(f.finished(), 1);
+  }).pipe(Effect.provide(layer)),
+);

@@ -246,6 +246,7 @@ const make = Effect.gen(function* () {
     const nextConfig = yield* HomeAdapters.changeProviderHomeConfig(
       latest.instance,
       intent.request,
+      current.handoffId,
     ).pipe(Effect.mapError(invalid));
     if (intent.request.action === "connect") {
       const overlay = HomeAdapters.providerHomeOverlayDriver(latest.instance.driver);

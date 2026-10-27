@@ -91,6 +91,8 @@ const decodeProviderHomeConfig = Effect.fn("ProviderHomeAdapters.decode")(functi
 export const changeProviderHomeConfig = Effect.fn("ProviderHomeAdapters.change")(function* (
   instance: ProviderInstanceConfig,
   input: ProviderHomeRequestInput,
+  /** Records an approved connect, so reconnecting a routed instance still rebuilds its runtime. */
+  routeRevision?: string,
 ) {
   yield* decodeProviderHomeConfig(instance);
   const stored = Option.getOrUndefined(readRecord(instance.config ?? {}));
@@ -103,7 +105,14 @@ export const changeProviderHomeConfig = Effect.fn("ProviderHomeAdapters.change")
     try: () => normalizeOpenCodexBaseUrl(input.opencodexBaseUrl ?? route.opencodexBaseUrl),
     catch: () => configError("Enter a local OpenCodex address such as http://127.0.0.1:10100/v1."),
   });
-  return { ...stored, modelRoute: "opencodex" as const, opencodexBaseUrl };
+  return {
+    ...stored,
+    modelRoute: "opencodex" as const,
+    opencodexBaseUrl,
+    ...(routeRevision === undefined || providerHomeOverlayDriver(instance.driver) === undefined
+      ? {}
+      : { opencodexRouteRevision: routeRevision }),
+  };
 });
 
 const canonicalUrl = (value: string) => {
@@ -129,6 +138,7 @@ export const providerHomeRouteKey = (instance: ProviderInstanceConfig | undefine
     driver,
     route.value.modelRoute,
     canonicalUrl(route.value.opencodexBaseUrl),
+    route.value.opencodexRouteRevision ?? null,
     environment,
   ]);
 };

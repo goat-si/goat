@@ -48,6 +48,10 @@ export const ProviderHomeRouteFields = {
       providerSettingsForm: { placeholder: DEFAULT_OPENCODEX_BASE_URL, clearWhenEmpty: "omit" },
     }),
   ),
+  /** Set by each approved connect so a reconnect rebuilds the runtime from Home's catalog. */
+  opencodexRouteRevision: Schema.optionalKey(TrimmedNonEmptyString).pipe(
+    Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+  ),
 };
 /** Reads the route from any of those configs, applying the defaults an older config omits. */
 export const ProviderHomeRouteConfig = Schema.Struct({
@@ -55,6 +59,7 @@ export const ProviderHomeRouteConfig = Schema.Struct({
   opencodexBaseUrl: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_OPENCODEX_BASE_URL)),
   ),
+  opencodexRouteRevision: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ProviderHomeRouteConfig = typeof ProviderHomeRouteConfig.Type;
 
