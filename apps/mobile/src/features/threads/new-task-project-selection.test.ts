@@ -117,47 +117,97 @@ describe("resolveEnvironmentProjectMatch", () => {
   });
 });
 
-describe("resolveDraftProjectSelection", () => {
-  it("selects one logical project even when it has multiple physical workspaces", () => {
-    const projects = [makeProject("t3code"), makeProject("t3code-2"), makeProject("t3code-3")];
-    expect(resolveDraftProjectSelection(null, projects, [makeScope(projects)])).toEqual({
-      kind: "select",
-      project: projects[0],
+describe("new task project choice", () => {
+  const picker = { pickerClosed: false, connectedEnvironmentIds: new Set<EnvironmentId>() };
+  it("shows the picker for a fresh task even with one project", () => {
+    const project = makeProject("first");
+    expect(resolveDraftProjectSelection(null, [project], [makeScope([project])], picker)).toEqual({
+      kind: "pick",
     });
   });
 
-  it("does not preserve a project key that is missing from the catalog", () => {
-    const project = makeProject("t3code");
+  it("keeps shared content and selects a connected copy of its only logical project", () => {
+    const offline = makeProject("clone-offline", "offline");
+    const online = makeProject("clone-online", "online");
+    const projects = [offline, online];
+    const result = resolveDraftProjectSelection(null, projects, [makeScope(projects)], {
+      incomingShareId: "share",
+      pickerClosed: true,
+      connectedEnvironmentIds: new Set([online.environmentId]),
+    });
+    expect(result).toEqual({ kind: "select", project: online });
+  });
+
+  it("dismisses an untouched draft when its first picker is cancelled", () => {
+    const project = makeProject("first");
     expect(
-      resolveDraftProjectSelection("environment:removed", [project], [makeScope([project])]),
-    ).toEqual({
-      kind: "select",
-      project,
-    });
+      resolveDraftProjectSelection(null, [project], [makeScope([project])], {
+        ...picker,
+        pickerClosed: true,
+      }),
+    ).toEqual({ kind: "dismiss" });
+    expect(
+      resolveDraftProjectSelection("environment:first", [project], [makeScope([project])], {
+        ...picker,
+        pickerClosed: true,
+      }),
+    ).toEqual({ kind: "preserve" });
   });
-});
 
-describe("newTaskDestination", () => {
-  it("opens the current thread's project directly in split view", () => {
-    const projects = [makeProject("first"), makeProject("current", "other-environment")];
-    expect(newTaskDestination(true, projects, projects[1], "request")).toEqual({
-      draft: { requestId: "request", environmentId: "other-environment", projectId: "current" },
-    });
-  });
-  it("uses an available project when split view has no current project", () => {
-    expect(newTaskDestination(true, [makeProject("first")], undefined, "request")).toEqual({
+  it("validates remembered projects and prefers the current thread's project", () => {
+    const projects = [makeProject("first"), makeProject("current", "other")];
+    const options = {
+      projects,
+      requestId: "request",
+      useLastProject: true,
+      currentProject: undefined,
+      lastProject: { environmentId: "environment", projectId: "first" },
+    };
+    expect(newTaskDestination(options)).toEqual({
       draft: { requestId: "request", environmentId: "environment", projectId: "first" },
     });
-  });
-  it("keeps the picker when there are no projects", () => {
-    expect(newTaskDestination(true, [], undefined, "request")).toEqual({
+    expect(
+      newTaskDestination({
+        ...options,
+        currentProject: { environmentId: "other", projectId: "current" },
+      }),
+    ).toEqual({ draft: { requestId: "request", environmentId: "other", projectId: "current" } });
+    expect(
+      newTaskDestination({
+        ...options,
+        lastProject: { environmentId: "removed", projectId: "first" },
+      }),
+    ).toEqual({ draft: { requestId: "request" } });
+    expect(newTaskDestination({ ...options, lastProject: undefined })).toEqual({
       draft: { requestId: "request" },
     });
   });
-  it("opens the same draft route in compact view", () => {
-    const project = makeProject("current");
-    expect(newTaskDestination(false, [project], project, "request")).toEqual({
-      draft: { requestId: "request", environmentId: "environment", projectId: "current" },
+
+  it("honors Use last project together with B27's connected-project selection", () => {
+    const offline = makeProject("offline-copy", "offline");
+    const online = makeProject("online-copy", "online");
+    const projects = [offline, online];
+    const scope = makeScope(projects);
+    const options = {
+      projects,
+      projectScopes: [scope],
+      connectedEnvironmentIds: new Set([online.environmentId]),
+      requestId: "request",
+      useLastProject: true,
+      currentProject: undefined,
+      lastProject: { environmentId: "offline", projectId: "offline-copy" },
+    };
+    expect(newTaskDestination(options)).toEqual({
+      draft: { requestId: "request", environmentId: "online", projectId: "online-copy" },
     });
+    expect(newTaskDestination({ ...options, useLastProject: false })).toEqual({
+      draft: { requestId: "request" },
+    });
+    expect(
+      getProjectScopeSelectionTarget(scope, offline.environmentId, options.connectedEnvironmentIds),
+    ).toBe(online);
+    expect(newTaskDestination({ ...options, useLastProject: undefined })).toEqual(
+      newTaskDestination(options),
+    );
   });
 });

@@ -12,7 +12,6 @@ import { useProjects } from "../../state/entities";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
-import { newTaskDestination } from "./new-task-project-selection";
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 
 function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
@@ -78,14 +77,16 @@ export function ThreadUnavailableScreen(props: {
 export function UnavailableThreadDraftRedirect(props: { readonly environmentId: EnvironmentId }) {
   const navigation = useNavigation();
   const projects = useProjects();
-  const { layout } = useAdaptiveWorkspaceLayout();
   const openDraft = useEffectEvent(() => {
     const project = projects.find((candidate) => candidate.environmentId === props.environmentId);
     navigation.dispatch(
-      StackActions.replace(
-        "Thread",
-        newTaskDestination(layout.usesSplitView, projects, project, uuidv4()),
-      ),
+      StackActions.replace("Thread", {
+        draft: {
+          requestId: uuidv4(),
+          environmentId: project?.environmentId,
+          projectId: project?.id,
+        },
+      }),
     );
   });
   // oxlint-disable-next-line goat/react-effect-budget -- replaces this route in the navigator
