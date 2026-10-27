@@ -571,6 +571,8 @@ function useSidebarThreads(input: {
   ] as const) {
     for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
   }
+  // Folded rows keep their own section, so sweeps stop at a change in lifecycle.
+  for (const [key, section] of partition.foldedSectionByKey) sectionByThreadKey.set(key, section);
   useEffect(() => {
     publishSidebarPriorityCount(priorityThreads.length);
     return () => publishSidebarPriorityCount(null);
@@ -3331,7 +3333,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
                         nested = false,
-                        parentVariant?: "card" | "slim",
                       ): ReactNode => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3342,7 +3343,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         });
                         const isCard =
                           section === "priority" || section === "pinned" || section === "active";
-                        const rowVariant = parentVariant ?? (isCard ? "card" : "slim");
+                        const rowVariant = isCard ? "card" : "slim";
                         const launched = launchFold.childrenByParentKey.get(threadKey);
                         const Row = nested ? SidebarNestedThreadRow : SortableThreadRow;
                         return (
@@ -3379,7 +3380,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                       child,
                                       foldedSectionByKey.get(threadShellKey(child)) ?? "active",
                                       true,
-                                      rowVariant,
                                     )
                                   }
                                 />
