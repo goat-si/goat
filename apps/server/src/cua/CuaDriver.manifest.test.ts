@@ -85,6 +85,10 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
                 text = cuaDriverCapabilityManifest({ applications: scenario.after });
                 return "/manifest";
               }),
+              restore: (previous) =>
+                Effect.sync(() => {
+                  text = previous;
+                }),
             }).pipe(
               Effect.mapError(
                 (cause) => new CuaDriver.CuaDriverHostError({ operation: "restart", cause }),
@@ -113,5 +117,57 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provideService(HostProcess.Environment, {}),
     ),
+  );
+
+  it.effect(
+    "a refresh that keeps the driver restores its manifest, so a later approval of an app found meanwhile restarts it",
+    () =>
+      Effect.gen(function* () {
+        const running = cuaDriverCapabilityManifest({ applications: ["host"] });
+        let disk = running;
+        let stops = 0;
+        const exited = yield* Deferred.make<void>();
+        const service = yield* CuaDriver.make(
+          () =>
+            Effect.succeed({
+              start: Effect.succeed({ command: "/driver", args: [], environment: [] }),
+              stop: Effect.sync(() => {
+                stops++;
+              }),
+              waitForExit: Deferred.await(exited),
+            }),
+          Effect.succeed({ capability: "available", reason: "test display", environment: [] }),
+          {
+            refreshManifest: (apps) =>
+              refreshManifest({
+                apps,
+                path: "/manifest",
+                read: () => Effect.sync(() => disk),
+                prepare: Effect.sync(() => {
+                  disk = cuaDriverCapabilityManifest({ applications: ["host", "browser"] });
+                  return "/manifest";
+                }),
+                restore: (text) =>
+                  Effect.sync(() => {
+                    disk = text;
+                  }),
+              }).pipe(
+                Effect.mapError(
+                  (cause) => new CuaDriver.CuaDriverHostError({ operation: "restart", cause }),
+                ),
+              ),
+          },
+        );
+        expect(Option.isSome(yield* service.acquire)).toBe(true);
+        yield* service.refreshManifest!(["editor"]);
+        expect(stops).toBe(0);
+        expect(disk).toBe(running);
+        yield* service.refreshManifest!(["browser"]);
+        expect(stops).toBe(1);
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.Environment, {}),
+      ),
   );
 });

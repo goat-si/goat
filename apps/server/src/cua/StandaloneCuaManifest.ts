@@ -4,6 +4,7 @@ import {
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
+  writeCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -13,11 +14,20 @@ import * as Option from "effect/Option";
 import type * as CuaDisplay from "./CuaDisplayCapability.ts";
 
 /** The caller holds the host mutex across the file update and any required restart. */
-export const refreshManifest = Effect.fn("CuaDriver.refreshManifestFile")(function* <E, P>(input: {
+/**
+ * The file on disk always matches the running driver: a refresh that keeps the driver writes back
+ * the manifest it read, so an app the re-listing found early is compared again when approved.
+ */
+export const refreshManifest = Effect.fn("CuaDriver.refreshManifestFile")(function* <
+  E,
+  P,
+  W,
+>(input: {
   readonly apps: ReadonlyArray<string>;
   readonly path: string;
   readonly read: (path: string) => Effect.Effect<string, E>;
   readonly prepare: Effect.Effect<string, P>;
+  readonly restore: (text: string) => Effect.Effect<void, W>;
 }) {
   if (input.apps.length === 0) return false;
   const text = yield* input.read(input.path);
@@ -32,7 +42,9 @@ export const refreshManifest = Effect.fn("CuaDriver.refreshManifestFile")(functi
     yield* Effect.logInfo("Approved apps are still absent from Cua Driver manifest", {
       count: stillMissing.length,
     });
-  return stillMissing.length < missing.length;
+  if (stillMissing.length < missing.length) return true;
+  yield* input.restore(text);
+  return false;
 });
 
 export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
@@ -68,6 +80,8 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
       path: manifestPath,
       read: (path) => fs.readFileString(path),
       prepare: prepare(binaryPath, display),
+      restore: (text) =>
+        Effect.tryPromise(() => writeCuaDriverCapabilityManifest(manifestPath, text)),
     });
   });
   const requestListing = <E>(startBinary: Effect.Effect<string, E>) =>
