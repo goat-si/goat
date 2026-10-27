@@ -1361,11 +1361,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           )}
                         >
                           {topStatus.icon === "working" ? (
-                            // oxlint-disable shadcn/no-arbitrary-values -- The sidebar spinner uses a twelve-step 1.6s rotation.
+                            // oxlint-disable shadcn/no-arbitrary-values -- The sidebar spinner turns smoothly once every 1.6s.
                             <svg
                               aria-hidden
                               viewBox="0 0 16 16"
-                              className="size-3.5 shrink-0 animate-[spin_1.6s_steps(12)_infinite] motion-reduce:animate-none"
+                              className="size-3.5 shrink-0 animate-[spin_1.6s_linear_infinite] motion-reduce:animate-none"
                               onAnimationStart={synchronizeSidebarSpinner}
                               fill="none"
                             >
