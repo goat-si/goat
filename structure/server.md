@@ -244,6 +244,9 @@ instance selects Home, through the process-only overlay `ProviderHomeDriver.ts` 
 registration. OpenCodex owns link keys and tunnel lifecycle, and the route selection stays on the
 instance. A configured or observed route is not the Child's inference proof. Shared route and
 settings contracts live in `packages/contracts/src/codexRoute.ts`.
+Claude Code reads settings-file `env` over its process environment, so a routed Claude launch pins
+the Home endpoint in Claude's flag settings (`ClaudeHomeSettings.ts`), and managed settings that
+outrank that tier refuse the route.
 
 Proposed (not implemented): a hub environment that is the OpenCodex Home for the fleet. Devices
 join through OpenCodex Remote Link or Hub mode, driven over GOAT's SSH sessions, and GOAT checks

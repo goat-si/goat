@@ -158,6 +158,7 @@
         "apps/server/src/checkpointing/Utils.ts",
         "apps/server/src/vcs/GitVcsDriver.ts",
         "apps/server/src/provider/OpenCodexRoute.ts",
+        "apps/server/src/provider/ClaudeHomeSettings.ts",
         "apps/server/src/provider/ProviderHomeAdapters.ts",
         "apps/server/src/provider/ProviderHomeDriver.ts",
         "apps/server/src/provider/ProviderHomeGuard.ts",
