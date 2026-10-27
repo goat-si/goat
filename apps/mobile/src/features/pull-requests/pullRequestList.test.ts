@@ -12,6 +12,7 @@ import {
   mergePullRequestListEntries,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
+  patchPullRequestListEntry,
   PR_LIST_PAGE_SIZE,
   pullRequestFilterChoices,
   pullRequestLabelColors,
@@ -19,6 +20,7 @@ import {
   pullRequestListInput,
   scopedPullRequestListKey,
   pullRequestListRowsAreEqual,
+  withShownPullRequestStats,
   withoutScratchProjectScope,
 } from "./pullRequestList";
 
@@ -80,6 +82,29 @@ describe("recycled PR list rows", () => {
 });
 
 describe("mobile PR list pagination", () => {
+  it("patches a head-only row before its pages have been recorded", () => {
+    const head = page([entry(1)]);
+    const patched = patchPullRequestListEntry(null, head, entry(1), { isDraft: true }, 20);
+    expect(patched?.entries[0]).toMatchObject({ isDraft: true, observedAt: 20 });
+    expect(patched && pullRequestListHead(patched, head)).toBe(patched);
+  });
+
+  it("patches the current head while preserving loaded continuations", () => {
+    const recorded = appendPullRequestListPage(
+      pullRequestListHead(null, page([entry(2)])),
+      page([entry(1)], { repo: "next" }),
+      { state: "open" },
+    );
+    const head = page([entry(3)]);
+    const patched = patchPullRequestListEntry(recorded, head, entry(3), { state: "merged" }, 20);
+    expect(patched?.entries.map(({ number, state }) => [number, state])).toEqual([
+      [3, "merged"],
+      [2, "open"],
+      [1, "open"],
+    ]);
+    expect(patched?.nextCursors).toEqual({ repo: "next" });
+  });
+
   it("continues only the repositories that have more, preserving the query and filters", () => {
     const first = pullRequestListHead(
       null,
@@ -135,6 +160,32 @@ describe("mobile PR list pagination", () => {
     expect(nextPullRequestListInput(first, { state: "all" })?.limit).toBe(60);
     expect(nextPullRequestListInput({ ...first, limit: 490 }, { state: "all" })?.limit).toBe(500);
     expect(nextPullRequestListInput({ ...first, limit: 500 }, { state: "all" })).toBeNull();
+  });
+});
+
+describe("shown PR diff stats", () => {
+  it("fills offline counts per environment without replacing newer row counts", () => {
+    const first = EnvironmentId.make("env-one");
+    const second = EnvironmentId.make("env-two");
+    const rows = [
+      { ...entry(1), environmentId: first },
+      { ...entry(1), environmentId: second },
+      { ...entry(2, { additions: 9 }), environmentId: first },
+    ];
+    const stat = (number: number, additions: number) => ({
+      projectId: entry(number).projectId,
+      repository: "org/repo",
+      number,
+      additions,
+      deletions: 2,
+    });
+    const filled = withShownPullRequestStats(rows, [
+      { environmentId: first, stats: [stat(1, 5), stat(2, 3)] },
+      { environmentId: second, stats: [stat(1, 7)] },
+    ]);
+    expect(filled.map(({ additions }) => additions)).toEqual([5, 7, 9]);
+    expect(filled[2]).toBe(rows[2]);
+    expect(withShownPullRequestStats(rows, [])).toBe(rows);
   });
 });
 
