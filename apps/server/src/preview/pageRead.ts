@@ -5,7 +5,8 @@ import type { CDPSession, Page } from "playwright-core";
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { dottedPattern, maskSecrets, openReaders, tabCookies } from "./pageSecrets.ts";
-import { readFailure, resolvePageScope } from "./pageScope.ts";
+import { HIDDEN_ABOVE, readFailure, resolvePageScope } from "./pageScope.ts";
+import { withoutDataPayload } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 
 const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
@@ -55,6 +56,7 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
     const loading = document.readyState !== 'complete';
     let collapsedCount = 0, omittedFrames = 0, nodes = 0, truncatedRender = false;
     const formatNode = ${MARKDOWN_FORMAT};
+    const hiddenAbove = ${HIDDEN_ABOVE};
     const skipped = new Set(['script','style','template','noscript','input','textarea','select','option','head']);
     const hrefOf = element => {
       try {
@@ -96,7 +98,7 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown }) => {
       if (tag === 'pre') return markdown ? '\\n\\n~~~\\n' + inner.replace(/\\n+$/, '') + '\\n~~~\\n\\n' : '\\n\\n' + inner + '\\n\\n';
       return formatNode(node, inner, markdown, hrefOf);
     };
-    return { url: document.location.href, title: document.title, text: render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
+    return { url: document.location.href, title: document.title, text: hiddenAbove(scope) ? '' : render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
   } finally {
     if (observer) observer.disconnect();
     clearTimeout(quietTimer);
@@ -216,9 +218,9 @@ export const pageRead = (
         return pageResult(
           fullText,
           {
-            url: cap(mask(rendered.url)),
+            url: cap(mask(withoutDataPayload(rendered.url))),
             title: cap(mask(rendered.title)),
-            urlTruncated: mask(rendered.url).length > 2048,
+            urlTruncated: mask(withoutDataPayload(rendered.url)).length > 2048,
             titleTruncated: mask(rendered.title).length > 2048,
             format,
             offset,

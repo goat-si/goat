@@ -1,5 +1,6 @@
 import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "@goat/contracts";
 import type { Locator, Page } from "playwright-core";
+import { HIDDEN_ABOVE } from "./pageScope.ts";
 
 const interactive =
   /^\s*- '?(?:button|link|textbox|searchbox|combobox|checkbox|radio|switch|tab|menuitem|option|slider|spinbutton|treeitem)(?=[\s"':])/;
@@ -84,7 +85,9 @@ export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
     ? {
         ...metadata,
         visibleText: await scope.evaluate(
-          (node) => (node as { innerText?: string }).innerText || "",
+          new Function("node", `return (${HIDDEN_ABOVE})(node) ? "" : node.innerText || "";`) as (
+            node: unknown,
+          ) => string,
         ),
       }
     : metadata;

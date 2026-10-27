@@ -62,9 +62,24 @@ it("reads visible live DOM, shadows, frames and collapsed summaries without fiel
     ).toBe("Frame paragraph");
   }));
 
+it("never returns data URL payloads or text under hidden ancestors", () =>
+  fixture(async (page, read) => {
+    await page.goto(
+      `data:text/html,${encodeURIComponent('<title>Form</title><main>Body</main><input type=password value="fictional pass word!">')}`,
+    );
+    const result = await read();
+    expect(result.url).toBe("data:text/html,…");
+    expect(JSON.stringify(result)).not.toMatch(/fictional|pass%20word/);
+    await page.setContent(
+      "<div hidden><main>fictional-hidden-token</main></div><details><p id=closed>fictional-closed-token</p></details>",
+    );
+    for (const selector of ["div[hidden] main", "#closed"])
+      expect((await read({ scope: { selector } })).text).toBe("");
+  }));
+
 it("pages encoded results without splitting emoji and restarts after mutation or navigation", () =>
   fixture(async (page, read) => {
-    const body = `<title>${"Title".repeat(1200)}</title><pre>${'A\n"\\😀'.repeat(5000)}</pre>`;
+    const body = `<title>${"Title".repeat(1200)}</title><pre>${'A\n"\\ð'.repeat(5000)}</pre>`;
     await page.route("https://read.test/**", (route) =>
       route.fulfill({ contentType: "text/html", body }),
     );

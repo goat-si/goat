@@ -56,6 +56,10 @@ it("narrows snapshots before budgeting, preserves actionable refs and isolates d
     ).toBe("none");
     await page.goto("about:blank");
     expect((await take({ diff: true })).diff?.base).toBe("none");
+    await page.setContent("<div hidden><main>fictional-hidden-token</main></div>");
+    expect(JSON.stringify(await take({ scope: { selector: "div[hidden] main" } }))).not.toContain(
+      "fictional-hidden-token",
+    );
     await page.setContent("<main>" + "<p>Long paragraph</p>".repeat(4000) + "</main>");
     expect((await take()).omitted).toContain("tree_budget");
   } finally {
