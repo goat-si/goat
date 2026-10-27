@@ -106,9 +106,11 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   }
   if (
     input.automationTargets === true &&
+    verdict._tag === "allow" &&
     sendsAppleEvents(input.message.params?.name, input.message.params?.arguments, input.listed) &&
     input.finished() === undefined &&
-    input.paused() === undefined
+    input.paused() === undefined &&
+    !input.idle()
   )
     yield* input.listApps;
   const finished = input.finished();
