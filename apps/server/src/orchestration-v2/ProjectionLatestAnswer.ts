@@ -27,106 +27,118 @@ export function answerExcerpt(text: string): string | undefined {
   return cut.trimEnd() + "…";
 }
 
-const completedRun = (event: OrchestrationV2DomainEvent): OrchestrationV2Run | null =>
-  (event.type === "run.created" || event.type === "run.updated") &&
-  event.payload.status === "completed" &&
-  event.payload.completedAt !== null
-    ? event.payload
-    : null;
+// Events that can change which run answered last or what it answered. Anything else keeps the
+// stored excerpt, including thread payloads, which echo older values and seed nothing.
+export const changesLatestAnswer = (event: OrchestrationV2DomainEvent) =>
+  // A fork's creation payload copies its source's excerpt from beyond the fork point.
+  event.type === "thread.created" ||
+  event.type === "run.created" ||
+  event.type === "run.updated" ||
+  event.type === "run-attempt.created" ||
+  event.type === "run-attempt.updated" ||
+  // Streaming text and other nodes change many times a second and never change the answer.
+  (event.type === "node.updated" && event.payload.kind === "assistant_message") ||
+  (event.type === "message.updated" &&
+    event.payload.role === "assistant" &&
+    !event.payload.streaming);
 
-// The run's answer comes from the attempt that finished it; native subagents' nodes are excluded.
-function answerNodeId(
-  run: OrchestrationV2Run,
-  attempts: OrchestrationV2ThreadProjection["attempts"],
-) {
-  return (
-    attempts.find((attempt) => attempt.id === run.activeAttemptId)?.rootNodeId ?? run.rootNodeId
-  );
-}
+const byId = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+const at = (time: DateTime.Utc) => DateTime.toEpochMillis(time);
 
-/** The excerpt a completed run leaves on its thread, or undefined when it answered nothing. */
-function latestAnswerOfRun(
-  projection: Pick<OrchestrationV2ThreadProjection, "attempts" | "messages">,
-  run: OrchestrationV2Run,
+/**
+ * The thread's latest answer: the newest non-blank assistant message of its most recently
+ * completed run, said by the finishing attempt's root turn or one of its own answer nodes. Native
+ * subagents answer under their own nodes, and idle compactions and rolled back runs do not count.
+ */
+export function latestAnswerExcerpt(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "nodes" | "messages">,
+  isIdleRun: (run: OrchestrationV2Run) => boolean,
 ): string | undefined {
-  const nodeId = answerNodeId(run, projection.attempts);
-  const answer = projection.messages
+  const run = projection.runs
+    .flatMap((candidate) =>
+      candidate.status === "completed" && candidate.completedAt !== null && !isIdleRun(candidate)
+        ? [{ run: candidate, completedAt: at(candidate.completedAt) }]
+        : [],
+    )
+    .toSorted(
+      (left, right) => left.completedAt - right.completedAt || left.run.ordinal - right.run.ordinal,
+    )
+    .at(-1)?.run;
+  if (run === undefined) return undefined;
+  const root =
+    projection.attempts.find((attempt) => attempt.id === run.activeAttemptId)?.rootNodeId ??
+    run.rootNodeId;
+  const answers = projection.messages
     .filter(
       (message) =>
         message.runId === run.id &&
         message.role === "assistant" &&
         !message.streaming &&
-        message.nodeId === nodeId &&
-        message.text.trim() !== "",
+        (message.nodeId === root ||
+          projection.nodes.find((node) => node.id === message.nodeId)?.parentNodeId === root),
     )
-    .toSorted(
-      (left, right) =>
-        DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt) ||
-        left.id.localeCompare(right.id),
-    )
-    .at(-1);
-  return answer === undefined ? undefined : answerExcerpt(answer.text);
+    .toSorted((left, right) => at(left.createdAt) - at(right.createdAt) || byId(left.id, right.id));
+  for (const answer of answers.toReversed()) {
+    const excerpt = answerExcerpt(answer.text);
+    if (excerpt !== undefined) return excerpt;
+  }
+  return undefined;
 }
 
-/** The thread after an event, carrying the excerpt of a run that just completed. */
-export function withLatestAnswer(
-  projection: Pick<OrchestrationV2ThreadProjection, "attempts" | "messages">,
+export const withExcerpt = (
   thread: OrchestrationV2AppThread,
-  event: OrchestrationV2DomainEvent,
-  idleRunIds: ReadonlySet<RunId>,
-): OrchestrationV2AppThread {
-  const run = completedRun(event);
-  if (run === null || idleRunIds.has(run.id)) return thread;
-  const excerpt = latestAnswerOfRun(projection, run);
-  return excerpt === undefined ? thread : { ...thread, latestAnswerExcerpt: excerpt };
-}
-
-// The projection owns the excerpt: a thread payload seeds it only when it creates the projection.
-export const preserveLatestAnswer = (
-  current: OrchestrationV2AppThread | undefined,
-  next: OrchestrationV2AppThread,
+  excerpt: string | undefined,
 ): OrchestrationV2AppThread => {
-  const { latestAnswerExcerpt: _echoed, ...rest } = next;
-  const kept = current === undefined ? next.latestAnswerExcerpt : current.latestAnswerExcerpt;
-  return kept === undefined ? rest : { ...rest, latestAnswerExcerpt: kept };
+  const { latestAnswerExcerpt: _previous, ...rest } = thread;
+  return excerpt === undefined ? rest : { ...rest, latestAnswerExcerpt: excerpt };
 };
 
-/** Mirrors preserveLatestAnswer for a thread row upsert: an existing row keeps its own excerpt. */
+/** A thread payload upsert keeps the row's own excerpt, the way withExcerpt keeps the projection's. */
 export const latestAnswerPayload = (sql: SqlClient.SqlClient, payload: Statement.Fragment) =>
   sql`CASE WHEN json_type(orchestration_v2_projection_threads.payload_json,'$.latestAnswerExcerpt') IS NULL
     THEN json_remove(${payload},'$.latestAnswerExcerpt')
     ELSE json_set(${payload},'$.latestAnswerExcerpt',
       json_extract(orchestration_v2_projection_threads.payload_json,'$.latestAnswerExcerpt')) END`;
 
-export const recordLatestAnswers = Effect.fn("ProjectionLatestAnswer.record")(function* (
+/** Mirrors latestAnswerExcerpt for the SQL projection, after the event's own rows are written. */
+export const recordLatestAnswer = Effect.fn("ProjectionLatestAnswer.record")(function* (
   sql: SqlClient.SqlClient,
-  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  event: OrchestrationV2DomainEvent,
 ) {
+  if (!changesLatestAnswer(event)) return;
   const shell = makeShellThreadRows(sql);
-  for (const event of events) {
-    const run = completedRun(event);
-    if (run === null) continue;
-    const idle = yield* sql`SELECT 1 FROM orchestration_v2_projection_runs r
-      WHERE r.run_id = ${run.id} AND ${shell.isIdleCompactionRun("r")}`;
-    if (idle.length > 0) continue;
-    const rows = yield* sql<{ readonly text: string }>`
-      SELECT json_extract(m.payload_json,'$.text') AS text
-      FROM orchestration_v2_projection_messages m
-      WHERE m.thread_id = ${run.threadId} AND m.run_id = ${run.id}
-        AND m.role = 'assistant' AND m.streaming = 0
-        AND m.node_id IS COALESCE(
-          (SELECT root_node_id FROM orchestration_v2_projection_run_attempts
-            WHERE attempt_id = ${run.activeAttemptId}),
-          ${run.rootNodeId})
-        AND TRIM(json_extract(m.payload_json,'$.text')) <> ''
-      ORDER BY m.created_at DESC, m.message_id DESC
-      LIMIT 1`;
-    const excerpt = rows[0] === undefined ? undefined : answerExcerpt(rows[0].text);
-    if (excerpt !== undefined) yield* writeExcerpt(sql, run.threadId, excerpt);
-  }
+  const runs = yield* sql<{ readonly run_id: RunId; readonly root_node_id: string | null }>`
+    SELECT r.run_id, COALESCE(
+      (SELECT a.root_node_id FROM orchestration_v2_projection_run_attempts a
+        WHERE a.attempt_id = json_extract(r.payload_json,'$.activeAttemptId')),
+      json_extract(r.payload_json,'$.rootNodeId')) AS root_node_id
+    FROM orchestration_v2_projection_runs r
+    WHERE r.thread_id = ${event.threadId} AND r.status = 'completed'
+      AND r.completed_at IS NOT NULL AND NOT ${shell.isIdleCompactionRun("r")}
+    ORDER BY r.completed_at DESC, r.ordinal DESC
+    LIMIT 1`;
+  const run = runs[0];
+  const answers =
+    run === undefined
+      ? []
+      : yield* sql<{ readonly text: string | null }>`
+          SELECT json_extract(m.payload_json,'$.text') AS text
+          FROM orchestration_v2_projection_messages m
+          LEFT JOIN orchestration_v2_projection_nodes n ON n.node_id = m.node_id
+          WHERE m.run_id = ${run.run_id} AND m.role = 'assistant' AND m.streaming = 0
+            AND (m.node_id IS ${run.root_node_id} OR n.parent_node_id IS ${run.root_node_id})
+          ORDER BY m.created_at DESC, m.message_id DESC`;
+  const excerpt = answers
+    .map((answer) => answerExcerpt(answer.text ?? ""))
+    .find((candidate) => candidate !== undefined);
+  yield* writeExcerpt(sql, event.threadId, excerpt);
 });
 
-const writeExcerpt = (sql: SqlClient.SqlClient, threadId: ThreadId, excerpt: string) =>
-  sql`UPDATE orchestration_v2_projection_threads
-    SET payload_json = json_set(payload_json,'$.latestAnswerExcerpt',${excerpt})
-    WHERE thread_id = ${threadId}`;
+const writeExcerpt = (sql: SqlClient.SqlClient, threadId: ThreadId, excerpt: string | undefined) =>
+  excerpt === undefined
+    ? sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_remove(payload_json,'$.latestAnswerExcerpt')
+        WHERE thread_id = ${threadId} AND json_type(payload_json,'$.latestAnswerExcerpt') IS NOT NULL`
+    : sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json,'$.latestAnswerExcerpt',${excerpt})
+        WHERE thread_id = ${threadId}`;

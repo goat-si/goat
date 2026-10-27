@@ -899,7 +899,10 @@ export function emptyProjection(
   event: Extract<OrchestrationV2DomainEvent, { readonly type: "thread.created" }>,
 ): OrchestrationV2ThreadProjection {
   return {
-    thread: RunNotification.preserveThreadNotification(undefined, event.payload),
+    thread: LatestAnswer.withExcerpt(
+      RunNotification.preserveThreadNotification(undefined, event.payload),
+      undefined,
+    ),
     runs: [],
     attempts: [],
     nodes: [],
@@ -948,14 +951,11 @@ export function applyToProjection(
   const completedAt = options.deferNotificationCursor
     ? undefined
     : RunNotification.notificationCompletions([event], cursorContext).get(event.threadId);
-  const thread = LatestAnswer.withLatestAnswer(
-    next,
-    LatestAnswer.preserveLatestAnswer(
-      projection.thread,
-      RunNotification.preserveThreadNotification(projection.thread, next.thread),
-    ),
-    event,
-    cursorContext.idleRunIds,
+  const thread = LatestAnswer.withExcerpt(
+    RunNotification.preserveThreadNotification(projection.thread, next.thread),
+    LatestAnswer.changesLatestAnswer(event)
+      ? LatestAnswer.latestAnswerExcerpt(next, (run) => isIdleCompactionRun(run, next))
+      : projection.thread.latestAnswerExcerpt,
   );
   return {
     ...next,
@@ -3223,7 +3223,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }
           if (!options?.deferNotificationCursor)
             yield* RunNotification.recordNotificationCompletions(sql, [event]);
-          yield* LatestAnswer.recordLatestAnswers(sql, [event]);
+          yield* LatestAnswer.recordLatestAnswer(sql, event);
         },
         (effect, event) =>
           effect.pipe(
