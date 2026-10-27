@@ -12,6 +12,8 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import { SET_TRAY_MENU_CHANNEL, TRAY_ACTION_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import { createTrayMenuGate, menuUpdatesWhileOpen } from "./trayMenuGate.ts";
+import { TrayMenuPayload } from "./trayMenuPayload.ts";
 import {
   trayMenuTemplate,
   type DesktopTrayAction,
@@ -26,21 +28,6 @@ import {
 } from "./trayResidency.ts";
 
 const { logWarning } = makeComponentLogger("desktop-tray");
-
-const TrayText = Schema.String.check(Schema.isMaxLength(1_000));
-const TrayThreads = Schema.Array(
-  Schema.Struct({
-    environmentId: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(200)),
-    threadId: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(200)),
-    title: TrayText,
-    project: Schema.NullOr(TrayText),
-  }),
-).check(Schema.isMaxLength(20));
-const TrayMenuPayload = Schema.Struct({
-  attention: TrayThreads,
-  running: TrayThreads,
-  pinned: TrayThreads,
-});
 
 const EMPTY_MENU: DesktopTrayMenu = { attention: [], running: [], pinned: [] };
 
@@ -97,33 +84,48 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
         "open-thread",
       ),
     quit: () => run(electronApp.quit, "quit"),
+    stopComputerUse: (appId: string | null) =>
+      run(
+        Effect.sync(() => {
+          picks.send({ kind: "stop-computer-use", appId });
+        }),
+        "stop-computer-use",
+      ),
+    stopAllComputerUse: () =>
+      run(
+        Effect.sync(() => {
+          picks.send({ kind: "stop-all-computer-use" });
+        }),
+        "stop-all-computer-use",
+      ),
   };
 
   let tray: Electron.Tray | null = null;
-  let menu = EMPTY_MENU;
-  let applied: string | null = null;
-  // Replacing the menu while it is open closes it, so a change waits until the user is done.
-  // Linux panels draw the menu over D-Bus and may never report it closing, so it updates live.
-  let menuOpen = false;
-  const render = () => {
+  const menuLifecycle = {
+    show: () => {},
+    hide: () => {},
+  };
+  const build = (menu: DesktopTrayMenu) => {
     if (tray === null || tray.isDestroyed()) return;
-    if (menuOpen) return;
-    const key = JSON.stringify(menu);
-    if (key === applied) return;
-    applied = key;
     const built = Electron.Menu.buildFromTemplate(
       trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions }),
     );
-    if (platform !== "linux") {
+    if (!menuUpdatesWhileOpen(platform)) {
       built.on("menu-will-show", () => {
-        menuOpen = true;
+        menuLifecycle.show();
       });
       built.on("menu-will-close", () => {
-        menuOpen = false;
-        render();
+        menuLifecycle.hide();
       });
     }
     tray.setContextMenu(built);
+  };
+  const gate = createTrayMenuGate(EMPTY_MENU, build, menuUpdatesWhileOpen(platform));
+  menuLifecycle.show = () => {
+    gate.opened();
+  };
+  menuLifecycle.hide = () => {
+    gate.closed();
   };
   const showIcon = () => {
     if (tray !== null || Option.isNone(iconPath)) return;
@@ -135,8 +137,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       // A left click on a Windows notification-area icon opens nothing by default.
       if (platform === "win32") created.on("click", () => created.popUpContextMenu());
       tray = created;
-      applied = null;
-      render();
+      gate.reapply();
     } catch (cause) {
       warn("could not create tray; tray disabled", { cause: String(cause) });
     }
@@ -182,8 +183,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       contents.removeListener("did-start-navigation", onNavigation);
       contents.removeListener("destroyed", forget);
       if (!picks.gone(contents)) return;
-      menu = EMPTY_MENU;
-      render();
+      gate.update(EMPTY_MENU);
     };
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", forget);
@@ -197,8 +197,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       result: Schema.Void,
       handler: (next, event) =>
         Effect.sync(() => {
-          menu = next;
-          render();
+          gate.update(next);
           const sender =
             event === undefined ? undefined : Electron.webContents.fromId(event.sender.id);
           if (sender === undefined || sender.isDestroyed()) return;

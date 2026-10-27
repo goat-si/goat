@@ -15,6 +15,8 @@ export interface TrayMenuActions {
   readonly newThread: () => void;
   readonly openThread: (thread: DesktopTrayThread) => void;
   readonly quit: () => void;
+  readonly stopComputerUse: (appId: string | null) => void;
+  readonly stopAllComputerUse: () => void;
 }
 
 export interface TrayMenuInput {
@@ -27,16 +29,20 @@ export interface TrayMenuInput {
 }
 
 // Electron reads "&" as a mnemonic marker on every platform (macOS drops it); "&&" draws one.
-export function trayLabel(text: string): string {
+export function trayLabel(
+  text: string,
+  limit = TITLE_CODE_POINTS,
+  fallback = "Untitled thread",
+): string {
   const codePoints = Array.from(text.replace(/\s+/g, " ").trim());
   const shortened =
-    codePoints.length > TITLE_CODE_POINTS
+    codePoints.length > limit
       ? `${codePoints
-          .slice(0, TITLE_CODE_POINTS - 1)
+          .slice(0, limit - 1)
           .join("")
           .trimEnd()}…`
       : codePoints.join("");
-  return (shortened.length > 0 ? shortened : "Untitled thread").replaceAll("&", "&&");
+  return (shortened.length > 0 ? shortened : fallback).replaceAll("&", "&&");
 }
 
 function threadItem(
@@ -66,6 +72,38 @@ function section(
   ];
 }
 
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+function computerUseItems({ menu, actions }: TrayMenuInput): Electron.MenuItemConstructorOptions[] {
+  const use = menu.computerUse;
+  if (use == null || use.threadCount === 0) return [];
+  const screen = use.targets.some((target) => target.appId === null);
+  const parts = ["Computer Use", count(use.threadCount, "thread")];
+  if (use.appCount > 0) parts.push(count(use.appCount, "app"));
+  else if (screen) parts.push("whole screen");
+  const rows = use.targets.map((target) => ({
+    label:
+      `Stop Using ${target.appId === null ? "the Screen" : trayLabel(target.name, 24, target.appId)}` +
+      (target.threadCount > 1 ? ` (${target.threadCount} threads)` : ""),
+    click: () => actions.stopComputerUse(target.appId),
+  }));
+  const hidden = use.appCount - use.targets.filter((target) => target.appId !== null).length;
+  const more =
+    hidden > 0 ? [{ label: `${count(hidden, "more app")}, use Stop All`, enabled: false }] : [];
+  return [
+    {
+      label: parts.join(" · "),
+      submenu: [
+        ...rows,
+        ...more,
+        ...(rows.length + more.length > 0 ? [{ type: "separator" as const }] : []),
+        { label: "Stop All Computer Use", click: actions.stopAllComputerUse },
+      ],
+    },
+    { type: "separator" },
+  ];
+}
+
 export function trayMenuTemplate(input: TrayMenuInput): Electron.MenuItemConstructorOptions[] {
   const { menu, appName, actions } = input;
   const sections = [
@@ -74,6 +112,7 @@ export function trayMenuTemplate(input: TrayMenuInput): Electron.MenuItemConstru
     section("Pinned", menu.pinned, input),
   ].filter((items) => items.length > 0);
   return [
+    ...computerUseItems(input),
     { label: trayLabel(`Open ${appName}`), click: actions.openApp },
     { label: "New Thread", click: actions.newThread },
     ...sections.flatMap((items) => [{ type: "separator" as const }, ...items]),
