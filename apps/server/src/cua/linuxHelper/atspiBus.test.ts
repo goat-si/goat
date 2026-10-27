@@ -34,13 +34,6 @@ const DBUS_NEXT = {
 
 const bytes = (hex: string) => Buffer.from(hex, "hex");
 
-/** A reply fixture answering the call with this serial, written into its REPLY_SERIAL field. */
-const answering = (hex: string, serial: number) => {
-  const reply = bytes(hex);
-  reply.writeUInt32LE(serial, reply.indexOf(bytes("05017500")) + 4);
-  return reply;
-};
-
 const HELLO = {
   destination: "org.freedesktop.DBus",
   path: "/org/freedesktop/DBus",
