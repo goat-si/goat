@@ -385,6 +385,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
+  It lists the apps open when the driver starts. An app opened later joins only when an approval,
+  or a full access `computer_use.request`, names it; the desktop then rewrites the manifest with
+  the same exclusions. That is how an agent reaches a GOAT dev build it launched (its own
+  per-worktree bundle id) while the host GOAT it runs in stays out.
   The card offers Approve and Decline (`apps/server/src/cua/ComputerUseRequests.ts`).
   Approving admits that thread's turns to those apps, by the ids `list_apps` reports, until the
   request's expiry, which counts from when the agent asked; it never approves each action. Under
