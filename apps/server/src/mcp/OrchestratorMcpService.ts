@@ -150,6 +150,7 @@ import {
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
+import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { statusFromShell, threadOrganization } from "./threadStatus.ts";
@@ -3717,6 +3718,7 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadReadResult;
     }),
     sendToThread: Effect.fn("OrchestratorMcpService.sendToThread")(function* (scope, input) {
+      const remoteSender = yield* acceptRemoteSender(scope, input.remoteSender);
       const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
       yield* assertLiveCallerForOtherThread(scope, parent, target);
       yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
@@ -3769,7 +3771,10 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
           messageId,
-          ...withTurnCapabilities({ text: input.message }, input.capabilities ?? []),
+          ...withRemoteSender(
+            withTurnCapabilities({ text: input.message }, input.capabilities ?? []),
+            remoteSender,
+          ),
           attachments: [],
           mode,
           createdBy: "agent",

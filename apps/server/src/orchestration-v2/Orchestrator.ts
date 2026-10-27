@@ -146,7 +146,8 @@ import {
   decideGuestMessageSend,
   guestShareAfterCancelledSend,
   releasedGuestAttachmentIds,
-  withoutGuestAttribution,
+  editedQueuedPayload,
+  withServerAttribution,
   decideGuestShareCommand,
   type GuestShareCommand,
 } from "./GuestShareDecider.ts";
@@ -9253,13 +9254,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
       providerInstanceId: queuedRun.providerInstanceId,
       occurredAt: now,
-      payload: withoutGuestAttribution({
-        ...queuedMessage,
-        text: command.text,
-        ...editedAttachments,
-        ...(command.context ? { context: command.context } : {}),
-        updatedAt: now,
-      }),
+      payload: editedQueuedPayload(queuedMessage, command, editedAttachments, now),
     });
     if (queuedTurnItem !== undefined && queuedTurnItem.type === "user_message") {
       yield* emitEvent({
@@ -9269,13 +9264,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: withoutGuestAttribution({
-          ...queuedTurnItem,
-          text: command.text,
-          ...editedAttachments,
-          ...(command.context ? { context: command.context } : {}),
-          updatedAt: now,
-        }),
+        payload: editedQueuedPayload(queuedTurnItem, command, editedAttachments, now),
       });
     }
   });
@@ -12631,7 +12620,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : yield* emitGuestMessageSent(command, command.guestMessageId, thread, events);
         const dispatched =
           guestSend === undefined
-            ? withoutGuestAttribution(command)
+            ? withServerAttribution(command)
             : {
                 ...command,
                 text: guestSend.text,
