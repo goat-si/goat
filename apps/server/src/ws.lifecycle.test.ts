@@ -306,7 +306,9 @@ it.effect.each([
         Layer.mock(UsageLimitSources.UsageLimitSources)({}),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
         Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: process.cwd(),
+        }),
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
         layerLifecycleEnvironment,
         Layer.succeed(ServerLifecycleEvents.ServerLifecycleEvents, {

@@ -183,7 +183,7 @@ it.effect(
         yield* Deferred.succeed(blocked, undefined);
         yield* Deferred.await(resume);
         yield* Deferred.succeed(received, yield* pull);
-        yield* Effect.never;
+        return yield* Effect.never;
       }).pipe(Effect.scoped, Effect.forkScoped);
       yield* Deferred.await(blocked);
       for (let count = 0; count < 50; count++) {
