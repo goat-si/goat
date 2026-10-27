@@ -120,20 +120,23 @@ git -C "$FORK" diff "$OLD" "$NEW" -- rust/Cargo.lock | rg '^\+name = '   # 새 c
 
 ## 7. 후보 아티팩트
 
-`RELEASE_SHA`에서 포크 CI가 만든 아카이브, `SHA256SUMS`, SDK를 내려받아 검증한다. artifact 이름과 배치는 #1590이 정한다.
-`gh run download`는 artifact마다 하위 폴더를 만들므로 아래는 `$CAND/<artifact>/` 아래의 파일을 찾는다.
+포크 `goat-ci.yml`은 `main` push에서 아카이브만 만들고, `SHA256SUMS`와 attestation은 릴리스 태그 push run의 `release` job만 만든다.
+그래서 검증 대상은 태그 run이 게시한 자산이다: `main` push run의 아카이브로 파일 목록과 배치를 미리 볼 수 있지만, 해시와 provenance는
+`gh release download "cua-driver-rs-v$VER-goat.$N" -R goat-si/cua-driver -D "$CAND"`로 받은 자산에서 확인한다. 태그 run도 느린
+회귀 lane을 모두 통과해야 게시하므로, 게시 전에 실패하면 릴리스 자산이 생기지 않는다.
 
 ```bash
 CAND="../cua-candidates-$VER"
-gh run download <run-id> -R goat-si/cua-driver -D "$CAND"
+TAG="cua-driver-rs-v$VER-goat.$N"
+gh release download "$TAG" -R goat-si/cua-driver -D "$CAND"
 SUMS=$(find "$CAND" -name SHA256SUMS)   # 하나여야 한다
 find "$CAND" -type f \( -name 'cua-driver-rs-*.tar.gz' -o -name 'cua-driver-rs-*.zip' \) | while read -r a; do
   want=$(awk -v n="$(basename "$a")" '$2 == n || $2 == "*" n { print $1 }' "$SUMS")
   have=$(shasum -a 256 "$a" | cut -d' ' -f1)
   [ -n "$want" ] && [ "$want" = "$have" ] || { echo "SHA256SUMS mismatch: $a"; exit 1; }
   gh attestation verify "$a" --repo goat-si/cua-driver \
-    --signer-workflow goat-si/cua-driver/.github/workflows/<build workflow> \
-    --source-digest "$RELEASE_SHA" --source-ref refs/heads/main || exit 1
+    --signer-workflow goat-si/cua-driver/.github/workflows/goat-ci.yml \
+    --source-digest "$RELEASE_SHA" --source-ref "refs/tags/$TAG" || exit 1
 done
 ```
 
@@ -174,7 +177,7 @@ git -C "$FORK" tag "cua-driver-rs-v$VER-goat.$N" "$RELEASE_SHA"
 git -C "$FORK" push origin "cua-driver-rs-v$VER-goat.$N"
 ```
 
-- 릴리스는 7번 후보와 같은 바이트를 올린다. 올라간 자산의 크기와 SHA-256이 후보와 같은지 확인한다. 다시 빌드해 바이트가
+- 태그 push가 빌드와 게시를 함께 하므로 7번은 이 태그의 자산을 검증하고, 8번 pin은 그 바이트를 쓴다. 태그를 다시 잘라 바이트가
   달라졌다면 pin을 바꾸고 7-8번을 다시 한다.
 - GOAT 브랜치에서 URL(`cuaDriverRelease.ts:64`)을 포크 릴리스로 바꾸고, 캐시 없이 helper 빌드 하나가 다운로드와 검증을 통과하는지
   본다. `vp run check:changed` 뒤 dev로 PR을 연다 (AGENTS.md "Pull requests").
