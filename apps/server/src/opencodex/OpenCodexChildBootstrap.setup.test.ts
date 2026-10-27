@@ -51,7 +51,7 @@ const failure = (code: ChildReadyFailure["code"], retryable = false): ChildReady
 const legacy = Effect.fn("OpenCodexChildBootstrapSetupTest.legacy")(function* (
   extraLinks: ReadonlyArray<{ readonly id: string; readonly alias: string }> = [],
 ) {
-  const home = yield* setup({ extraLinks });
+  const home = yield* setup({ extraLinks, readyProof: true });
   const fs = yield* FileSystem.FileSystem;
   yield* fs.writeFileString(
     `${home.stateDir}/opencodex-child-bootstrap.json`,
@@ -86,6 +86,8 @@ const transportDouble = (
           return {
             kind: "device",
             ...address,
+            // A prepare action answers for its own operation, as OpenCodexChildReady does.
+            ...(requested === "opencodexHealth" ? { operationId: purpose.operationId } : {}),
             healthy: true,
             revision: { epoch: "r2", sequence: 1 },
             device: {
@@ -143,7 +145,7 @@ it.each(["purpose_expired", "phase_timeout"] as const)(
 it.layer(NodeServices.layer)("OpenCodex Child setup from the Home", (it) => {
   it.effect("finishes Child Codex setup after linking", () =>
     Effect.gen(function* () {
-      const home = yield* setup();
+      const home = yield* setup({ readyProof: true });
       const status = yield* home.bootstrap.ensure("boat-builder");
       expect(status).toMatchObject({ state: "child", setup: { readiness: "ready" } });
       expect(home.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);

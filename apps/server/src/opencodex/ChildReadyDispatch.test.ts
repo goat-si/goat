@@ -137,6 +137,8 @@ const fixture = Effect.fn("ChildReadyDispatch.test.fixture")(function* (
             kind: "device",
             destinationEnvironmentId: destination,
             homeEnvironmentId: home,
+            // A prepare action answers for its own operation, as OpenCodexChildReady does.
+            ...(action === "opencodexHealth" ? { operationId: binding.operationId } : {}),
             healthy: true,
             revision: { epoch: "r2-epoch", sequence },
             device: {

@@ -540,11 +540,12 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("a withdrawal or Forget during the last consent read before linking wins", () =>
     Effect.gen(function* () {
       // Authority is read when consent is given, before the setup, around ensuring GOAT's
-      // runtime, after preparing, and last by the join itself under the hub permit; the change
-      // lands inside that last read.
+      // runtime, when identifying the Child, when binding its setup purpose, after preparing,
+      // and by the join itself under the hub permit; the change lands inside the last read
+      // before the join.
       const opted = yield* setup();
       opted.machine.duringSessionRead = {
-        at: 8,
+        at: 12,
         run: opted.bootstrap.setSshOptIn("lidge-ts", false, PERSON).pipe(Effect.orDie),
       };
       yield* opted.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
@@ -553,7 +554,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
 
       const forgotten = yield* setup();
       forgotten.machine.duringSessionRead = {
-        at: 8,
+        at: 12,
         run: Effect.sync(() => void forgotten.machine.generations.set("lidge-ts", 1)).pipe(
           Effect.andThen(forgotten.ssh("lidge-ts", "forgotten")),
           Effect.orDie,
@@ -630,9 +631,9 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       ];
       for (const end of endings) {
         const home = yield* setup();
-        // Hub state is read before the setup, around ensuring GOAT's runtime, after preparing,
-        // and last by the join itself.
-        home.machine.duringSettingsRead = { at: 5, run: Effect.sync(() => end(home.machine)) };
+        // Hub state is read before the setup, around ensuring GOAT's runtime, when identifying
+        // the Child, when binding its setup purpose, after preparing, and last by the join.
+        home.machine.duringSettingsRead = { at: 7, run: Effect.sync(() => end(home.machine)) };
         yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
         expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
           state: "blocked",
@@ -646,10 +647,11 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("a hub turned off while the alias's files are read last still stops the join", () =>
     Effect.gen(function* () {
       const home = yield* setup();
-      // Read when consent is given, before the setup, around ensuring GOAT's runtime, after
-      // preparing, and last by the join.
+      // Read when consent is given, before the setup, around ensuring GOAT's runtime, when
+      // identifying the Child, when binding its setup purpose, after preparing, and last by the
+      // join.
       home.machine.duringRevisionRead = {
-        at: 6,
+        at: 8,
         run: Effect.sync(() => void (home.machine.hub = false)),
       };
       yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
