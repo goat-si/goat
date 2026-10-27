@@ -14,24 +14,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-
-const yieldToRuntime = Effect.yieldNow.pipe(
-  Effect.andThen(
-    Effect.promise(
-      () =>
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        }),
-    ),
-  ),
-);
 
 export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnControlError>()(
   "ProviderTurnControlError",
@@ -87,12 +78,15 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | EventSink.EventSinkV2
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const eventSink = yield* EventSink.EventSinkV2;
     const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -303,37 +297,71 @@ export const layer: Layer.Layer<
             return;
           }
 
-          yield* loaded.session.value.interruptTurn({
-            providerThread: loaded.providerThread,
-            providerTurnId: loaded.providerTurn.id,
-          });
-
-          for (let remaining = 1_000; remaining > 0; remaining -= 1) {
-            const { providerTurn, attempt } = yield* projections.getProviderControlContext(
-              input.threadId,
-              {
-                providerThreadId: input.providerThreadId,
-                providerTurnId: input.providerTurnId,
-                attemptId: input.interruptedAttemptId,
+          const session = loaded.session.value;
+          yield* Effect.gen(function* () {
+            const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
+            const readTerminal = Effect.fn("ProviderTurnControlService.readRestartTerminal")(
+              function* () {
+                const { providerTurn, attempt } = yield* projections.getProviderControlContext(
+                  input.threadId,
+                  {
+                    providerThreadId: input.providerThreadId,
+                    providerTurnId: input.providerTurnId,
+                    attemptId: input.interruptedAttemptId,
+                  },
+                );
+                return (
+                  providerTurn !== undefined &&
+                  providerTurn.status !== "running" &&
+                  attempt !== undefined &&
+                  attempt.status !== "running"
+                );
               },
             );
-            if (
-              providerTurn !== undefined &&
-              providerTurn.status !== "running" &&
-              attempt !== undefined &&
-              attempt.status !== "running"
-            ) {
-              return;
-            }
-            // Yield through Node's event loop; detached ingestion cannot advance a deterministic Effect clock.
-            yield* yieldToRuntime;
-          }
-          return yield* new ProviderTurnControlError({
-            threadId: input.threadId,
-            operation: "restart",
-            providerTurnId: input.providerTurnId,
-            cause: `Provider turn ${input.providerTurnId} did not terminalize before restart.`,
-          });
+            yield* session.interruptTurn({
+              providerThread: loaded.providerThread,
+              providerTurnId: loaded.providerTurn.id,
+            });
+            if (yield* readTerminal()) return;
+            const terminal = yield* eventSink
+              .stream({
+                threadId: input.threadId,
+                afterSequence,
+                bounded: true,
+              })
+              .pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    (event.type === "provider-turn.updated" &&
+                      event.payload.id === input.providerTurnId &&
+                      event.payload.status !== "running") ||
+                    (event.type === "run-attempt.updated" &&
+                      event.payload.id === input.interruptedAttemptId &&
+                      event.payload.status !== "running"),
+                ),
+                Stream.mapEffect(() => readTerminal()),
+                Stream.filter((terminal) => terminal),
+                Stream.runHead,
+              );
+            if (Option.isNone(terminal))
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "restart",
+                providerTurnId: input.providerTurnId,
+                cause: "The persisted terminal event stream ended before restart.",
+              });
+          }).pipe(
+            Effect.timeoutOrElse({
+              duration: "30 seconds",
+              orElse: () =>
+                new ProviderTurnControlError({
+                  threadId: input.threadId,
+                  operation: "restart",
+                  providerTurnId: input.providerTurnId,
+                  cause: "Provider terminal state could not be confirmed before restart.",
+                }),
+            }),
+          );
         },
         (effect, input) =>
           effect.pipe(

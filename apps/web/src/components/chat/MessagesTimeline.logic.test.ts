@@ -3494,12 +3494,11 @@ describe("linked timeline resources", () => {
     expect(collapsed.map((row) => row.id)).toEqual([
       "turn-fold:resource-run",
       "final",
-      "summary:created",
+      "thread-cards:final",
       "assistant-meta:final",
     ]);
-    expect(collapsed.find((row) => row.id === "summary:created")).toMatchObject({
-      resourceSummary: true,
-    });
+    const cards = collapsed.find((row) => row.id === "thread-cards:final");
+    expect(cards).toMatchObject({ kind: "thread-cards", targets: [{ via: "launch" }] });
     const expanded = deriveMessagesTimelineRows({
       ...common,
       timelineEntries,
@@ -3510,7 +3509,7 @@ describe("linked timeline resources", () => {
       "intro",
       "created",
       "final",
-      "summary:created",
+      "thread-cards:final",
       "assistant-meta:final",
     ]);
   });
@@ -3553,7 +3552,7 @@ describe("linked timeline resources", () => {
       "created",
       "after-steer",
       "final",
-      "summary:created",
+      "thread-cards:final",
       "assistant-meta:final",
     ]);
   });
