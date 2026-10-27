@@ -876,7 +876,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (isRequest && options.answersCursorTools && Cursor.isWindowCursorMove(name, args)) {
       const answer = yield* Cursor.answerWindowCursorMove(id, args, overlay, drawOverlay);
       if (reservationId !== undefined)
-        yield* release({ reservationId, connectionId: current.connectionId }, true);
+        yield* release({ reservationId, connectionId: current.connectionId });
       return yield* sink.answer(answer, "settled", { tool: "move_cursor" });
     }
 

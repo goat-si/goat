@@ -424,7 +424,9 @@ export const make = Effect.gen(function* () {
               .catch(() => {
                 throw refused(UNCERTAIN);
               });
+            // Only FILL's explicit early false proves the value was never set.
             if (typed.exceptionDetails || typed.result.value !== true) {
+              if (typed.exceptionDetails || typed.result.value !== false) throw refused(UNCERTAIN);
               fences.set(
                 tab.page,
                 (fences.get(tab.page) ?? []).filter((each) => each !== entry),

@@ -144,13 +144,27 @@ function targetIndex(args: unknown, snapshotId: string | undefined): number | un
   return match?.[2] !== undefined && match[1] === snapshotId ? Number(match[2]) : undefined;
 }
 
-/** Whether a diff's +, ~ or - rows touch the neighbourhood. */
-const touches = (diffText: string, around: Neighbourhood | undefined) =>
-  around !== undefined &&
-  diffText.split("\n").some((text) => {
-    const index = /^[+~-] \[(\d+)\]/u.exec(text)?.[1];
-    return index !== undefined && Number(index) >= around.start && Number(index) <= around.end;
-  });
+const REINDEXED = /^reindexed: \[(\d+)-\d+\]/u;
+
+/**
+ * Whether a diff's +, ~ or - rows touch the neighbourhood. + and ~ rows carry the new read's
+ * numbers and - rows the old one's, so this holds only while the neighbourhood kept its numbers:
+ * no row up to its first one moved, and no numbered row before it came or went.
+ */
+function touches(diffText: string, around: Neighbourhood | undefined): boolean {
+  if (around === undefined) return false;
+  let near = false;
+  for (const text of diffText.split("\n")) {
+    const moved = REINDEXED.exec(text)?.[1];
+    if (moved !== undefined && Number(moved) <= around.start) return false;
+    const row = /^([+~-]) \[(\d+)\]/u.exec(text);
+    if (row?.[2] === undefined) continue;
+    const index = Number(row[2]);
+    if (index < around.start && row[1] !== "~") return false;
+    if (index >= around.start && index <= around.end) near = true;
+  }
+  return near;
+}
 
 /**
  * The input's answer with the diff read's outcome added, or the answer unchanged when the read
