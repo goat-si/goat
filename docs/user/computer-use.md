@@ -161,7 +161,8 @@ thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
-A thread started from another computer's GOAT counts as one you direct here.
+In full access mode, a thread started from another computer's GOAT uses every
+app here beside the threads you run, rather than waiting for the screen.
 Detecting secret fields in desktop apps is switched off while it is being
 fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts

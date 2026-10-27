@@ -3,9 +3,10 @@
  *
  * Unattended turns come from GOAT Bot, channel tasks, scheduled and webhook tasks, messages
  * another unattended thread sent, and threads such a turn launched or delegated to. They get the
- * driver only through an approved lease or full access (ComputerUseLeases). A thread launched
- * from another environment counts as interactive: its launcher cannot be read here. Every read
- * that fails or runs out of lineage counts as unattended.
+ * driver only through an approved lease or full access (ComputerUseLeases). Threads launched from
+ * another environment, and threads they launch, are `launched_remotely`: in full access they
+ * use the screen like a person's threads (ComputerUseAttachment). Every read that fails or runs
+ * out of lineage counts as unattended.
  *
  * @module ComputerUseOrigin
  */
@@ -40,6 +41,7 @@ export type UnattendedReason =
   | "scheduled_task"
   | "sent_by_unattended"
   | "launched_by_unattended"
+  | "launched_remotely"
   | "unknown";
 
 export type ComputerUseOrigin =
@@ -164,14 +166,18 @@ const classify: (
       : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId
         ? { threadId: thread.lineage.parentThreadId, environmentId: null }
         : undefined;
-  if (launcher !== undefined && launcher.environmentId === null) {
+  if (launcher !== undefined) {
+    if (launcher.environmentId !== null) return unattended("launched_remotely");
     const parent = yield* classify(
       reads,
       launcher.threadId,
       (runs) => runAt(runs, thread.createdAt),
       depth + 1,
     );
-    if (parent._tag === "unattended") return unattended("launched_by_unattended");
+    if (parent._tag === "unattended")
+      return unattended(
+        parent.reason === "launched_remotely" ? "launched_remotely" : "launched_by_unattended",
+      );
   }
   return INTERACTIVE;
 });

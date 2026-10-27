@@ -111,7 +111,11 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   cua: Option.Option<CuaDriver.CuaDriver["Service"]>,
   input: ComputerUseAttachmentInput,
 ) {
-  const unattended = input.origin._tag === "unattended";
+  // A remote launcher cannot be read here; in full access its threads use the screen like a
+  // person's (owner decision, Jun, 2026-10-28). Steering and other modes still see it unattended.
+  const unattended =
+    input.origin._tag === "unattended" &&
+    !(input.origin.reason === "launched_remotely" && input.runtimeMode === "full-access");
   if (input.driver === undefined || !COMPUTER_USE_PROVIDER_DRIVERS.has(input.driver))
     return none("unsupported-provider", unattended);
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", unattended);

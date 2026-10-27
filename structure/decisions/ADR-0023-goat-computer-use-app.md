@@ -17,9 +17,10 @@
   private-mode detection but not human-input detection, and human-input detection remains for
   input arbitration and reports only. The Safety bullet below states the amended decision.
 - Amended 2026-10-28, D7 and D16 (owner decision, Jun, 2026-10-28): no detection signal gates
-  admission, so unattended work no longer needs private-mode detection, and a thread launched
-  from another environment counts as one a person directs. The Safety bullet and D16 below
-  state the amended decision.
+  admission, so unattended work no longer needs private-mode detection, and in full access a
+  thread launched from another environment, and threads it launches, use every app like a
+  person's threads instead of holding the screen alone. They stay unattended for steering and
+  outside full access. The Safety bullet and D16 below state the amended decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the

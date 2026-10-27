@@ -368,6 +368,7 @@ describe("computerUseAttachment", () => {
         "scheduled_task",
         "sent_by_unattended",
         "launched_by_unattended",
+        "launched_remotely",
         "unknown",
       ] as const
     ).map((reason) => ({
@@ -394,7 +395,10 @@ describe("computerUseAttachment", () => {
           attached._tag === "proxied" ? attached.control.controlId : attached._tag,
           "control:every-app",
         );
-        assert.deepEqual(leases.everyApp, [origin._tag === "unattended"]);
+        // A remote launch works beside other threads instead of holding the screen alone.
+        assert.deepEqual(leases.everyApp, [
+          origin._tag === "unattended" && origin.reason !== "launched_remotely",
+        ]);
         assert.deepEqual(leases.minted, []);
       }),
   );

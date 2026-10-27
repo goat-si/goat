@@ -145,6 +145,9 @@ describe("computerUseOrigin", () => {
               environmentId: "other-host",
             },
           },
+          remoteChild: {
+            launchedBy: { kind: "launch", threadId: ThreadId.make("remote"), environmentId: null },
+          },
         },
         runs: { mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)] },
         messages: { m1: typed(1), m2: { createdAt: at(10), scheduledTaskId: "task-1" } },
@@ -157,9 +160,10 @@ describe("computerUseOrigin", () => {
       assert.deepEqual(yield* classify(world, "fromTyped"), { _tag: "interactive" });
       // A person promoting a delegated task takes it over.
       assert.deepEqual(yield* classify(world, "promoted"), { _tag: "interactive" });
-      // Another environment's launcher cannot be read here; its thread is treated like one a
-      // person's thread launched on this host.
-      assert.deepEqual(yield* classify(world, "remote"), { _tag: "interactive" });
+      // Threads a remote launch starts here keep its reason, which full access admits like a person's.
+      const remote = { _tag: "unattended", reason: "launched_remotely" } as const;
+      assert.deepEqual(yield* classify(world, "remote"), remote);
+      assert.deepEqual(yield* classify(world, "remoteChild"), remote);
     }),
   );
 
@@ -233,7 +237,19 @@ describe("channel workers before the ledger binds them", () => {
 describe("gateUnattendedSteering", () => {
   const world: World = {
     bot: ["bot"],
-    threads: { bot: {}, mine: {}, peer: {}, "channel-worker:9c": {} },
+    threads: {
+      bot: {},
+      mine: {},
+      peer: {},
+      "channel-worker:9c": {},
+      remote: {
+        launchedBy: {
+          kind: "launch",
+          threadId: ThreadId.make("elsewhere"),
+          environmentId: "other-host",
+        },
+      },
+    },
     runs: {
       mine: [run("typed", "m1", 1)],
       peer: [run("p1", "pm", 0)],
@@ -272,6 +288,8 @@ describe("gateUnattendedSteering", () => {
         queued,
       );
       assert.deepEqual(yield* gate("mine", "typed", { scheduledTaskId: "task-1" }), queued);
+      // Full access opens the screen to a remote launch, not a person's running turn.
+      assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "remote" }), queued);
     }),
   );
 

@@ -413,9 +413,11 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling unchanged. A thread launched from another environment counts as one a person directs
-  (`ComputerUseOrigin.ts`): this host cannot read the turn that launched it, and computer use
-  stays open to remote lanes (owner decision, Jun, 2026-10-28).
+  ceiling unchanged. In full access, a thread launched from another environment, and threads it
+  launches (`launched_remotely`), use every app like a person's threads, beside them rather than
+  holding the screen alone (`ComputerUseAttachment.ts`; owner decision, Jun, 2026-10-28). This
+  host cannot read the turn that launched it, so the thread stays unattended for steering a
+  person's turn and outside full access.
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
