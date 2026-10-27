@@ -19,11 +19,13 @@ export const providerClients = makeProviderClientRegistry([
   {
     driverKind: ProviderDriverKind.make("codex"),
     label: "Codex",
+    acpRegistryAgentIds: ["codex-acp"],
     settingsSchema: CodexSettings,
   },
   {
     driverKind: ProviderDriverKind.make("claudeAgent"),
     label: "Claude",
+    acpRegistryAgentIds: ["claude-acp"],
     settingsSchema: ClaudeSettings,
   },
   cursorClient,
@@ -35,6 +37,7 @@ export const providerClients = makeProviderClientRegistry([
   {
     driverKind: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
+    acpRegistryAgentIds: ["antigravity-acp"],
     settingsSchema: AntigravitySettings,
   },
   museClient,
