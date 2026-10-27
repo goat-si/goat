@@ -34,6 +34,7 @@ export interface ManagedRelaySessionInput {
 }
 
 interface ManagedRelaySessionControl {
+  readonly invalidate: () => void;
   readonly updateReadClerkToken: (
     readClerkToken: ManagedRelaySessionInput["readClerkToken"],
   ) => void;
@@ -131,6 +132,11 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
     }),
   };
   managedRelaySessionControls.set(session, {
+    invalidate: () => {
+      cachedToken = null;
+      pendingToken = null;
+      tokenProviderGeneration += 1;
+    },
     updateReadClerkToken: (nextReadClerkToken) => {
       readClerkToken = nextReadClerkToken;
       tokenProviderGeneration += 1;
@@ -138,6 +144,11 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
     },
   });
   return session;
+}
+
+export function invalidateManagedRelaySessionToken(registry: AtomRegistry.AtomRegistry): void {
+  const session = registry.get(managedRelaySessionAtom);
+  if (session) managedRelaySessionControls.get(session)?.invalidate();
 }
 
 export function setManagedRelaySession(

@@ -19,6 +19,8 @@ const shouldLaunchElectronAfterPack = process.env.GOAT_DESKTOP_DEV === "1";
 const devElectronPack = (configs: PackUserConfig[]) =>
   shouldLaunchElectronAfterPack ? withDevElectronLaunch(import.meta.dirname, configs) : configs;
 const publicConfigDefine = {
+  __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
+  __GOAT_BUILD_HOSTED_APP_URL__: JSON.stringify(repoEnv.GOAT_HOSTED_APP_URL?.trim() ?? ""),
   __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),

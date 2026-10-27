@@ -1,9 +1,9 @@
+import * as ConnectTokenExchange from "../auth/ConnectTokenExchange.ts";
 import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import * as CliLinkApprovals from "../auth/CliLinkApprovals.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
 import { createLinkChallenge } from "../auth/ConnectLinkChallenges.ts";
 import * as ConnectAuthentication from "../auth/ConnectAuthentication.ts";
-import { RelayConnectUpgradeRequiredError } from "@goat/contracts/connectAssurance";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
@@ -25,7 +25,6 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpTraceContext from "effect/http/HttpTraceContext";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApiError from "effect/http-api/HttpApiError";
-import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as HttpObservability from "@goat/shared/httpObservability";
 
 import {
@@ -34,7 +33,6 @@ import {
   RelayAgentActivityPublishProofInvalidError,
   RelayClientAuth,
   RelayClientPrincipal,
-  RelayAccessTokenType,
   RelayDpopClientAuth,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -1049,74 +1047,16 @@ export const layerTokenApi = HttpApiBuilder.group(
   RelayApi,
   "token",
   Effect.fnUntraced(function* (handlers) {
-    const config = yield* RelayConfiguration.RelayConfiguration;
-    const crypto = yield* Crypto.Crypto;
+    const exchange = yield* ConnectTokenExchange.ConnectTokenExchange;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
-    const relayTokens = yield* RelayTokens.RelayTokens;
     return handlers.handle(
       "exchangeDpopAccessToken",
       Effect.fn("relay.api.token.exchangeDpopAccessToken")(function* (args) {
         yield* appendRelayCredentialResponseHeaders;
-        const issuer = normalizeRelayIssuer(config.relayIssuer);
-        const requestedScopes = relayTokens.resolveDpopAccessTokenScopes({
-          clientId: args.payload.client_id,
-          scope: args.payload.scope,
-        });
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": "clerk_bearer_token_exchange",
-          "relay.oauth.client_id": args.payload.client_id,
-          "relay.oauth.scopes": args.payload.scope,
-        });
-        if (args.payload.resource !== issuer || requestedScopes === null) {
-          return yield* new HttpApiError.Unauthorized({});
-        }
-
-        if (args.payload.connectAuthPolicyVersion !== 1)
-          return yield* new RelayConnectUpgradeRequiredError({
-            code: "connect_upgrade_required",
-            requiredPolicyVersion: 1,
-            traceId: "connect-auth",
-          });
-        const assurance = yield* ConnectAuthentication.ConnectAuthentication.pipe(
-          Effect.flatMap((auth) => auth.session(args.payload.subject_token)),
-          Effect.provide(ConnectAuthentication.layer),
-        );
-        const proofKeyThumbprint = yield* requireDpopProof().pipe(
+        const thumbprint = yield* requireDpopProof().pipe(
           Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
         );
-        const now = yield* DateTime.now;
-        const keys = yield* ClientKeys.ClientKeys;
-        const keyAdmission = yield* keys.admit({
-          assurance,
-          clientId: args.payload.client_id,
-          thumbprint: proofKeyThumbprint,
-          ...(args.payload.readmitClientKey ? { readmit: true } : {}),
-          now: Math.floor(now.epochMilliseconds / 1000),
-        });
-        const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL);
-        const jti = yield* crypto
-          .randomUUIDv4()
-          .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error")));
-        return {
-          access_token: yield* relayTokens
-            .issueDpopAccessToken({
-              userId: assurance.userId,
-              assurance,
-              clientKeyAuthorizedAt: keyAdmission.authorizedAt,
-              clientKeyAdmissionId: keyAdmission.admissionId,
-              proofKeyThumbprint,
-              jti,
-              issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
-              expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
-              clientId: args.payload.client_id,
-              scopes: requestedScopes,
-            })
-            .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
-          issued_token_type: RelayAccessTokenType,
-          token_type: "DPoP" as const,
-          expires_in: Duration.toSeconds(RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL),
-          scope: encodeOAuthScope(requestedScopes),
-        };
+        return yield* exchange.exchange(args.payload, thumbprint);
       }, mapRelayCommonApiErrors("invalid_dpop")),
     );
   }),

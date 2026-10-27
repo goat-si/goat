@@ -147,6 +147,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
       unregisterDevice: unused,
       registerLiveActivity: unused,
       getAgentActivitySnapshot: unused,
+      requestKeyReadmission: Effect.void,
       resetTokenCache: Effect.void,
     }),
   );

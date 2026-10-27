@@ -114,7 +114,7 @@ interface SettingsListSection {
 
 function ConfiguredSettingsRouteScreen() {
   const navigation = useNavigation();
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const { user } = useUser();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const accountLabel = !isLoaded

@@ -1,3 +1,5 @@
+import { normalizeConnectHostedOrigin } from "@goat/shared/connectAuth";
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { useAuth } from "@clerk/react";
 import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
@@ -21,6 +23,9 @@ import { WorkspacePageHeader } from "./WorkspacePageHeader";
 export function HostedEmptyState() {
   const cloudEnabled = hasCloudPublicConfig();
   const localEnvironmentOff = isLocalEnvironmentDisabled();
+  const hostedOrigin = isGoatConnectEnabled()
+    ? normalizeConnectHostedOrigin(import.meta.env.VITE_HOSTED_APP_URL ?? "")
+    : null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
@@ -47,6 +52,11 @@ export function HostedEmptyState() {
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
+            {!cloudEnabled && hostedOrigin ? (
+              <a href={hostedOrigin} className="text-sm text-primary underline">
+                Sign in at GOAT Connect
+              </a>
+            ) : null}
             {localEnvironmentOff ? (
               <Button render={<Link to="/settings/connections" />} size="sm">
                 Open Connections
@@ -64,7 +74,7 @@ export function HostedEmptyState() {
 }
 
 function GoatConnectSteps() {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const { openAuthPrompt } = useGoatConnectAuthPrompt();
   // Adding the first computer unmounts this screen. Wait for all health checks
   // so every compatible registration is queued before that happens.

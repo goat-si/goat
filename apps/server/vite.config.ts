@@ -108,6 +108,7 @@ export default mergeConfig(
         __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
         __GOAT_BUILD_COMMIT__: JSON.stringify(resolveBuildCommit(import.meta.dirname) ?? ""),
         __GOAT_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
+        __GOAT_BUILD_HOSTED_APP_URL__: JSON.stringify(repoEnv.GOAT_HOSTED_APP_URL?.trim() ?? ""),
         __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
         __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

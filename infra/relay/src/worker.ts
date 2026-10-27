@@ -1,3 +1,5 @@
+import * as ConnectTokenExchange from "./auth/ConnectTokenExchange.ts";
+import * as ConnectAuthentication from "./auth/ConnectAuthentication.ts";
 import * as ConnectAccounts from "./auth/ConnectAccounts.ts";
 import { isGoatConnectPushEnabled } from "@goat/shared/goatConnect";
 import * as ClientKeys from "./auth/ClientKeys.ts";
@@ -322,6 +324,7 @@ export const layer = Api.make(
       Layer.provideMerge(EnvironmentCredentials.layer),
       Layer.provideMerge(
         Layer.mergeAll(
+          ConnectTokenExchange.layer.pipe(Layer.provide(ConnectAuthentication.layer)),
           CloudflareApiPause.layer,
           EnvironmentLinks.layer,
           ManagedEndpointAllocations.layer,

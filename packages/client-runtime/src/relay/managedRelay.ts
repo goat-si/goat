@@ -299,6 +299,7 @@ export class ManagedRelayClient extends Context.Service<
     readonly getAgentActivitySnapshot: (input: {
       readonly clerkToken: string;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, ManagedRelayClientError>;
+    readonly requestKeyReadmission: Effect.Effect<void>;
     readonly resetTokenCache: Effect.Effect<void>;
   }
 >()("@goat/client-runtime/relay/managedRelay/ManagedRelayClient") {}
@@ -433,6 +434,7 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
     unregisterDevice: unavailable("clientRuntime.managedRelay.unregisterDevice"),
     registerLiveActivity: unavailable("clientRuntime.managedRelay.registerLiveActivity"),
     getAgentActivitySnapshot: unavailable("clientRuntime.managedRelay.getAgentActivitySnapshot"),
+    requestKeyReadmission: Effect.void,
     resetTokenCache: Effect.void.pipe(
       Effect.withSpan("clientRuntime.managedRelay.resetTokenCache"),
     ),
@@ -491,6 +493,8 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
     }),
   };
 
+  let keyReadmissionRequested = false;
+
   const exchangeAccessToken = Effect.fn("clientRuntime.managedRelay.exchangeAccessToken")(
     function* (input: {
       readonly clerkToken: string;
@@ -511,6 +515,8 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
         .exchangeDpopAccessToken({
           headers: { dpop: proof },
           payload: {
+            connectAuthPolicyVersion: 1,
+            readmitClientKey: keyReadmissionRequested,
             grant_type: RelayDpopTokenExchangeGrantType,
             subject_token: input.clerkToken,
             subject_token_type: RelayJwtSubjectTokenType,
@@ -521,6 +527,11 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
           },
         })
         .pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              keyReadmissionRequested = false;
+            }),
+          ),
           Effect.mapError(relayRequestError("exchange relay DPoP access token")),
           timeoutRelayRequest("Relay DPoP access token exchange"),
         );
@@ -937,6 +948,9 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
       Effect.withSpan("clientRuntime.managedRelay.registerLiveActivity"),
       withRelayClientTracing,
     ),
+    requestKeyReadmission: Effect.sync(() => {
+      keyReadmissionRequested = true;
+    }),
     resetTokenCache: SynchronizedRef.set(cachedTokens, []).pipe(
       Effect.andThen(options.accessTokenStore ? options.accessTokenStore.clear : Effect.void),
       Effect.withSpan("clientRuntime.managedRelay.resetTokenCache"),

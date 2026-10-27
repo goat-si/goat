@@ -109,7 +109,33 @@ const withCloudServices = <A, E>(
 ) => effect.pipe(Effect.provide(layerCloudClient()));
 
 function validLinkProof() {
-  return "signed-environment-link-jwt";
+  const payload = {
+    iss: "goat-env:env-1",
+    aud: "https://relay.example.test",
+    sub: "env-1",
+    jti: "proof-1",
+    iat: 1800000000,
+    exp: 1800000300,
+    challenge: "link-challenge",
+    environmentId: "env-1",
+    environmentPublicKey: "environment-key",
+    descriptor: {
+      connectAuthPolicyVersion: 1,
+      environmentId: "env-1",
+      label: "Desktop",
+      serverVersion: "test",
+      platform: { os: "darwin", arch: "arm64" },
+      capabilities: {},
+    },
+    endpoint: {
+      httpBaseUrl: "https://desktop.example.test/",
+      wsBaseUrl: "wss://desktop.example.test/ws",
+      providerKind: "cloudflare_tunnel",
+    },
+    origin: { localHttpHost: "127.0.0.1", localHttpPort: 443 },
+    scopes: ["managed_tunnels"],
+  };
+  return `${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify(payload))}.signature`;
 }
 
 function validLinkResponse(environmentId = "env-1") {
@@ -129,6 +155,7 @@ function validLinkResponse(environmentId = "env-1") {
     cloudUserId: "user_123",
     environmentCredential: "environment-credential",
     cloudMintPublicKey: "cloud-mint-public-key",
+    connectAuthPolicyVersion: 1,
   };
 }
 
@@ -175,7 +202,7 @@ describe("mobile cloud link environment client", () => {
           _tag: "CloudEnvironmentLinkError",
           message: "Relay returned credentials for a different environment.",
         });
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
       }),
   );
 
@@ -211,7 +238,7 @@ describe("mobile cloud link environment client", () => {
         _tag: "CloudEnvironmentLinkError",
         message: "Relay returned credentials for a different endpoint provider.",
       });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
     }),
   );
 
@@ -245,7 +272,7 @@ describe("mobile cloud link environment client", () => {
         }),
       );
 
-      expect(bodies[1]).toMatchObject({
+      expect(bodies[2]).toMatchObject({
         endpoint: {
           httpBaseUrl: "https://desktop.example.test/",
           wsBaseUrl: "wss://desktop.example.test/ws",
@@ -256,13 +283,13 @@ describe("mobile cloud link environment client", () => {
           localHttpPort: 443,
         },
       });
-      expect(bodies[2]).toMatchObject({
+      expect(bodies[3]).toMatchObject({
         deviceId: "device-1",
-        notificationsEnabled: true,
+        notificationsEnabled: false,
         liveActivitiesEnabled: false,
         managedTunnelsEnabled: true,
       });
-      expect(bodies[3]).toMatchObject({
+      expect(bodies[4]).toMatchObject({
         cloudUserId: "user_123",
         environmentCredential: "environment-credential",
       });

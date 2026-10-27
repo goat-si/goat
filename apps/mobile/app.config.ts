@@ -456,6 +456,8 @@ const config: ExpoConfig = {
     appVariant: APP_VARIANT,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
     relay: {
+      hostedAppUrl: repoEnv.GOAT_HOSTED_APP_URL ?? null,
+      connectAuthPolicyVersion: 1,
       url: repoEnv.GOAT_RELAY_URL ?? null,
     },
     clerk: {

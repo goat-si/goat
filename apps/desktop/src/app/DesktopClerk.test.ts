@@ -111,10 +111,26 @@ const layerDesktopClerk = (
 
 describe("DesktopClerk", () => {
   beforeEach(() => {
+    vi.stubGlobal("__GOAT_BUILD_CLERK_PUBLISHABLE_KEY__", "pk_test_Y2xlcmsuZXhhbXBsZS50ZXN0JA==");
+    vi.stubGlobal("__GOAT_BUILD_RELAY_URL__", "https://relay.example.test");
+    vi.stubGlobal("__GOAT_BUILD_HOSTED_APP_URL__", "https://app.example.test");
     createClerkBridgeMock.mockReset();
     requestSingleInstanceLockMock.mockReset().mockReturnValue(true);
     storageMock.mockReset();
   });
+
+  it.effect("does not initialize Clerk with a partial public configuration", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("__GOAT_BUILD_RELAY_URL__", "");
+      yield* Layer.build(layerDesktopClerk());
+      assert.equal(createClerkBridgeMock.mock.calls.length, 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.ensuring(
+        Effect.sync(() => vi.stubGlobal("__GOAT_BUILD_RELAY_URL__", "https://relay.example.test")),
+      ),
+    ),
+  );
 
   it.each([
     {

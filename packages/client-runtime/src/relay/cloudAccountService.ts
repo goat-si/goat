@@ -7,7 +7,10 @@ import { reportAtomCommandResult, settlePromise } from "../state/runtime.ts";
  */
 export interface CloudAccountSource {
   readonly addListener: (
-    listener: (resources: { readonly user?: { readonly id: string } | null | undefined }) => void,
+    listener: (resources: {
+      readonly user?: { readonly id: string } | null | undefined;
+      readonly session?: { readonly status: string } | null | undefined;
+    }) => void,
   ) => () => void;
 }
 
@@ -197,10 +200,11 @@ export function createCloudAccountService<S extends CloudAccountSource>(
       const current = {
         source,
         unsubscribe: source.addListener((resources) => {
-          // Clerk reports `user: undefined` until it loads; pending sessions
-          // still carry a user and count as signed in.
           if (resources.user === undefined) return;
-          observe(source, resources.user?.id ?? null);
+          observe(
+            source,
+            resources.session?.status === "active" ? (resources.user?.id ?? null) : null,
+          );
         }),
       };
       attached = current;

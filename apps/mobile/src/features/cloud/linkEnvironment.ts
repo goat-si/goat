@@ -1,3 +1,4 @@
+import { connectLinkIntentFromProof } from "@goat/shared/connectAuth";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -170,12 +171,33 @@ export const linkEnvironmentToCloudWithPreference = Effect.fn(
   const deviceId = yield* storage.loadOrCreateAgentAwarenessDeviceId.pipe(
     Effect.mapError(cloudEnvironmentLinkError("Could not load the mobile device id.")),
   );
-  const liveActivitiesEnabled = input.liveActivitiesEnabled;
+  const liveActivitiesEnabled = false;
+  const environmentClient = yield* makeEnvironmentHttpApiClient(input.connection.httpBaseUrl);
+  const intentProof = yield* environmentClient.connect
+    .linkProof({
+      headers: { authorization: `Bearer ${localBearerToken}` },
+      payload: {
+        challenge: "connect-intent",
+        relayIssuer: relayUrl,
+        endpoint: {
+          httpBaseUrl: input.connection.httpBaseUrl,
+          wsBaseUrl: input.connection.wsBaseUrl,
+          providerKind: MANAGED_ENDPOINT_PROVIDER_KIND,
+        },
+        origin: endpointOrigin(input.connection.httpBaseUrl),
+      },
+    })
+    .pipe(Effect.mapError(cloudEnvironmentLinkError("Could not read environment identity.")));
+  const intent = yield* Effect.try({
+    try: () => connectLinkIntentFromProof(intentProof, true),
+    catch: cloudEnvironmentLinkError("Update this GOAT host before linking Connect."),
+  });
   const challenge = yield* relayClient
     .createEnvironmentLinkChallenge({
       clerkToken: input.clerkToken,
       payload: {
-        notificationsEnabled: true,
+        ...intent,
+        notificationsEnabled: false,
         liveActivitiesEnabled,
         managedTunnelsEnabled: true,
       },
@@ -185,7 +207,6 @@ export const linkEnvironmentToCloudWithPreference = Effect.fn(
         decodedRelayClientError(`${relayUrl}/v1/client/environment-link-challenges failed`),
       ),
     );
-  const environmentClient = yield* makeEnvironmentHttpApiClient(input.connection.httpBaseUrl);
   const proof = yield* environmentClient.connect
     .linkProof({
       headers: { authorization: `Bearer ${localBearerToken}` },
@@ -207,7 +228,7 @@ export const linkEnvironmentToCloudWithPreference = Effect.fn(
       payload: {
         deviceId,
         proof,
-        notificationsEnabled: true,
+        notificationsEnabled: false,
         liveActivitiesEnabled,
         managedTunnelsEnabled: true,
       },
@@ -230,6 +251,7 @@ export const linkEnvironmentToCloudWithPreference = Effect.fn(
         cloudUserId: link.cloudUserId,
         environmentCredential: link.environmentCredential,
         cloudMintPublicKey: link.cloudMintPublicKey,
+        connectAuthPolicyVersion: 1,
         endpointRuntime: link.endpointRuntime,
       },
     })

@@ -98,7 +98,7 @@ on:
       clerk_publishable_key:
         required: true
         type: string
-      clerk_jwt_template:
+      hosted_app_url:
         required: true
         type: string
       clerk_cli_oauth_client_id:
@@ -126,7 +126,7 @@ jobs:
     timeout-minutes: ${{ (inputs.ssh_runtime_bundle || inputs.platform == 'win') && 70 || 30 }}
     env:
       GOAT_CLERK_PUBLISHABLE_KEY: ${{ inputs.clerk_publishable_key }}
-      GOAT_CLERK_JWT_TEMPLATE: ${{ inputs.clerk_jwt_template }}
+      GOAT_HOSTED_APP_URL: ${{ inputs.hosted_app_url }}
       GOAT_CLERK_CLI_OAUTH_CLIENT_ID: ${{ inputs.clerk_cli_oauth_client_id }}
       GOAT_RELAY_URL: ${{ inputs.relay_url }}
     steps:

@@ -1,3 +1,4 @@
+import { prepareCliLinkIntent, installApprovedCliLink } from "../cloud/CliLinkApproval.ts";
 import {
   AuthRelayReadScope,
   AuthRelayWriteScope,
@@ -27,7 +28,6 @@ import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
-import * as Schema from "effect/Schema";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -58,8 +58,6 @@ const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
 );
 
-const isCloudCliTokenManagerError = Schema.is(CliTokenManager.CloudCliTokenManagerError);
-
 const headlessFlag = Flag.Boolean("headless").pipe(
   Flag.withDescription("Authorize without a local browser using the OAuth device flow."),
   Flag.withDefault(false),
@@ -77,58 +75,15 @@ const headlessSessionConfig = Config.all({
   Config.map(({ sshConnection, sshTty }) => Option.isSome(sshConnection) || Option.isSome(sshTty)),
 );
 
-const showDeviceAuthorizationPrompt = (prompt: CliTokenManager.DeviceAuthorizationPrompt) =>
-  Console.log(formatDeviceAuthorizationPrompt(prompt));
-
-function formatDeviceAuthorizationPrompt(
-  prompt: CliTokenManager.DeviceAuthorizationPrompt,
-): string {
-  const minutes = Math.max(1, Math.round(Duration.toMinutes(prompt.expiresIn)));
-  return [
-    "Headless authorization",
-    "Open this URL on a device with a browser:",
-    `  ${prompt.verificationUriComplete ?? prompt.verificationUri}`,
-    "",
-    `Confirm this code when asked: ${prompt.userCode}`,
-    "",
-    `Waiting for approval (expires in ${minutes} min). Press Ctrl+C to cancel.`,
-  ].join("\n");
-}
-
 const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
   readonly headless: boolean;
 }) {
+  if (options.headless || (yield* headlessSessionConfig))
+    return yield* new CliTokenManager.CloudCliAuthorizationUnsupportedError({});
+  const target = yield* prepareCliLinkIntent(true);
   const tokens = yield* CliTokenManager.CloudCliTokenManager;
-  const useOutOfBandOAuth = options.headless || (yield* headlessSessionConfig);
-  if (!useOutOfBandOAuth) {
-    const authorization = yield* tokens.get;
-    if (authorization._tag === "Authorized") {
-      return authorization.token.identity ?? null;
-    }
-    yield* Console.log("\nHeadless mode enabled. A new authorization link is ready below.");
-  }
-  const existing = yield* tokens.getExisting.pipe(
-    Effect.catchTags({
-      CloudCliCredentialRefreshError: () =>
-        Console.log(
-          "The stored GOAT Connect credential could not be refreshed; signing in again.",
-        ).pipe(Effect.as(Option.none())),
-    }),
-  );
-  if (Option.isSome(existing)) {
-    return existing.value.identity ?? null;
-  }
-  const { token, identity } = yield* CliTokenManager.deviceAuthorizationLogin(
-    showDeviceAuthorizationPrompt,
-  ).pipe(
-    Effect.mapError((cause) =>
-      isCloudCliTokenManagerError(cause)
-        ? cause
-        : new CliTokenManager.CloudCliAuthorizationError({ cause }),
-    ),
-  );
-  yield* tokens.store(token);
-  return identity;
+  const approved = yield* tokens.approveLink(target.intent);
+  return approved.token.identity ?? null;
 });
 
 function bytesToString(value: Uint8Array): string {
@@ -468,7 +423,7 @@ const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_resu
       );
       yield* Console.warn(
         input.clearAuthorization
-          ? "Could not revoke the relay-side environment record before signing out.\nThe stored CLI authorization was still removed locally."
+          ? "Remote revocation pending. The stored CLI authorization was removed locally.\nRetry: goat connect login, then goat connect unlink; or withdraw the environment from the hosted account page."
           : "Could not revoke the relay-side environment record yet.\nRun `goat connect unlink` again when the relay is reachable, or deregister it from the GOAT Connect page of your GOAT account.",
       );
     } else if (input.relayResult.value.status === "not-authenticated") {
@@ -481,7 +436,7 @@ const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_resu
   },
 );
 
-const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
+export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
   readonly clearAuthorization: boolean;
 }) {
   yield* CliState.setCliDesiredCloudLink(false);
@@ -559,6 +514,8 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
   readonly headless: boolean;
   readonly publishOnly?: boolean;
 }) {
+  if (options.headless || (yield* headlessSessionConfig))
+    return yield* new CliTokenManager.CloudCliAuthorizationUnsupportedError({});
   const publishOnly = options.publishOnly ?? false;
   if (!publishOnly) {
     const relayClient = yield* RelayClient.RelayClient;
@@ -574,17 +531,11 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
     yield* Console.log(formatRelayClientReady(installed.value.version));
   }
 
-  const identity = yield* authorizeCli(options);
+  const target = yield* prepareCliLinkIntent(!publishOnly);
+  const tokens = yield* CliTokenManager.CloudCliTokenManager;
+  const approved = yield* tokens.approveLink(target.intent);
+  const identity = yield* installApprovedCliLink(target.intent, approved, target.origin);
   yield* CliState.setCliDesiredCloudLink(true, publishOnly ? "publish_only" : "managed");
-  if (yield* CliState.dropRevokedCloudLink) {
-    yield* Console.log(
-      "Removed the link GOAT Connect no longer accepts. The next start links this environment again.",
-    );
-  }
-  if (publishOnly) {
-    const secrets = yield* ServerSecretStore.ServerSecretStore;
-    yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, stringToBytes("true"));
-  }
   return { identity } as const;
 });
 
@@ -615,7 +566,7 @@ const connectLinkCommand = Command.make("link", {
     Flag.withDefault(false),
   ),
 }).pipe(
-  Command.withDescription("Authorize this environment for GOAT Connect on next start."),
+  Command.withDescription("Approve and link this environment to GOAT Connect."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
