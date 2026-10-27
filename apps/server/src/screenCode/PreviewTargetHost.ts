@@ -16,8 +16,12 @@ import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import type { BoundPreviewTab } from "./BoundPreviewTabs.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
-import { type ScreenHostContext, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
-import { observePreviewTarget } from "./PreviewTargetReads.ts";
+import {
+  observationReplyBudget,
+  type ScreenHostContext,
+  type ScreenHostDispatcher,
+} from "./ScreenHostBridge.ts";
+import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
@@ -347,10 +351,26 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const current = yield* status(
         bound,
         context,
-        call.method === "observe" || call.method === "tab_status",
+        call.method === "observe" || call.method === "tab_status" || call.method === "read_page",
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
+      if (call.method === "read_page") {
+        const scope = cellScope(arg.scope, observations);
+        const input = cellReadInput(arg, observationReplyBudget(call, context.limits));
+        if (scope && "code" in scope) return yield* Effect.fail(scope);
+        if ("code" in input) return yield* Effect.fail(input);
+        const page = yield* broker
+          .invoke({
+            scope: context.invocation,
+            operation: "read",
+            input: { ...input, ...(scope ? { scope } : {}) },
+            exact: exact(bound.tab, false),
+            updateCurrentTab: false,
+          })
+          .pipe(Effect.mapError((error) => previewTargetFailure(error, "read")));
+        return { value: page, category: "confirmed", evidence: ["Rendered page text read"] };
+      }
       const claimIdentity = identity(bound, context);
       if (call.method === "claim_tab") {
         const claim = yield* claims
@@ -378,6 +398,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       if (call.method === "observe") {
+        const scope = cellScope(arg.scope, observations);
+        if (scope && "code" in scope) return yield* Effect.fail(scope);
         const reading = {
           ...bound,
           tab: { ...bound.tab, url: current.url },
@@ -387,6 +409,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const snapshot = yield* invoke(reading, context, "snapshot", {
           captureImage: arg.screenshot === true,
           fullPage: arg.fullPage === true,
+          ...(arg.interactiveOnly === true ? { interactiveOnly: true } : {}),
+          ...(scope ? { scope } : {}),
         }) as Effect.Effect<PreviewAutomationSnapshot, ScreenRunError>;
         const result = yield* observePreviewTarget({
           call,

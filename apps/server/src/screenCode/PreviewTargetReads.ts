@@ -18,6 +18,52 @@ const fail = (code: ScreenRunError["code"], nextStep: string): ScreenRunError =>
   nextStep,
 });
 
+/** A cell scope names a selector or an element ref from the latest observation of this tab. */
+export const cellScope = (
+  value: unknown,
+  observations: ScreenObservations,
+): { readonly ref: string } | { readonly selector: string } | undefined | ScreenRunError => {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return fail("invalid_argument", "Pass scope as {selector} or {ref}.");
+  const scope = value as { selector?: unknown; ref?: unknown };
+  if (typeof scope.selector === "string" && scope.ref === undefined)
+    return { selector: scope.selector };
+  if (scope.ref && typeof scope.ref === "object" && scope.selector === undefined) {
+    const token = observations.index.resolveElement(
+      scope.ref as Parameters<typeof observations.index.resolveElement>[0],
+    );
+    return token?.startsWith("aria-ref=")
+      ? { ref: token.slice("aria-ref=".length) }
+      : fail("stale_reference", "Observe the current tab again.");
+  }
+  return fail("invalid_argument", "Pass scope as {selector} or {ref}.");
+};
+
+const READ_OPTIONS = ["format", "offset", "revision", "settleMs", "timeoutMs", "maxBytes"] as const;
+
+/** Read options for the broker, with the page budget lowered to what one cell reply can carry. */
+export const cellReadInput = (
+  arg: Record<string, unknown>,
+  replyBytes: number,
+): Record<string, unknown> | ScreenRunError => {
+  const unknown = Object.keys(arg).filter(
+    (key) =>
+      key !== "targetRef" &&
+      key !== "scope" &&
+      !(READ_OPTIONS as ReadonlyArray<string>).includes(key),
+  );
+  if (unknown.length > 0)
+    return fail("invalid_argument", `Unknown read options: ${unknown.join(", ")}.`);
+  const requested = typeof arg.maxBytes === "number" ? arg.maxBytes : 32_000;
+  const maxBytes = Math.min(requested, 48_000, replyBytes);
+  if (maxBytes < 1_000) return fail("output_limit", "Raise returnBytes to read page text.");
+  const input: Record<string, unknown> = { maxBytes };
+  for (const key of READ_OPTIONS)
+    if (key !== "maxBytes" && arg[key] !== undefined) input[key] = arg[key];
+  return input;
+};
+
 export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(function* (input: {
   readonly call: ScreenHostCall;
   readonly context: ScreenHostContext;

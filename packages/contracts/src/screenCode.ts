@@ -73,6 +73,7 @@ export const ScreenMethod = Schema.Literals([
   "close_tab",
   "observe",
   "tab_status",
+  "read_page",
   "select",
   "select_text",
   "wait_for",

@@ -62,6 +62,7 @@ const methods = [
   "close_tab",
   "observe",
   "tab_status",
+  "read_page",
   "select",
   "select_text",
   "wait_for",
@@ -208,6 +209,7 @@ export async function runScreenChild(
         return Object.freeze(ref.kind === 'tab' ? {
           ...common,
           status: () => call('tab_status'),
+          read: (arg = {}) => call('read_page', arg),
           claim: () => call('claim_tab'),
           keep: (reason = 'deliverable') => call('keep_tab', { reason }),
           navigate: (url) => call('navigate_tab', { url }),

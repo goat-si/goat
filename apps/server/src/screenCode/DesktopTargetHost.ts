@@ -587,7 +587,7 @@ export const createDesktopTargetHost = (deps: {
       return [{ kind: "app" as const, available: false, reason }];
     }),
     dispatch: (call, context) =>
-      call.method === "tab_status"
+      call.method === "tab_status" || call.method === "read_page"
         ? Effect.fail(fail("unsupported"))
         : call.method === "bind_app"
           ? bindApp(call, context)

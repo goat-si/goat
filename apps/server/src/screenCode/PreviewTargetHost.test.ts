@@ -107,6 +107,8 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
         } as A);
       }
       if (state.failure) return Effect.fail(state.failure);
+      if (request.operation === "read")
+        return Effect.succeed({ url: state.url, title: tab.title, text: "# Workspace" } as A);
       state.clicked = true;
       if (state.navigateOnClick) state.url = "https://next.test/";
       return Effect.succeed({ ok: true } as A);
@@ -128,8 +130,47 @@ const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(functio
     expect(reply?.outcome).toBe("ok");
     return reply?.value as ScreenObservation;
   });
-  return { state, requests, dispatch, observe, bridge };
+  return { state, requests, dispatch, observe, bridge, ref };
 });
+
+it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    const first = yield* fixture.observe();
+    const page = yield* fixture.dispatch("read_page", {
+      scope: { ref: first.elements[0]!.ref },
+      format: "text",
+      maxBytes: 48_000,
+    });
+    expect(page?.value).toMatchObject({ text: "# Workspace" });
+    const request = fixture.requests.find((entry) => entry.operation === "read");
+    expect(request?.input).toMatchObject({ scope: { ref: "e1" }, format: "text" });
+    expect((request?.input as { maxBytes: number }).maxBytes).toBeLessThan(
+      DEFAULT_SCREEN_RUN_LIMITS.returnBytes,
+    );
+    expect(request?.exact).not.toHaveProperty("controlGeneration");
+    expect((yield* fixture.dispatch("read_page", { expand: true }))?.error?.code).toBe(
+      "invalid_argument",
+    );
+    const tiny = yield* fixture.bridge.handle(call("read_page", 90, {}, fixture.ref), {
+      ...context,
+      limits: { ...DEFAULT_SCREEN_RUN_LIMITS, returnBytes: 900 },
+    });
+    expect(tiny?.error?.code).toBe("output_limit");
+    expect(fixture.requests.filter((entry) => entry.operation === "read")).toHaveLength(1);
+  }),
+);
+
+it.effect("observe passes interactive-only and scope narrowing to the snapshot", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.observe({ interactiveOnly: true, scope: { selector: "main" } });
+    expect(fixture.requests.find((entry) => entry.operation === "snapshot")?.input).toMatchObject({
+      interactiveOnly: true,
+      scope: { selector: "main" },
+    });
+  }),
+);
 
 it.effect("actions retire refs while preserving the last complete tree for a diff", () =>
   Effect.gen(function* () {

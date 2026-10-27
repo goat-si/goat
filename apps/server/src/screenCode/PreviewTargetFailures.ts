@@ -20,7 +20,10 @@ export const previewTargetFailure = (
   operation: PreviewAutomationOperation,
 ): ScreenRunError => {
   const effectStarted =
-    operation !== "snapshot" && operation !== "status" && !beforeInput.has(error._tag);
+    operation !== "snapshot" &&
+    operation !== "status" &&
+    operation !== "read" &&
+    !beforeInput.has(error._tag);
   const message = NodeUtil.stripVTControlCharacters(error.message)
     .replace(/https?:\/\/\S+/gi, "[url]")
     .replace(/\b(?:password|token|secret|authorization|cookie)\s*[:=]\s*\S+/gi, "[redacted]")
