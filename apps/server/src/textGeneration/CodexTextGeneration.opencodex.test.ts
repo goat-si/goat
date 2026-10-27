@@ -211,59 +211,66 @@ const admission = <E>(mutation: Effect.Effect<unknown, E, Settings.ServerSetting
       ).pipe(Effect.as("committed" as const)),
     );
   });
-const fenceWorld = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const route = yield* fixture();
-  const home = route.input.execution.home;
-  const log = home + "/launches.jsonl";
-  const binary = writeFakeCodex({
-    home,
-    log,
-    version: "0.156.1",
-    validConfig: true,
-    output: { title: "Home title" },
-  });
-  const settings = yield* Settings.ServerSettingsService;
-  yield* settings.start;
-  const routes = yield* Routes.CodexRouteService;
-  const config = {
-    modelRoute: "opencodex",
-    opencodexAuth: "openai",
-    opencodexBaseUrl: route.input.settings.opencodexBaseUrl,
-    homePath: home,
-    binaryPath: binary,
-  } as const;
-  const upsert = (opencodexAuth: "openai" | "none") =>
-    routes.mutateProviderInstance(
-      {
-        mutation: {
-          operation: "upsert",
-          instanceId,
-          instance: { driver: codexDriver, config: { ...config, opencodexAuth } },
+const fenceWorld = (id: ProviderInstanceId = instanceId) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const route = yield* fixture();
+    const home = route.input.execution.home;
+    const log = home + "/launches.jsonl";
+    const binary = writeFakeCodex({
+      home,
+      log,
+      version: "0.156.1",
+      validConfig: true,
+      output: { title: "Home title" },
+    });
+    const settings = yield* Settings.ServerSettingsService;
+    yield* settings.start;
+    const routes = yield* Routes.CodexRouteService;
+    const config = {
+      modelRoute: "opencodex",
+      opencodexAuth: "openai",
+      opencodexBaseUrl: route.input.settings.opencodexBaseUrl,
+      homePath: home,
+      binaryPath: binary,
+    } as const;
+    const upsert = (opencodexAuth: "openai" | "none") =>
+      routes.mutateProviderInstance(
+        {
+          mutation: {
+            operation: "upsert",
+            instanceId: id,
+            instance: { driver: codexDriver, config: { ...config, opencodexAuth } },
+          },
         },
-      },
-      caller,
-    );
-  yield* commitAndApply(upsert("openai"));
-  const generate = (getModels: Effect.Effect<ReadonlyArray<never>>) =>
-    makeCodexTextGeneration(decode(config), { PATH: process.env.PATH }, getModels, undefined, {
-      providerInstanceId: instanceId,
-    }).pipe(
-      Effect.provideService(HomeRoute.OpenCodexRoute, route.service),
-      Effect.map((generation) =>
-        generation.generateThreadTitle({
-          cwd: route.input.execution.cwd,
-          message: "Name the work",
-          modelSelection: createModelSelection(instanceId, "home-model"),
-        }),
+        caller,
+      );
+    yield* commitAndApply(upsert("openai"));
+    const generate = (getModels: Effect.Effect<ReadonlyArray<never>>) =>
+      makeCodexTextGeneration(decode(config), { PATH: process.env.PATH }, getModels, undefined, {
+        providerInstanceId: id,
+      }).pipe(
+        Effect.provideService(HomeRoute.OpenCodexRoute, route.service),
+        Effect.map((generation) =>
+          generation.generateThreadTitle({
+            cwd: route.input.execution.cwd,
+            message: "Name the work",
+            modelSelection: createModelSelection(id, "home-model"),
+          }),
+        ),
+      );
+    const execs = fs.exists(log).pipe(
+      Effect.flatMap((exists) => (exists ? fs.readFileString(log) : Effect.succeed(""))),
+      Effect.map(
+        (text) => text.split("\n").filter((line) => line.includes('"kind":"exec"')).length,
       ),
     );
-  const execs = fs.exists(log).pipe(
-    Effect.flatMap((exists) => (exists ? fs.readFileString(log) : Effect.succeed(""))),
-    Effect.map((text) => text.split("\n").filter((line) => line.includes('"kind":"exec"')).length),
-  );
-  return { upsert, generate, execs };
-});
+    const remove = routes.mutateProviderInstance(
+      { mutation: { operation: "remove", instanceId: id } },
+      caller,
+    );
+    return { upsert, remove, generate, execs };
+  });
 const fenceLayer = Layer.effect(
   ProviderHost.ProviderHost,
   Effect.gen(function* () {
@@ -284,7 +291,7 @@ const fenceLayer = Layer.effect(
 ).pipe(Layer.provideMerge(routeLayer));
 it.live("holds the instance's route lease from its settings until Codex exits", () =>
   Effect.gen(function* () {
-    const world = yield* fenceWorld;
+    const world = yield* fenceWorld();
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const request = yield* world.generate(
@@ -309,9 +316,27 @@ it.live("holds the instance's route lease from its settings until Codex exits", 
 );
 it.live("does not start Codex with route settings older than an admitted change", () =>
   Effect.gen(function* () {
-    const world = yield* fenceWorld;
+    const world = yield* fenceWorld();
     const request = yield* world.generate(Effect.succeed([]));
     yield* commitAndApply(world.upsert("none"));
+    const result = yield* request.pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.include(result.failure.message, "settings changed");
+    assert.equal(yield* world.execs, 0);
+  }).pipe(Effect.scoped, Effect.provide(fenceLayer)),
+);
+
+it.live.each([
+  { case: "a deleted explicit instance", id: instanceId },
+  {
+    case: "the default instance reset to its implicit settings",
+    id: ProviderInstanceId.make("codex"),
+  },
+])("does not start Codex for $case with route settings captured before", ({ id }) =>
+  Effect.gen(function* () {
+    const world = yield* fenceWorld(id);
+    const request = yield* world.generate(Effect.succeed([]));
+    yield* commitAndApply(world.remove);
     const result = yield* request.pipe(Effect.result);
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure") assert.include(result.failure.message, "settings changed");

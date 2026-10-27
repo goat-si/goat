@@ -2,7 +2,7 @@ import * as HomeRoute from "../provider/OpenCodexRoute.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { withCodexAppServerClient } from "../provider/CodexProvider.ts";
 import { usesAuthlessCodexHome } from "../provider/CodexHomeRouteConfig.ts";
-import { ProviderDriverKind } from "@goat/contracts";
+import { defaultInstanceIdForDriver, ProviderDriverKind } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
   withMemoryExecution,
@@ -138,13 +138,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         ),
       );
     if (Option.isNone(host)) return;
-    const current = (yield* host.value.settings.get.pipe(
-      Effect.mapError(
-        (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
-      ),
-    )).providerInstances[instanceId];
+    // An absent default instance runs on its implicit settings; any other absent instance is gone.
+    const current =
+      (yield* host.value.settings.get.pipe(
+        Effect.mapError(
+          (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
+        ),
+      )).providerInstances[instanceId] ??
+      (instanceId === defaultInstanceIdForDriver(CODEX_DRIVER)
+        ? { driver: CODEX_DRIVER, config: {} }
+        : undefined);
     if (
-      current !== undefined &&
+      current === undefined ||
       CodexRoutes.codexRouteKey(current) !==
         CodexRoutes.codexRouteKey({ driver: CODEX_DRIVER, config: codexConfig })
     )
