@@ -503,13 +503,14 @@ describe("X11 window capture against a scripted server", () => {
     ).toEqual({ refused: SHARED_CAPTURE });
   });
 
-  it("refuses, as transient, a window its app has not redrawn whole when asked (#1381)", async () => {
-    // Undrawn parts of a window without a background keep what Composite copied in from behind.
+  it("reads the pixmap the compositor shows when the app does not repaint all of it on Expose", async () => {
+    // GTK 3 and 4, Firefox and Xt apps on GNOME's compositor answer a synthetic Expose with no
+    // drawing or with their frame only; what the compositor shows is still that window's.
     for (const redraw of ["none", "half"] as const) {
       await using server = await scriptedServer(FRAMED, { redirected: [0x400001], redraw });
       expect(
         await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-      ).toEqual({ refused: STILL_DRAWING, transient: true });
+      ).toMatchObject({ width: 100 });
     }
   });
 
