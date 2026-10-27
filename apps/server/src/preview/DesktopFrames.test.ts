@@ -493,6 +493,15 @@ describe("DesktopFrames", () => {
         assert.deepInclude(unstamped, { type: "frame", capturedAt: 3_000 });
         assert.notProperty(unstamped, "cursor");
         assert.notProperty(unstamped, "ageMs");
+        yield* TestClock.adjust("500 millis");
+        // Stamped later than the server's own clock: the clock stepped back while it was captured,
+        // so the stamp orders nothing.
+        yield* f.record(pointAt(3, 0.5, 2_900));
+        yield* captured("RlVU", 9_000);
+        const jumped = yield* next;
+        assert.deepInclude(jumped, { type: "frame", capturedAt: 3_500 });
+        assert.notProperty(jumped, "cursor");
+        assert.notProperty(jumped, "ageMs");
       }).pipe(Effect.scoped),
   );
 

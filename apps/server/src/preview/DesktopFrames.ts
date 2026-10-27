@@ -182,7 +182,10 @@ export function admitFrame(
   const bytes = Math.floor((message.data.length * 3) / 4);
   if (bytes > PREVIEW_SESSION_FRAME_LIMITS.maxBytes || message.width > target.maxWidth)
     return { type: "unavailable", reason: "captureFailed" };
-  const stamped = message.capturedAt === undefined ? undefined : Math.min(message.capturedAt, now);
+  // A stamp later than now means the host's clock stepped back during the capture; it orders
+  // nothing against a cursor stamped since, so the frame counts as unstamped.
+  const stamped =
+    message.capturedAt === undefined || message.capturedAt > now ? undefined : message.capturedAt;
   const capturedAt = stamped ?? now;
   const paired = stamped !== undefined && (gate.cursorAt === undefined || gate.cursorAt < stamped);
   return {
