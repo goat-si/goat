@@ -80,11 +80,13 @@ it.live(
         })).status,
       ).toBe(401);
       expect((yield* request("accounts/owner/suspend")).status).toBe(400);
-      expect(
-        (yield* request("accounts/owner/suspend", { key: "suspend", body: '{"status":"allowed"}' }))
-          .status,
-      ).toBe(400);
+      for (const body of ['{"status":"allowed"}', "[]", '"invalid"', "null", "1", "true", "{"]) {
+        const invalid = yield* request("accounts/owner/suspend", { key: "suspend", body });
+        expect(invalid.status, body).toBe(400);
+        expect(yield* Effect.promise(() => invalid.json())).toEqual({ code: "invalid_request" });
+      }
       expect(pg.query("SELECT status FROM relay_account_access").trim()).toBe("allowed");
+      expect(pg.query("SELECT count(*) FROM relay_account_operations").trim()).toBe("0");
       const pending = yield* request("accounts/owner/suspend", { key: "suspend" });
       expect(pending.status).toBe(202);
       const operation = yield* Effect.promise(() => pending.json());

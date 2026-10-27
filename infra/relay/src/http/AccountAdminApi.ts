@@ -24,7 +24,7 @@ export function operatorAuthenticated(
 }
 const response = (body: unknown, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status, headers: { "cache-control": "no-store" } });
-const EmptyBody = Schema.Struct({});
+const EmptyBody = Schema.Record(Schema.String, Schema.Never);
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const lifecycle = yield* AccountLifecycle.AccountLifecycle;
