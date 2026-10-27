@@ -7,6 +7,17 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
+  it.each([
+    ["packages/shared/src/paletteSearch.test.ts", '"t3code#22889"', '"goat#22889"'],
+    [
+      "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
+      'headRepository: { id: "R_1", name: "t3code" }',
+      'headRepository: { id: "R_1", name: "goat" }',
+    ],
+  ])("keeps repository fixture fields consistent in %s", (path, input, expected) => {
+    expect(apply(path, input)).toBe(expected);
+  });
+
   it("renames maintainer samples in tests", () => {
     expect(
       apply(

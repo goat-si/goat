@@ -417,7 +417,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
       ],
     });
     for (const query of [
-      "t3code#22889",
+      "goat#22889",
       "github.com/goat-si/goat/pull/22889",
       "https://github.com/goat-si/goat/pull/22889/files",
       "5fe6f59c",
@@ -427,7 +427,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     }
     expect(scoreThreadSearch("github.com", subject, NOW)).toBeNull();
     // A number is never cut short.
-    for (const query of ["github.com/goat-si/goat/pull/2288", "t3code#2288"]) {
+    for (const query of ["github.com/goat-si/goat/pull/2288", "goat#2288"]) {
       expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW), query).toBeNull();
     }
   });
