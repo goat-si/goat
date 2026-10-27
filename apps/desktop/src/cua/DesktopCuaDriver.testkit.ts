@@ -46,7 +46,8 @@ export const descriptor = {
 
 export const HOST_PID = 4242;
 export const HELPER_PID = 5151;
-export const HELPER_ID = "codes.t3.host-test.computer-use";
+/** The stable channel's helper: the fixture runs a packaged 1.0.0 under its own app id. */
+export const HELPER_ID = "si.goat.desktop.computer-use";
 export const HELPER_BUNDLE = "/Helpers/GOAT Computer Use.app";
 
 /** The helper's answer to a grant check; detail and blocker are its Windows refusal. */
@@ -99,6 +100,8 @@ export const fixture = Effect.fn(function* (
   options: {
     platform?: NodeJS.Platform;
     isPackaged?: boolean;
+    /** Runs as a dev launcher does: a dev server URL and the checkout's own app id. */
+    development?: { readonly appUserModelId: string };
     denyPermissions?: boolean;
     failFirstStart?: boolean;
     hold?: "start" | "stop" | "monitor";
@@ -549,7 +552,14 @@ export const fixture = Effect.fn(function* (
     Layer.provide(
       Layer.mergeAll(
         NodePath.layerPosix,
-        DesktopConfig.layerTest({ GOAT_DESKTOP_APP_USER_MODEL_ID: "codes.t3.host-test" }),
+        DesktopConfig.layerTest(
+          options.development === undefined
+            ? { GOAT_DESKTOP_APP_USER_MODEL_ID: "codes.t3.host-test" }
+            : {
+                GOAT_DESKTOP_APP_USER_MODEL_ID: options.development.appUserModelId,
+                VITE_DEV_SERVER_URL: "http://localhost:5733",
+              },
+        ),
       ),
     ),
   );
