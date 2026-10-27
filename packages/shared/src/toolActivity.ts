@@ -249,15 +249,21 @@ function typedTextMask(typed: ReadonlySet<string>) {
   }
   const sorted = [...forms].sort((left, right) => right.length - left.length);
   const long = sorted.filter((form) => form.length >= MIN_EMBEDDED_TYPED_LENGTH);
-  // A short value with no letter or digit, such as a quote mark, would match all over the text.
+  // Short values go as whole tokens in any script. A lone punctuation mark, such as a quote,
+  // would match all over the text, so it goes only where it is the whole string.
   const short = sorted.filter(
-    (form) => form.length < MIN_EMBEDDED_TYPED_LENGTH && /[A-Za-z0-9]/u.test(form),
+    (form) =>
+      form.length < MIN_EMBEDDED_TYPED_LENGTH && (form.length > 1 || /[\p{L}\p{N}]/u.test(form)),
   );
   const tokens =
     short.length === 0
       ? undefined
-      : new RegExp(`(?<![A-Za-z0-9])(?:${short.map(regexLiteral).join("|")})(?![A-Za-z0-9])`, "g");
+      : new RegExp(
+          `(?<![\\p{L}\\p{N}])(?:${short.map(regexLiteral).join("|")})(?![\\p{L}\\p{N}])`,
+          "gu",
+        );
   return (text: string) => {
+    if (typed.has(text)) return COMPUTER_USE_TYPED_OUTPUT;
     let masked = text;
     for (const form of long) masked = masked.split(form).join(COMPUTER_USE_TYPED_OUTPUT);
     return tokens === undefined ? masked : masked.replace(tokens, COMPUTER_USE_TYPED_OUTPUT);

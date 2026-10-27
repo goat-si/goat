@@ -263,6 +263,29 @@ describe("orchestration V2 wire projection", () => {
     ).toEqual(["ok", "echo [typed text]"]);
   });
 
+  it("masks short values in any script or punctuation as whole tokens in a batch's result", () => {
+    const input = {
+      steps: [
+        { set_value: { value: "秘密" }, expect: { value: "秘密" } },
+        { type_text: { text: "!!" } },
+        { type_text: { text: "?" } },
+      ],
+    };
+    expect(
+      redactComputerUseTypedOutput("cua-driver.run_steps", input, [
+        'expected value "秘密" but saw ""',
+        "typed !! then Hello!!",
+        "?",
+        "Is it done?",
+      ]),
+    ).toEqual([
+      'expected value "[typed text]" but saw ""',
+      "typed [typed text] then Hello!!",
+      "[typed text]",
+      "Is it done?",
+    ]);
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,
