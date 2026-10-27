@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { makeSweepCursor } from "./PendingAttachmentSweepCursor.ts";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
@@ -80,9 +80,7 @@ describe("AttachmentUpload", () => {
   it.effect("configuration prepares attachment storage without synchronous enumeration", () =>
     Effect.gen(function* () {
       using entries = vi.spyOn(NodeFS, "readdirSync");
-      const config = yield* Effect.gen(function* () {
-        return yield* ServerConfig.ServerConfig;
-      }).pipe(Effect.provide(layerTest));
+      const config = yield* ServerConfig.ServerConfig.pipe(Effect.provide(layerTest));
       expect(
         entries.mock.calls.filter(([directory]) => String(directory) === config.attachmentsDir),
       ).toHaveLength(0);
