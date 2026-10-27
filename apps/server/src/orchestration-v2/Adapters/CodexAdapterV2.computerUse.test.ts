@@ -73,7 +73,7 @@ describe("Codex computer use attachment", () => {
             id++;
           }
           if (mode !== "user") id = f.reload(id, managed);
-          yield* f.turnStart(id++, 2, mode !== "user");
+          yield* f.turnStart(id++, 2, { computerUse: mode !== "user", screenCode: true });
           f.entries.push({
             type: "emit_inbound",
             frame: {
@@ -101,7 +101,7 @@ describe("Codex computer use attachment", () => {
           f.turnCompleted(2);
           // The next protocol request must be turn/start, even with a background command alive.
           // No goal/terminal reads, unsubscribe, resume or deferral note are expected after Stop.
-          yield* f.turnStart(id++, 3, mode !== "user");
+          yield* f.turnStart(id++, 3, { computerUse: mode !== "user", screenCode: true });
           f.turnCompleted(3);
           if (mode !== "user") id = f.reload(id, { ...managed, enabled: false });
           yield* f.turnStart(id, 4, false);
@@ -150,9 +150,12 @@ describe("Codex computer use attachment", () => {
         });
         yield* sessions.set(first.session);
         f.start(managed(first.descriptor));
-        yield* f.turnStart(3, 1, true);
+        yield* f.turnStart(3, 1, { computerUse: true, screenCode: true });
         f.turnCompleted(1);
-        yield* f.turnStart(f.reload(4, managed(next.descriptor)), 2, true);
+        yield* f.turnStart(f.reload(4, managed(next.descriptor)), 2, {
+          computerUse: true,
+          screenCode: true,
+        });
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);

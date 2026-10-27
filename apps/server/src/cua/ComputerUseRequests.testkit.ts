@@ -36,10 +36,14 @@ export const supported = { humanInput: "supported", privateMode: "supported" } s
  * The real leases, on a host whose helper's accepted readiness reported these signals;
  * undefined: a host whose helper never reported.
  */
-export const leasesDetecting = (signals: Signals | undefined) =>
+export const leasesDetecting = (
+  signals: Signals | undefined,
+  setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
+) =>
   ComputerUseLeases.layer.pipe(
     Layer.provide(
       DesktopTelemetryReceiver.layerTest({
+        ...(setCuaWatch === undefined ? {} : { setCuaWatch }),
         cuaReadiness: Effect.succeed(
           signals === undefined
             ? Option.none()
@@ -111,6 +115,8 @@ export const withRequests = <A, E, R>(
   ) => Effect.Effect<void>,
   /** The running turn came from a scheduled task, so it is unattended work. */
   scheduled = false,
+  /** Hears what the leases tell the desktop to watch and admit to the driver's manifest. */
+  setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
 ) => {
   let current = failure;
   return Effect.gen(function* () {
@@ -154,7 +160,7 @@ export const withRequests = <A, E, R>(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        leasesDetecting(signals),
+        leasesDetecting(signals, setCuaWatch),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
           listedApps: Effect.succeed(listedApps),
