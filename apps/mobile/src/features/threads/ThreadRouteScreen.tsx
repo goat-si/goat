@@ -4,8 +4,12 @@ import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
 import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
-import { AppBar } from "../../components/ui/AppBar";
-import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  StackActions,
+  useNavigation,
+  useRoute,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import {
@@ -26,7 +30,6 @@ import {
   resolveProjectScripts,
 } from "@goat/shared/projectScripts";
 import { Platform } from "react-native";
-import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConnectionsReady } from "../../state/workspace";
 import { useEnvironmentShellReadiness } from "../../state/shell";
@@ -36,8 +39,6 @@ import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draf
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
-import { EmptyState } from "../../components/ui/EmptyState";
-import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { connectionTone } from "../connection/connectionTone";
@@ -63,7 +64,7 @@ import {
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
-import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
+import { ThreadScreenBinding, ThreadScreenHost } from "./ThreadScreenHost";
 import { draftRouteIdentity } from "./thread-route-state";
 import { NewTaskDraftRouteScreen, type NewTaskDraftRouteParams } from "./NewTaskDraftRouteScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
@@ -76,6 +77,7 @@ import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { resolveMergeBackTargetThreadId } from "@goat/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@goat/client-runtime/state/thread-workflows";
 import { threadEnvironment, useThreadFamily } from "../../state/threads";
+import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@goat/client-runtime/state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
@@ -89,11 +91,15 @@ import {
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
 import { threadRouteIsHydrating } from "./thread-route-hydration";
+import {
+  OpeningThreadLoadingScreen,
+  ThreadUnavailableScreen,
+  UnavailableThreadDraftRedirect,
+} from "./thread-route-fallback";
 import { useThreadPromptLink } from "../prompt-links/useThreadPromptLink";
 import { ThreadHeader } from "./ThreadHeader";
 import {
   useAndroidWorkspaceBack,
-  useWorkspaceBackNavigation,
 } from "../workspace/useAndroidWorkspaceNavigation";
 import { openSettings } from "../settings/settings-navigation";
 import {
@@ -120,38 +126,6 @@ function firstRouteParam(value: string | string[] | undefined): string | null {
   return first === undefined || first.trim().length === 0 ? null : first;
 }
 
-function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
-  const goBack = useWorkspaceBackNavigation("threads");
-  const { layout } = useAdaptiveWorkspaceLayout();
-  const { themeVariables } = useAppearancePreferences();
-  if (Platform.OS !== "android")
-    return <ThreadScreenFallback>{props.children}</ThreadScreenFallback>;
-
-  return (
-    <>
-      <AppBar
-        title="Thread"
-        options={{ contentStyle: { backgroundColor: themeVariables["--color-header"] } }}
-        onBack={layout.usesSplitView ? undefined : goBack}
-        hideBottomBorder
-      />
-      <ThreadScreenFallback>{props.children}</ThreadScreenFallback>
-    </>
-  );
-}
-
-function OpeningThreadLoadingScreen() {
-  return (
-    <ThreadRouteFallbackLayout>
-      <LoadingScreen
-        message="Opening thread…"
-        messagePlacement="above-spinner"
-        embedded={Platform.OS === "android"}
-      />
-    </ThreadRouteFallbackLayout>
-  );
-}
-
 type ThreadRouteScreenRouteProps = StaticScreenProps<{
   readonly environmentId?: string;
   readonly threadId?: string;
@@ -164,33 +138,6 @@ interface ThreadRouteScreenProps extends ThreadRouteScreenRouteProps {
   readonly inspectorPresentation?: ThreadInspectorPresentation;
   readonly onReturnToThread?: () => void;
   readonly renderInspector?: (headerInset: number) => ReactNode;
-}
-
-function ThreadUnavailableScreen(props: {
-  readonly actionLabel: string;
-  readonly onAction: () => void;
-}) {
-  return (
-    <ThreadRouteFallbackLayout>
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{
-          flexGrow: 1,
-          justifyContent: "center",
-          paddingHorizontal: 24,
-          paddingVertical: 32,
-        }}
-        className="bg-screen flex-1 android:bg-transparent"
-      >
-        <EmptyState
-          title="Thread unavailable"
-          detail="This thread is not available in the current mobile snapshot."
-          actionLabel={props.actionLabel}
-          onAction={props.onAction}
-        />
-      </ScrollView>
-    </ThreadRouteFallbackLayout>
-  );
 }
 
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
@@ -227,6 +174,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   const routeEnvironmentShellState = useEnvironmentShellReadiness(environmentId);
   const { onReconnectEnvironment } = useRemoteConnections();
   const navigation = useNavigation();
+  const routeName = useRoute().name;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeThreadKey =
@@ -263,6 +211,10 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
 
   const stillHydrating = threadRouteIsHydrating({
     isLoadingConnections: !connectionsReady,
+    environmentRegistered: routeEnvironmentRuntime !== null,
+    localCacheRead:
+      routeEnvironmentShellState.cacheRead &&
+      selectedThreadDetailState !== EMPTY_ENVIRONMENT_THREAD_STATE,
     connectionState: routeConnectionState,
     shellStatus: routeEnvironmentShellState.status,
     shellHasError: routeEnvironmentShellState.hasError,
@@ -272,6 +224,10 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
 
   if (stillHydrating) {
     return withInspectorHeader(<OpeningThreadLoadingScreen />);
+  }
+
+  if (routeName === "Thread" && !props.inspectorPresentation) {
+    return <UnavailableThreadDraftRedirect environmentId={environmentId} />;
   }
 
   return withInspectorHeader(
