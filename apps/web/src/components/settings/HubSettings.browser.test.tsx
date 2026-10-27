@@ -933,7 +933,7 @@ it("shows a failed setup request inline, naming the device, and lets the Home re
   await userEvent.click(row.getByText("Setup steps"));
   await expect
     .element(row.getByText("Install Codex:", { exact: false }))
-    .toHaveTextContent("Failed");
+    .toHaveTextContent("Install Codex: Failed");
   await userEvent.click(row.getByRole("button", { name: "Continue setup" }));
   await expect
     .element(row.getByRole("alert"))

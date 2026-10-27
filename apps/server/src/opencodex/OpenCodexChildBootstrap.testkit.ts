@@ -42,7 +42,7 @@ import * as Inventory from "./OpenCodexInventory.ts";
 
 export const MINUTE = 60_000;
 
-export const joinResult = (
+const joinResult = (
   alias: string,
   allowed: boolean,
   joined: HubDeviceOperationResult["state"],

@@ -67,7 +67,7 @@ export const childError = (code: ChildReadyFailure["code"], step: ChildReadyStep
   new ChildStepError({ code, step });
 
 /** One next action per failure: GOAT update only after a real outdated refusal. */
-export const nextActionFor = (failure: ChildReadyFailure | undefined): ChildReadyNextAction =>
+const nextActionFor = (failure: ChildReadyFailure | undefined): ChildReadyNextAction =>
   failure === undefined
     ? "none"
     : failure.code === "remote_outdated"

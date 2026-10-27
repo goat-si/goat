@@ -69,6 +69,8 @@ export function HubChildSetup({
         setError(failure instanceof Error ? failure.message : "Setup could not start. Try again.");
       } else if (result.value.kind === "error") setError(result.value.failure.message);
       onRefresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Setup could not start. Try again.");
     } finally {
       inFlight.current = false;
       setPending(false);
@@ -76,8 +78,8 @@ export function HubChildSetup({
   };
   return (
     <div className="space-y-1.5 text-xs">
-      <p role="status" className={TONE_TEXT[setup.tone]}>
-        {setup.label} · {relative(setup.checkedAt)}
+      <p className={TONE_TEXT[setup.tone]}>
+        <span role="status">{setup.label}</span> · {relative(setup.checkedAt)}
       </p>
       {setup.detail === null ? null : <p className="text-muted-foreground">{setup.detail}</p>}
       {setup.proof === null ? null : (

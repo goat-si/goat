@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 /** Present only in the environment of a Claude Code instance routed through OpenCodex Home. */
 export const CLAUDE_HOME_ROUTE_MARKER = "GOAT_CLAUDE_HOME_ROUTE";
 /** Endpoint, credential and backend switches a routed Claude Code launch must not take elsewhere. */
-export const CLAUDE_HOME_PINNED_ENV = [
+const CLAUDE_HOME_PINNED_ENV = [
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_API_KEY",
