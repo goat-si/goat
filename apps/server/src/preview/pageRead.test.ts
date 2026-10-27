@@ -253,7 +253,7 @@ it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
     });
     await page.exposeFunction("readWaiting", () => started());
     await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
-    await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+    await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
     // The read adds its load listener in the same step that arms its deadline timer.
     await page.setContent(
       "<main>Changing</main><script>const add = window.addEventListener.bind(window); window.addEventListener = (type, ...rest) => { if (type === 'load') window.readWaiting(); return add(type, ...rest); };</script>",
