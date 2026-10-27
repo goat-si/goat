@@ -343,7 +343,7 @@ const runProbe = Effect.fn("runProbe")(function* (
         shell: resolved.shell,
       }),
     );
-    yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+    yield* Effect.addFinalizer(() => Effect.ignore(child.kill({ forceKillAfter: "1 second" })));
     // stderr is drained so a chatty tool cannot block on a full pipe.
     const [stdout, exitCode] = yield* Effect.all(
       [

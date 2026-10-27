@@ -32,6 +32,7 @@ import { resolveSpawnCommand } from "@goat/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
+import * as WindowsTaskkill from "@goat/provider-core/server/windowsTaskkill";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
 import { forkRuntimeScope } from "./runtimeScope.ts";
 import {
@@ -1022,48 +1023,19 @@ export function terminatePosixOwnedProcessTree(input: {
   }).pipe(withWallClock);
 }
 
-function windowsTaskkillResultIsSuccess(exitCode: number, _output?: string): boolean {
-  return exitCode === 0;
-}
-
-const terminateWindowsProcessTreeWithTaskkill = (
-  pid: number,
-): Effect.Effect<void, AcpProcessGroupTerminationError, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const taskkill = yield* spawner.spawn(
-        ChildProcess.make("taskkill", ["/PID", String(pid), "/T", "/F"]),
-      );
-      const outputFiber = yield* Stream.decodeText(taskkill.all).pipe(
-        Stream.mkString,
-        Effect.forkScoped,
-      );
-      const exitCode = Number(yield* taskkill.exitCode);
-      const output = yield* Fiber.join(outputFiber);
-      // A missing leader cannot prove that inherited descendants exited.
-      if (windowsTaskkillResultIsSuccess(exitCode, output)) return;
-      const trimmedOutput = output.trim();
-      return yield* new AcpProcessGroupTerminationError({
-        detail: `taskkill exited ${exitCode} for ACP process tree ${pid}`,
-        pid,
-        exitCode,
-        ...(trimmedOutput.length === 0
-          ? {}
-          : { cause: trimmedOutput.length > 500 ? trimmedOutput.slice(0, 500) : trimmedOutput }),
-      });
-    }),
-  ).pipe(
-    Effect.mapError((cause) =>
-      isAcpProcessGroupTerminationError(cause)
-        ? cause
-        : new AcpProcessGroupTerminationError({
+const terminateWindowsProcessTreeWithTaskkill = Effect.fn("AcpSessionRuntime.terminateWindowsTree")(
+  (pid: number) =>
+    WindowsTaskkill.terminateWindowsTree(pid).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AcpProcessGroupTerminationError({
+            pid,
             cause,
             detail: `Failed to run taskkill for ACP process tree ${pid}`,
-            pid,
           }),
+      ),
     ),
-  );
+);
 
 export function selectAcpAgentAuthMethod(
   authMethods: ReadonlyArray<EffectAcpSchema.AuthMethod> | undefined,

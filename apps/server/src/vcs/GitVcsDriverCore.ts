@@ -1089,7 +1089,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ChildProcess.make(executable, commandInput.args, {
               cwd: commandInput.cwd,
               env: spawnEnv,
-              forceKillAfter: input.forceKillAfterMs,
+              forceKillAfter: input.forceKillAfterMs ?? 1_000,
             }),
           )
           .pipe(
