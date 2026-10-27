@@ -632,7 +632,8 @@ const make = Effect.gen(function* () {
           { transport },
         );
       // Ready means OpenCodex answers on the device; installing it is a separate, consented step.
-      yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
+      // A native Windows device has no shell to ask; Home's own link probe and add answer there.
+      if (platform !== undefined) yield* ocx.device(alias, ["--version"], DEVICE_TIMEOUT_MS);
       const offered = yield* probe(alias);
       if (!offered.ok) {
         steps.push({ step: "probe", outcome: "failed", detail: phaseMessage(offered.phase) });

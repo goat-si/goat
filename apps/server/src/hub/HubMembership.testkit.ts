@@ -86,6 +86,8 @@ export interface Fixture {
   readonly health?: { readonly service: string; readonly role?: string };
   readonly strayTunnel?: boolean;
   readonly platform?: DevicePlatform;
+  /** A native Windows device answers no shell, so its platform reads as unknown. */
+  readonly nativeWindows?: boolean;
   /** `ocx connect status --json` on the device. */
   readonly connection?: Readonly<Record<string, unknown>>;
   /** Home `ocx hub invite` exit; 0 mints a code. */
@@ -245,7 +247,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
             devicePlatform: (alias) =>
               Effect.sync(() => {
                 calls.push(`platform ${alias}`);
-                return fixture.platform ?? "posix";
+                return fixture.nativeWindows === true ? undefined : (fixture.platform ?? "posix");
               }),
             connectHubClient: (alias) =>
               Effect.sync(() => {

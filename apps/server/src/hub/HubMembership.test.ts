@@ -398,6 +398,16 @@ it.effect("OpenCodex's own platform refusal asks for an update without changing 
   }),
 );
 
+it.effect("a device that answers no shell joins through Home's own probe and link", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ nativeWindows: true, pin: PINNED });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+    expect(result).toMatchObject({ state: "child", transport: "remote-link" });
+    expect(hub.calls).not.toContain("device mini --version");
+    expect(hub.calls).toContain(`home link add mini --expect-fingerprint ${PINNED} --json`);
+  }),
+);
+
 it.effect("a password-only device can ask for a Hub client join on any platform", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ platform: "posix" });
