@@ -69,6 +69,44 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it("derives readable labels for catalog and custom models without changing selections", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const source = provider({ instanceId });
+    const entries = deriveProviderInstanceEntries([
+      {
+        ...source,
+        models: [
+          { slug: "gpt-6.1-sol", name: "GPT-6.1-Sol", isCustom: false, capabilities: {} },
+          { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: {} },
+          {
+            slug: "gpt-special",
+            name: "GPT Special",
+            shortName: "Supplied label",
+            isCustom: false,
+            capabilities: {},
+          },
+        ],
+      },
+    ]);
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [instanceId]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [{ slug: "custom-sol", name: "GPT-6.1-Custom" }] },
+        },
+      },
+    };
+    const options = getAppModelOptionsForInstance(settings, entries[0]!);
+    expect(options).toMatchObject([
+      { slug: "gpt-6.1-sol", name: "GPT-6.1-Sol", shortName: "6.1 Sol" },
+      { slug: "gpt-5.5", name: "GPT-5.5" },
+      { slug: "gpt-special", shortName: "Supplied label" },
+      { slug: "custom-sol", name: "GPT-6.1-Custom", shortName: "6.1 Custom", isCustom: true },
+    ]);
+    expect(options[1]?.shortName).toBeUndefined();
+  });
+
   it("keeps custom models on the provider instance that declared them", () => {
     const providers = [
       provider({

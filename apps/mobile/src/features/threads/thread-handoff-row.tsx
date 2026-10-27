@@ -1,3 +1,4 @@
+import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
@@ -136,7 +137,7 @@ function HandoffEndpoint(props: {
   const provider = props.providers.find((candidate) => candidate.instanceId === props.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === props.model);
   const label =
-    model?.shortName ??
+    (model ? resolveModelShortName(model, provider?.driver) : undefined) ??
     model?.name ??
     props.model ??
     (provider ? resolveProviderInstanceDisplayName(provider) : props.instanceId);

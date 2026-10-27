@@ -802,7 +802,7 @@ function ComposerTraitsPicker({
   const normalizedModel = normalizeModelSlug(traitsInput.model, traitsInput.provider);
   const modelEntry = traitsInput.models.find((candidate) => candidate.slug === normalizedModel);
   const modelLabel = modelEntry
-    ? getTriggerDisplayModelName(modelEntry)
+    ? getTriggerDisplayModelName(modelEntry, traitsInput.provider)
     : (traitsInput.model ?? "");
 
   return (
