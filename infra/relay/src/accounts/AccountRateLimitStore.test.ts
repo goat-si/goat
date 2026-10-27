@@ -135,3 +135,38 @@ it("erases usage windows and keeps terminal denial after reopening the database"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it.effect(
+  "Worker deletion closes both the charged legacy key and digest counter and fails closed on binding failure",
+  () =>
+    Effect.gen(function* () {
+      const charged: string[] = [];
+      const closed: string[] = [];
+      let unavailable = false;
+      const rates = yield* makeWorkerRateLimits({
+        stage: "fixture-stage",
+        hourly: (key) =>
+          Effect.sync(() => {
+            charged.push(key);
+            return { allowed: true, retryAfterSeconds: 0 };
+          }),
+        mobile: () => Effect.die("No registration in deletion fixture"),
+        publish: () => Effect.die("No publication in deletion fixture"),
+        close: (key) =>
+          unavailable
+            ? Effect.fail("fixture DO unavailable")
+            : Effect.sync(() => {
+                closed.push(key);
+              }),
+      });
+      yield* rates.charge({ userId: "fixture-owner", operation: "link" });
+      const close = rates.close;
+      if (!close) throw new Error("Worker deletion binding must expose close");
+      yield* close("fixture-owner", "fixture-subject-digest");
+      expect(closed).toEqual([charged[0], "fixture-subject-digest"]);
+      unavailable = true;
+      expect((yield* Effect.flip(close("fixture-owner", "fixture-subject-digest")))._tag).toBe(
+        "RelayAuthorizationUnavailableError",
+      );
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);

@@ -253,6 +253,7 @@ export const make = Effect.gen(function* () {
       const completedAt = DateTime.formatIso(yield* DateTime.now);
       const [owner] = yield* db.$client<{
         user_id: string | null;
+        account_epoch: number | null;
       }>`SELECT user_id,account_epoch FROM relay_delivery_attempts WHERE source_job_id=${input.sourceJobId}`.pipe(
         Effect.mapError(
           (cause) =>

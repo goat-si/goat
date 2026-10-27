@@ -717,6 +717,11 @@ const make = Effect.gen(function* () {
     },
   ) {
     const apply = Effect.gen(function* () {
+      if (yield* revocation.pending)
+        return yield* new CloudLinkInternalError({
+          operation: "persist-relay-config",
+          cause: "Local withdrawal journal remains pending",
+        });
       yield* environmentAuth.withCloudCredentialPermit(Effect.void);
       yield* validateRelayConfigPayload(payload);
       if (payload.connectAuthPolicyVersion !== 1)

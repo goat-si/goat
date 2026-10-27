@@ -392,9 +392,9 @@ const make = Effect.gen(function* () {
       const [access] = yield* sql<{
         status: string;
         account_epoch: number;
-      }>`SELECT status,account_epoch FROM relay_account_access WHERE subject_digest=${digest}`;
+      }>`SELECT status,account_epoch FROM relay_account_access WHERE subject_digest=${digest} OR (subject_digest IS NULL AND user_id=${userId})`;
       const operations =
-        yield* sql<AccountOperation>`SELECT ${sql.literal(operationColumns)} FROM relay_account_operations WHERE subject_digest=${digest} ORDER BY created_at DESC LIMIT 20`;
+        yield* sql<AccountOperation>`SELECT ${sql.literal(operationColumns)} FROM relay_account_operations WHERE subject_digest=${digest} OR (subject_digest IS NULL AND user_id=${userId}) ORDER BY created_at DESC LIMIT 20`;
       return {
         status: access?.status ?? "not_invited",
         accountEpoch: access?.account_epoch ?? null,

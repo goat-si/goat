@@ -27,7 +27,7 @@ import {
 
 const JOURNAL = "cloud-link-withdrawal-journal";
 const Entry = Schema.Struct({
-  phase: Schema.Literals(["local_pending", "ack_pending"]),
+  phase: Schema.Literals(["local_pending", "local_complete", "ack_pending"]),
   relayUrl: Schema.String,
   credential: Schema.String,
   environmentId: Schema.String,
@@ -88,8 +88,14 @@ export const make = Effect.gen(function* () {
   ) {
     const entries = yield* read;
     let entry = entries.find((value) => value.phase === "local_pending");
+    const credential = yield* secrets.get(RELAY_ENVIRONMENT_CREDENTIAL_SECRET);
+    if (
+      entry &&
+      ((expectedCredential !== undefined && expectedCredential !== entry.credential) ||
+        (Option.isSome(credential) && text.decode(credential.value) !== entry.credential))
+    )
+      return yield* new Client.CloudLinkRevocationError({ phase: "local_cleanup" });
     if (!entry) {
-      const credential = yield* secrets.get(RELAY_ENVIRONMENT_CREDENTIAL_SECRET);
       if (
         expectedCredential !== undefined &&
         (Option.isNone(credential) || text.decode(credential.value) !== expectedCredential)
@@ -129,10 +135,13 @@ export const make = Effect.gen(function* () {
     yield* runtime.applyConfig(null);
     yield* Effect.forEach(TRUST_KEYS, (key) => secrets.remove(key), { discard: true });
     const remaining = next.filter((value) => value !== captured);
+    // Journal settlement must survive a crash before admission can reopen.
+    yield* write([
+      ...remaining,
+      { ...captured, phase: captured.revocationId ? "ack_pending" : "local_complete" },
+    ]);
     yield* auth.completeCloudWithdrawal();
-    yield* write(
-      captured.revocationId ? [...remaining, { ...captured, phase: "ack_pending" }] : remaining,
-    );
+    if (!captured.revocationId) yield* write(remaining);
     return true;
   });
   const withdrawInstalledLink = Effect.fn("CloudLinkRevocation.withdrawInstalledLink")(
@@ -143,7 +152,18 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const entries = yield* read;
       if (entries.some((entry) => entry.phase === "local_pending")) yield* withdrawUnlocked();
-      else if (Option.isSome(yield* secrets.get(CLOUD_WITHDRAWAL_FENCE))) yield* withdrawUnlocked();
+      else {
+        const settled = entries.some(
+          (entry) => entry.phase === "local_complete" || entry.phase === "ack_pending",
+        );
+        if (Option.isSome(yield* secrets.get(CLOUD_WITHDRAWAL_FENCE))) {
+          const installedTrust = yield* Effect.forEach(TRUST_KEYS, (key) => secrets.get(key));
+          if (settled && installedTrust.every(Option.isNone)) yield* auth.completeCloudWithdrawal();
+          else yield* withdrawUnlocked();
+        }
+        if (entries.some((entry) => entry.phase === "local_complete"))
+          yield* write(entries.filter((entry) => entry.phase !== "local_complete"));
+      }
     }),
   );
   const reconcile = Effect.fn("CloudLinkRevocation.reconcile")(function* () {

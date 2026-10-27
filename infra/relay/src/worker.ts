@@ -341,9 +341,10 @@ export const layer = Api.make(
       yield* RelayRateLimits.makeWorkerRateLimits({
         stage,
         close: (key) =>
-          accountCounters.getByName(key).close().pipe(
-            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-          ),
+          accountCounters
+            .getByName(key)
+            .close()
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
         hourly: (key, operation) =>
           accountCounters
             .getByName(key)

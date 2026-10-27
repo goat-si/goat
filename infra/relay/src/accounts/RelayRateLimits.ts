@@ -62,19 +62,25 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
   return RelayRateLimits.of({
     ...(close
       ? {
-          close: Effect.fn("RelayRateLimits.close")(function* (userId, subjectDigest) {
-            const legacy = yield* crypto.digest(
-              "SHA-256",
-              new TextEncoder().encode(
-                [bindings.stage, userId].map((part) => `${part.length}:${part}`).join(""),
-              ),
-            );
-            const legacyKey = Array.from(legacy, (b) => b.toString(16).padStart(2, "0")).join("");
-            yield* Effect.all([close(legacyKey), close(subjectDigest)]);
-          }, Effect.mapError(() => new RelayAuthorizationUnavailableError({
-            code: "authorization_unavailable",
-            traceId: "relay",
-          }))),
+          close: Effect.fn("RelayRateLimits.close")(
+            function* (userId: string, subjectDigest: string) {
+              const legacy = yield* crypto.digest(
+                "SHA-256",
+                new TextEncoder().encode(
+                  [bindings.stage, userId].map((part) => `${part.length}:${part}`).join(""),
+                ),
+              );
+              const legacyKey = Array.from(legacy, (b) => b.toString(16).padStart(2, "0")).join("");
+              yield* Effect.all([close(legacyKey), close(subjectDigest)]);
+            },
+            Effect.mapError(
+              () =>
+                new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                }),
+            ),
+          ),
         }
       : {}),
     charge: Effect.fn("RelayRateLimits.charge")(function* (input) {

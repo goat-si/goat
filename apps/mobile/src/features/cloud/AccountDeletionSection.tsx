@@ -15,6 +15,14 @@ import * as Dialog from "../../components/ui/Dialog";
 
 export function AccountDeletionSection() {
   const clerk = useClerk();
+  return <AccountDeletionForSession key={`${clerk.user?.id ?? ""}:${clerk.session?.id ?? ""}`} />;
+}
+
+function AccountDeletionForSession() {
+  const clerk = useClerk();
+  const user = clerk.user;
+  const session = clerk.session;
+  const isCurrent = () => clerk.user === user && clerk.session === session;
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AccountDeletionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,40 +35,38 @@ export function AccountDeletionSection() {
     },
   );
   const advance = async (confirmed: boolean) => {
-    const user = clerk.user;
-    const session = clerk.session;
-    if (!user || !session || busy) return;
+    if (!user || !session || busy || !isCurrent()) return;
     if (key.current?.accountId !== user.id)
       key.current = { accountId: user.id, key: Crypto.randomUUID() };
     setBusy(true);
     setError(null);
     try {
-      setResult(
-        await advanceAccountDeletion(
-          {
-            accountId: user.id,
-            session,
-            isCurrent: () => clerk.user === user && clerk.session === session,
-            getToken: () => session.getToken({ skipCache: true }),
-            getStatus: (clerkToken) =>
-              runtime.runPromise(
-                ManagedRelay.ManagedRelayClient.pipe(
-                  Effect.flatMap((relay) => relay.getAccountDeletion({ clerkToken })),
-                ),
+      const next = await advanceAccountDeletion(
+        {
+          accountId: user.id,
+          session,
+          isCurrent,
+          getToken: () => session.getToken({ skipCache: true }),
+          getStatus: (clerkToken) =>
+            runtime.runPromise(
+              ManagedRelay.ManagedRelayClient.pipe(
+                Effect.flatMap((relay) => relay.getAccountDeletion({ clerkToken })),
               ),
-            requestDelete: (clerkToken, idempotencyKey) =>
-              runtime.runPromise(
-                ManagedRelay.ManagedRelayClient.pipe(
-                  Effect.flatMap((relay) => relay.deleteAccount({ clerkToken, idempotencyKey })),
-                ),
+            ),
+          requestDelete: (clerkToken, idempotencyKey) =>
+            runtime.runPromise(
+              ManagedRelay.ManagedRelayClient.pipe(
+                Effect.flatMap((relay) => relay.deleteAccount({ clerkToken, idempotencyKey })),
               ),
-            deleteIdentity: () => deleteIdentity(user, session),
-          },
-          key.current.key,
-          confirmed,
-        ),
+            ),
+          deleteIdentity: () => deleteIdentity(user, session),
+        },
+        key.current.key,
+        confirmed,
       );
+      if (isCurrent()) setResult(next);
     } catch (cause) {
+      if (!isCurrent()) return;
       if (cause instanceof AccountIdentityDeletionPendingError)
         setResult({ relay: cause.relay, identityDeleted: false });
       setError(
@@ -69,10 +75,11 @@ export function AccountDeletionSection() {
           : "Deletion is unconfirmed. Refresh status before retrying.",
       );
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
-  const confirm = () =>
+  const confirm = () => {
+    if (!user || !session || !isCurrent()) return;
     Dialog.confirm({
       title: "Delete GOAT Connect account?",
       message:
@@ -81,6 +88,7 @@ export function AccountDeletionSection() {
       destructive: true,
       onConfirm: () => void advance(true),
     });
+  };
   return (
     <View className="gap-3 px-5 py-6">
       <Text className="text-base font-semibold text-clerk-primary">

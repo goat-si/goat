@@ -13,7 +13,18 @@ import { Button } from "../ui/button";
 
 export function AccountDeletionSection() {
   const clerk = useClerk();
-  const [confirmed, setConfirmed] = useState(false);
+  return <AccountDeletionForSession key={`${clerk.user?.id ?? ""}:${clerk.session?.id ?? ""}`} />;
+}
+
+function AccountDeletionForSession() {
+  const clerk = useClerk();
+  const user = clerk.user;
+  const session = clerk.session;
+  const isCurrent = () => clerk.user === user && clerk.session === session;
+  const [consent, setConsent] = useState<{ user: typeof user; session: typeof session } | null>(
+    null,
+  );
+  const confirmed = consent !== null && consent.user === user && consent.session === session;
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<AccountDeletionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,9 +37,7 @@ export function AccountDeletionSection() {
     },
   );
   const advance = async (destroy: boolean) => {
-    const user = clerk.user;
-    const session = clerk.session;
-    if (!user || !session || busy) return;
+    if (!user || !session || busy || !isCurrent()) return;
     if (key.current?.accountId !== user.id)
       key.current = { accountId: user.id, key: crypto.randomUUID() };
     setBusy(true);
@@ -38,7 +47,7 @@ export function AccountDeletionSection() {
         {
           accountId: user.id,
           session,
-          isCurrent: () => clerk.user === user && clerk.session === session,
+          isCurrent,
           getToken: () => session.getToken({ skipCache: true }),
           getStatus: (clerkToken) =>
             runtime.runPromise(
@@ -57,8 +66,9 @@ export function AccountDeletionSection() {
         key.current.key,
         destroy && confirmed,
       );
-      setResult(next);
+      if (isCurrent()) setResult(next);
     } catch (cause) {
+      if (!isCurrent()) return;
       if (cause instanceof AccountIdentityDeletionPendingError)
         setResult({ relay: cause.relay, identityDeleted: false });
       setError(
@@ -67,7 +77,7 @@ export function AccountDeletionSection() {
           : "Deletion is unconfirmed. Refresh status before retrying.",
       );
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
   return (
@@ -102,7 +112,7 @@ export function AccountDeletionSection() {
               type="checkbox"
               checked={confirmed}
               disabled={busy}
-              onChange={(event) => setConfirmed(event.target.checked)}
+              onChange={(event) => setConsent(event.target.checked ? { user, session } : null)}
             />
             I understand this permanently deletes my GOAT Connect account.
           </label>
