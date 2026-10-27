@@ -32,6 +32,30 @@ const status = (overrides: object) => ({
 });
 
 describe("composer capability entries", () => {
+  it("offers fx computer use while preserving plan, disabled-host and unattended availability", () => {
+    const fx = { ...ready, providerDrivers: ["fx"] };
+    expect(matchComposerCapabilityItems("computer", fx)[0]?.availability).toEqual({
+      state: "available",
+      note: null,
+    });
+    expect(
+      turnCapabilityAvailability("computer-use", { ...fx, interactionMode: "plan" }),
+    ).toMatchObject({
+      state: "unavailable",
+      setup: false,
+    });
+    expect(
+      turnCapabilityAvailability("computer-use", {
+        ...fx,
+        computerUse: { enabled: false, status: { platform: "darwin", running: false } },
+      }),
+    ).toMatchObject({ state: "unavailable", setup: true });
+    expect(turnCapabilityAvailability("computer-use", { ...fx, mayRunUnattended: true })).toEqual({
+      state: "available",
+      note: "This thread can run unattended, so a person approves computer use first.",
+    });
+  });
+
   it("offers Computer and Browser on a bare @ and filters by what was typed", () => {
     expect(matchComposerCapabilityItems("", ready).map((item) => item.label)).toEqual([
       "Computer",

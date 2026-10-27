@@ -12,6 +12,26 @@ const apply = (path: string, text: string) =>
 const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
 
 describe("GOAT meta", () => {
+  it("brands fx status and recorder text while preserving the emitted instruction wrapper", () => {
+    const recorder = "apps/server/scripts/record-fx-acp-replay-fixture.ts";
+    const wrapper = "<t3_code_instructions>\\n<any>\\n</t3_code_instructions>";
+    expect(apply(recorder, `T3-owned prompt text ${wrapper}`)).toBe(
+      `GOAT-owned prompt text ${wrapper}`,
+    );
+    expect(
+      apply("packages/provider-fx/src/server/status.ts", "fx is disabled in T3 Code settings."),
+    ).toBe("fx is disabled in GOAT settings.");
+    expect(apply("packages/provider-fx/src/server/status.test.ts", "// fields T3 reads")).toBe(
+      "// fields GOAT reads",
+    );
+    expect(
+      apply(
+        "apps/server/src/orchestration-v2/testkit/fixtures/tool_call_read_only_on_request/fx_output.ts",
+        "fx must ask T3 before its own write",
+      ),
+    ).toBe("fx must ask GOAT before its own write");
+  });
+
   it("turns upstream's dev container into GOAT's and keeps the existing workspace home", () => {
     const path = ".devcontainer/devcontainer.json";
     const upstream = [

@@ -950,6 +950,7 @@ export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
   "cursor",
+  "fx",
   "grok",
   "antigravity",
   "acpRegistry",
