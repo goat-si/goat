@@ -240,7 +240,12 @@ if ($r.op -eq 'inspect') {
     $owner=Json-Read $ownerFile
     if (Get-Process -Id ([int]$owner.pid) -ErrorAction SilentlyContinue) { Report $owner $true (Live $owner); return }
   }
-  if (Test-Path -LiteralPath (Join-Path $baseDir 'userdata\server-runtime.json')) { throw 'unverified-existing-runtime' }
+  $runtimeFile=Join-Path $baseDir 'userdata\server-runtime.json'
+  if (Test-Path -LiteralPath $runtimeFile) {
+    # Only the exact record our dead owner left is stale; any other runtime is not ours to replace.
+    $left=Json-Read $runtimeFile
+    if ($null -eq $owner -or $left.pid -ne $owner.pid -or $left.instanceId -ne $owner.instanceId) { throw 'unverified-existing-runtime' }
+  }
   $v=if ($null -ne $owner) { $owner.version } else { $r.version }
   if ($v -notmatch $versionPattern) { throw 'version' }
   $exe=Join-Path $versions ($v+'\goat.exe')

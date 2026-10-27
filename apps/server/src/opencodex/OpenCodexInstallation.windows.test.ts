@@ -205,6 +205,32 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
+it.live(
+  "a Windows swap published but not committed is undone before a supported install is kept",
+  () =>
+    Effect.gen(function* () {
+      const world = yield* windowsWorld();
+      const first = yield* world.installer(world.catalog, world.served, { platform: "win32" });
+      yield* first.install();
+      // The process dies after publishing the next junction, before the journal commits.
+      const crashing = yield* world.installer(world.catalog, world.served, {
+        platform: "win32",
+        fs: {
+          beforeRename: (from) =>
+            from.endsWith(".committed.tmp") ? Effect.die("crash") : Effect.void,
+        },
+      });
+      expect(
+        Exit.isFailure(yield* Effect.exit(crashing.install({ managedVersion: "2.93.0" }))),
+      ).toBe(true);
+      expect(yield* world.fs.realPath(world.current)).toBe(world.release("2.93.0"));
+      const restarted = yield* world.installer(world.catalog, world.served, { platform: "win32" });
+      expect(yield* restarted.install()).toMatchObject({ version: "2.92.0", ownership: "managed" });
+      expect(yield* world.fs.realPath(world.current)).toBe(world.release("2.92.0"));
+      expect(yield* world.fs.exists(world.path.join(world.prefix, ".activation.json"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
 it.live("Windows keeps a supported Desktop ocx and refuses an older one that shadows GOAT's", () =>
   Effect.gen(function* () {
     const world = yield* windowsWorld();

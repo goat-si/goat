@@ -715,10 +715,19 @@ const make = Effect.gen(function* () {
     function* (input: { readonly managedVersion?: string } = {}) {
       // Keeping a supported install changes nothing, so it needs no lock and creates no files.
       const current = yield* selected();
+      // An uncommitted Windows swap may still be undone, so it is recovered under the lock first.
+      const pendingActivation =
+        platform === "win32" &&
+        (yield* prefixOf(false).pipe(
+          Effect.flatMap((prefix) => identify(path.join(prefix, ACTIVATION))),
+          Effect.map(Option.isSome),
+          Effect.orElseSucceed(() => false),
+        ));
       if (
         input.managedVersion === undefined &&
         current !== undefined &&
-        supportedOpenCodexVersion(current.version)
+        supportedOpenCodexVersion(current.version) &&
+        !pendingActivation
       )
         return current;
       const version = input.managedVersion ?? OPEN_CODEX_PINNED_VERSION;

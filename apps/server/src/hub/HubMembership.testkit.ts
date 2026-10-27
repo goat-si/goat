@@ -88,6 +88,8 @@ export interface Fixture {
   readonly platform?: DevicePlatform;
   /** A native Windows device answers no shell, so its platform reads as unknown. */
   readonly nativeWindows?: boolean;
+  /** The role the device's GOAT reports after a connection change; absent as an older GOAT. */
+  readonly reportedRole?: "standalone" | "hub" | "client" | "unknown";
   /** `ocx connect status --json` on the device. */
   readonly connection?: Readonly<Record<string, unknown>>;
   /** Home `ocx hub invite` exit; 0 mints a code. */
@@ -242,7 +244,13 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                 const kind =
                   operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"];
                 const { code } = yield* device(alias, kind);
-                return { code, stdout: "" };
+                return {
+                  code,
+                  stdout: "",
+                  ...(fixture.reportedRole === undefined
+                    ? {}
+                    : { deviceRole: fixture.reportedRole }),
+                };
               }),
             devicePlatform: (alias) =>
               Effect.sync(() => {

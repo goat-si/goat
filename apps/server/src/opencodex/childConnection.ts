@@ -183,6 +183,7 @@ export const makeChildConnection = Effect.fn("OpenCodexChildReady.makeChildConne
               kind: op.kind,
               code,
               healthy: after.healthy,
+              role: after.device.connection.role,
             } satisfies ChildReadyConnectionResult;
           }),
         ),

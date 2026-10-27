@@ -55,6 +55,8 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** The role the device's own GOAT read after a connection change it ran. */
+  readonly deviceRole?: "standalone" | "hub" | "client" | "unknown";
 }
 
 export class HubOcxError extends Data.TaggedError("HubOcxError")<{
@@ -452,7 +454,11 @@ const make = Effect.gen(function* () {
       result.kind !== operation.kind
     )
       return yield* refused(`${alias} answered for another connection change.`);
-    return { code: result.code, stdout: "" } satisfies OcxOutput;
+    return {
+      code: result.code,
+      stdout: "",
+      ...(result.role === undefined ? {} : { deviceRole: result.role }),
+    } satisfies OcxOutput;
   });
 
   const connection = Effect.fn("HubOcx.connection")(function* (

@@ -253,6 +253,7 @@ export const ChildReadyConnectionResult = Schema.Struct({
   kind: Schema.Literals(["connectHubClient", "disconnect", "restart"]),
   code: Schema.Int,
   healthy: Schema.Boolean,
+  role: Schema.optional(Schema.Literals(["standalone", "hub", "client", "unknown"])),
 });
 export type ChildReadyConnectionResult = typeof ChildReadyConnectionResult.Type;
 export const ChildReadyDevice = Schema.Struct({

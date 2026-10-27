@@ -10,10 +10,7 @@ import {
   type HubParityResult,
   hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
-import {
-  windowsRemoteLinkRelease,
-  WINDOWS_REMOTE_LINK_UNPINNED,
-} from "@goat/shared/opencodexRelease";
+import { windowsRemoteLinkRelease } from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,6 +36,7 @@ import {
 } from "./HubOcx.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import { hubDeviceResult as result } from "./hubDeviceResult.ts";
+import { joinPreflight } from "./hubJoinPreflight.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
@@ -47,9 +45,6 @@ const LINK_ADD_TIMEOUT_MS = 420_000;
 const CONNECT_TIMEOUT_MS = 300_000;
 const HOME_TIMEOUT_MS = 60_000;
 const DEVICE_TIMEOUT_MS = 120_000;
-const WINDOWS_REFUSAL = `${WINDOWS_REMOTE_LINK_UNPINNED} Join it as a Hub-mode client with transport hub-client.`;
-const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform unknown" };
-
 type Action = HubDeviceOperationResult["action"];
 type Rung = "sync" | "restart" | "reconnect";
 /** Ladder order and the checks each rung addresses (§1.4). */
@@ -358,18 +353,25 @@ const make = Effect.gen(function* () {
     steps: HubDeviceStep[],
   ) {
     // The device's GOAT runs both under its idle fence, bound to the membership seen here.
+    let reported: OcxOutput["deviceRole"];
     for (const kind of ["disconnect", "restart"] as const) {
       const operation = { kind, expectedLinkId: member };
       const ran = yield* ocx.connection(alias, operation, DEVICE_TIMEOUT_MS, admission).pipe(
-        Effect.map((output: OcxOutput) =>
-          output.code === 0
+        Effect.map((output: OcxOutput) => {
+          reported = output.deviceRole;
+          return output.code === 0
             ? { outcome: "ok" as const }
-            : { outcome: "failed" as const, detail: `ocx ${kind} exited ${output.code}.` },
-        ),
+            : { outcome: "failed" as const, detail: `ocx ${kind} exited ${output.code}.` };
+        }),
         Effect.catch((error) => Effect.succeed(unreachable(error))),
       );
       steps.push({ step: kind, ...ran });
       if (ran.outcome !== "ok") return ran.detail;
+    }
+    // A native Windows device has no shell for /healthz; its own GOAT already read the role.
+    if (reported === "standalone") {
+      steps.push({ step: "health", outcome: "ok", detail: "Device answers as standalone." });
+      return undefined;
     }
     const body = yield* ocx.deviceHealth(alias);
     const health = body === undefined ? undefined : decodeJson(Health, body);
@@ -380,7 +382,9 @@ const make = Effect.gen(function* () {
     const detail = standalone
       ? "Device answers as standalone."
       : health === undefined
-        ? "Device /healthz did not answer after the restart."
+        ? reported === undefined
+          ? "Device /healthz did not answer after the restart."
+          : `Device reports role ${reported} after the restart.`
         : `Device /healthz still reports role ${health.role}.`;
     steps.push({ step: "health", outcome: standalone ? "ok" : "failed", detail });
     return standalone ? undefined : detail;
@@ -606,20 +610,17 @@ const make = Effect.gen(function* () {
           { parity: verified, transport: "remote-link" },
         );
       }
-      // Remote Link to Windows exists only in a release this GOAT pins; older ones refuse it
-      // after issuing a key and starting a tunnel (OCX-9).
       const platform = yield* ocx.devicePlatform(alias);
-      const refused = platform === "windows" && windowsRemoteLinkRelease(releases) === undefined;
-      const transport = input.transport ?? (refused ? "hub-client" : "remote-link");
-      if (transport === "remote-link" && refused) {
-        steps.push({ step: "preflight", outcome: "failed", detail: WINDOWS_REFUSAL });
-        return result("join", alias, "failed", WINDOWS_REFUSAL, steps, { transport });
-      }
+      const pinned = windowsRemoteLinkRelease(releases) !== undefined;
+      const preflight = joinPreflight(alias, platform, input.transport, pinned);
+      const { transport } = preflight;
       steps.push({
         step: "preflight",
-        outcome: "ok",
-        detail: `${PLATFORM_LABEL[platform ?? "unknown"]}; joining as ${transport}.`,
+        outcome: preflight.ok ? "ok" : "failed",
+        detail: preflight.detail,
       });
+      if (!preflight.ok)
+        return result("join", alias, "failed", preflight.detail, steps, { transport });
       if (transport === "hub-client")
         return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
       if (!(yield* ocx.directAlias(alias)))

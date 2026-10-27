@@ -50,7 +50,8 @@ route**. The default address is `http://127.0.0.1:10100/v1` on that
 environment's machine. **Home authentication** sets what the instance sends to
 Home: **None** needs no sign-in on that machine, and **OpenAI** keeps the
 instance's own sign-in. A Codex instance that GOAT manages always uses
-**None**. On mobile, change the route in web or desktop Settings.
+**None**. On mobile, the same choices are in **Settings → Provider accounts**;
+a server that is too old for them asks you to update it first.
 
 Choose the instance in the thread's model picker. Instances using the same
 **CODEX_HOME path** can continue compatible threads; after you change Home

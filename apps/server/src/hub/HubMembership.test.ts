@@ -347,7 +347,12 @@ it.effect(
       expect(result.steps).toEqual([
         { step: "preflight", outcome: "failed", detail: result.message },
       ]);
-      expect(hub.calls).toEqual(["home link status --json", "platform mini"]);
+      expect(
+        hub.calls.filter(
+          (call) => call.startsWith("home link ") && call !== "home link status --json",
+        ),
+      ).toEqual([]);
+      expect(hub.calls).not.toContain("handoff mini");
       expect(yield* hub.audit).toEqual([]);
     }),
 );
@@ -400,11 +405,42 @@ it.effect("OpenCodex's own platform refusal asks for an update without changing 
 
 it.effect("a device that answers no shell joins through Home's own probe and link", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ nativeWindows: true, pin: PINNED });
+    const hub = yield* setup({ nativeWindows: true, pin: PINNED, releases: windowsPins });
     const result = yield* hub.membership.join(scope, { deviceAlias: "mini" });
     expect(result).toMatchObject({ state: "child", transport: "remote-link" });
     expect(hub.calls).not.toContain("device mini --version");
     expect(hub.calls).toContain(`home link add mini --expect-fingerprint ${PINNED} --json`);
+  }),
+);
+
+it.effect.each([undefined, "hub-client"] as const)(
+  "a device that answers no shell is refused before any probe with transport %s while Windows is unpinned",
+  (transport) =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ nativeWindows: true, pin: PINNED });
+      const result = yield* hub.membership.join(scope, {
+        deviceAlias: "mini",
+        ...(transport === undefined ? {} : { transport }),
+      });
+      expect(result.state).toBe("failed");
+      expect(result.steps).toEqual([
+        expect.objectContaining({ step: "preflight", outcome: "failed" }),
+      ]);
+      expect(hub.calls).toEqual(["home link status --json", "platform mini"]);
+    }),
+);
+
+it.effect("a native Windows Child leaves on the role its own GOAT reports, without /healthz", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["lidge-ts"],
+      nativeWindows: true,
+      reportedRole: "standalone",
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
+    expect(result.state).toBe("ready");
+    expect(hub.calls).not.toContain("health lidge-ts");
+    expect(result.steps).toContainEqual(expect.objectContaining({ step: "health", outcome: "ok" }));
   }),
 );
 
