@@ -29,6 +29,107 @@ import {
 const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text: "fixture work" });
 
 describe("thread lease proxy", () => {
+  it.effect.each(["active", "waiting", "paused"] as const)(
+    "rejects JSON-RPC arrays and non-objects at thread ingress while %s",
+    (state) =>
+      Effect.gen(function* () {
+        const h = yield* threadHarness();
+        let driver: Effect.Success<typeof h.started> | undefined;
+        if (state === "waiting") yield* h.push({ state: "waiting" });
+        else {
+          yield* h.push(snapshot("A"));
+          driver = yield* h.started;
+          yield* h.applied;
+          if (state === "paused") {
+            yield* h.push({ ...snapshot("A"), state: "paused", reason: "private" });
+            yield* h.applied;
+          }
+        }
+        const invalid = [
+          [JSON.parse(call(1, "get_guide"))],
+          [],
+          null,
+          "text",
+          7,
+          true,
+          { jsonrpc: "2.0", id: 1, method: "ping", error: {} },
+        ];
+        for (const [line, code] of [
+          ...invalid.map((value) => [JSON.stringify(value), -32600] as const),
+          ["{", -32700] as const,
+        ]) {
+          yield* h.send(line);
+          yield* h.send(
+            JSON.stringify({ jsonrpc: "2.0", id: "goat-thread-proxy:barrier", method: "ping" }),
+          );
+          const answer = yield* h.next;
+          assert.isNull(answer.id);
+          assert.equal((answer.error as { code: number }).code, code);
+          assert.equal((yield* h.next).id, "goat-thread-proxy:barrier");
+        }
+        if (driver !== undefined) {
+          if (state === "active") {
+            yield* h.send(call(700, "get_guide"));
+            assert.deepEqual(
+              JSON.parse(yield* Queue.take(driver.sent)),
+              JSON.parse(call(700, "get_guide")),
+            );
+          }
+          assert.equal(yield* Queue.size(driver.sent), 0);
+        }
+      }),
+  );
+
+  it.effect("forwards an error response without an id, which MCP allows, to the driver", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      const driver = yield* h.started;
+      yield* h.applied;
+      const unread = { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } };
+      yield* h.send(JSON.stringify(unread));
+      yield* h.send(call(700, "get_guide"));
+      assert.deepEqual(JSON.parse(yield* Queue.take(driver.sent)), unread);
+      assert.equal(JSON.parse(yield* Queue.take(driver.sent)).id, 700);
+    }),
+  );
+
+  it.effect("rejecting an in-flight thread request preserves its owner and eventual reply", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      const driver = yield* h.started;
+      yield* h.applied;
+      yield* h.send(call(1, "get_guide"));
+      yield* Queue.take(driver.sent);
+      yield* h.send(call(1, "get_guide"));
+      assert.include(JSON.stringify(yield* h.next), "work in progress");
+      assert.equal(yield* Queue.size(driver.sent), 0);
+      const reply = { jsonrpc: "2.0", id: 1, result: { content: [] } };
+      yield* Queue.offer(driver.replies, JSON.stringify(reply));
+      assert.deepEqual(yield* h.next, reply);
+      yield* h.send(call(1, "get_guide"));
+      yield* Queue.take(driver.sent);
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* Queue.take(driver.sent);
+      yield* h.send(call(1, "get_guide"));
+      assert.include(JSON.stringify(yield* h.next), "work in progress");
+      assert.equal(yield* Queue.size(driver.sent), 0);
+      yield* Queue.offer(driver.replies, JSON.stringify(reply));
+      yield* Queue.offer(
+        driver.replies,
+        JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }),
+      );
+      assert.equal((yield* h.next).method, "notifications/message");
+    }),
+  );
+
   it.effect(
     "thread-follow routes server requests only to the current control and driver generation",
     () =>

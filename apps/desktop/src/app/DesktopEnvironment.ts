@@ -19,6 +19,10 @@ import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 import type { OtlpProtocol } from "@goat/shared/observability";
+import {
+  computerUseHelperBundleIdForChannel,
+  DESKTOP_CHANNEL_APP_IDS,
+} from "@goat/shared/cuaDriverRelease";
 import { LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME } from "@goat/contracts/legacyT3Names";
 
 export interface MakeDesktopEnvironmentInput {
@@ -78,6 +82,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly branding: DesktopAppBranding;
     readonly displayName: string;
     readonly appUserModelId: string;
+    /** The channel's GOAT Computer Use bundle id, whatever app id this checkout runs as. */
+    readonly computerUseHelperBundleId: string;
     readonly linuxDesktopEntryName: string;
     readonly linuxWmClass: string;
     readonly linuxApplicationsDir: string;
@@ -194,6 +200,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appVersion: input.appVersion,
   });
   const displayName = branding.displayName;
+  const channel = isDevelopment
+    ? "dev"
+    : isNightlyDesktopVersion(input.appVersion)
+      ? "nightly"
+      : "stable";
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
@@ -250,13 +261,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpProtocol: config.otlpProtocol,
     branding,
     displayName,
-    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment
-        ? "si.goat.desktop.dev"
-        : isNightlyDesktopVersion(input.appVersion)
-          ? "si.goat.desktop.nightly"
-          : "si.goat.desktop",
+    appUserModelId: Option.getOrElse(
+      config.appUserModelIdOverride,
+      () => DESKTOP_CHANNEL_APP_IDS[channel],
     ),
+    computerUseHelperBundleId: computerUseHelperBundleIdForChannel(channel),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
     linuxApplicationsDir,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PreparedVoiceTranscription } from "@goat/client-runtime/voice-input";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { resetVoiceInputGlobalsForTests } from "../../../../../packages/client-runtime/src/voice-input/controller";
 import {
@@ -63,6 +64,58 @@ function createSession(recordingAudio?: {
 
 describe("global voice input", () => {
   beforeEach(() => resetVoiceInputGlobalsForTests());
+
+  it("captures routing context and keeps the starting target when another screen starts voice", async () => {
+    const { session } = createSession();
+    expect(session.currentTarget).toBeNull();
+    const context = {
+      environmentId: EnvironmentId.make("environment-a"),
+      providerInstanceId: ProviderInstanceId.make("codex-a"),
+      cwd: "/workspace/a",
+      threadId: ThreadId.make("thread-a"),
+    };
+    const target = createVoiceInputTarget(
+      "first",
+      () => "first",
+      vi.fn(),
+      { start: 5, end: 5 },
+      () => () => {},
+      context,
+    );
+    context.environmentId = EnvironmentId.make("environment-b");
+    await session.start(target);
+    await session.start(
+      createVoiceInputTarget(
+        "second",
+        () => "second",
+        vi.fn(),
+        { start: 6, end: 6 },
+        () => () => {},
+        context,
+      ),
+    );
+    expect(session.currentTarget).toBe(target);
+    expect(session.currentTarget).toMatchObject({
+      environmentId: EnvironmentId.make("environment-a"),
+      providerInstanceId: context.providerInstanceId,
+      cwd: "/workspace/a",
+      threadId: context.threadId,
+    });
+    await session.controller.stop();
+  });
+
+  it("preserves explicit null routing fields for drafts without a remote target", () => {
+    const context = { environmentId: null, providerInstanceId: null, cwd: null, threadId: null };
+    const target = createVoiceInputTarget(
+      "draft",
+      () => "",
+      vi.fn(),
+      { start: 0, end: 0 },
+      () => () => {},
+      context,
+    );
+    expect(target).toMatchObject(context);
+  });
 
   it.each(["retry", "takeover"])(
     "handles failed deactivation with %s without notifying a released owner",
