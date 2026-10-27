@@ -1,6 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { AuthSessionId, AuthStandardClientScopes, EnvironmentId } from "@goat/contracts";
+import {
+  AuthSessionId,
+  AuthStandardClientScopes,
+  EnvironmentId,
+  makeChildSetupPurpose,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -157,6 +162,38 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
       yield* TestClock.adjust(Duration.minutes(1));
       yield* Fiber.join(watcher);
       yield* sessions.awaitInvalidation(client.sessionId);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
+  it.effect("caps a setup-purpose bearer at its phase deadline plus five minutes", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const purpose = makeChildSetupPurpose(
+        {
+          purpose: "opencodex-child-setup",
+          homeEnvironmentId: EnvironmentId.make("home"),
+          destinationEnvironmentId: EnvironmentId.make("child"),
+          operationId: "setup-1",
+          grantId: "consent-1",
+          grantRevision: 2,
+        },
+        "catalogConfigureProbe",
+        "phase-1",
+        0,
+      );
+      const issued = yield* sessions.issue({
+        subject: "mcp-client",
+        method: "bearer-access-token",
+        scopes: ["orchestration:read"],
+        childSetupPurpose: purpose,
+      });
+      expect(issued.expiresAt.epochMilliseconds).toBe(purpose.phaseDeadline + 5 * 60_000);
+      expect((yield* sessions.verify(issued.token)).childSetupPurpose).toEqual(purpose);
+      yield* TestClock.adjust(Duration.millis(purpose.expiresAt));
+      expect((yield* sessions.verify(issued.token).pipe(Effect.result))._tag).toBe("Failure");
+      expect((yield* sessions.readActiveScopes(issued.sessionId).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 

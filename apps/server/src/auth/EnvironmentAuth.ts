@@ -3,10 +3,7 @@ import {
   AuthAccessWriteScope,
   AuthOrchestrationApproveScope,
   AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
   EnvironmentAuthorizationError,
-  AuthSettingsWriteScope,
-  AuthSourceControlWriteScope,
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
   type AuthBrowserSessionResult,
@@ -24,6 +21,7 @@ import {
   type ServerAuthSessionMethod,
   type AuthWebSocketTicketResult,
   type AuthWebSocketTicketUse,
+  type ChildSetupPurpose,
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
   type RuntimeMode,
@@ -52,6 +50,9 @@ import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
+import { mcpClientScopes } from "./mcpClientScopes.ts";
+
+export { mcpClientScopes };
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
@@ -67,6 +68,7 @@ export interface IssuedPairingLink {
 }
 
 export interface IssuedBearerSession {
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly sessionId: AuthSessionId;
   readonly token: string;
   readonly method: "bearer-access-token";
@@ -78,26 +80,9 @@ export interface IssuedBearerSession {
 
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 
-export const mcpClientScopes = (
-  access: AuthMcpClientAccess,
-  memoryScopes: ReadonlyArray<"memory:read" | "memory:write"> = [],
-): ReadonlyArray<AuthEnvironmentScope> => [
-  ...new Set([
-    ...memoryScopes,
-    ...(access === "read-only"
-      ? [AuthOrchestrationReadScope]
-      : access === "full-access"
-        ? [
-            AuthOrchestrationReadScope,
-            AuthOrchestrationOperateScope,
-            AuthSettingsWriteScope,
-            AuthSourceControlWriteScope,
-          ]
-        : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
-  ]),
-];
-
 export interface McpClientSession {
+  /** Verified from the signed session; only the Child setup tools admit it. */
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly sessionId: AuthSessionId;
   readonly label: string;
   readonly access: AuthMcpClientAccess;
@@ -532,6 +517,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly label?: string;
       /** Caps the threads an `mcp-client` session may start or change; see `authenticateMcpClient`. */
       readonly runtimeModeCeiling?: RuntimeMode;
+      readonly childSetupPurpose?: ChildSetupPurpose;
     }) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
     readonly listSessions: () => Effect.Effect<
       ReadonlyArray<AuthClientSession>,
@@ -1121,6 +1107,7 @@ export const make = Effect.gen(function* () {
             },
             ...(input?.ttl ? { ttl: input.ttl } : {}),
             ...(input?.runtimeModeCeiling ? { runtimeModeCeiling: input.runtimeModeCeiling } : {}),
+            ...(input?.childSetupPurpose ? { childSetupPurpose: input.childSetupPurpose } : {}),
           })
           .pipe(
             Effect.map(
@@ -1133,6 +1120,9 @@ export const make = Effect.gen(function* () {
                   subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
                   client: issued.client,
                   expiresAt: DateTime.toUtc(issued.expiresAt),
+                  ...(issued.childSetupPurpose
+                    ? { childSetupPurpose: issued.childSetupPurpose }
+                    : {}),
                 }) satisfies IssuedBearerSession,
             ),
             Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
@@ -1336,6 +1326,9 @@ export const make = Effect.gen(function* () {
                   ? (session.runtimeModeCeiling ?? "approval-required")
                   : "read-only",
                 grantedScopes: session.scopes,
+                ...(session.childSetupPurpose
+                  ? { childSetupPurpose: session.childSetupPurpose }
+                  : {}),
                 reauthorize: reauthorizeSession(sessions, session.sessionId),
                 approvals:
                   session.scopes.includes(AuthOrchestrationOperateScope) &&

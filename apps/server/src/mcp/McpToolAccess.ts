@@ -1,4 +1,5 @@
 import {
+  childSetupPurposeIsLive,
   OrchestratorMcpFailure,
   type PermissionCapability,
   type ProviderInteractionMode,
@@ -8,6 +9,7 @@ import {
 import type { AgentSurfaceEffect, AgentSurfaceEntry } from "@goat/contracts/agentSurface";
 import { hostArgumentsOf } from "@goat/contracts/agentSurface/hosts";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -202,6 +204,44 @@ const namedHosts = (
     ? []
     : hostArgumentsOf(entry).flatMap((key) => stringArgument(args, key) ?? []);
 
+const CHILD_SETUP_TOOLS: ReadonlySet<string> = new Set(["hub.child_prepare", "hub.child_status"]);
+
+/** A Child setup purpose counts only on a live, unrevoked session bound to this environment. */
+const requireLiveChildSetup = Effect.fn("McpToolAccess.requireLiveChildSetup")(function* (
+  scope: McpInvocationContext.McpInvocationScope,
+) {
+  const purpose = scope.childSetupPurpose;
+  if (
+    purpose === undefined ||
+    scope.client === undefined ||
+    scope.thread !== undefined ||
+    scope.environmentId !== purpose.destinationEnvironmentId ||
+    !childSetupPurposeIsLive(purpose, yield* Clock.currentTimeMillis) ||
+    scope.reauthorize === undefined
+  )
+    return yield* capabilityRefused("A live destination-bound Child setup purpose is required.");
+  // An empty list still reads the session's live record, so revocation and expiry refuse here.
+  yield* scope
+    .reauthorize([])
+    .pipe(
+      Effect.mapError(() => capabilityRefused("The Child setup session was revoked or expired.")),
+    );
+});
+
+/**
+ * goat_hub_child_prepare's declaration: only a Home-issued Child setup purpose may call it, and
+ * that read-scoped session needs no other write grant. Ordinary sessions are refused, whatever
+ * they hold.
+ */
+export const childSetupWrite = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    Effect.gen(function* () {
+      yield* requireLiveChildSetup(yield* McpInvocationContext.McpInvocationContext);
+      yield* admit(params);
+      return yield* handle(params);
+    }),
+  );
+
 /**
  * With goatclaw on, a GOAT thread runs a write only when its effective profile holds the
  * capability the tool's registry entry declares, plus threads.remote and an allowed host for
@@ -219,12 +259,22 @@ export const requireDeclaredCapability = (
   // Any name or path of the entry: the toolkit's shipped name, the listed name, or a legacy one.
   const entry: (AgentSurfaceEntry & { readonly path: string }) | undefined =
     resolveAgentSurfaceEntry(tool);
+  // A Child setup purpose reaches only the Child setup tools, before any read fast path.
+  const setup = Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
+    Effect.map((scope) => Option.filter(scope, (value) => value.childSetupPurpose !== undefined)),
+  );
   const capability = entry?.capability;
   // A mismatch between the registry and the handler's declaration fails closed below.
   const reads = declaredEffect === "read" && (entry?.effect ?? "read") === "read";
   const hosts = reads ? [] : namedHosts(entry, args);
-  if (reads || (capability === "none" && hosts.length === 0)) return Effect.void;
   return Effect.gen(function* () {
+    const purpose = yield* setup;
+    if (Option.isSome(purpose)) {
+      if (entry === undefined || !CHILD_SETUP_TOOLS.has(entry.path))
+        return yield* capabilityRefused("This credential permits only the Child setup tools.");
+      return yield* requireLiveChildSetup(purpose.value);
+    }
+    if (reads || (capability === "none" && hosts.length === 0)) return;
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     if (Option.isNone(scope) || scope.value.thread === undefined) return;
     const effective = yield* permissions.resolve(scope.value).pipe(

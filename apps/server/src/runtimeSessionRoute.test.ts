@@ -1,10 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { GOAT_RUNTIME_CONTROL_HEADER, GOAT_RUNTIME_SESSION_PATH } from "@goat/contracts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  GOAT_RUNTIME_CONTROL_HEADER,
+  GOAT_RUNTIME_SESSION_PATH,
+  makeChildSetupPurpose,
+} from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest } from "effect/http";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -109,6 +117,52 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
       }).pipe(Effect.scoped, Effect.provide(layerAuth)),
   );
 
+  it.effect(
+    "SSH runtime control revokes the exact Child setup session and denies untrusted cleanup",
+    () =>
+      Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        const send = yield* serve();
+        const purpose = makeChildSetupPurpose(
+          {
+            purpose: "opencodex-child-setup",
+            homeEnvironmentId: EnvironmentId.make("home"),
+            destinationEnvironmentId: EnvironmentId.make("child"),
+            operationId: "runtime-revoke",
+            grantId: "consent",
+            grantRevision: 1,
+          },
+          "installCodex",
+          "install-1",
+          yield* Clock.currentTimeMillis,
+        );
+        const issued = yield* auth.issueSession({
+          subject: "mcp-client",
+          scopes: ["orchestration:read"],
+          childSetupPurpose: purpose,
+        });
+        const body = { kind: "revoke", sessionId: issued.sessionId };
+        expect((yield* send({ peer: "192.0.2.10", token: "secret", body })).status).toBe(403);
+        expect((yield* send({ peer: "127.0.0.1", token: "wrong", body })).status).toBe(403);
+        expect((yield* auth.authenticateMcpClient(bearer(issued.token))).sessionId).toBe(
+          issued.sessionId,
+        );
+        const response = yield* send({ peer: "127.0.0.1", token: "secret", body });
+        expect(response.status).toBe(200);
+        const result = yield* Effect.promise(() => response.json()).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ sessionId: AuthSessionId, revoked: Schema.Boolean }),
+            ),
+          ),
+        );
+        expect(result).toEqual({ sessionId: issued.sessionId, revoked: true });
+        expect(
+          (yield* auth.authenticateMcpClient(bearer(issued.token)).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+      }).pipe(Effect.scoped, Effect.provide(layerAuth)),
+  );
+
   it.effect("refuses anyone without a loopback peer and the runtime control token", () =>
     Effect.gen(function* () {
       const auth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -130,3 +184,49 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
     }).pipe(Effect.scoped, Effect.provide(layerAuth)),
   );
 });
+
+// Live: the served route reads the real clock, so the purpose must be issued against it too.
+it.live("preserves the Child setup purpose through runtime session issuance", () =>
+  Effect.gen(function* () {
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    const send = yield* serve();
+    const purpose = makeChildSetupPurpose(
+      {
+        purpose: "opencodex-child-setup",
+        homeEnvironmentId: EnvironmentId.make("home"),
+        destinationEnvironmentId: EnvironmentId.make("child"),
+        operationId: "runtime-issue",
+        grantId: "consent",
+        grantRevision: 1,
+      },
+      "installOpenCodex",
+      "install-1",
+      yield* Clock.currentTimeMillis,
+    );
+    const body = { ...mcpSession, scopes: ["orchestration:read"], childSetupPurpose: purpose };
+    const response = yield* send({ peer: "127.0.0.1", token: "secret", body });
+    expect(response.status).toBe(200);
+    const issued = (yield* Effect.promise(() => response.json())) as {
+      token: string;
+      sessionId: string;
+      expiresAt: string;
+      childSetupPurpose: unknown;
+    };
+    expect(issued.childSetupPurpose).toEqual(purpose);
+    expect(Date.parse(issued.expiresAt)).toBeLessThanOrEqual(purpose.expiresAt);
+    const accepted = yield* auth.authenticateMcpClient(bearer(issued.token));
+    expect(accepted.childSetupPurpose).toEqual(purpose);
+    expect(accepted.access).toBe("read-only");
+
+    // Bounded setup issues only read scope; a broader request is refused, not narrowed.
+    const broad = yield* send({
+      peer: "127.0.0.1",
+      token: "secret",
+      body: { ...body, scopes: ["orchestration:read", "orchestration:operate"] },
+    });
+    expect(broad.status).toBe(500);
+    expect((yield* auth.listSessions()).map((session) => session.sessionId)).toEqual([
+      issued.sessionId,
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(layerAuth), Effect.provide(NodeServices.layer)),
+);

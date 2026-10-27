@@ -546,6 +546,9 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     ? {}
                     : { grantedScopes: client.grantedScopes }),
                   ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
+                  ...(client.childSetupPurpose === undefined
+                    ? {}
+                    : { childSetupPurpose: client.childSetupPurpose }),
                   requestNamespace: `client:${client.sessionId}`,
                   thread: undefined,
                   client: {
