@@ -2,12 +2,17 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 
@@ -176,7 +181,112 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   };
 });
 
+const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
+  hang?: string;
+  oversized?: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const started = yield* Deferred.make<void>();
+  const interrupted = yield* Deferred.make<void>();
+  const stopped = yield* Deferred.make<void>();
+  let faulty = true;
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      if (!ChildProcess.isStandardCommand(command) || command.command !== "tar")
+        return yield* Effect.die(new Error("Unexpected fixture command."));
+      const operation = command.args[0];
+      const hang = faulty && operation === options.hang;
+      const oversized = faulty && operation === options.oversized;
+      if (hang || oversized) faulty = false;
+      if (hang) yield* Effect.addFinalizer(() => Deferred.succeed(stopped, undefined));
+      let text = "";
+      if (operation === "-tzf") text = releases[0].files.join("\n") + "\n";
+      if (operation === "-tvzf")
+        text = releases[0].files.map((file) => `- ${file}`).join("\n") + "\n";
+      if (oversized)
+        text = releases[0].files
+          .map((file, index) => {
+            const name = index === 0 ? "a".repeat(1024 * 1024 + 1) : file;
+            return operation === "-tzf" ? name : `- ${name}`;
+          })
+          .join("\n");
+      if (!hang && operation === "-xzf") {
+        const destination = command.args[command.args.indexOf("-C") + 1];
+        if (destination === undefined)
+          return yield* Effect.die(new Error("Missing tar destination."));
+        for (const file of releases[0].files) {
+          const target = path.join(destination, file);
+          yield* fs.makeDirectory(path.dirname(target), { recursive: true });
+          yield* fs.writeFileString(target, file);
+          if (file === releases[0].executable) yield* fs.chmod(target, 0o755);
+        }
+      }
+      const stdout = hang
+        ? Stream.fromEffect(
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+            ),
+          )
+        : Stream.make(new TextEncoder().encode(text));
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: hang ? Effect.never : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(hang),
+        kill: () => Effect.void,
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout,
+        stderr: Stream.empty,
+        all: stdout,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      });
+    }),
+  );
+  return { spawner, started, interrupted, stopped };
+});
+
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
+  it.effect.each(["-tzf", "-tvzf", "-xzf"])(
+    "expires tar %s without publishing and releases installation for retry",
+    (hang) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeTarFixture({ hang });
+        const h = yield* makeHarness(releases[0]).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
+        );
+        const pending = yield* h.installation.executable.pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(fixture.started);
+        yield* TestClock.adjust("60 seconds");
+        expect(yield* Deferred.isDone(fixture.interrupted)).toBe(true);
+        const result = yield* Fiber.join(pending);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
+        expect(yield* Deferred.isDone(fixture.stopped)).toBe(true);
+        yield* h.expectUnpublished;
+        expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
+        expect(h.publications).toEqual([h.destination]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["-tzf", "-tvzf"])(
+    "rejects oversized tar %s output without publishing and permits retry",
+    (oversized) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeTarFixture({ oversized });
+        const h = yield* makeHarness(releases[0]).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fixture.spawner),
+        );
+        const result = yield* h.installation.executable.pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.stage).toBe("extract");
+        yield* h.expectUnpublished;
+        expect(yield* h.installation.executable).toBe(h.path.join(h.destination, "cua-driver"));
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("does not reuse another release archive's driver at the same version", () =>
     Effect.gen(function* () {
       const fixture = releases[0];
