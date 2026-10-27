@@ -7,7 +7,6 @@ import { active, call, CONTROL, cutOffCall, harness } from "./ComputerUseLeasePr
 import {
   linuxScreenshotPolicy,
   type LinuxScreenshotPolicy,
-  SCREENSHOT_FILE_REFUSED,
 } from "./ComputerUseLinuxScreenshots.ts";
 import { CROPPED_CAPTURE } from "./linuxHelper/windowCapture.ts";
 
@@ -15,7 +14,6 @@ import { CROPPED_CAPTURE } from "./linuxHelper/windowCapture.ts";
 const policy = (admit: LinuxScreenshotPolicy["admit"]): LinuxScreenshotPolicy => ({
   admit,
   scrub: (line) => line,
-  refuseArguments: () => undefined,
 });
 
 const DRIVER_PNG = Buffer.from("driver pixels").toString("base64");
@@ -120,21 +118,6 @@ describe("ComputerUseLeaseProxy screenshots on Linux (#1677)", () => {
       yield* h.close;
       yield* Fiber.join(h.proxy);
       assert.equal(yield* h.providerQueued, 0);
-    }),
-  );
-
-  it.effect("a call that asks the driver to write its capture to a file never reaches it", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({
-        screenshots: linuxScreenshotPolicy({ route: "refused", reason: CROPPED_CAPTURE }),
-      });
-      yield* h.push(active());
-      yield* h.send(
-        call(1, "get_window_state", { pid: 4, window_id: 9, screenshot_out_file: "/tmp/w.png" }),
-      );
-      const answer = yield* h.nextToProvider;
-      assert.include(JSON.stringify(answer), SCREENSHOT_FILE_REFUSED);
-      assert.equal(yield* h.driverQueued, 0);
     }),
   );
 

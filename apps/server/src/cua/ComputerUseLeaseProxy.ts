@@ -44,6 +44,7 @@ import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import { AGENT_CURSOR_TOOLS, answerCursorTool } from "./ComputerUseCursorTools.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
+import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
 import {
   type Envelope,
   decodeProviderIngress,
@@ -604,7 +605,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       listed,
       bundleIds: options.bundleIds,
       shared: sharedNow,
-      toFile: () => options.screenshots?.refuseArguments(message.params?.arguments),
+      toFile: () => refuseCaptureFileArguments(message.params?.arguments),
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),
       foreground: () => foreground,
       listApps,
