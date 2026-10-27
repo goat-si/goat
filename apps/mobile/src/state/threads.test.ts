@@ -30,7 +30,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AtomRegistry } from "effect/reactivity";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 
 import { v2Projection } from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
 import type { WsRpcProtocolClient } from "../../../../packages/client-runtime/src/rpc/protocol";
@@ -222,7 +222,8 @@ describe("startOpeningEnvironmentThread", () => {
     (outcome) =>
       Effect.gen(function* () {
         const h = yield* setup();
-        vi.useFakeTimers();
+        // Effect's atom scheduler needs real setImmediate calls while state streams settle.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
             vi.clearAllTimers();
@@ -252,14 +253,13 @@ describe("startOpeningEnvironmentThread", () => {
         );
         expect(state.status).toBe("live");
         expect(Option.getOrThrow(state.data).thread).toEqual(v2Projection.thread);
-        yield* Effect.promise(() => vi.runAllTimersAsync());
       }),
   );
 
   it.effect("opens an existing thread with a queued follow-up message", () =>
     Effect.gen(function* () {
       const h = yield* setup();
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           vi.clearAllTimers();
@@ -274,7 +274,6 @@ describe("startOpeningEnvironmentThread", () => {
       h.threads.startOpeningEnvironmentThread(environmentId, threadId);
       const state = yield* h.observe((value) => value.status === "live");
       expect(Option.getOrThrow(state.data).thread.id).toBe(threadId);
-      yield* Effect.promise(() => vi.runAllTimersAsync());
     }),
   );
 
