@@ -24,6 +24,7 @@ const TONE_TEXT: Record<ChildSetup["tone"], string> = {
 };
 
 const relative = (at: number) => formatRelativeTimeLabel(new Date(at).toISOString());
+const SETUP_FAILED = "Setup could not start. Try again.";
 
 /**
  * A hub device's Child setup: the step the Home reports, what failed, and one next action. Repair
@@ -52,29 +53,32 @@ export function HubChildSetup({
   const repairs = setup.nextAction === "reconnect_home";
   const allowed = repairs ? actions.allowed : setupAllowed;
   const moving = setup.tone === "progress";
+  const attempt = async (host: string): Promise<string | null> => {
+    if (repairs) {
+      await actions.run("repair", host);
+      return null;
+    }
+    const result = await continueSetup({ environmentId, input: { deviceAlias: host } });
+    onRefresh();
+    if (result._tag === "Failure") {
+      const failure = squashAtomCommandFailure(result);
+      return failure instanceof Error ? failure.message : SETUP_FAILED;
+    }
+    return result.value.kind === "error" ? result.value.failure.message : null;
+  };
   const run = async () => {
     const host = setup.host;
     if (inFlight.current || host === null || !setup.actionable || !allowed || moving) return;
     inFlight.current = true;
     setPending(true);
     setError(null);
-    try {
-      if (repairs) {
-        await actions.run("repair", host);
-        return;
-      }
-      const result = await continueSetup({ environmentId, input: { deviceAlias: host } });
-      if (result._tag === "Failure") {
-        const failure = squashAtomCommandFailure(result);
-        setError(failure instanceof Error ? failure.message : "Setup could not start. Try again.");
-      } else if (result.value.kind === "error") setError(result.value.failure.message);
-      onRefresh();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Setup could not start. Try again.");
-    } finally {
-      inFlight.current = false;
-      setPending(false);
-    }
+    // React Compiler cannot lower try/finally, so the promise carries the failure instead.
+    const failure = await attempt(host).catch((cause: unknown) =>
+      cause instanceof Error ? cause.message : SETUP_FAILED,
+    );
+    inFlight.current = false;
+    setPending(false);
+    if (failure !== null) setError(failure);
   };
   return (
     <div className="space-y-1.5 text-xs">
