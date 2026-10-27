@@ -332,7 +332,7 @@
   "apps/server/src/orchestration-v2/ThreadManagementService.test.ts": { "lines": 1368 },
   "apps/server/src/orchestration-v2/ThreadManagementService.ts": { "lines": 2074 },
   "apps/server/src/orchestration-v2/ThreadPullRequestService.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/ThreadSearch.test.ts": { "lines": 1115 },
+  "apps/server/src/orchestration-v2/ThreadSearch.test.ts": { "lines": 1061 },
   "apps/server/src/orchestration-v2/ThreadSearch.ts": { "nonNull": 2 },
   "apps/server/src/orchestration-v2/ThreadSettlementService.test.ts": { "lines": 1425 },
   "apps/server/src/orchestration-v2/ThreadSettlementService.ts": { "nonNull": 1 },
