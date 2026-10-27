@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -18,6 +19,7 @@ const MAX_RETAINED_TERMINALS = 32;
 const MAX_RETAINED_OUTPUT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_OUTPUT_BYTE_LIMIT = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTE_LIMIT = 8 * 1024 * 1024;
+const OUTPUT_DRAIN_TIMEOUT = "2 seconds";
 
 const terminalRequestError = (message: string, cause?: unknown) =>
   EffectAcpErrors.AcpRequestError.internalError(
@@ -285,8 +287,12 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
               ),
               Effect.ignore,
             );
-          const stdoutPump = yield* Effect.forkDetach(pump(child.stdout));
-          const stderrPump = yield* Effect.forkDetach(pump(child.stderr));
+          const stdoutPump = yield* Effect.forkDetach(
+            pump(child.stdout).pipe(Effect.interruptible),
+          );
+          const stderrPump = yield* Effect.forkDetach(
+            pump(child.stderr).pipe(Effect.interruptible),
+          );
           yield* Effect.forkDetach(
             child.exitCode.pipe(
               Effect.match({
@@ -294,16 +300,19 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                 onSuccess: (code) => ({ exitCode: Number(code), signal: null }),
               }),
               Effect.flatMap((status) =>
-                Effect.all([Fiber.join(stdoutPump), Fiber.join(stderrPump)], {
-                  discard: true,
-                }).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      record.exitStatus = status;
-                    }),
-                  ),
-                  Effect.andThen(Deferred.succeed(record.exit, status)),
-                ),
+                Effect.gen(function* () {
+                  const drained = yield* Effect.all(
+                    [Fiber.join(stdoutPump), Fiber.join(stderrPump)],
+                    { discard: true },
+                  ).pipe(Effect.interruptible, Effect.timeoutOption(OUTPUT_DRAIN_TIMEOUT));
+                  if (Option.isNone(drained)) {
+                    record.buffer.truncated = true;
+                    yield* Fiber.interruptAll([stdoutPump, stderrPump]);
+                    yield* Effect.logWarning("ACP terminal output drain expired", { terminalId });
+                  }
+                  record.exitStatus = status;
+                  yield* Deferred.succeed(record.exit, status);
+                }),
               ),
             ),
           );
