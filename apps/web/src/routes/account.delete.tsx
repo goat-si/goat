@@ -1,4 +1,4 @@
-import { SignIn, useClerk } from "@clerk/react";
+import { SignIn, useUser } from "@clerk/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { AccountDeletionSection } from "../components/cloud/AccountDeletionSection";
@@ -17,8 +17,8 @@ function AccountDeletionRoute() {
   );
 }
 function SignedInDeletion() {
-  const clerk = useClerk();
-  return clerk.user ? (
+  const { user } = useUser();
+  return user ? (
     <AccountDeletionSection />
   ) : (
     <SignIn routing="hash" forceRedirectUrl="/account/delete" />

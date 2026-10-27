@@ -1,4 +1,4 @@
-import { useClerk, useReverification } from "@clerk/react";
+import { useClerk, useReverification, useSession, useUser } from "@clerk/react";
 import {
   AccountIdentityDeletionPendingError,
   advanceAccountDeletion,
@@ -7,20 +7,34 @@ import {
   type AccountDeletionResult,
 } from "@goat/client-runtime/relay";
 import * as Effect from "effect/Effect";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { runtime } from "../../lib/runtime";
 import { Button } from "../ui/button";
 
 export function AccountDeletionSection() {
-  const clerk = useClerk();
-  return <AccountDeletionForSession key={`${clerk.user?.id ?? ""}:${clerk.session?.id ?? ""}`} />;
+  const { user } = useUser();
+  const { session } = useSession();
+  // Resource replacement invalidates consent even when Clerk keeps the same IDs.
+  const [identity, setIdentity] = useState({ user, session, version: 0 });
+  if (identity.user !== user || identity.session !== session) {
+    setIdentity({ user, session, version: identity.version + 1 });
+  }
+  return user && session ? <AccountDeletionForSession key={identity.version} /> : null;
 }
 
 function AccountDeletionForSession() {
   const clerk = useClerk();
   const user = clerk.user;
   const session = clerk.session;
-  const isCurrent = () => clerk.user === user && clerk.session === session;
+  const active = useRef(true);
+  // oxlint-disable-next-line goat/react-effect-budget -- Invalidate pending deletion and consent when this session leaves.
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
+  const isCurrent = () => active.current && clerk.user === user && clerk.session === session;
   const [consent, setConsent] = useState<{ user: typeof user; session: typeof session } | null>(
     null,
   );
@@ -31,7 +45,7 @@ function AccountDeletionForSession() {
   const key = useRef<{ accountId: string; key: string } | null>(null);
   const deleteIdentity = useReverification(
     async (user: NonNullable<typeof clerk.user>, session: NonNullable<typeof clerk.session>) => {
-      if (clerk.user !== user || clerk.session !== session)
+      if (!isCurrent() || clerk.user !== user || clerk.session !== session)
         throw new Error("Account changed. Resume with the original account.");
       return await user.delete();
     },
