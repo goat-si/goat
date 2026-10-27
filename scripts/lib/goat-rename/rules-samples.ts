@@ -143,6 +143,20 @@ export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
     scope: (path) =>
       path === "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
   },
+  {
+    id: "samples:change-request-identity-owner",
+    category: "samples",
+    find: /(\bowner:\s*")pingdotgg(?=")/g,
+    replace: "$1goat-si",
+    scope: (path) => path === "packages/client-runtime/src/changeRequestLinks.test.ts",
+  },
+  {
+    id: "samples:change-request-identity-name",
+    category: "samples",
+    find: /\bt3code\b/g,
+    replace: "goat",
+    scope: (path) => path === "packages/client-runtime/src/changeRequestLinks.test.ts",
+  },
   // This file also asserts owner and name separately, so its owner moves everywhere in it.
   identityTestSample("owner-tools-identity", /\bT3Tools\b/g, "Sample-Tools"),
   identityTestSample("owner-tools-identity-key", /(?<![\w.-])t3tools(?=\/)/g, "sample-tools"),

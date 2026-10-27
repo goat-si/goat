@@ -18,6 +18,29 @@ describe("sample names", () => {
     expect(apply(path, input)).toBe(expected);
   });
 
+  it("keeps split change-request identities consistent with their repository keys", () => {
+    const input = `canonicalKey: "github.com/pingdotgg/t3code",
+owner: "pingdotgg",
+name: "t3code",
+canonicalKey: "gitlab.com/t3tools/platform/t3code",
+displayName: "t3tools/platform/t3code",
+owner: "t3tools",
+name: "t3code",`;
+    const expected = `canonicalKey: "github.com/goat-si/goat",
+owner: "goat-si",
+name: "goat",
+canonicalKey: "gitlab.com/t3tools/platform/goat",
+displayName: "t3tools/platform/goat",
+owner: "t3tools",
+name: "goat",`;
+    const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
+    expect(apply(path, input)).toBe(expected);
+    expect(apply(path, expected)).toBe(expected);
+    expect(apply("other.test.ts", 'owner: "pingdotgg",\nname: "t3code",')).toBe(
+      'owner: "pingdotgg",\nname: "t3code",',
+    );
+  });
+
   it("renames maintainer samples in tests", () => {
     expect(
       apply(

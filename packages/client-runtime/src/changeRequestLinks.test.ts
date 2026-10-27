@@ -21,31 +21,38 @@ describe("findProjectForChangeRequest", () => {
   it("matches a nested GitLab group by the whole path below the host", () => {
     const projects = [
       project({
-        canonicalKey: "gitlab.com/t3tools/platform/t3code",
+        canonicalKey: "gitlab.com/t3tools/platform/goat",
         provider: SourceControlProviderKind.make("gitlab"),
-        displayName: "t3tools/platform/t3code",
+        displayName: "t3tools/platform/goat",
         owner: "t3tools",
-        name: "t3code",
+        name: "goat",
       }),
     ];
     expect(
       findProjectForChangeRequest(projects, {
         host: "gitlab.com",
-        repository: "t3tools/platform/t3code",
+        repository: "t3tools/platform/goat",
         number: 42,
       }),
     ).toBe(projects[0]);
   });
 
-  it("claims nothing for a lookalike host, which is what keeps a link a link", () => {
+  it("matches its own host but claims nothing for a lookalike host", () => {
     const projects = [
       project({
         canonicalKey: "github.com/goat-si/goat",
         provider: SourceControlProviderKind.make("github"),
-        owner: "pingdotgg",
-        name: "t3code",
+        owner: "goat-si",
+        name: "goat",
       }),
     ];
+    expect(
+      findProjectForChangeRequest(projects, {
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 1,
+      }),
+    ).toBe(projects[0]);
     expect(
       findProjectForChangeRequest(projects, {
         host: "github.com-evil.test",
