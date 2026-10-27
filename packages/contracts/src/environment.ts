@@ -142,6 +142,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Hide the switch when absent; older servers silently drop per-project provider patches. */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
   /**
+   * Server applies Codex Home authentication and refuses a provider instance upsert whose
+   * expectedInstance is stale. Older servers drop both, so clients change Home only when set.
+   */
+  providerInstancePreconditions: Schema.optionalKey(Schema.Boolean),
+  /**
    * Server delivers the goat-discipline built-in skill to a turn that names it and honors a
    * project's `builtInSkills` switch. Older servers would leave the mention as plain text and drop
    * the switch, so clients list the skill and show its settings only when this is true.

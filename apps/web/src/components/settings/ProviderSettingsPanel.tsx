@@ -601,6 +601,11 @@ export function EnvironmentProviderSettings({
     serverEnvironment.configValueAtom(environmentId),
     (config) => config?.environment.capabilities.projectProviderInstanceOverrides === true,
   );
+  // Older servers drop Home authentication and write preconditions, so Home changes wait for an update.
+  const supportsInstancePreconditions = useAtomValue(
+    serverEnvironment.configValueAtom(environmentId),
+    (config) => config?.environment.capabilities.providerInstancePreconditions === true,
+  );
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -836,7 +841,7 @@ export function EnvironmentProviderSettings({
     next: ProviderInstanceConfig,
     options?: {
       readonly throwOnFailure?: boolean;
-      readonly expectedInstance?: ProviderInstanceConfig | undefined;
+      readonly expectedInstance?: ProviderInstanceConfig | null | undefined;
       readonly textGenerationModelSelection?: Parameters<
         typeof buildProviderInstanceUpdatePatch
       >[0]["textGenerationModelSelection"];
@@ -853,7 +858,9 @@ export function EnvironmentProviderSettings({
         operation: "upsert",
         instanceId,
         instance: next,
-        ...(options?.expectedInstance ? { expectedInstance: options.expectedInstance } : {}),
+        ...(options?.expectedInstance === undefined
+          ? {}
+          : { expectedInstance: options.expectedInstance }),
       },
       patch,
     );
@@ -965,7 +972,7 @@ export function EnvironmentProviderSettings({
     async (
       instanceId: ProviderInstanceId,
       next: ProviderInstanceConfig,
-      expectedInstance?: ProviderInstanceConfig,
+      expectedInstance?: ProviderInstanceConfig | null,
     ) => {
       if (!readEnvironmentScope(environmentId, AuthProvidersManageScope))
         throw new Error(
@@ -1035,6 +1042,7 @@ export function EnvironmentProviderSettings({
         providerInstances={settings.providerInstances}
         canRefreshProviders={canRefreshProviders}
         canOpenHomeDashboard={canOpenHomeDashboard}
+        supportsInstancePreconditions={supportsInstancePreconditions}
         active={threadShells.some(
           (thread) =>
             thread.environmentId === environmentId &&
@@ -1286,7 +1294,7 @@ interface ProviderInstanceRowActions {
   readonly configureInstance: (
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,
-    expectedInstance?: ProviderInstanceConfig,
+    expectedInstance?: ProviderInstanceConfig | null,
   ) => Promise<void>;
   readonly refreshInstance: (instanceId: ProviderInstanceId) => Promise<void>;
   readonly addOpenCodexInstance: () => void;
@@ -1341,6 +1349,7 @@ function ProviderInstanceRow({
   providerInstances,
   canRefreshProviders,
   canOpenHomeDashboard,
+  supportsInstancePreconditions,
   active,
   isUpdateDispatching,
   showProjectOverride,
@@ -1366,6 +1375,7 @@ function ProviderInstanceRow({
   readonly providerInstances: UnifiedSettings["providerInstances"];
   readonly canRefreshProviders: boolean;
   readonly canOpenHomeDashboard: boolean;
+  readonly supportsInstancePreconditions: boolean;
   readonly active: boolean;
   readonly isUpdateDispatching: boolean;
   readonly showProjectOverride: boolean;
@@ -1459,7 +1469,8 @@ function ProviderInstanceRow({
             environmentLabel={environmentLabel}
             instanceId={instanceId}
             instance={instance}
-            expectedInstance={explicitInstance}
+            expectedInstance={explicitInstance ?? null}
+            writesSupported={supportsInstancePreconditions}
             status={liveProvider?.codexRoute}
             readOnly={readOnly}
             active={active}

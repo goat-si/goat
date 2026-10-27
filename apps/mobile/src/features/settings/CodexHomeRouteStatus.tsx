@@ -75,10 +75,13 @@ const routeFields = (instance: ProviderInstanceConfig | undefined) =>
     configValue(instance, key),
   );
 
+const UPDATE_GOAT_FOR_HOME = "Update GOAT on this machine to change Home authentication.";
+
 /**
  * Confirms a change chosen in an Alert against the instance as it is now. If another device
  * changed the route since the Alert opened, nothing is written; otherwise only the change is
- * applied over the latest instance.
+ * applied over the latest instance. Servers without providerInstancePreconditions would drop that
+ * guard and the authentication field, so nothing is sent to them.
  */
 export async function confirmCodexRouteChange(input: {
   readonly environmentId: EnvironmentId;
@@ -86,8 +89,10 @@ export async function confirmCodexRouteChange(input: {
   readonly opened: ProviderInstanceConfig | undefined;
   readonly readLatest: () => ProviderInstanceConfig | undefined;
   readonly change: CodexRouteChange;
+  readonly supportsPreconditions: boolean;
   readonly mutate: (mutation: ReturnType<typeof buildDefaultCodexRouteMutation>) => Promise<void>;
 }) {
+  if (!input.supportsPreconditions) throw new Error(UPDATE_GOAT_FOR_HOME);
   const latest = input.readLatest();
   const opened = routeFields(input.opened);
   if (
@@ -136,6 +141,8 @@ export function CodexHomeRouteStatus({
   const handoff = openCodexHomeHandoff({ environmentLabel: environment.label, action: "connect" });
   const settings = config.data?.config.settings;
   const instance = settings?.providerInstances[provider.instanceId];
+  const supportsPreconditions =
+    config.data?.config.environment.capabilities.providerInstancePreconditions === true;
   const managed = configValue(instance, "setupMode") === "managed";
   const homeAuth: CodexHomeAuth =
     configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
@@ -161,6 +168,7 @@ export function CodexHomeRouteStatus({
           opened,
           readLatest: readLatestInstance,
           change,
+          supportsPreconditions,
           mutate: async (mutation) => {
             const result = await mutate(mutation);
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -203,8 +211,10 @@ export function CodexHomeRouteStatus({
         <SettingsActionRow
           icon="person.crop.circle"
           label="Home authentication"
-          description={homeAuth === "none" ? "None" : "OpenAI"}
-          disabled={pending || config.isPending || config.error !== null}
+          description={
+            supportsPreconditions ? (homeAuth === "none" ? "None" : "OpenAI") : UPDATE_GOAT_FOR_HOME
+          }
+          disabled={pending || config.isPending || config.error !== null || !supportsPreconditions}
           onPress={() =>
             Alert.alert(
               "Home authentication",
@@ -238,7 +248,13 @@ export function CodexHomeRouteStatus({
         <SettingsActionRow
           icon="xmark"
           label="Stop using OpenCodex Home"
-          disabled={pending || !instance || config.isPending || config.error !== null}
+          disabled={
+            pending ||
+            !instance ||
+            config.isPending ||
+            config.error !== null ||
+            !supportsPreconditions
+          }
           onPress={() => {
             const disconnect = openCodexHomeHandoff({
               environmentLabel: environment.label,

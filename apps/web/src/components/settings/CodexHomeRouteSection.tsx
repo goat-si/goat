@@ -36,6 +36,8 @@ export interface CodexHomeRouteSectionProps {
   readonly readOnly: boolean;
   readonly active?: boolean;
   readonly canRefresh?: boolean;
+  /** False on servers that would drop Home authentication and write preconditions. */
+  readonly writesSupported?: boolean;
   readonly onChange: (route: {
     readonly modelRoute: CodexModelRoute;
     readonly opencodexBaseUrl: string;
@@ -60,7 +62,8 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
   // Managed Codex holds no OpenAI credential that may be sent through Home.
   const authMode: CodexHomeAuth = managed ? "none" : authDraft;
   const usesHome = props.settings.modelRoute === "opencodex";
-  const disabled = props.readOnly || props.active || pending;
+  const writesBlocked = props.writesSupported === false;
+  const disabled = props.readOnly || props.active || pending || writesBlocked;
   // Never show an old route's successful observation after a settings change.
   const observed =
     props.status?.modelRoute === props.settings.modelRoute ? props.status : undefined;
@@ -99,9 +102,11 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
       <SettingsRow
         title="Home authentication"
         description={
-          managed
-            ? "Managed Codex uses Home without a sign-in. OpenAI authentication for Home needs an instance that uses your Codex CLI."
-            : "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in."
+          writesBlocked
+            ? "Update GOAT on this machine to change Home authentication."
+            : managed
+              ? "Managed Codex uses Home without a sign-in. OpenAI authentication for Home needs an instance that uses your Codex CLI."
+              : "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in."
         }
         control={
           <div className="flex gap-2" role="group" aria-label="Home authentication">

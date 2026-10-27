@@ -5,12 +5,12 @@ import { readCodexSetupMode } from "./CodexSetupSection.logic";
 
 type Props = Omit<CodexHomeRouteSectionProps, "settings" | "onChange" | "onOpenDashboard"> & {
   readonly instance: ProviderInstanceConfig;
-  /** The stored instance, when there is one; the server refuses a write made against an older one. */
-  readonly expectedInstance: ProviderInstanceConfig | undefined;
+  /** The stored instance, or null when none is; the server refuses a write made against an older one. */
+  readonly expectedInstance: ProviderInstanceConfig | null;
   readonly canOpenDashboard: boolean;
   readonly onConfigure: (
     instance: ProviderInstanceConfig,
-    expectedInstance: ProviderInstanceConfig | undefined,
+    expectedInstance: ProviderInstanceConfig | null,
   ) => Promise<void>;
 };
 const LOCAL_ADDRESS = "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.";

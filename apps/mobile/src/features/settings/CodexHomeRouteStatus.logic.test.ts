@@ -117,9 +117,29 @@ describe("OpenCodex Home routing", () => {
           opened,
           readLatest: () => latest,
           change,
+          supportsPreconditions: true,
           mutate,
         }),
       ).rejects.toThrow("Settings changed on another device");
+    expect(mutate).not.toHaveBeenCalled();
+  });
+  it("refuses a Home confirmation on a server that cannot enforce its precondition", async () => {
+    const instance: ProviderInstanceConfig = {
+      driver: codex,
+      config: { modelRoute: "opencodex", opencodexAuth: "openai" },
+    };
+    const mutate = vi.fn(async () => undefined);
+    await expect(
+      confirmCodexRouteChange({
+        environmentId: EnvironmentId.make("old"),
+        instanceId: ProviderInstanceId.make("old_codex"),
+        opened: instance,
+        readLatest: () => instance,
+        change: { opencodexAuth: "none" },
+        supportsPreconditions: false,
+        mutate,
+      }),
+    ).rejects.toThrow("Update GOAT on this machine to change Home authentication.");
     expect(mutate).not.toHaveBeenCalled();
   });
   it("applies only the confirmed authentication over the latest instance", async () => {
@@ -138,6 +158,7 @@ describe("OpenCodex Home routing", () => {
       opened,
       readLatest: () => latest,
       change: { opencodexAuth: "none" },
+      supportsPreconditions: true,
       mutate,
     });
     expect(mutate).toHaveBeenCalledExactlyOnceWith(

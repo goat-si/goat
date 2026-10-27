@@ -46,19 +46,25 @@ export const instanceFingerprint = (instance: unknown) =>
     )
     .digest("hex");
 /**
- * Rejects an upsert whose client-confirmed instance no longer matches the stored one. Clients only
- * see redacted settings, so both sides are compared in that form. Called under the settings lock.
+ * Rejects an upsert whose client-confirmed instance no longer matches the stored one; null means
+ * none was stored. Clients see redacted settings, so both sides are compared in that form. Called
+ * under the settings lock.
  */
 export const ensureExpectedProviderInstance = (
   settings: ServerSettings,
   mutation: ProviderInstanceMutation,
   settingsPath: string,
-) =>
-  mutation.operation !== "upsert" ||
-  mutation.expectedInstance === undefined ||
-  instanceFingerprint(
-    Settings.redactServerSettingsForClient(settings).providerInstances[mutation.instanceId],
-  ) === instanceFingerprint(mutation.expectedInstance)
+) => {
+  if (mutation.operation !== "upsert" || mutation.expectedInstance === undefined)
+    return Effect.void;
+  const current =
+    Settings.redactServerSettingsForClient(settings).providerInstances[mutation.instanceId];
+  return (
+    mutation.expectedInstance === null
+      ? current === undefined
+      : current !== undefined &&
+        instanceFingerprint(current) === instanceFingerprint(mutation.expectedInstance)
+  )
     ? Effect.void
     : Effect.fail(
         new ServerSettingsError({
@@ -68,6 +74,7 @@ export const ensureExpectedProviderInstance = (
           code: "provider_instance_stale",
         }),
       );
+};
 class ProviderInstanceBusyError extends ServerSettingsError {
   override get message() {
     return "Wait for this instance's active turns to finish before changing its model route.";

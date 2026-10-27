@@ -494,3 +494,58 @@ it.effect.each([
     });
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect.each([
+  {
+    case: "rejects a first write confirmed against no stored instance once another device stored one",
+    stale: true,
+  },
+  { case: "applies a first write confirmed against no stored instance", stale: false },
+])("$case", ({ stale }) =>
+  Effect.gen(function* () {
+    const routes = yield* seed;
+    const settings = yield* Settings.ServerSettingsService;
+    const id = ProviderInstanceId.make("codex");
+    const upsert = (config: Record<string, unknown>, expectedInstance?: null) =>
+      routes.mutateProviderInstance(
+        {
+          mutation: overWire({
+            operation: "upsert",
+            instanceId: id,
+            instance: { driver: base.driver, config },
+            ...(expectedInstance === null ? { expectedInstance } : {}),
+          }),
+        },
+        caller,
+      );
+    if (stale)
+      yield* commitAndApply(
+        upsert({ modelRoute: "default", opencodexBaseUrl: "http://127.0.0.1:10101/v1" }),
+      );
+    const late = upsert(
+      { modelRoute: "opencodex", opencodexBaseUrl: "http://127.0.0.1:10100/v1" },
+      null,
+    );
+    if (!stale) {
+      const saved = yield* commitAndApply(late);
+      assert.equal(decode(saved.providerInstances[id]?.config ?? {}).modelRoute, "opencodex");
+      return;
+    }
+    const state = yield* Routes.CodexRouteState;
+    const changes = yield* settings.subscribeProviderChanges!;
+    const baseline = state.revision();
+    const fiber = yield* late.pipe(Effect.result, Effect.forkScoped);
+    const result = yield* Effect.raceFirst(
+      Fiber.join(fiber),
+      Stream.runHead(
+        changes.pipe(Stream.filter((event) => event.revision.sequence > baseline.sequence)),
+      ).pipe(Effect.andThen(Effect.die("A stale first write was committed"))),
+    );
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.equal(result.failure.code, "provider_instance_stale");
+    assert.deepInclude(decode((yield* settings.getSettings).providerInstances[id]?.config ?? {}), {
+      modelRoute: "default",
+      opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+    });
+  }).pipe(Effect.provide(layer)),
+);
