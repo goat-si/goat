@@ -225,10 +225,15 @@ export const make = Effect.gen(function* () {
       Effect.map((state) => state._tag === "active" && state.idle !== true),
       Effect.orElseSucceed(() => false),
     );
-  // A thread proxy lives as long as its provider conversation and registers once, so a turn
-  // ending, an expiry or a successor control keeps its registration; Stop and revocation close it.
+  // A thread proxy lives as long as its provider conversation and registers once. A turn end,
+  // expiry, successor or Stop ends only the control; revocation and turning computer use off
+  // close the registration, as does an explicit revoke when the thread's session goes.
   const keepsRegistration = (state: { readonly _tag: string; readonly reason?: string }) =>
-    state._tag === "ended" ? state.reason === "expired" || state.reason === "replaced" : true;
+    state._tag !== "ended" ||
+    state.reason === "expired" ||
+    state.reason === "replaced" ||
+    state.reason === "stopped" ||
+    state.reason === "stopped_all";
   const revokeEndedControls = Effect.fn("ComputerUsePrimitiveChannel.revokeEndedControls")(
     function* () {
       for (const [threadId, attachment] of attachments) {
@@ -246,7 +251,7 @@ export const make = Effect.gen(function* () {
             ? yield* leases
                 .controlState(threadId, current.controlId)
                 .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })))
-            : { _tag: "ended" as const };
+            : { _tag: "ended" as const, reason: current.ended };
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         const record = registered?.controls.get(current.controlId);
         if (registered?.kind === "thread" && keepsRegistration(state)) {

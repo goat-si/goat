@@ -6,6 +6,7 @@ import {
   type ComputerUseRequestInput,
   EnvironmentId,
   ScheduledTaskId,
+  ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
@@ -91,6 +92,22 @@ const fromSchedule = <T extends object>(records: T): T =>
       }
     : records;
 
+/** The same records for a thread launched from another environment. */
+const fromRemote = <T extends object>(records: T): T =>
+  "thread" in records && typeof records.thread === "object" && records.thread !== null
+    ? {
+        ...records,
+        thread: {
+          ...records.thread,
+          launchedBy: {
+            kind: "launch",
+            threadId: ThreadId.make("thread:elsewhere"),
+            environmentId: "other-host",
+          },
+        },
+      }
+    : records;
+
 export const withRequests = <A, E, R>(
   orchestrator: Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"],
   signals: Signals | undefined,
@@ -113,8 +130,8 @@ export const withRequests = <A, E, R>(
   observe?: (
     command: Parameters<Orchestrator.OrchestratorV2["Service"]["dispatch"]>[0],
   ) => Effect.Effect<void>,
-  /** The running turn came from a scheduled task, so it is unattended work. */
-  scheduled = false,
+  /** Who started the running turn: a person, a scheduled task, or another environment's launch. */
+  from: "person" | "schedule" | "remote" = "person",
   /** Hears what the leases tell the desktop to watch and admit to the driver's manifest. */
   setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
 ) => {
@@ -180,7 +197,15 @@ export const withRequests = <A, E, R>(
           getThreadRecords: (id, fields, filter) =>
             orchestrator
               .getThreadRecords(id, fields, filter)
-              .pipe(Effect.map((records) => (scheduled ? fromSchedule(records) : records))),
+              .pipe(
+                Effect.map((records) =>
+                  from === "schedule"
+                    ? fromSchedule(records)
+                    : from === "remote"
+                      ? fromRemote(records)
+                      : records,
+                ),
+              ),
         }),
       ),
     ),

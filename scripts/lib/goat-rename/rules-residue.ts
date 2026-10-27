@@ -101,7 +101,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   keep(
     "relay-help-anchors",
     [
-      "docs/user/t3-connect-troubleshooting.md",
+      "docs/user/goat-connect-troubleshooting.md",
       "packages/client-runtime/src/connection/diagnosis.ts",
       "packages/contracts/src/environmentHttp.ts",
     ],

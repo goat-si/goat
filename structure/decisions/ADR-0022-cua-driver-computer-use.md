@@ -111,9 +111,8 @@
 `computerUseAttachment` returns `none` (with a reason) or `proxied`. It attaches only when
 `enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
 Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
-thread holds a lease and the host's helper reports secret fields as a supported signal in its
-readiness (`cuaReadiness`, also shown as `CuaHostStatus.readiness`;
-otherwise `detection-unsupported`, #1235). Every attachment carries GOAT's proxy
+thread holds a lease or runs in full access (ADR-0023 D16); whether the host's helper detects
+secret fields does not gate it. Every attachment carries GOAT's proxy
 instead of `cua-driver mcp` under the thread's control (see "Safety") with
 `cuaDriverOverridesUserConfig`: a `cua-driver` the person configured would skip Stop, pauses and app
 approvals. Without the proxy subcommand nothing could stop the driver, so there is no attachment.
@@ -245,8 +244,8 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   until it loses focus. The control counts these pauses, so a proxy that only sees the state after a
   pause has already ended still ends the call it overlapped. Narrowing a thread's approved apps ends
   the call in flight. Interactive
-  turns run where the helper cannot report these yet, with the gap shown as unsupported; unattended
-  turns require private-mode detection but not human-input detection. Controls and pauses are
+  and unattended turns run where the helper cannot report these yet, with the gap shown as
+  unsupported. Controls and pauses are
   in memory, ended by a restart like the provider processes they serve.
 - **Proxy.** Every attached provider runs `goat cua-lease-proxy --control` in place of
   `cua-driver mcp`. It holds the thread's own MCP credential and reads

@@ -45,13 +45,25 @@ function setup() {
 }
 
 const floating = () => usePreviewMiniPlayerStore.getState().byThreadKey[threadKey]?.source;
+const agentTab = (threadId: string, tabId: string) => ({
+  id: `browser:${threadId}:${tabId}`,
+  kind: "browser" as const,
+  environmentId: "env-1" as EnvironmentId,
+  host: "mac",
+  platform: "mac" as const,
+  threadId: ThreadId.make(threadId),
+  target: { kind: "browser" as const, tabId, url: "http://localhost:5173/", title: "" },
+  owner: "agent" as const,
+  status: "acting" as const,
+  capabilities: { controls: ["stop" as const], frames: true, privateMode: true, humanInput: true },
+});
 const deviceTabs = () =>
   useRightPanelStore
     .getState()
     .byThreadKey[threadKey]?.surfaces.filter((surface) => surface.kind === "device")
     .map((surface) => surface.id);
 
-it("floats a person's own tab, and sends a tab an agent drives to its large card even when a person asks", () => {
+it("floats a person's own tab, and shows a tab an agent drives as its small card even when a person asks", () => {
   setup();
   applyPreviewServerSnapshot(ref, tab("tab_own"));
   applyPreviewServerSnapshot(ref, tab("tab_agent", "agent-session"));
@@ -62,12 +74,29 @@ it("floats a person's own tab, and sends a tab an agent drives to its large card
   floatPreview(ref, browserMiniPlayerSource("tab_agent"), { by: "person" });
   expect(floating()).toBeUndefined();
   expect(usePreviewSessionStack.getState().hidden).toBe(false);
-  expect(usePreviewSessionStack.getState().expanded.get("env-1|thread-1")).toEqual({
+  expect(usePreviewSessionStack.getState().focus).toEqual({
     kind: "browser",
     threadId: "thread-1",
     tabId: "tab_agent",
-    environmentId: "env-1",
   });
+  expect(usePreviewSessionStack.getState().expanded.size).toBe(0);
+
+  floatPreview(ref, browserMiniPlayerSource("tab_agent"), { by: "agent", force: true });
+  expect(usePreviewSessionStack.getState().expanded.size).toBe(0);
+});
+
+it("keeps the card the person enlarged when its agent shows another tab, and keeps a shrunk card small", () => {
+  setup();
+  applyPreviewServerSnapshot(ref, tab("tab_a", "agent-session"));
+  applyPreviewServerSnapshot(ref, tab("tab_b", "agent-session"));
+  const large = () => usePreviewSessionStack.getState().expanded.get("env-1|thread-1");
+  usePreviewSessionStack.getState().expand(agentTab("thread-1", "tab_a"));
+  floatPreview(ref, browserMiniPlayerSource("tab_b"), { by: "agent", force: true });
+  expect(large()).toMatchObject({ sessionId: "browser:thread-1:tab_a" });
+
+  usePreviewSessionStack.getState().collapse("env-1|thread-1");
+  floatPreview(ref, browserMiniPlayerSource("tab_a"), { by: "agent", force: true });
+  expect(large()).toBeUndefined();
 });
 
 it("leaves the thread on screen's large card and hidden cards alone when another thread's agent opens a tab", () => {
@@ -78,35 +107,22 @@ it("leaves the thread on screen's large card and hidden cards alone when another
     ...tab("tab_theirs", "agent-session"),
     threadId: "thread-2",
   });
-  openPreviewSessionStack({
-    environmentId: ref.environmentId,
-    focus: { kind: "browser", threadId: "thread-1", tabId: "tab_mine" },
-    expand: true,
-    automatic: true,
-  });
+  usePreviewSessionStack.getState().expand(agentTab("thread-1", "tab_mine"));
   floatPreview(other, browserMiniPlayerSource("tab_theirs"), { by: "agent", force: true });
   const state = usePreviewSessionStack.getState();
-  expect(state.expanded.get("env-1|thread-1")).toMatchObject({ tabId: "tab_mine" });
-  expect(state.expanded.get("env-1|thread-2")).toMatchObject({ tabId: "tab_theirs" });
+  expect(state.expanded.get("env-1|thread-1")).toMatchObject({
+    sessionId: "browser:thread-1:tab_mine",
+  });
+  expect(state.expanded.has("env-1|thread-2")).toBe(false);
   expect(selectAgentCardsShown("env-1|thread-1")(state)).toBe(false);
   expect(selectAgentCardsShown("env-1|thread-2")(state)).toBe(true);
 
-  // Closing the card an agent enlarged shrinks only that thread's card.
-  usePreviewSessionStack.getState().dismiss({
-    id: "browser:thread-2:tab_theirs",
-    kind: "browser",
-    environmentId: "env-1" as EnvironmentId,
-    host: "mac",
-    platform: "mac",
-    threadId: ThreadId.make("thread-2"),
-    target: { kind: "browser", tabId: "tab_theirs", url: "http://localhost:5173/", title: "" },
-    owner: "agent",
-    status: "acting",
-    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
-  });
+  // Closing an enlarged card shrinks only that thread's card.
+  usePreviewSessionStack.getState().expand(agentTab("thread-2", "tab_theirs"));
+  usePreviewSessionStack.getState().dismiss(agentTab("thread-2", "tab_theirs"));
   const after = usePreviewSessionStack.getState().expanded;
   expect(after.has("env-1|thread-2")).toBe(false);
-  expect(after.get("env-1|thread-1")).toMatchObject({ tabId: "tab_mine" });
+  expect(after.get("env-1|thread-1")).toMatchObject({ sessionId: "browser:thread-1:tab_mine" });
 });
 
 it("ends an agent's reveal of its thread's cards when the person hides them or the pane narrows", () => {

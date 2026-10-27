@@ -15,7 +15,7 @@ import { floatBrowserTab } from "./floatPreview";
 
 /**
  * Shows browsers an agent or another client revealed for a thread, for every thread at once: an
- * agent's tab as its thread's large card and anything else floating over chat (floatBrowserTab), or
+ * agent's tab as its thread's card and anything else floating over chat (floatBrowserTab), or
  * focusing an existing panel tab when the reveal is forced. This is the only place a revealed
  * server tab opens, so a tab never shows twice.
  */

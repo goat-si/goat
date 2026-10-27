@@ -4,6 +4,7 @@ import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
+import { tabCookies } from "./pageSecrets.ts";
 
 export interface InPageFetchInput {
   readonly url: string;
@@ -249,6 +250,8 @@ const fetchInPage = async (
   // Page-side code is passed as source: the server compiles without DOM types.
   const outcome = (await page.evaluate(`(${FETCH_SCRIPT})(${args})`)) as PageOutcome;
   if ("error" in outcome) {
+    // A page's own fetch can fail with any message, the tab's cookie values included.
+    const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));
     throw outcome.timedOut
       ? new ServerBrowserOperationError(
           "PreviewAutomationTimeoutError",
@@ -256,19 +259,18 @@ const fetchInPage = async (
         )
       : new ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
-          `Fetching ${url} failed: ${outcome.error}`,
+          `Fetching ${url} failed: ${failed}`,
         );
   }
-  // Every cookie the browser would send to the request, its redirect target or the tab, HttpOnly
-  // ones included.
-  const origins = [url, page.url(), outcome.url].filter((candidate) => /^https?:/.test(candidate));
-  const cookies = await page.context().cookies(origins);
+  // Every cookie the browser would send to the request, its redirect target, the tab's frames or
+  // what the tab fetched before, HttpOnly ones included.
+  const cookies = await tabCookies(page, [url, outcome.url]);
   const redact = (text: string) => redactSecrets(text, cookies);
   const head = {
     url: redact(redactQuery(outcome.url)),
     status: outcome.status,
     ok: outcome.ok,
-    contentType: outcome.contentType,
+    contentType: redact(outcome.contentType),
   };
   if (outcome.kind === "raw") return { ...head, format: "raw", text: "", truncated: false };
   // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.

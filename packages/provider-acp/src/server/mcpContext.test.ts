@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { mergeThreadEnvironment } from "@goat/provider-core/server/mcpSession";
 
 import { goatAcpPromptWithInstructions } from "@goat/provider-core/server/orchestrationInstructions";
 import { acpInstructionState } from "./screenInstructions.ts";
@@ -32,6 +33,29 @@ describe("ACP GOAT MCP context", () => {
         screenCodeCompact: true,
       }),
     ).toContain("goat_screen_run");
+  });
+
+  it("routes BROWSER to GOAT's opener only where the agent's own environment has none", () => {
+    const opener = "/tmp/goat-threads-fixture/goat-browser";
+    const { processEnvironment } = acpMcpContext(
+      {
+        environmentId: EnvironmentId.make("environment-one"),
+        threadId: ThreadId.make("thread-one"),
+        providerSessionId: "session-one",
+        providerInstanceId: ProviderInstanceId.make("acp"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer test-token",
+        browserToolsAvailable: true,
+        urlOpener: opener,
+      },
+      { command: "/goat/node", entrypoint: undefined },
+    );
+    // A registry distribution's or the user's BROWSER, even an empty one, is kept.
+    for (const chosen of ["firefox", ""])
+      expect(mergeThreadEnvironment({ BROWSER: chosen }, processEnvironment).BROWSER).toBe(chosen);
+    const merged = mergeThreadEnvironment({ PATH: "/usr/bin" }, processEnvironment);
+    expect(merged.BROWSER).toBe(opener);
+    expect(merged.GOAT_ACP_MCP_AUTHORIZATION).toBe("Bearer test-token");
   });
 });
 
