@@ -1,4 +1,11 @@
-import { EnvironmentId, MessageId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  RunId,
+  ScheduledTaskId,
+  ThreadId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -151,50 +158,68 @@ const SENDER_THREAD_ID = ThreadId.make("thread-sender");
 const AGENT_MESSAGE = "Review finished\n\nThe migration drops the index before backfilling it.";
 
 describe("MessagesTimeline agent messages", () => {
-  it("folds a message from another agent into a one-line preview", async () => {
+  it("folds a message from a thread this app does not hold under a plain sent-from label", async () => {
     setup();
     const onOpenThread = vi.fn();
     await using screen = await renderTimeline(
       [message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID })],
       { onOpenThread },
     );
-    const row = screen.button(/^Agent/);
-    expect(row.textContent).toContain("Review finished");
-    expect(row.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.text()).not.toContain("drops the index");
-    expect(screen.buttons("Open thread")).toHaveLength(0);
-    // An unknown sender has no title to open, so its label stays inside the toggle.
+    expect(screen.text()).toContain("Sent from another thread");
     expect(screen.buttons(/^Open /)).toHaveLength(0);
+    const toggle = screen.button("Review finished");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.text()).not.toContain("drops the index");
 
-    await click(row);
+    await click(toggle);
     expect(screen.text()).toContain("The migration drops the index before backfilling it.");
     await click(screen.button("Open thread"));
     expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID);
-
-    await click(screen.button(/^Agent/));
-    expect(screen.text()).not.toContain("drops the index");
   });
 
-  it("opens a known sender thread from its name without unfolding the message", async () => {
+  it("names a known sender above the message and opens it at the call that sent it", async () => {
     setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
     const onOpenThread = vi.fn();
     await using screen = await renderTimeline(
       [message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID })],
       { onOpenThread },
     );
+    expect(screen.text()).toContain("Sent by CU100 merge manager from another thread");
     const toggle = screen.button("Review finished");
 
     await click(screen.button("Open CU100 merge manager"));
-    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-
-    await click(toggle.parentElement!);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    await click(toggle);
+    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID, {
+      sentFrom: {
+        threadId: expect.stringMatching(/^thread-/),
+        messageId: MessageId.make("message-1"),
+        senderThreadId: SENDER_THREAD_ID,
+        activation: expect.any(String),
+      },
+    });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("shows a deleted sender's name as plain text", async () => {
+  it("points an inherited message at the thread it was delivered to", async () => {
+    setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
+    const onOpenThread = vi.fn();
+    const inherited = {
+      ...message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
+      projectedItem: {
+        position: 0,
+        visibility: "inherited",
+        sourceThreadId: ThreadId.make("thread-original"),
+        sourceItemId: "item-1",
+        item: { threadId: ThreadId.make("thread-original") },
+      } as unknown as OrchestrationV2ProjectedTurnItem,
+    };
+    await using screen = await renderTimeline([inherited], { onOpenThread });
+    await click(screen.button("Open CU100 merge manager"));
+    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID, {
+      sentFrom: expect.objectContaining({ threadId: "thread-original" }),
+    });
+  });
+
+  it("names a deleted sender without a link", async () => {
     setup({
       shells: [
         { id: SENDER_THREAD_ID, title: "CU100 merge manager", deletedAt: "2026-03-18T00:00:00Z" },
@@ -203,11 +228,11 @@ describe("MessagesTimeline agent messages", () => {
     await using screen = await renderTimeline([
       message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
     ]);
+    expect(screen.text()).toContain("Sent by CU100 merge manager from another thread");
     expect(screen.buttons(/^Open /)).toHaveLength(0);
-    expect(screen.button(/^CU100 merge manager/).textContent).toContain("Review finished");
   });
 
-  it("keeps the sender name plain when the sender is on another environment", async () => {
+  it("does not link a sender held only by another environment", async () => {
     setup({
       shells: [
         {
@@ -220,8 +245,8 @@ describe("MessagesTimeline agent messages", () => {
     await using screen = await renderTimeline([
       message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
     ]);
+    expect(screen.text()).toContain("Sent from another thread");
     expect(screen.buttons(/^Open /)).toHaveLength(0);
-    expect(screen.button(/^Agent/).textContent).toContain("Review finished");
   });
 
   it("names the toggle after the sender when the message has no text", async () => {
@@ -233,6 +258,19 @@ describe("MessagesTimeline agent messages", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     await click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("does not mark a message from another thread as a steer", async () => {
+    setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
+    await using screen = await renderTimeline([
+      message(AGENT_MESSAGE, {
+        createdBy: "agent",
+        senderThreadId: SENDER_THREAD_ID,
+        inputIntent: "steer",
+      }),
+    ]);
+    expect(screen.text()).toContain("Sent by CU100 merge manager");
+    expect(screen.text()).not.toContain("Steer");
   });
 
   it("leaves messages sent by GOAT as full bubbles", async () => {
@@ -256,7 +294,7 @@ describe("MessagesTimeline agent messages", () => {
       },
     );
     await vi.waitFor(() =>
-      expect(screen.button(/^Agent/).getAttribute("aria-expanded")).toBe("true"),
+      expect(screen.button(/^Checked the next file/).getAttribute("aria-expanded")).toBe("true"),
     );
     const { range } = collectThreadFindRanges(screen.container, "drops the index")[0]!;
     const body = screen.container.querySelector("[data-user-message-body]")!;

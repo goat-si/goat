@@ -195,10 +195,14 @@ export const make = Effect.gen(function* () {
     const b = Buffer.from(given);
     return a.length === b.length && NodeCrypto.timingSafeEqual(a, b);
   };
+  // A thread proxy registers once and never reconnects, so its control's expiry must not
+  // unauthorize it: the next turn reissues the attachment under the same registration.
+  const live = (value: Attachment, now: number) =>
+    value.expiresAt > now || value.registration?.kind === "thread";
   const attachment = (input: Authority, now: number) => {
     const value = attachments.get(input.threadId);
     return value?.generation === input.attachmentGeneration &&
-      value.expiresAt > now &&
+      live(value, now) &&
       tokenMatches(value.token, input.proxyChannelToken)
       ? value
       : undefined;
@@ -254,8 +258,9 @@ export const make = Effect.gen(function* () {
             : { _tag: "ended" as const, reason: current.ended };
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         const record = registered?.controls.get(current.controlId);
-        if (registered?.kind === "thread" && keepsRegistration(state)) {
-          if (record !== undefined) clear(registered, record);
+        // A proxy still starting registers as a thread proxy, so its attachment waits for it.
+        if (registered?.kind !== "control" && keepsRegistration(state)) {
+          if (registered !== undefined && record !== undefined) clear(registered, record);
           continue;
         }
         yield* close(attachment) ?? Effect.void;
@@ -322,7 +327,7 @@ export const make = Effect.gen(function* () {
         Effect.map((now) => {
           const value = attachments.get(input.threadId);
           return value !== undefined &&
-            value.expiresAt > now &&
+            live(value, now) &&
             tokenMatches(value.token, input.proxyChannelToken)
             ? value.generation
             : undefined;
@@ -465,7 +470,7 @@ export const make = Effect.gen(function* () {
       const binding = record?.binding;
       if (
         value === undefined ||
-        value.expiresAt <= now ||
+        !live(value, now) ||
         registered === undefined ||
         record === undefined ||
         binding === undefined

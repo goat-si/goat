@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -222,7 +223,13 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
             sessionEnvironment === undefined &&
             (request.env?.length ?? 0) === 0
               ? undefined
-              : { ...options.environment, ...sessionEnvironment, ...requestEnvironment };
+              : {
+                  ...McpProviderSession.mergeThreadEnvironment(
+                    options.environment,
+                    sessionEnvironment,
+                  ),
+                  ...requestEnvironment,
+                };
           const terminalScope = yield* Scope.make();
           const child = yield* restore(
             spawner

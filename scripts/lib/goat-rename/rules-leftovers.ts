@@ -30,6 +30,18 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
     "GOAT.app",
   ),
   rule(
+    "sea-injection-scratch",
+    at("scripts/lib/linux-arm64-sea.ts"),
+    /(?<=prefix: ")t3-sea-(?=")/g,
+    "goat-sea-",
+  ),
+  rule(
+    "sea-build-output",
+    at("apps/server/scripts/cli.ts", "apps/server/vite.config.ts"),
+    /(?<=dist-exe\/)t3\b/g,
+    "goat",
+  ),
+  rule(
     "native-upload-scratch",
     at("scripts/mobile-native-client.ts"),
     /t3-native-upload-/g,

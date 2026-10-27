@@ -36,7 +36,7 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
     { readonly _tag: string; readonly reason?: ComputerUseControlEnd },
     ComputerUseLeaseError
   >;
-  readonly end: (threadId: ThreadId, reason: ComputerUseControlEnd) => boolean;
+  readonly end: (threadId: ThreadId, reason: ComputerUseControlEnd, now: number) => boolean;
   readonly signals: PubSub.PubSub<void>;
   readonly watchKick: PubSub.PubSub<void>;
   readonly live: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
@@ -69,7 +69,12 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
           grant.value.reason !== undefined &&
           controls.get(record.threadId)?.controlId === record.controlId
         )
-          endedAny = input.end(record.threadId, grant.value.reason) || endedAny;
+          endedAny =
+            input.end(
+              record.threadId,
+              grant.value.reason,
+              DateTime.toEpochMillis(yield* DateTime.now),
+            ) || endedAny;
       }
       // Proxies waiting on a pause hear their control ended.
       if (endedAny) yield* PubSub.publish(input.signals, undefined);

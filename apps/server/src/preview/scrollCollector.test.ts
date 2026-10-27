@@ -235,6 +235,28 @@ describe("collectWhileScrolling", () => {
   });
 });
 
+describe("a gate reused across scrolls", () => {
+  it("refuses after a scroll already went out without claiming nothing was sent", async () => {
+    const control = new SessionControl("agent");
+    const gate = control.dispatchGate();
+    let calls = 0;
+    const reused = () => {
+      calls += 1;
+      // A person takes over and hands back while the first scroll's responses are collected.
+      if (calls === 3) {
+        void control.take("person").catch(() => undefined);
+        void control.release("person").catch(() => undefined);
+      }
+      gate();
+    };
+    const { page } = fakePage((scroll, emit) => emit(response(pageOf(scroll))));
+    await expect(
+      collectWhileScrolling(page, control, reused, { minItems: 100 }),
+    ).rejects.toMatchObject({ reason: "interrupted", beforeInput: false });
+    expect(page.mouse.wheel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe.skipIf(!chromiumInstalled)("collectWhileScrolling in a browser", () => {
   let browser: Browser;
   let context: BrowserContext;

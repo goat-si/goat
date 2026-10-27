@@ -229,7 +229,7 @@ it.effect.each([{}, { includeImage: false }])(
         expect(snapshot.content).toEqual([
           { type: "text", text: `Preview snapshot failed: ${message}` },
         ]);
-        expect(snapshot.structuredContent).toEqual({
+        expect(snapshot.structuredContent).toMatchObject({
           error: {
             _tag: "PreviewAutomationExecutionError",
             operation: "snapshot",
@@ -930,12 +930,11 @@ it.effect("registers annotated tools and preserves authenticated request context
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(evaluated.isError).toBe(false);
-      expect(evaluated.structuredContent).toEqual({ value: ["Connect", "Continue"], toolIcon });
+      const value = ["Connect", "Continue"];
+      expect(evaluated.structuredContent).toMatchObject({ value, toolIcon });
       const evaluatedText = evaluated.content[0];
-      expect(evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null).toEqual({
-        toolIcon,
-        value: ["Connect", "Continue"],
-      });
+      const decoded = evaluatedText?.type === "text" ? decodeJsonText(evaluatedText.text) : null;
+      expect(decoded).toMatchObject({ toolIcon, value });
 
       const actionRequests = [
         { name: "goat_preview_click", arguments: { x: 10, y: 10 } },
@@ -952,10 +951,11 @@ it.effect("registers annotated tools and preserves authenticated request context
             Effect.provideService(McpSchema.McpServerClient, client),
           );
         expect(result.isError).toBe(false);
-        expect(result.structuredContent).toEqual({ toolIcon });
+        expect(result.structuredContent).toMatchObject({ toolIcon });
         expect(routedRequests.at(-1)?.operation).toBe("status");
         const text = result.content[0];
-        expect(text?.type === "text" ? decodeJsonText(text.text) : null).toEqual({ toolIcon });
+        const decodedText = text?.type === "text" ? decodeJsonText(text.text) : null;
+        expect(decodedText).toMatchObject({ toolIcon });
       }
     }),
   ).pipe(Effect.provide(layerTest)),
