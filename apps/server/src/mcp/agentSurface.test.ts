@@ -59,8 +59,8 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync and storage tools.
-  expect(entries).toHaveLength(214);
+  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup and storage tools.
+  expect(entries).toHaveLength(218);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -416,6 +416,8 @@ const REASONS = {
   clientOnly: "Only another GOAT's dispatch session may call it.",
   grantChecked: "Checks a scope the test client does not hold, inside its handler.",
   dispatches: "Runs other tools, each under its own declaration, and adds no gate of its own.",
+  childSetupOnly:
+    "Accepts only a Home-issued Child setup session; ToolAdmission.childSetup.test.ts covers it.",
 } as const;
 // Where the runtime outcome differs from what requires and effect alone predict, and why.
 const ACCESS_EXCEPTIONS: Readonly<
@@ -435,6 +437,12 @@ const ACCESS_EXCEPTIONS: Readonly<
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.resume": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "hub.child_prepare": {
+    reason: "childSetupOnly",
+    thread: "denied",
+    readOnlyClient: "denied",
+    fullClient: "denied",
+  },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
   "operation.cancel": { reason: "dispatches", readOnlyClient: "reached" },
 };

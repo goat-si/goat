@@ -148,6 +148,32 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   attachment_remove_failed: before("unavailable"),
   // Linked hosts (OrchestratorMcpFailure reason)
   link_refused: before("permission_denied"),
+  // OpenCodex Child setup (ChildReadyFailureCode); remote_outdated, storage_failed and
+  // interrupted are classified elsewhere in this table.
+  permission_denied: before("permission_denied"),
+  destination_changed: before("conflict"),
+  stale_configuration: before("conflict"),
+  setup_approval_stale: before("conflict"),
+  // Approval can be withdrawn while a step runs; the step's recorded progress stays.
+  setup_approval_revoked: c("permission_denied"),
+  purpose_expired: before("expired"),
+  proof_expired: before("expired"),
+  instance_changed: before("conflict"),
+  instance_busy: before("conflict"),
+  link_changed: c("conflict"),
+  probe_unsupported: before("failed_precondition"),
+  ocx_unusable: before("failed_precondition"),
+  platform_unsupported: before("failed_precondition"),
+  route_unverified: c("failed_precondition"),
+  attribution_unproven: c("failed_precondition"),
+  installation_failed: c("internal"),
+  catalog_sync_failed: c("unavailable"),
+  startup_failed: c("unavailable"),
+  unreachable: c("unavailable"),
+  // The probe's model request may have run and used Home's quota.
+  probe_failed: c("unavailable"),
+  probe_timeout: c("timeout"),
+  phase_timeout: c("timeout"),
   // Cloud machines (CloudMachineErrorReason)
   not_configured: before("failed_precondition"),
   invalid_key: before("unauthenticated"),
