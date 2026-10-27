@@ -262,6 +262,12 @@ it.live("a deadline stops a queued call before it dispatches and journals it und
       scheduleDeadline: childDeadlineOnly,
     });
     yield* Effect.gen(function* () {
+      // A started child, so its start does not use up the cell's wall time.
+      yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("warmup", limits) },
+        "return true;",
+        false,
+      );
       // The second click waits behind the first on the window's gate when the deadline hits.
       const result = yield* supervisor.runCell(
         { runId: "r", turnId: "t", context: context("queued", limits) },
@@ -588,27 +594,25 @@ it.live("interrupting the run fiber cuts its exact child and discards the cell",
   }),
 );
 
-it.live(
-  "the first cell of a fresh child that runs to its wall limit reports the child's deadline",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const asset = yield* resolveScreenRuntimeAsset("dev");
-        const limits = screenRunLimits({ cellWallMs: 1000 });
-        const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
-        yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
-        const outcome = yield* supervisor
-          .runCell(
-            { runId: "r", turnId: "t", context: context("one", limits) },
-            "console.log('started'); while (true) {}",
-            false,
-          )
-          .pipe(Effect.result);
-        expect(outcome._tag).toBe("Success");
-        if (outcome._tag === "Success") {
-          expect(outcome.success.status).toBe("deadline");
-          expect(outcome.success.console).toEqual(["started"]);
-        }
-      }),
-    ),
+it.live("a cell's wall limit includes the time its fresh child takes to start", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const asset = yield* resolveScreenRuntimeAsset("dev");
+      const limits = screenRunLimits({ cellWallMs: 1 });
+      const supervisor = fixtureSupervisor({
+        asset,
+        limits,
+        hostBridge: new ScreenHostBridge(),
+        scheduleDeadline: childDeadlineOnly,
+      });
+      yield* Effect.addFinalizer(() => supervisor.finishTurn("r", "t", "test"));
+      const result = yield* supervisor.runCell(
+        { runId: "r", turnId: "t", context: context("one", limits) },
+        "console.log('ran'); return 1;",
+        false,
+      );
+      expect(result.status).toBe("deadline");
+      expect(result.console).toEqual([]);
+    }),
+  ),
 );

@@ -312,6 +312,11 @@ export async function runScreenChild(
       linesOut = [];
       truncated = [];
       deadline = cell.deadlineMillis;
+      // Starting the child can use up a short cell's wall time; such a cell never runs.
+      if (Date.now() >= deadline) {
+        finish({ t: "result", cellId, status: "deadline", console: linesOut, truncated });
+        continue;
+      }
       admitted = true;
       runtime.setInterruptHandler(() => Date.now() >= deadline);
       deadlineTimer = setTimeout(
