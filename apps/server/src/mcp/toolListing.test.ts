@@ -142,6 +142,20 @@ it.effect.each(["core", "full"] as const)(
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it.effect.each(["core", "full"] as const)(
+  "lists goat_screen_run only to a thread whose turn has a screen surface attached (setting %s)",
+  (setting) =>
+    Effect.gen(function* () {
+      const screen = {
+        ...callers.thread,
+        capabilities: new Set([...callers.thread.capabilities, "screen" as const]),
+      };
+      const http = yield* serveCatalogOverHttp({ screen, thread: callers.thread }, setting);
+      expect(names(yield* http.listTools("screen"))).toContain("goat_screen_run");
+      expect(names(yield* http.listTools("thread"))).not.toContain("goat_screen_run");
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
 it.effect("lists a client by the header of each tools/list, within one session", () =>
   Effect.gen(function* () {
     const sent: Record<string, string> = {};
