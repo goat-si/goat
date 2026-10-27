@@ -1,3 +1,4 @@
+import { previewHints } from "./hints.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -16,6 +17,7 @@ import {
   type PreviewAutomationSelectResult,
   type PreviewAutomationSetColorSchemeResult,
   type PreviewAutomationFetchResult,
+  type PreviewAutomationRead,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationScrollCollectResult,
   type PreviewAutomationSnapshot,
@@ -85,6 +87,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "snapshot",
       "logs",
       "fetch",
+      "read",
       "fillSecret",
     ].includes(operation)
   )
@@ -124,6 +127,7 @@ const invokeTargeted = <A extends object>(
     Effect.map(({ result, toolIcon }) => ({
       ...result,
       ...(toolIcon ? { toolIcon } : {}),
+      ...previewHints(operation, result),
     })),
   );
 };
@@ -250,6 +254,9 @@ const handlers = {
   }),
   preview_logs: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationLogs>("logs", input),
+  ),
+  goat_preview_read: McpToolAccess.readsAsCaller((input) =>
+    invokeTargeted<PreviewAutomationRead>("read", input, (input.timeoutMs ?? 10_000) + 2_000),
   ),
   goat_preview_fetch: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationFetchResult>("fetch", input, input.timeoutMs),

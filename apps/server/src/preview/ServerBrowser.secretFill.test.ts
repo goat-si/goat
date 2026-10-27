@@ -11,6 +11,7 @@ import {
   SecretRequestError,
   ThreadId,
   type PreviewAutomationFillSecretResult,
+  type PreviewAutomationRead,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
 } from "@goat/contracts";
@@ -364,4 +365,44 @@ describe("playwrightDebugLogging", () => {
     for (const debug of [undefined, "", "goat:server", "-pw:*"])
       expect(playwrightDebugLogging(debug)).toBe(false);
   });
+});
+
+it.live("reads another session's human-controlled tab without taking authority", () => {
+  const secrets = makeSecrets();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const { service, open } = yield* harness;
+      const { tabId } = yield* open("https://login.test/");
+      const viewer = yield* service.attachViewer({
+        threadId: scope.thread.threadId,
+        tabId,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+        canOperate: true,
+      });
+      yield* viewer.input({ type: "takeControl" });
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const reader = {
+        ...scope,
+        requestNamespace: "read-observer",
+        thread: { ...scope.thread, providerSessionId: "read-observer" },
+      };
+      const result = yield* broker.invoke<PreviewAutomationRead>({
+        scope: reader,
+        operation: "read",
+        tabId,
+        input: { settleMs: 100 },
+      });
+      expect(result).toMatchObject({ title: "Sign in", settled: true });
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: reader,
+        operation: "status",
+        tabId,
+        input: {},
+      });
+      expect(status.control).toMatchObject({ owner: "human", ownedByCaller: false });
+      yield* viewer.input({ type: "releaseControl" });
+    }),
+  ).pipe(Effect.provide(layerFor(secrets)));
 });

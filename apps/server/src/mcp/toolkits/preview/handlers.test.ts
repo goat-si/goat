@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -207,3 +209,83 @@ describe("claimPreviewRecording", () => {
       ),
   );
 });
+
+it.effect(
+  "explains an empty browser and refuses page reads on an older host or a disabled capability",
+  () => {
+    const scope: McpInvocationContext.McpInvocationScope = {
+      environmentId: EnvironmentId.make("read-mcp-environment"),
+      requestNamespace: "read-mcp-session",
+      thread: {
+        threadId: ThreadId.make("read-mcp-thread"),
+        providerSessionId: "read-mcp-session",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+      client: undefined,
+      capabilities: new Set(["preview"]),
+      issuedAt: 0,
+    };
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+        const ready = yield* Deferred.make<void>();
+        const events = yield* broker.connect({
+          clientId: "read-older-host",
+          environmentId: scope.environmentId,
+        });
+        yield* Stream.runForEach(events, (event) =>
+          event.type === "connected"
+            ? Deferred.succeed(ready, undefined)
+            : broker.respond({
+                clientId: "read-older-host",
+                connectionId: event.connectionId,
+                requestId: event.request.requestId,
+                ok: true,
+                result: {
+                  available: false,
+                  visible: false,
+                  tabId: null,
+                  url: null,
+                  title: null,
+                  loading: false,
+                },
+              }),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(ready);
+        const status = yield* server.callTool({ name: "goat_preview_status", arguments: {} });
+        expect(status.structuredContent).toMatchObject({
+          next: "No tab yet: call goat_preview_open with a url.",
+        });
+        const readTool = server.tools.find(({ tool }) => tool.name === "goat_preview_read");
+        expect(readTool?.tool.description).toContain("rendered page text");
+        const older = yield* server.callTool({ name: "goat_preview_read", arguments: {} });
+        expect(older.isError).toBe(true);
+        expect(JSON.stringify(older.content)).toContain(
+          "This browser host cannot read pages; use goat_preview_snapshot.",
+        );
+        const disabled = yield* server.callTool({ name: "goat_preview_read", arguments: {} }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            capabilities: new Set<McpInvocationContext.McpCapability>(),
+          }),
+        );
+        expect(disabled.isError).toBe(true);
+        expect(JSON.stringify(disabled.content)).toContain("browser preview tools are off");
+      }),
+    ).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+      Effect.provideService(McpSchema.McpServerClient, mcpClient),
+      Effect.provide(
+        McpHttpServer.layerPreviewToolkit.pipe(
+          Layer.provide(layerPermissionProfilesOff),
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(liveThreadsLayer),
+          Layer.provideMerge(PreviewAutomationBroker.layer),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-read-mcp-" })),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    );
+  },
+);

@@ -236,6 +236,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_preview_fetch",
     "goat_preview_fill_secret",
     "goat_preview_list",
+    "goat_preview_read",
     "goat_preview_scroll_collect",
     "goat_project_clone",
     "goat_project_create",
@@ -326,7 +327,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(186);
+  expect(names.size).toBe(187);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("t3_thread_start")).toBe(false);
   for (const [tool, questionDelivery] of [
@@ -671,7 +672,6 @@ it.effect("records the calling agent and the agent a tool acted on", () => {
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    // The fork recorded a single event, so the next one is the queue edit.
     expect((yield* Deferred.await(recorded[1]!)).properties).toMatchObject({
       tool: "goat_queue_edit",
       outcome: "ok",

@@ -1,6 +1,23 @@
 import { entry } from "../entry.ts";
 
 export const previewEntries = {
+  "preview.read": entry({
+    resource: "preview",
+    verb: "read",
+    name: "goat_preview_read",
+    toolkit: "preview",
+    summary: "Read rendered browser text",
+    description:
+      "Read rendered page text as Markdown after the page settles, for articles, docs and script-rendered pages. Page with offset, revision and nextOffset. With network unknown, settled means DOM quiet only. To act, use preview.snapshot refs. Older hosts: use goat_preview_snapshot.",
+    guide:
+      "Requires the thread's preview capability. Reads allow observation of human-controlled tabs and other agents' tabs without taking control. Private periods withhold the result. Scope selects one subtree. Keep revision when continuing at nextOffset; changed restarts at zero. maxBytes bounds the entire encoded result. Narrow scope when metadata exceeds the budget.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read rendered browser text", idempotentHint: true, openWorldHint: true },
+  }),
   "preview.snapshot": entry({
     resource: "preview",
     verb: "snapshot",

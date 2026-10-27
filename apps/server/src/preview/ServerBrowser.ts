@@ -101,6 +101,10 @@ import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
+import { pushBounded } from "./boundedBuffer.ts";
+import { pageRead } from "./pageRead.ts";
+import { attachNetworkTracker } from "./networkTracker.ts";
+import { READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
@@ -359,15 +363,6 @@ interface ServerDownload {
   readonly completedAt: string;
 }
 
-/** Read-only operations remain available during human control; evaluate requires control because scripts can mutate the page. */
-const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new Set([
-  "status",
-  "snapshot",
-  "logs",
-  "fetch",
-  "waitFor",
-]);
-
 const AGENT_TAB_LIMIT = 8;
 const SERVER_TAB_LIMIT = 32;
 const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
@@ -378,15 +373,6 @@ const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
 const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
-
-const pushBounded = <A>(
-  buffer: Array<A>,
-  entry: A,
-  limit = ServerBrowserPage.DIAGNOSTIC_BUFFER_LIMIT,
-) => {
-  buffer.push(entry);
-  if (buffer.length > limit) buffer.splice(0, buffer.length - limit);
-};
 
 const viewportSettingsEqual = (left: PreviewViewportSetting, right: PreviewViewportSetting) =>
   left._tag === right._tag &&
@@ -689,6 +675,7 @@ const make = Effect.gen(function* () {
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
     if (!desktop) await prepareContext(context);
     const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
+    attachNetworkTracker(page);
     const cdp = await context.newCDPSession(page);
     await installPdfDocumentNavigation(cdp);
     // The desktop's page is already a normal browser. A popup's first request
@@ -1947,6 +1934,13 @@ const make = Effect.gen(function* () {
         await applyRendering(tab, snapshot);
         return { tabId: tab.tabId, colorScheme };
       }
+      case "read":
+        return pageRead(
+          tab.page,
+          tab.cdp,
+          tab.control,
+          input as import("@goat/contracts").PreviewAutomationReadInput,
+        ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
         return withScreencastsPaused(
           tab,
@@ -1954,7 +1948,8 @@ const make = Effect.gen(function* () {
             ServerBrowserPage.snapshot({
               ...tab,
               renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+              ...(input as PreviewAutomationSnapshotInput),
+              agentSessionId: request.agentSessionId,
               captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
               timeoutMs: deadlineMs - performance.now(),
             }),
@@ -2504,6 +2499,7 @@ const make = Effect.gen(function* () {
         clientId: SERVER_HOST_CLIENT_ID,
         environmentId,
         supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS],
+        supportedFeatures: ["snapshotOptions"],
       },
       { preferred: true, inProcess: true },
     )
