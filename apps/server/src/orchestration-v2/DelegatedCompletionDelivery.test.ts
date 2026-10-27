@@ -1,5 +1,10 @@
+import {
+  reconcileCommandId,
+  parentProviderThreadId,
+  runEvent,
+  seedRestartCancelledChild,
+} from "./DelegatedCompletionDelivery.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
-
 import { assert, it, vi } from "@effect/vitest";
 import {
   CheckpointId,
@@ -18,15 +23,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-
 import * as ServerSettings from "../serverSettings.ts";
-
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
-
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
-
 import {
   modelSelection,
   driver,
@@ -885,168 +886,145 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         );
       }),
   );
-});
 
-const reconcileCommandId = (name: string) => CommandId.make(`command:runtime-reconcile:${name}`);
-
-const parentProviderThreadId = (threadId: ThreadId) =>
-  ProviderThreadId.make(`provider-thread:${String(threadId).replace("thread:", "")}`);
-
-const runEvent = (input: {
-  readonly threadId: ThreadId;
-  readonly runId: RunId;
-  readonly ordinal: number;
-  readonly status: OrchestrationV2Run["status"];
-  readonly now: DateTime.Utc;
-  readonly providerThreadId?: ProviderThreadId;
-  readonly userMessageId?: MessageId;
-  readonly delegatedCompletion?: OrchestrationV2Run["delegatedCompletion"];
-}) => ({
-  id: EventId.make(`event:${input.runId}:${input.status}`),
-  type: "run.updated" as const,
-  threadId: input.threadId,
-  runId: input.runId,
-  providerInstanceId: modelSelection.instanceId,
-  occurredAt: input.now,
-  payload: {
-    id: input.runId,
-    threadId: input.threadId,
-    ordinal: input.ordinal,
-    providerInstanceId: modelSelection.instanceId,
-    modelSelection,
-    providerThreadId: input.providerThreadId ?? null,
-    userMessageId: input.userMessageId ?? MessageId.make(`message:${input.runId}`),
-    rootNodeId: null,
-    activeAttemptId: null,
-    status: input.status,
-    requestedAt: input.now,
-    startedAt: input.now,
-    completedAt: input.status === "running" ? null : input.now,
-    checkpointId: null,
-    contextHandoffId: null,
-    ...(input.delegatedCompletion === undefined
-      ? {}
-      : { delegatedCompletion: input.delegatedCompletion }),
-  },
-});
-
-const seedRestartCancelledChild = (input: {
-  readonly parentThreadId: ThreadId;
-  readonly projectId: ProjectId;
-  readonly parentRunId: RunId;
-  readonly rootNodeId: NodeId;
-  readonly name: string;
-  readonly completionWake: "always" | "settled_only";
-  readonly continuationPending: boolean;
-  readonly runStatus?: "cancelled" | "completed";
-  readonly lostWork?: OrchestrationV2Run["restartCancelledBackgroundWork"];
-  readonly now: DateTime.Utc;
-}) =>
-  Effect.gen(function* () {
-    const eventSink = yield* EventSink.EventSinkV2;
-    const taskId = NodeId.make(`node:${input.name}`);
-    const childThreadId = ThreadId.make(`thread:${input.name}`);
-    const childRunId = RunId.make(`run:${input.name}:1`);
-    yield* eventSink.write({
-      commandId: CommandId.make(`command:seed-child:${input.name}`),
-      events: [
-        {
-          id: EventId.make(`event:${input.name}:thread`),
-          type: "thread.created",
-          threadId: childThreadId,
-          occurredAt: input.now,
-          payload: {
-            createdBy: "agent",
-            creationSource: "server",
-            id: childThreadId,
-            projectId: input.projectId,
-            title: input.name,
-            providerInstanceId: modelSelection.instanceId,
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: null,
-            lineage: {
-              parentThreadId: input.parentThreadId,
-              relationshipToParent: "subagent",
-              rootThreadId: input.parentThreadId,
-            },
-            forkedFrom: { type: "node", nodeId: taskId },
-            createdAt: input.now,
-            updatedAt: input.now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-        },
-        {
-          id: EventId.make(`event:${input.name}:task`),
-          type: "subagent.updated",
-          threadId: input.parentThreadId,
-          runId: input.parentRunId,
-          nodeId: taskId,
-          driver,
-          providerInstanceId: modelSelection.instanceId,
-          occurredAt: input.now,
-          payload: {
-            id: taskId,
-            threadId: input.parentThreadId,
-            runId: input.parentRunId,
-            parentNodeId: input.rootNodeId,
-            origin: "app_owned",
-            createdBy: "agent",
-            driver,
-            providerInstanceId: modelSelection.instanceId,
-            providerThreadId: null,
-            childThreadId,
-            nativeTaskRef: null,
-            prompt: `Run ${input.name}.`,
-            title: null,
-            model: null,
-            completionWake: input.completionWake,
-            status: "running",
-            result: null,
-            startedAt: input.now,
-            completedAt: null,
-            updatedAt: input.now,
-          },
-        },
-      ],
-    });
-    const childRun = runEvent({
-      threadId: childThreadId,
-      runId: childRunId,
-      ordinal: 1,
-      status: input.runStatus ?? "cancelled",
-      now: input.now,
-    });
-    yield* eventSink.writeWithEffects({
-      commandId: reconcileCommandId(input.name),
-      events: [
-        input.lostWork === undefined
-          ? childRun
-          : {
-              ...childRun,
-              payload: { ...childRun.payload, restartCancelledBackgroundWork: input.lostWork },
-            },
-      ],
-      effects: input.continuationPending
-        ? [
+  it.effect.each([
+    { command: "acknowledge", before: "running", after: "failed", capture: false },
+    { command: "acknowledge", before: "waiting", after: "completed", capture: true },
+    { command: "accept", before: "waiting", after: "completed", capture: true },
+  ] as const)(
+    "keeps a $after run that settled between $command's read and commit",
+    ({ command, before, after, capture }) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const race = `${command}-settle-race-${after}`;
+        const threadId = ThreadId.make(`thread:${race}`);
+        const runId = RunId.make(`run:${race}`);
+        const taskId = NodeId.make(`node:${race}-task`);
+        const checkpointId = CheckpointId.make(`checkpoint:${race}`);
+        const messageId = MessageId.make(`message:delegated-delivery:${threadId}`);
+        yield* seedParentWithTerminalTask({
+          threadId,
+          projectId: ProjectId.make(`project:${race}`),
+          runId,
+          rootNodeId: NodeId.make(`node:${race}-root`),
+          taskId,
+          deliveryState: "claimed",
+          deliveryTaskIds: [taskId],
+          now,
+        });
+        const parent = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+        yield* sink.write({
+          events: [
             {
-              id: `effect:restart-continuation:${childRunId}`,
-              commandId: reconcileCommandId(input.name),
-              threadId: childThreadId,
-              request: { type: "provider-runtime.continue", sourceRunId: childRunId },
+              id: EventId.make(`event:${race}-before`),
+              type: "run.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: { ...parent, status: before },
             },
-          ]
-        : [],
-    });
-    return { taskId, childThreadId, childRunId };
-  });
+            {
+              id: EventId.make(`event:${race}-message`),
+              type: "message.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: {
+                id: messageId,
+                threadId,
+                runId,
+                nodeId: parent.rootNodeId,
+                role: "user",
+                text: "Background task finished",
+                attachments: [],
+                streaming: false,
+                createdBy: "agent",
+                creationSource: "server",
+                createdAt: now,
+                updatedAt: now,
+                delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [taskId] },
+              },
+            },
+          ],
+        });
+        const { delegatedCompletion: _cohort, ...settledRun } = parent;
+        const commit = sink.commitCommand;
+        let settled = false;
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() =>
+            vi.spyOn(sink, "commitCommand").mockImplementation((input) =>
+              Effect.gen(function* () {
+                if (
+                  !settled &&
+                  input.commandType ===
+                    (command === "accept"
+                      ? "notification.delivery.accept"
+                      : "delegated_task.completion-delivery.acknowledge")
+                ) {
+                  settled = true;
+                  // The provider turn ends (or its checkpoint lands) after the command read the run.
+                  yield* commit({
+                    commandId: CommandId.make(`command:${race}`),
+                    threadId,
+                    commandType: capture ? "checkpoint.capture" : "provider.event",
+                    acceptedAt: now,
+                    effects: [],
+                    events: [
+                      {
+                        id: EventId.make(`event:${race}-settled`),
+                        type: "run.updated",
+                        threadId,
+                        runId,
+                        occurredAt: now,
+                        payload: {
+                          ...settledRun,
+                          status: after,
+                          completedAt: now,
+                          checkpointId: capture ? checkpointId : null,
+                        },
+                      },
+                    ],
+                  });
+                }
+                return yield* commit(input);
+              }),
+            ),
+          ),
+          () =>
+            orchestrator.dispatch(
+              command === "accept"
+                ? {
+                    type: "notification.delivery.accept",
+                    commandId: CommandId.make(`command:${race}:accept`),
+                    threadId,
+                    messageId,
+                  }
+                : {
+                    type: "delegated_task.completion-delivery.acknowledge",
+                    commandId: CommandId.make(`command:${race}:task-status`),
+                    parentThreadId: threadId,
+                    taskId,
+                    observedByRunId: runId,
+                  },
+            ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        assert.isTrue(settled);
+        const finished = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          finished.subagents.find((row) => row.id === taskId)?.completionDelivery?.state,
+          command === "accept" ? "delivered" : "acknowledged",
+        );
+        const run = finished.runs.find((candidate) => candidate.id === runId)!;
+        assert.deepEqual(
+          { status: run.status, completedAt: run.completedAt, checkpointId: run.checkpointId },
+          { status: after, completedAt: now, checkpointId: capture ? checkpointId : null },
+        );
+      }),
+  );
+});
 
 it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
   "subagent follow-ups",
