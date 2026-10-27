@@ -10,6 +10,8 @@ import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import {
   active,
+  unknownWriteSafety,
+  terminalRefusalSafety,
   call,
   CONTROL,
   foregroundActive,
@@ -87,7 +89,10 @@ describe("ComputerUseLeaseProxy", () => {
         assert.equal(yield* h.driverQueued, 0);
         const reply = { jsonrpc: "2.0", id: 1, result: { content: [] } };
         yield* h.reply(JSON.stringify(reply));
-        assert.deepEqual(yield* h.nextToProvider, reply);
+        // No structuredContent is added: Codex would show it in place of the driver's text.
+        const text = "GOAT outcome: " + JSON.stringify({ safety: unknownWriteSafety });
+        const content = [{ type: "text", text }];
+        assert.deepEqual(yield* h.nextToProvider, { ...reply, result: { content } });
         yield* h.send(call(2, "list_apps"));
         assert.equal((yield* h.nextToDriver).id, 2);
         yield* h.send(
@@ -537,13 +542,18 @@ describe("ComputerUseLeaseProxy", () => {
           effect: "unverifiable",
           code: "interrupted",
           detail: "waiting_for_human",
+          safety: unknownWriteSafety,
         });
         assert.include(cutOff.result.content[0]?.text, MAY_HAVE_ACTED);
         const waiting = {
           jsonrpc: "2.0",
           result: {
             content: [{ type: "text", text: PAUSE_MESSAGES.takeover }],
-            structuredContent: { refused: "userIntervened", detail: "waiting_for_human" },
+            structuredContent: {
+              refused: "userIntervened",
+              detail: "waiting_for_human",
+              safety: terminalRefusalSafety,
+            },
             isError: true,
           },
         };

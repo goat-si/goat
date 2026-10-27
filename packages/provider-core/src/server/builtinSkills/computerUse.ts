@@ -28,9 +28,9 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 - An \`effect\` always outranks a \`code\` (which may sit under \`refusal\`). Nothing was sent only when \`effect\` is \`refused\`, or there is no effect and the code is \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\` or \`permission_denied\`.
 - \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe and never resend it unchanged; a repeated keystroke can submit twice.
 - GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\`, which waits for the person's answer in this turn.
-- \`bounded_resource_outside_manifest\` on an app opened after computer use started, such as a build you launched: nothing was sent. Call \`computer_use.request\` with its \`bundle_id\`, then retry.
+- \`bounded_resource_outside_manifest\` on an app opened after computer use started: nothing was sent. Call \`computer_use.request\` with its \`bundle_id\`, then retry.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
-- Detail \`target_busy\`: another thread, named in the answer, is acting on that window or on the whole desktop; nothing was sent. Wait for it or work elsewhere, then observe. \`control_idle\`: this thread's turn is over; leave the screen until its next turn.
+- Details: \`target_busy\`: the named thread holds that window or the desktop; wait or work elsewhere. \`control_idle\`: this turn is over, leave the screen. \`reconnecting\`: its link to GOAT blinked; retry shortly, then observe. \`transport_lost\`: it stayed down and the control ended; tell the person.
 </computer_use>`;
 
 /** Stop, take over, private fields and confirmation: what the person sees and decides. */

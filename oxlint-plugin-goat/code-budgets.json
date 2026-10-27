@@ -280,7 +280,7 @@
   "apps/server/src/opencodex/OpenCodexInventory.ts": { "nonNull": 1 },
   "apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.test.ts": { "lines": 7942 },
   "apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts": { "lines": 1841 },
-  "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts": { "lines": 15495 },
+  "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts": { "lines": 15619 },
   "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.testkit.ts": {
     "lines": 2833,
     "nonNull": 12
@@ -331,7 +331,7 @@
   "apps/server/src/orchestration-v2/ThreadManagementService.test.ts": { "lines": 1368 },
   "apps/server/src/orchestration-v2/ThreadManagementService.ts": { "lines": 2074 },
   "apps/server/src/orchestration-v2/ThreadPullRequestService.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/ThreadSearch.test.ts": { "lines": 1115 },
+  "apps/server/src/orchestration-v2/ThreadSearch.test.ts": { "lines": 1061 },
   "apps/server/src/orchestration-v2/ThreadSearch.ts": { "nonNull": 2 },
   "apps/server/src/orchestration-v2/ThreadSettlementService.test.ts": { "lines": 1425 },
   "apps/server/src/orchestration-v2/ThreadSettlementService.ts": { "nonNull": 1 },
@@ -343,7 +343,7 @@
   "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8690 },
   "apps/server/src/orchestration-v2/testkit/FakeCloudAdapter.ts": { "nonNull": 4 },
   "apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 3083 },
+  "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 3097 },
   "apps/server/src/orchestration-v2/testkit/fixtures/grok_auto_blocked_command/output.ts": {
     "nonNull": 1
   },

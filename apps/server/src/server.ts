@@ -875,7 +875,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       layerLinuxFrameSource,
       ComputerUseAgentConnections.layer,
       ComputerUseLeases.layer.pipe(
-        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(Layer.merge(layerCuaDriver, layerDesktopTelemetryReceiver)),
         Layer.provide(layerLinuxFrameSource),
         Layer.provide(layerLinuxHelperHost),
       ),

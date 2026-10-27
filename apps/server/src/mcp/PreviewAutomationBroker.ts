@@ -274,11 +274,17 @@ const classifyResponseError = (
       });
     }
     case "PreviewAutomationControlInterruptedError": {
-      const reason = decodeControlReason(error.detail);
+      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left;
+      // dispatched: false carries that to the classifier.
+      const detail = error.detail;
+      const object = typeof detail === "object" && detail !== null ? detail : undefined;
+      const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
+      const beforeInput = object !== undefined && "beforeInput" in object && object.beforeInput;
       return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
         ...(Option.isSome(reason) ? { reason: reason.value } : {}),
+        ...(beforeInput === true ? { dispatched: false } : {}),
       });
     }
     case "PreviewAutomationInvalidSelectorError": {

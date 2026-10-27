@@ -478,6 +478,8 @@ type SidebarThreadRowProps = {
   openSubagent: EnvironmentThreadShell | null;
   // A pending approval or question from one of this row's subagents.
   childAttention: SidebarChildAttention | undefined;
+  // Threads this row launched, folded under it (SidebarLaunchGroup).
+  launchGroup?: ReactNode;
   onOpenDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onStopDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onDelegatedChildContextMenu: (
@@ -578,7 +580,7 @@ function ThreadRenameInput(props: {
   );
 }
 
-const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const {
     isRenaming,
     onCancelRename,
@@ -1246,6 +1248,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           {detailsTooltip}
         </Tooltip>
         {delegatedChildrenGroup}
+        {props.launchGroup}
       </li>
     );
   }
@@ -1531,6 +1534,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {detailsTooltip}
       </Tooltip>
       {delegatedChildrenGroup}
+      {props.launchGroup}
     </li>
   );
 });

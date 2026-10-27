@@ -1138,16 +1138,19 @@ export function isSidebarPriorityMember(input: {
   readonly now: string;
   readonly localLastVisitedAt: string | undefined;
   readonly hasChildAttention: boolean;
+  /** A folded launched thread is working (rank 1, like the row's own work). */
+  readonly hasChildWork?: boolean;
   readonly supportsSnooze: boolean;
   readonly supportsSettlement: boolean;
 }): boolean {
   if (input.thread.deletedAt != null) return false;
-  const rank = resolveSidebarPriorityRank({
+  const ownRank = resolveSidebarPriorityRank({
     thread: input.thread,
     localLastVisitedAt: input.localLastVisitedAt,
     wokeAt: threadWokeAt(input.thread, { now: input.now }),
     hasChildAttention: input.hasChildAttention,
   });
+  const rank = input.hasChildWork === true && (ownRank === null || ownRank === 2) ? 1 : ownRank;
   return (
     resolveSidebarThreadSection({
       snoozed: input.supportsSnooze && effectiveSnoozed(input.thread, { now: input.now }),
@@ -1165,6 +1168,7 @@ export function countVisibleSidebarPriorityThreads<
   readonly now: string;
   readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
   readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
+  readonly childWorkKeys?: ReadonlySet<string>;
   readonly supportsSnooze: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
   readonly supportsSettlement: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
 }): number {
@@ -1177,6 +1181,7 @@ export function countVisibleSidebarPriorityThreads<
         now: input.now,
         localLastVisitedAt: input.localLastVisitedAtByKey[key],
         hasChildAttention: input.attentionByOwnerKey.has(key),
+        hasChildWork: input.childWorkKeys?.has(key) === true,
         supportsSnooze: input.supportsSnooze(thread.environmentId),
         supportsSettlement: input.supportsSettlement(thread.environmentId),
       })

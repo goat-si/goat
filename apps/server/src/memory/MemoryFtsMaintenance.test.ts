@@ -3,6 +3,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../persistence/Migrations/078_Memory.ts";
 import lineageMigration from "../persistence/Migrations/082_MemoryImportLineage.ts";
@@ -32,6 +33,39 @@ const live = Store.layer.pipe(Layer.provideMerge(setup));
 const quotas = Quota.layer.pipe(Layer.provideMerge(live));
 const services = Fts.layer.pipe(Layer.provideMerge(quotas));
 describe("MemoryFtsMaintenance", () => {
+  it.effect("throttles completed unavailable allocation attempts until the sample deadline", () =>
+    Effect.gen(function* () {
+      const store = yield* Store.MemoryStore;
+      const allocation = yield* store.measureAllocation();
+      let measurements = 0;
+      const probe = Store.MemoryStore.of({
+        ...store,
+        measureAllocation: () =>
+          Effect.sync(() => {
+            measurements++;
+            return { ...allocation, memoryBytes: null, ftsBytes: null };
+          }),
+        mergeFts: () => Effect.succeed(false),
+      });
+      const maintenance = yield* Fts.MemoryFtsMaintenance.pipe(
+        Effect.provide(Layer.fresh(Fts.layer)),
+        Effect.provideService(Store.MemoryStore, probe),
+      );
+      const first = yield* maintenance.cycle(env);
+      const second = yield* maintenance.cycle(env);
+      assert.equal(first.measurementStatus, "unavailable");
+      assert.isNull(first.lastMeasuredAtUtc);
+      assert.deepEqual(second, first);
+      assert.equal(measurements, 1);
+      yield* TestClock.adjust(Fts.MEMORY_STORAGE_SAMPLE_INTERVAL_MS - 1);
+      yield* maintenance.cycle(env);
+      assert.equal(measurements, 1);
+      yield* TestClock.adjust(1);
+      yield* maintenance.cycle(env);
+      assert.equal(measurements, 2);
+      assert.isNull((yield* store.ftsState(env)).measuredAt);
+    }).pipe(Effect.provide(services)),
+  );
   it.effect("measures complete real dbstat inventory and performs bounded merge", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

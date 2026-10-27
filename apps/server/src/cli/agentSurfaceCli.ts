@@ -48,7 +48,7 @@ const failureOf = (phase: CallFailure["phase"], error: AcpMcpBridgeError): CallF
  * One goat_call on the origin's /mcp: the same handle, argument refusal, access checks and
  * host routing a direct call gets. --host is just the call's host argument.
  */
-const callOrigin = (
+export const callOrigin = (
   credential: CliCredential,
   invocation: Extract<AgentSurfaceInvocation, { kind: "call" }>,
   effect: CallEffect,
