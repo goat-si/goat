@@ -35,9 +35,13 @@ const MAX_WINDOWS = 64;
 const STATE_FOCUSED = 1 << 12;
 // GTK4 has no Collection interface, so focus is found by walking (#1607). Each object costs
 // three gdbus calls (state, role, children); past this many in one probe, focus is reported
-// unknown, which is private.
-const MAX_WALK_NODES = 256;
+// unknown, which is private. Measured on GTK4: Calculator 98 objects, Text Editor 63, a Nautilus
+// window 215-254, two of them 469 (0.9 s to walk); one showing 79 files in a home folder, 975.
+const MAX_WALK_NODES = 512;
 const UINT32_MAX = 0xffff_ffff;
+// gdbus processes running at once. Each call is its own process; on a 16-thread host, 780 calls
+// took 1.4 s one at a time and 0.43 s at four or eight at once, and no less with more.
+const CONCURRENT_CALLS = 8;
 
 /** The first state word of a `GetState` reply, `([uint32 N, M],)`; null for any other reply. */
 function parseStates(output: string): number | null {
@@ -125,16 +129,47 @@ function parseUint32(output: string): number | null {
   return value <= 0xffff_ffff ? value : null;
 }
 
+/** run, with at most limit calls in flight; the rest wait their turn. */
+function limited(run: GdbusRunner, limit: number): GdbusRunner {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async (args) => {
+    if (active < limit) active++;
+    else await new Promise<void>((resolve) => waiting.push(resolve));
+    try {
+      return await run(args);
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active--;
+    }
+  };
+}
+
+/**
+ * Reads every item at once, then judges the answers in item order, as a loop that reads one at a
+ * time would: true at the first decisive answer, unless a failure comes before it, which throws.
+ */
+async function anyInOrder<T, R>(
+  items: ReadonlyArray<T>,
+  read: (item: T) => Promise<R>,
+  decisive: (answer: R) => boolean,
+): Promise<boolean> {
+  for (const answer of await Promise.allSettled(items.map(read))) {
+    if (answer.status === "rejected") throw answer.reason;
+    if (decisive(answer.value)) return true;
+  }
+  return false;
+}
+
 export function makeSecureFocusProbe(run: GdbusRunner) {
-  let address: string | null = null;
+  const runLimited = limited(run, CONCURRENT_CALLS);
+  let address: Promise<string> | null = null;
   const busByPid = new Map<number, string>();
 
-  const a11yAddress = async () => {
-    address ??= await a11yBusAddress(run);
-    return address;
-  };
+  const a11yAddress = () => (address ??= a11yBusAddress(runLimited));
   const call = async (dest: string, path: string, method: string, ...args: string[]) =>
-    run([
+    runLimited([
       "call",
       "--address",
       await a11yAddress(),
@@ -153,19 +188,27 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
     const apps = parseReferences(
       await call(REGISTRY, ROOT, "org.a11y.atspi.Accessible.GetChildren"),
     );
-    for (const { bus } of apps) {
-      const owner = parseUint32(
-        await call(
-          "org.freedesktop.DBus",
-          "/org/freedesktop/DBus",
-          "org.freedesktop.DBus.GetConnectionUnixProcessID",
-          bus,
-        ),
-      );
-      if (owner !== null) busByPid.set(owner, bus);
-      if (owner === pid) return bus;
-    }
-    return null;
+    let found: string | null = null;
+    await anyInOrder(
+      apps,
+      async ({ bus }) => {
+        const owner = parseUint32(
+          await call(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.GetConnectionUnixProcessID",
+            bus,
+          ),
+        );
+        if (owner !== null) busByPid.set(owner, bus);
+        return { bus, owner };
+      },
+      ({ bus, owner }) => {
+        if (owner === pid) found = bus;
+        return owner === pid;
+      },
+    );
+    return found;
   };
 
   return async (pid: number): Promise<SecureFocus> => {
@@ -190,26 +233,32 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       // everything found focused, by a walk or by Collection.
       const passwords: Ref[] = [];
       const seenFocus: Ref[] = [];
-      // Every object of the window, for a toolkit without Collection: its state and role. A
-      // hidden container can still hold focus, so none is skipped; an unreadable answer or an
-      // exhausted budget throws, so focus is unknown.
+      // Every object of the window, for a toolkit without Collection: its state and role, read a
+      // level of the tree at a time. A hidden container can still hold focus, so none is skipped;
+      // an unreadable answer or an exhausted budget throws, so focus is unknown.
       const walkFocused = async (window: Ref) => {
         const focused: Ref[] = [];
-        const queue = [window];
-        for (let node = queue.shift(); node !== undefined; node = queue.shift()) {
-          if (--walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
-          const states = await readStates(node);
-          const role = parseUint32(
-            await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetRole"),
+        for (let level = [window]; level.length > 0;) {
+          walkBudget -= level.length;
+          if (walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
+          const read = await Promise.all(
+            level.map(async (node) => {
+              const [states, role, children] = await Promise.all([
+                readStates(node),
+                call(node.bus, node.path, "org.a11y.atspi.Accessible.GetRole").then(parseUint32),
+                call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren").then(
+                  parseReferences,
+                ),
+              ]);
+              if (role === null) throw new Error("AT-SPI gave no role.");
+              return { node, states, role, children };
+            }),
           );
-          if (role === null) throw new Error("AT-SPI gave no role.");
-          if (role === ROLE_PASSWORD_TEXT) passwords.push(node);
-          if ((states & STATE_FOCUSED) !== 0) focused.push(node);
-          queue.push(
-            ...parseReferences(
-              await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren"),
-            ),
-          );
+          for (const { node, states, role } of read) {
+            if (role === ROLE_PASSWORD_TEXT) passwords.push(node);
+            if ((states & STATE_FOCUSED) !== 0) focused.push(node);
+          }
+          level = read.flatMap(({ children }) => children);
         }
         seenFocus.push(...focused);
         return focused;
@@ -227,16 +276,19 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             "true",
           ),
         );
-      const anyPassword = async (refs: ReadonlyArray<Ref>) => {
-        for (const ref of refs) {
-          const role = parseUint32(
-            await call(ref.bus, ref.path, "org.a11y.atspi.Accessible.GetRole"),
-          );
-          if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
-          if (role === ROLE_PASSWORD_TEXT) return true;
-        }
-        return false;
-      };
+      const anyPassword = (refs: ReadonlyArray<Ref>) =>
+        anyInOrder(
+          refs,
+          async (ref) => {
+            const role = parseUint32(
+              await call(ref.bus, ref.path, "org.a11y.atspi.Accessible.GetRole"),
+            );
+            if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
+            return role;
+          },
+          (role) => role === ROLE_PASSWORD_TEXT,
+        );
+      const focusedNow = async (node: Ref) => ((await readStates(node)) & STATE_FOCUSED) !== 0;
       const collectionWindows: Ref[] = [];
       for (const window of windows) {
         let matches: ReadonlyArray<Ref>;
@@ -261,15 +313,18 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       // was found focused must still be, and the app must still show the same windows, read
       // last. Otherwise focus is unknown. A password field created and focused after its parent
       // was walked is the one change this does not see (#1607).
-      for (const node of passwords)
-        if (((await readStates(node)) & STATE_FOCUSED) !== 0)
-          return { known: true, secure: true, windows: windows.length };
-      for (const window of collectionWindows)
-        if (await anyPassword(await focusedByCollection(window)))
-          return { known: true, secure: true, windows: windows.length };
-      for (const node of seenFocus)
-        if (((await readStates(node)) & STATE_FOCUSED) === 0)
-          throw new Error("Focus moved while the app was read.");
+      if (await anyInOrder(passwords, focusedNow, (focused) => focused))
+        return { known: true, secure: true, windows: windows.length };
+      if (
+        await anyInOrder(
+          collectionWindows,
+          async (window) => anyPassword(await focusedByCollection(window)),
+          (password) => password,
+        )
+      )
+        return { known: true, secure: true, windows: windows.length };
+      if (await anyInOrder(seenFocus, focusedNow, (focused) => !focused))
+        throw new Error("Focus moved while the app was read.");
       const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
       const same = (refs: ReadonlyArray<Ref>) => refs.map((ref) => ref.bus + ref.path).join("\n");
       if (same(now) !== same(windows))

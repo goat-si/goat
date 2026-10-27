@@ -191,6 +191,46 @@ describe("Linux live frames (#1370)", () => {
     }),
   );
 
+  it.effect(
+    "asks AT-SPI once a frame while focus stays clear, and before reading the window again after it was private",
+    () =>
+      Effect.gen(function* () {
+        let probes = 0;
+        let reads = 0;
+        let secure = false;
+        const { source, sent } = yield* sourceWith({
+          focus: async () => {
+            probes++;
+            return { known: true, secure };
+          },
+          capture: async () => {
+            reads++;
+            return SHOT;
+          },
+        });
+        yield* source.setTargets(1, [TARGET]);
+        assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
+        assert.deepEqual([probes, reads], [2, 1]);
+        // The answer that let the last frame out stands for the moment before this read.
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
+        assert.deepEqual([probes, reads], [3, 2]);
+        secure = true;
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          reason: "private",
+        });
+        assert.deepEqual([probes, reads], [4, 3]);
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          reason: "private",
+        });
+        assert.deepEqual([probes, reads], [5, 3]);
+      }),
+  );
+
   it.effect("sends nothing from a capture still running when its targets are cleared", () =>
     Effect.gen(function* () {
       const started = Promise.withResolvers<void>();

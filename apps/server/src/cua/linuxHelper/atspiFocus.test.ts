@@ -198,7 +198,7 @@ describe("makeSecureFocusProbe", () => {
       windows: 1,
     });
     // A tree too large to walk in time stays unknown, which is private.
-    expect(await makeSecureFocusProbe(gtk4(40, 300))(10)).toEqual({
+    expect(await makeSecureFocusProbe(gtk4(40, 600))(10)).toEqual({
       known: false,
       secure: false,
       windows: 0,
@@ -459,5 +459,54 @@ describe("makeSecureFocusProbe", () => {
       secure: false,
       windows: 0,
     });
+  });
+
+  it("walks a window without Collection several gdbus calls at a time, never more than its cap", async () => {
+    // GTK4 Nautilus showed 254 objects, three gdbus calls each; one after another took 1.9 s.
+    let inFlight = 0;
+    let most = 0;
+    const leaves = Array.from({ length: 40 }, (_, i) => "/n" + i);
+    const runner: GdbusRunner = async (args) => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      inFlight--;
+      const method = args[args.indexOf("--method") + 1];
+      const path = args[args.indexOf("--object-path") + 1] ?? "";
+      if (method === "org.a11y.Bus.GetAddress") return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+      if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 10,)\n";
+      if (method === "org.a11y.atspi.Accessible.GetChildren") {
+        if (path === "/org/a11y/atspi/accessible/root")
+          return args.includes("org.a11y.atspi.Registry")
+            ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
+            : "([(':1.9', objectpath '/w')],)\n";
+        if (path === "/w")
+          return (
+            "([" +
+            leaves
+              .map((leaf, i) => (i === 0 ? "(':1.9', objectpath '" : "(':1.9', '") + leaf + "')")
+              .join(", ") +
+            "],)\n"
+          );
+        return "(@a(so) [],)\n";
+      }
+      if (method === "org.a11y.atspi.Collection.GetMatches")
+        throw new Error(
+          "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path /w",
+        );
+      if (method === "org.a11y.atspi.Accessible.GetInterfaces")
+        return "(['org.a11y.atspi.Accessible', 'org.a11y.atspi.Component'],)\n";
+      if (method === "org.a11y.atspi.Accessible.GetState")
+        return path === "/n7" ? "([uint32 1124077568, 0],)\n" : "([uint32 1124073472, 0],)\n";
+      if (method === "org.a11y.atspi.Accessible.GetRole") return "(uint32 61,)\n";
+      throw new Error("unexpected " + method);
+    };
+    expect(await makeSecureFocusProbe(runner)(10)).toEqual({
+      known: true,
+      secure: false,
+      windows: 1,
+    });
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(8);
   });
 });
