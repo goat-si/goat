@@ -229,22 +229,35 @@ const encodedForms = (value: string) =>
     new URLSearchParams({ v: value }).toString().slice(2),
   ].flatMap((form) => [form, form.replaceAll("'", "''")]);
 
-/** Servers write percent escapes in either case; uppercasing them keeps every index in place. */
-const upperEscapes = (text: string) =>
-  text.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
-
 /**
- * Where `form` occurs in `text`, overlaps included, merged into spans. Knuth-Morris-Pratt keeps
- * this linear, so a long or repetitive secret neither builds a huge pattern nor stalls the loop.
+ * Servers write percent escapes in either case. Folding every A-F, wherever it stands, keeps each
+ * index in place and every exact match a match; it only also masks hex-case variants.
  */
-const spansOf = (text: string, form: string) => {
+const foldHex = (text: string) => text.replace(/[A-F]/g, (digit) => digit.toLowerCase());
+
+interface Form {
+  readonly text: string;
+  readonly fallback: Int32Array;
+}
+
+/** The Knuth-Morris-Pratt table, built once per form for every string one answer holds. */
+const compile = (form: string): Form => {
   const fallback = new Int32Array(form.length);
   for (let i = 1, k = 0; i < form.length; i++) {
     while (k > 0 && form.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
     if (form.charCodeAt(i) === form.charCodeAt(k)) k++;
     fallback[i] = k;
   }
+  return { text: form, fallback };
+};
+
+/**
+ * Where `form` occurs in `text`, overlaps included, merged into spans. Knuth-Morris-Pratt keeps
+ * this linear, so a long or repetitive secret neither builds a huge pattern nor stalls the loop.
+ */
+const spansOf = (text: string, { text: form, fallback }: Form) => {
   const spans: Array<[number, number]> = [];
+  if (form.length > text.length) return spans;
   for (let i = 0, k = 0; i < text.length; i++) {
     while (k > 0 && text.charCodeAt(i) !== form.charCodeAt(k)) k = fallback[k - 1] ?? 0;
     if (text.charCodeAt(i) === form.charCodeAt(k)) k++;
@@ -260,11 +273,11 @@ const spansOf = (text: string, form: string) => {
 
 /** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
 const maskWith = (values: ReadonlySet<string>) => {
-  const forms = [...new Set([...values].flatMap(encodedForms).map(upperEscapes))].filter(
-    (form) => form !== "",
-  );
+  const forms = [...new Set([...values].flatMap(encodedForms).map(foldHex))]
+    .filter((form) => form !== "")
+    .map(compile);
   return (text: string) => {
-    const searched = upperEscapes(text);
+    const searched = foldHex(text);
     const spans = forms.flatMap((form) => spansOf(searched, form));
     if (spans.length === 0) return text;
     let masked = "";

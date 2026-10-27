@@ -232,19 +232,27 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   const first = "very-private-prefix%2";
   const second = "&cdefghijklmnopqrstuvwxyz";
   const unpaired = "pw\uD800abc";
+  // Hex digits right after a value's end or start must not hide it by looking like an escape.
+  const trailingPercent = "long-password%a";
+  const hexStart = "aBcdefgh123";
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record);
       const text = [
         `${first}6cdefghijklmnopqrstuvwxyz`,
         encodeURIComponent(second).toLowerCase(),
         unpaired,
+        `${trailingPercent}b`,
+        `%2${hexStart}`,
       ].join("\n");
       const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
-      expect(outcome).toEqual({ ok: true, result: { text: "[secret]\n[secret]\n[secret]" } });
+      expect(outcome).toEqual({
+        ok: true,
+        result: { text: "[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]" },
+      });
     },
     undefined,
-    [first, second, unpaired],
+    [first, second, unpaired, trailingPercent, hexStart],
   );
 });
 
