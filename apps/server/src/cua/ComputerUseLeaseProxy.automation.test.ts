@@ -212,4 +212,33 @@ describe("lease proxy macOS Automation refusals", () => {
         );
       }),
   );
+  +it.effect("never asks the driver for apps for a call it refuses for another reason", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ automationHolder: "helper" });
+      yield* h.push(active());
+      yield* h.applied;
+      const refused = [
+        call(2, "invoke_menu", {
+          pid: 42,
+          window_id: 7,
+          path: ["File"],
+          screenshot_out_file: "/tmp/s.png",
+        }),
+        call(3, "set_value", {
+          pid: 42,
+          window_id: 7,
+          element_index: 3,
+          value: "b",
+          delivery_mode: "foreground",
+        }),
+      ];
+      for (const line of refused) {
+        yield* h.send(line);
+        const answer = yield* Effect.raceFirst(h.nextToProvider, h.nextToDriver);
+        assert.equal(answer.id, JSON.parse(line).id);
+        assert.isDefined(answer.result?.structuredContent?.refused);
+        assert.equal(yield* h.driverQueued, 0);
+      }
+    }),
+  );
 });

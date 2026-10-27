@@ -104,15 +104,6 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     yield* input.listApps;
     verdict = judge();
   }
-  if (
-    input.automationTargets === true &&
-    verdict._tag === "allow" &&
-    sendsAppleEvents(input.message.params?.name, input.message.params?.arguments, input.listed) &&
-    input.finished() === undefined &&
-    input.paused() === undefined &&
-    !input.idle()
-  )
-    yield* input.listApps;
   const finished = input.finished();
   const paused = input.paused();
   if (finished !== undefined)
@@ -167,5 +158,28 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       "foreground_not_approved",
       FOREGROUND_NOT_APPROVED,
     );
+  return yield* listAutomationTarget(input);
+});
+
+/**
+ * After every other check: a call that will run and may send Apple Events gets its pid listed,
+ * so an Automation refusal can name the app. The lease can end or pause while it waits.
+ */
+const listAutomationTarget = Effect.fn("ComputerUseLeaseProxy.listAutomationTarget")(function* (
+  input: Parameters<typeof refuseProxyCall>[0],
+) {
+  const params = input.message.params;
+  if (
+    input.automationTargets !== true ||
+    !sendsAppleEvents(params?.name, params?.arguments, input.listed)
+  )
+    return undefined;
+  yield* input.listApps;
+  const finished = input.finished();
+  if (finished !== undefined)
+    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+  const paused = input.paused();
+  if (paused !== undefined)
+    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
   return undefined;
 });
