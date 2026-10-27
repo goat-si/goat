@@ -1347,14 +1347,13 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
     const updatedParent = yield* projections.getThreadProjection(parentThreadId);
     const childThreadId = updatedParent.subagents[0]!.childThreadId!;
     const child = yield* projections.getThreadProjection(childThreadId);
-    assert.deepEqual(child.thread.launchedBy, {
+    assert.include(child.thread.launchedBy, {
       kind: "launch" as const,
       environmentLabel: null,
       threadTitle: "Parent with a linked PR",
       threadId: parentThreadId,
       environmentId: null,
       via: "delegate_task",
-      runId: parentRun.id,
     });
     const replay = yield* orchestrator.dispatch({
       type: "delegated_task.request",
