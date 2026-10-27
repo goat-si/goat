@@ -39,6 +39,7 @@ import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import ChatView from "./ChatView";
 import * as disconnectDelay from "../hooks/useEnvironmentDisconnectDelay";
 import { useRightPanelStore } from "../rightPanelStore";
+import "~/index.css";
 vi.mock("../hooks/useEnvironmentDisconnectDelay", async (original) => {
   const actual = await original<typeof import("../hooks/useEnvironmentDisconnectDelay")>();
   return { ...actual, useEnvironmentStateHeldFor: vi.fn(actual.useEnvironmentStateHeldFor) };
@@ -621,7 +622,9 @@ describe("right panel in narrow windows", () => {
   async function setupPanel(options: { maximized?: boolean; requestMaximize?: boolean } = {}) {
     await using stack = new AsyncDisposableStack();
     const savedPanelState = useRightPanelStore.getState();
-    stack.defer(() => useRightPanelStore.setState(savedPanelState));
+    stack.defer(() => {
+      useRightPanelStore.setState(savedPanelState);
+    });
     const fixture = stack.use(await setup());
     state.narrowRightPanel = true;
     state.keybindings = compileResolvedKeybindingsConfig([
@@ -643,7 +646,10 @@ describe("right panel in narrow windows", () => {
   it("maximizes from the sheet controls and restores the sheet with the shortcut", async () => {
     await using panel = await setupPanel();
     await expect.element(page.getByRole("dialog")).toBeVisible();
-    await page.getByRole("button", { name: "Maximize panel", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Maximize panel", exact: true })
+      .click();
     await expect
       .element(panel.chatColumn)
       .toHaveAttribute("data-chat-column-maximized-away", "true");
