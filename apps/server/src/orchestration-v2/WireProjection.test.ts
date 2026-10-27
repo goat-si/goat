@@ -286,6 +286,17 @@ describe("orchestration V2 wire projection", () => {
     ]);
   });
 
+  it("masks a typed value that is itself JSON, alone or inside a JSON result", () => {
+    const value = '{"token":"hunter2"}';
+    const input = { steps: [{ set_value: { value } }] };
+    const masked = redactComputerUseTypedOutput("cua-driver.run_steps", input, {
+      expected: value,
+      text: JSON.stringify({ expected: value }),
+    }) as { expected: string; text: string };
+    expect(masked.expected).toBe("[typed text]");
+    expect(JSON.parse(masked.text)).toEqual({ expected: "[typed text]" });
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,

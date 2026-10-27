@@ -302,6 +302,8 @@ export function redactComputerUseTypedOutput(
         );
   };
   const maskString = (text: string, depth: number): string => {
+    // A typed value can itself be JSON; it goes whole before it is read as structure.
+    if (typed.has(text)) return COMPUTER_USE_TYPED_OUTPUT;
     const start = text.trimStart()[0];
     if (depth < MAX_JSON_DEPTH && (start === "{" || start === "[")) {
       let parsed: unknown;
