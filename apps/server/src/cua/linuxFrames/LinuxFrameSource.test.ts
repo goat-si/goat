@@ -192,42 +192,30 @@ describe("Linux live frames (#1370)", () => {
   );
 
   it.effect(
-    "asks AT-SPI once a frame while focus stays clear, and before reading the window again after it was private",
+    "keeps a frame back when a password field had focus before the read, even if it left before the check after it",
     () =>
       Effect.gen(function* () {
-        let probes = 0;
-        let reads = 0;
         let secure = false;
+        let reads = 0;
         const { source, sent } = yield* sourceWith({
-          focus: async () => {
-            probes++;
-            return { known: true, secure };
-          },
+          focus: async () => ({ known: true, secure }),
           capture: async () => {
             reads++;
+            // Focus leaves the password field while the window is read.
+            secure = false;
             return SHOT;
           },
         });
         yield* source.setTargets(1, [TARGET]);
         assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
-        assert.deepEqual([probes, reads], [2, 1]);
-        // The answer that let the last frame out stands for the moment before this read.
-        yield* TestClock.adjust(TARGET.intervalMs);
-        assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
-        assert.deepEqual([probes, reads], [3, 2]);
+        // Between frames, after the last frame's checks, a password field takes focus.
         secure = true;
         yield* TestClock.adjust(TARGET.intervalMs);
         assert.deepInclude(yield* Queue.take(sent), {
           type: "cuaFrameUnavailable",
           reason: "private",
         });
-        assert.deepEqual([probes, reads], [4, 3]);
-        yield* TestClock.adjust(TARGET.intervalMs);
-        assert.deepInclude(yield* Queue.take(sent), {
-          type: "cuaFrameUnavailable",
-          reason: "private",
-        });
-        assert.deepEqual([probes, reads], [5, 3]);
+        assert.strictEqual(reads, 1);
       }),
   );
 

@@ -175,10 +175,6 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
   const hub = yield* PubSub.sliding<DesktopCuaFrame>(16);
   const loops = yield* FiberMap.make<string>();
   const stillDrawing = new Map<string, number>();
-  // Targets whose last capture was let out by a focus read after it. That read also stands for
-  // the moment before the next capture, so a clear window costs one AT-SPI probe a frame; any
-  // other outcome asks again before the window is read.
-  const clearAfterLast = new Set<string>();
 
   const supported: Effect.Effect<boolean> =
     platform !== "linux"
@@ -188,7 +184,6 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
         );
 
   const capture = Effect.fn("LinuxFrameSource.capture")(function* (target: Target) {
-    const clear = clearAfterLast.delete(target.key);
     const current = yield* io.session;
     if (Option.isNone(current) || (current.value.DISPLAY ?? "").trim() === "")
       return { unavailable: "unsupported" } satisfies FrameOutcome;
@@ -198,7 +193,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     if (placed === "other") return { unavailable: "windowGone" } satisfies FrameOutcome;
     if (placed === "unknown") return { unavailable: "captureFailed" } satisfies FrameOutcome;
     // A focused password field, or focus that cannot be read, shows nothing.
-    if (!clear && isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
+    if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
       return { unavailable: "private" } satisfies FrameOutcome;
     if (target.apps !== undefined) {
       const listed = new Map<number, ListedApp>();
@@ -229,7 +224,6 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     // A password field focused while the window was read or encoded keeps the frame back.
     if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
       return { unavailable: "private" } satisfies FrameOutcome;
-    clearAfterLast.add(target.key);
     return {
       frame: { width: shot.width, height: shot.height, data, capturedAt },
     } satisfies FrameOutcome;
@@ -255,7 +249,6 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
   ) {
     yield* FiberMap.clear(loops);
     stillDrawing.clear();
-    clearAfterLast.clear();
     if (platform !== "linux") return;
     for (const target of targets) yield* FiberMap.run(loops, target.key, loop(seq, target));
   });
