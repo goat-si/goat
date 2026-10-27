@@ -93,7 +93,7 @@ describe("attachment media preview failures", () => {
       await act(async () => image.dispatchEvent(new Event("error", { bubbles: true })));
       await expect
         .element(screen.getByRole("alert"))
-        .toHaveTextContent("This image format can't be displayed here");
+        .toMatchTextContent("This image format can't be displayed here");
       expect(fetch).toHaveBeenCalledWith(first, expect.objectContaining({ method: "HEAD" }));
       await expect.element(screen.getByRole("link")).toHaveAttribute("href", first);
       await expect.element(screen.getByRole("button", { name: "Save file" })).toBeVisible();
@@ -115,7 +115,7 @@ describe("attachment media preview failures", () => {
     await expect.element(screen.getByRole("alert")).toBeVisible();
     await expect
       .element(screen.getByRole("alert"))
-      .not.toHaveTextContent("This image format can't be displayed here");
+      .not.toMatchTextContent("This image format can't be displayed here");
 
     await retryImage(screen);
     await expect.element(screen.getByAltText("photo.heic")).toHaveAttribute("src", second);
@@ -141,7 +141,7 @@ describe("attachment media preview failures", () => {
       await act(async () => video.dispatchEvent(new Event("error", { bubbles: true })));
       await expect
         .element(screen.getByRole("alert"))
-        .toHaveTextContent("This video format can't be played here");
+        .toMatchTextContent("This video format can't be played here");
       expect(fetch).toHaveBeenCalledWith(second, expect.objectContaining({ method: "HEAD" }));
       await expect.element(screen.getByRole("button", { name: "Save file" })).toBeVisible();
       await expect.element(screen.getByRole("link")).toHaveAttribute("href", second);

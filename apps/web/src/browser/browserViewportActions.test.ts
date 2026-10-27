@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import type { EnvironmentRegistry as EnvironmentRegistryTypes } from "@goat/client-runtime/connection";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 
 import {
   type AuthSessionState,
@@ -45,7 +48,7 @@ vi.mock("~/state/preview", async () => {
         boundary.destinations.push(environmentId);
         return effect;
       },
-    } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+    } as EnvironmentRegistryTypes.EnvironmentRegistry["Service"]),
   );
   return {
     previewEnvironment: {
@@ -101,16 +104,16 @@ function setup(): Disposable {
 describe("browserViewportActions", () => {
   it("commits two resizes to the same background tab in order through the environment", async () => {
     using _state = setup();
-    const firstGate = Promise.withResolvers<void>();
-    const firstStarted = Promise.withResolvers<void>();
+    const firstGate = Deferred.makeUnsafe<void>();
+    const firstStarted = Deferred.makeUnsafe<void>();
     const completed: PreviewViewportSetting[] = [];
     const firstViewport: PreviewViewportSetting = { _tag: "freeform", width: 800, height: 600 };
     const secondViewport: PreviewViewportSetting = { _tag: "freeform", width: 900, height: 700 };
     boundary.resize.mockImplementation(async (input) => {
       expect(input.threadId).toBe(threadRef.threadId);
       if (input.viewport._tag !== "fill" && input.viewport.width === 800) {
-        firstStarted.resolve();
-        await firstGate.promise;
+        Effect.runSync(Deferred.succeed(firstStarted, undefined));
+        await Effect.runPromise(Deferred.await(firstGate));
       }
       completed.push(input.viewport);
       return snapshot(input.tabId, input.viewport);
@@ -119,13 +122,13 @@ describe("browserViewportActions", () => {
     const first = commitBrowserViewportChange(target, firstViewport);
     const second = commitBrowserViewportChange(target, secondViewport);
     try {
-      await firstStarted.promise;
+      await Effect.runPromise(Deferred.await(firstStarted));
       expect(readThreadPreviewState(threadRef).sessions[target.tabId]?.viewport).toEqual(
         initialViewport,
       );
       expect(completed).toEqual([]);
     } finally {
-      firstGate.resolve();
+      Effect.runSync(Deferred.succeed(firstGate, undefined));
       await Promise.all([first, second]);
     }
 
