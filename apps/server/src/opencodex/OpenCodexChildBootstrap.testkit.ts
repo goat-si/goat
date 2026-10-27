@@ -224,8 +224,9 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(Dispatch.SshRemoteDispatch)({
-          callHostTool: (_call, authorize) =>
-            authorize.pipe(Effect.as({ environmentId: "child-env" })),
+          // Setup must never mint an ordinary MCP session; identity comes over pinned SSH.
+          callHostTool: () => Effect.die("Child setup minted an ordinary MCP session"),
+          identifyTarget: () => Effect.succeed(EnvironmentId.make("child-env")),
           revokeChildSetupSessions: () => Effect.void,
         }),
       ),

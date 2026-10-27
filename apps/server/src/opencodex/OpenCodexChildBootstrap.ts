@@ -60,7 +60,6 @@ const RETRY_AFTER_MS = 10 * 60_000;
 type Status = OpenCodexChildBootstrapStatus;
 type Reason = NonNullable<Status["reason"]>;
 const Records = Schema.Record(Schema.String, OpenCodexChildBootstrapStatus);
-const decodeIdentity = Schema.decodeUnknownEffect(Schema.Struct({ environmentId: EnvironmentId }));
 const encodeRecords = Schema.encodeEffect(Schema.fromJsonString(Records));
 
 const RUNTIME_MISSING = "GOAT's runtime is not available there. Finish SSH setup and retry.";
@@ -308,34 +307,33 @@ const make = Effect.gen(function* () {
       Effect.tap(() => Effect.sync(() => setupBindings.delete(admission.binding.operationId))),
       Effect.ignore({ log: true }),
     );
-  /** The destination's own environment id, read once over the authenticated channel. */
+  /**
+   * The destination's own environment id, read over the pinned SSH channel like revocation:
+   * no MCP session is minted for it, so setup never holds an ordinary operate credential.
+   */
   const identify = Effect.fn("OpenCodexChildBootstrap.identify")(function* (
     alias: string,
     gate: Gate,
   ) {
-    const answer = yield* sshDispatch.callHostTool(
-      {
-        host: alias,
-        tool: "goat_environment_read",
-        arguments: {},
-        writes: false,
-        timeoutMs: 60_000,
-      },
-      gate.admission.pipe(
-        Effect.flatMap((read) =>
-          read.state === "allowed"
-            ? Effect.succeed("approval-required" as const)
-            : Effect.fail(
-                new OrchestratorMcpFailure({
-                  code: "orchestration_error",
-                  reason: "setup_approval_revoked",
-                  message: "Child setup approval was revoked.",
-                }),
-              ),
-        ),
-      ),
-    );
-    return (yield* decodeIdentity(answer)).environmentId;
+    if ((yield* gate.admission).state !== "allowed")
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "setup_approval_revoked",
+        message: "Child setup approval was revoked.",
+      });
+    const identity = yield* sshDispatch.identifyTarget({
+      alias,
+      hostname: alias,
+      username: null,
+      port: null,
+    });
+    if (identity === null)
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        reason: "unreachable",
+        message: "GOAT there did not identify its environment.",
+      });
+    return identity;
   });
   /** Finishes the Child's own setup over the Home link it was joined with. */
   const complete = Effect.fn("OpenCodexChildBootstrap.complete")(function* (
