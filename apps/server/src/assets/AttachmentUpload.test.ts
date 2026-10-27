@@ -14,6 +14,11 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { vi } from "vitest";
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+}));
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode, signPayload } from "../auth/utils.ts";
@@ -55,6 +60,30 @@ const encodeLegacyAttachmentUploadClaims = Schema.encodeEffect(
 );
 
 describe("AttachmentUpload", () => {
+  it.effect("issuing an upload URL never enumerates the attachment directory synchronously", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      using entries = vi.spyOn(NodeFS, "readdirSync");
+      const issued = yield* issueAttachmentUploadUrl(uploadInput);
+      expect(issued.relativeUrl).toMatch(/^\/api\/attachments\/upload\//);
+      expect(
+        entries.mock.calls.filter(([directory]) => String(directory) === config.attachmentsDir),
+      ).toHaveLength(0);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("configuration prepares attachment storage without synchronous enumeration", () =>
+    Effect.gen(function* () {
+      using entries = vi.spyOn(NodeFS, "readdirSync");
+      const config = yield* Effect.gen(function* () {
+        return yield* ServerConfig.ServerConfig;
+      }).pipe(Effect.provide(layerTest));
+      expect(
+        entries.mock.calls.filter(([directory]) => String(directory) === config.attachmentsDir),
+      ).toHaveLength(0);
+    }),
+  );
+
   it.effect.each([false, true])(
     "persists and replays immutable uploads (hard links unsupported: %s)",
     (unsupported) =>
