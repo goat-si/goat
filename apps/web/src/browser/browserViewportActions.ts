@@ -99,7 +99,7 @@ async function resizeBrowserViewport(
  * caller-facing timeout starts only once it reaches the front of the queue,
  * while the queue itself waits for the real operation.
  */
-export function queueBrowserViewportCommit(
+function queueBrowserViewportCommit(
   runtimeTabId: string,
   operation: () => Promise<void>,
 ): Promise<void> {
