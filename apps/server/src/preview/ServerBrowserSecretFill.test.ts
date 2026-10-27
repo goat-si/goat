@@ -21,6 +21,8 @@ const PASSWORD = "pw_unit_secret_value";
 /** One password field behind a scripted CDP session; faults are injected per method. */
 const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: boolean } = {}) => {
   const field = { value: "", type: "password", isConnected: true };
+  const closes: Array<() => void> = [];
+  let sessionClosed = false;
   const context = {};
   const page = {
     frames: () => [],
@@ -43,6 +45,7 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
       return { result: { value: true } };
     }
     if (fn.includes('return "empty"')) {
+      if (sessionClosed) throw new Error("Target page, context or browser has been closed");
       if (faults.stillFilled) throw new Error("Session closed");
       // Runs the page-side check against the scripted field.
       const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
@@ -52,13 +55,21 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
   };
   const tab = {
     page,
-    cdp: { send } as unknown as CDPSession,
+    cdp: {
+      send,
+      on: (event: string, listener: () => void) => event === "close" && closes.push(listener),
+    } as unknown as CDPSession,
     frameSessions: new Map(),
     control: new SessionControl("agent-a"),
     recording: null as unknown,
     recordingStart: null as unknown,
   };
-  return { tab, field };
+  /** The frame's session goes away, as an out-of-process frame's does when it detaches. */
+  const closeSession = () => {
+    sessionClosed = true;
+    for (const listener of closes) listener();
+  };
+  return { tab, field, closeSession };
 };
 
 const request = (operation: PreviewAutomationRequest["operation"], input: unknown) =>
@@ -121,6 +132,18 @@ it.live("keeps the fence when the fill's reply is lost after the page may have t
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
     );
+  });
+});
+
+it.live("lifts the fence of a field whose frame session closed with its document", () => {
+  const { tab, closeSession } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
+    closeSession();
+    await fill.guard(tab, request("evaluate", { expression: "1" }));
   });
 });
 

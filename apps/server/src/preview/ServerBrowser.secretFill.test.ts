@@ -340,6 +340,38 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
     );
   });
 
+  it.live(
+    "stays fenced when the page swaps the filled field for a new one holding the value",
+    () => {
+      const secrets = makeSecrets();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { open, call, fill } = yield* harness;
+          const { tabId, page } = yield* open("https://login.test/focus");
+          const { ref } = secrets.save("https://login.test");
+          yield* fill(tabId, { secretRef: ref, selector: "#pw" });
+          // The page's own script moves the value into a fresh, visible field.
+          yield* Effect.promise(() =>
+            page.evaluate(
+              "(() => { const old = document.getElementById('pw'); const next = document.createElement('input'); next.id = 'shown'; next.value = old.value; old.replaceWith(next); })()",
+            ),
+          );
+          const evaluated = yield* call<object>(tabId, "evaluate", { expression: "1 + 1" }).pipe(
+            Effect.flip,
+          );
+          expect(JSON.stringify(evaluated)).toContain("shows a password GOAT filled as plain text");
+          const read = yield* call<object>(tabId, "snapshot", { captureImage: false }).pipe(
+            Effect.flip,
+          );
+          expect(JSON.stringify(read)).toContain("shows a password GOAT filled as plain text");
+          // Once the page clears the new field too, the fence lifts.
+          yield* Effect.promise(() => page.evaluate("document.getElementById('shown').value = ''"));
+          expect(yield* call<number>(tabId, "evaluate", { expression: "1 + 1" })).toBe(2);
+        }).pipe(Effect.provide(layerFor(secrets))),
+      );
+    },
+  );
+
   it.live("refuses a tab a person stopped, keeping the ref", () => {
     const secrets = makeSecrets();
     return Effect.scoped(
