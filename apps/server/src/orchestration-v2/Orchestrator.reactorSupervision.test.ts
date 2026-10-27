@@ -15,11 +15,11 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vitest";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -86,14 +86,14 @@ it.effect(
         { name: "reactor-supervision" },
         ProviderAdapterRegistry.layerFromAdapters([adapter]),
         { databaseLayer, runEffectWorker: false },
-      ).pipe(Layer.provideMerge(fault));
+      ).pipe(Layer.provideMerge(fault), Layer.provideMerge(databaseLayer));
 
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const sink = yield* EventSink.EventSinkV2;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
         const store = yield* EventStore.EventStoreV2;
-        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const sql = yield* SqlClient.SqlClient;
         yield* Deferred.await(failed);
         const threadId = ThreadId.make("thread:reactor-supervision");
         yield* orchestrator.dispatch({
@@ -199,13 +199,13 @@ it.effect(
             stored.event.payload.status === "starting",
         );
         assert.lengthOf(promotions, 1);
-        const effects = yield* outbox.listByCommandId(promotions[0]!.commandId!);
+        const starts = yield* sql<{ readonly runId: string }>`
+          SELECT json_extract(payload_json, '$.runId') AS runId
+          FROM orchestration_v2_effect_outbox
+          WHERE thread_id = ${threadId} AND effect_type = 'provider-turn.start'
+        `;
         assert.lengthOf(
-          effects.filter(
-            (effect) =>
-              effect.request.type === "provider-turn.start" &&
-              effect.request.runId === queuedRun.id,
-          ),
+          starts.filter((effect) => effect.runId === queuedRun.id),
           1,
         );
       }).pipe(Effect.provide(layer));
