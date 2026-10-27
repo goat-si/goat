@@ -147,12 +147,19 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
 - **Driver ceiling.** Both hosts start the daemon in `standard` mode with
   `--capability-manifest <file> --approve-capability-manifest`, written at each start by
   `packages/shared/src/cuaDriverManifest.ts` (v3 schema).
-  - Tools: observation, input, `run_steps`, `run_script`, sessions and cursor. Excluded with
+  - Tools: observation, input, `kill_app`, `run_steps`, `run_script`, sessions and cursor. Excluded with
     reasons in `CUA_DRIVER_EXCLUDED_TOOLS`: installs, driver configuration, update checks,
     trajectory replay, the perception extension, deprecated capture tools, recording (writes
-    files), both clipboard tools (the person's copied secrets; file loading), `kill_app` (unsaved
-    work; no terminate scope is granted) and every browser tool (they need per-origin grants a
-    launch-time file cannot know, and logged-in profiles are never granted).
+    files), both clipboard tools (the person's copied secrets; file loading) and every browser
+    tool (they need per-origin grants a launch-time file cannot know, and logged-in profiles are
+    never granted).
+  - `kill_app` sends SIGKILL, so every app grant carries `terminate: driver_launched`: only a
+    process `launch_app` started in the same driver session, re-attested by start time and
+    executable before the signal. Standard mode refuses any other process first
+    (`foreign_process_termination_denied`). The driver judges termination against
+    `executable` grants only, so on macOS each admitted app also gets one for its bundle's
+    binary; Windows grants name executables as bundle ids and Linux desktop-entry apps have
+    none, so `kill_app` stays refused there until the driver matches bundle ids too.
   - Resources: `desktop.display` plus one `apps[].bundle_id` per app the driver's own
     `list_apps` reports at start, from a short-lived `cua-driver mcp` (`--direct` on macOS). No
     file paths, processes, origins or existing browser profiles. Excluded apps: the GOAT host

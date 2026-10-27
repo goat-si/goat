@@ -671,6 +671,11 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "automation_not_allowed",
   /** macOS may still be waiting for a person to answer its Automation prompt for this app. */
   "automation_pending",
+  /**
+   * GOAT's capability manifest for the driver leaves this tool or resource out. The driver says
+   * permission_denied, as for a missing macOS grant; no grant the person gives changes it.
+   */
+  "outside_manifest",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

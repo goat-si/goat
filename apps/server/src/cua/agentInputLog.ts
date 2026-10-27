@@ -39,11 +39,12 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "set_agent_cursor_theme",
 ]);
 
-/** Act through accessibility or window management; no keyboard or pointer events. */
+/** Act through accessibility, window management or a signal; no keyboard or pointer events. */
 const SEMANTIC_TOOLS: ReadonlySet<string> = new Set([
   "invoke_menu",
   "bring_to_front",
   "launch_app",
+  "kill_app",
   "set_window_frame",
 ]);
 

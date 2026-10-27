@@ -134,6 +134,7 @@ const SUMMARIES: Readonly<Record<string, string>> = {
   set_value: "Set a value",
   invoke_menu: "Choose a menu item",
   bring_to_front: "Bring a window to the front",
+  kill_app: "Force quit an app",
   set_window_frame: "Move a window",
   get_window_state: "Look at a window",
   wait_for_window_settle: "Wait for a window to settle",

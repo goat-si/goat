@@ -52,12 +52,90 @@ describe("cuaDriverManifest", () => {
       "browser_download",
       "browser_set_input_files",
       "clipboard_read",
-      "kill_app",
       // A whole-display screenshot shows every other app (#1321).
       "get_desktop_state",
     ])
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
   });
+
+  it("offers kill_app only for processes the driver launched, in every admitted app", () => {
+    expect(CUA_DRIVER_ALLOWED_TOOLS).toContain("kill_app");
+    const text = cuaDriverCapabilityManifest({
+      applications: ["com.apple.TextEdit", { executable: "/usr/bin/gedit", names: ["gedit"] }],
+    });
+    expect(text).toContain(
+      [
+        '    - bundle_id: "com.apple.TextEdit"',
+        '      terminate: "driver_launched"',
+        '    - executable: "/usr/bin/gedit" # names: ["gedit"]',
+        '      terminate: "driver_launched"',
+      ].join("\n"),
+    );
+    expect(text).not.toMatch(/terminate: "(any|deny)"|processes/);
+    // A manifest without kill_app grants no termination at all.
+    expect(
+      cuaDriverCapabilityManifest({ applications: ["com.apple.TextEdit"], tools: ["click"] }),
+    ).not.toContain("terminate");
+    expect(cuaDriverManifestApplications(text)).toEqual([
+      "com.apple.TextEdit",
+      "/usr/bin/gedit",
+      "gedit",
+    ]);
+  });
+
+  // The driver judges kill_app against executable grants only (session_manifest.rs
+  // process_control), and attests a macOS process by the binary ps reports.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "grants a macOS app's bundle binary beside its bundle id, and nothing when it cannot be read",
+    async () => {
+      const directory = await NodeFSP.realpath(
+        await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-")),
+      );
+      const bundle = async (name: string, plist: string, binary?: string) => {
+        const app = NodePath.join(directory, name + ".app");
+        await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(app, "Contents", "Info.plist"), plist);
+        if (binary !== undefined)
+          await NodeFSP.writeFile(NodePath.join(app, "Contents", "MacOS", binary), "");
+        return app;
+      };
+      const plist = (executable: string) =>
+        `<?xml version="1.0"?><plist><dict><key>CFBundleIdentifier</key><string>x</string><key>CFBundleExecutable</key><string>${executable}</string></dict></plist>`;
+      try {
+        const editor = await bundle("Editor", plist("Editor &amp; Co"), "Editor & Co");
+        const missing = await bundle("Missing", plist("Missing"));
+        const escape = await bundle("Escape", plist("../../Editor.app/Contents/MacOS/Editor & Co"));
+        const host = await bundle("GOAT", plist("GOAT"), "GOAT");
+        const path = await prepareCuaDriverCapabilityManifest({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "darwin",
+          environment: {},
+          hostBundleIds: ["si.goat.desktop"],
+          path: NodePath.join(directory, "manifest.yaml"),
+          listApplications: async () => [
+            { bundle_id: "org.example.editor", name: "Editor", launch_path: editor },
+            { bundle_id: "org.example.missing", name: "Missing", launch_path: missing },
+            { bundle_id: "org.example.escape", name: "Escape", launch_path: escape },
+            { bundle_id: "si.goat.desktop", name: "GOAT", launch_path: host },
+            { bundle_id: "org.example.unlisted", name: "Unlisted" },
+          ],
+        });
+        const text = await NodeFSP.readFile(path, "utf8");
+        const grants = text.split("\n").filter((line) => line.startsWith("    - executable: "));
+        expect(grants).toEqual([
+          "    - executable: " +
+            JSON.stringify(NodePath.join(editor, "Contents", "MacOS", "Editor & Co")) +
+            " # names: []",
+        ]);
+        for (const id of ["org.example.editor", "org.example.missing", "org.example.escape"])
+          expect(text).toContain(`    - bundle_id: "${id}"`);
+        expect(text).not.toContain("si.goat.desktop");
+        expect(text).not.toContain("GOAT.app");
+      } finally {
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("offers the read-only get_config while set_config stays out", () => {
     expect(CUA_DRIVER_ALLOWED_TOOLS).toContain("get_config");
