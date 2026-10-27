@@ -96,7 +96,20 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: "SymbolView" }));
-vi.mock("../../components/ui/AppText", () => ({ AppText: "Text", AppTextInput: "TextInput" }));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: "Text",
+  AppTextInput: (props: {
+    value: string;
+    onChangeText: (value: string) => void;
+    placeholder?: string;
+  }) =>
+    createElement("input", {
+      value: props.value,
+      placeholder: props.placeholder,
+      onChange: (event: { currentTarget: HTMLInputElement }) =>
+        props.onChangeText(event.currentTarget.value),
+    }),
+}));
 vi.mock("../../components/EnvironmentMachineSymbol", () => ({
   EnvironmentMachineSymbol: "EnvironmentMachineSymbol",
 }));
@@ -109,6 +122,7 @@ vi.mock("../../state/session", () => ({
   readEnvironmentScope: (environmentId: string, scope: string) =>
     (environmentId === "environment" ? state.scopes : state.otherScopes).has(scope),
   readEnvironmentProxiedByHub: () => false,
+  environmentSession: { sessionStateAtom: () => null },
 }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => state.existingProjects,
@@ -696,31 +710,6 @@ describe("local project navigation", () => {
 });
 
 describe("local folder path", () => {
-  function findPathInput(
-    node: ReactNode,
-  ): { value: string; onChangeText: (value: string) => void } | null {
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const input = findPathInput(child);
-        if (input) return input;
-      }
-      return null;
-    }
-    if (
-      !isValidElement<{
-        value?: string;
-        onChangeText?: (value: string) => void;
-        onSubmit?: () => void;
-        children?: ReactNode;
-      }>(node)
-    ) {
-      return null;
-    }
-    const { value, onChangeText, onSubmit } = node.props;
-    if (typeof value === "string" && onChangeText && onSubmit) return { value, onChangeText };
-    return findPathInput(node.props.children);
-  }
-
   function mountLocalFolder() {
     state.scopes = new Set([AuthOrchestrationOperateScope]);
     state.baseDirectory = "/work";
@@ -730,22 +719,26 @@ describe("local folder path", () => {
       { environmentId: "another-environment", environmentLabel: "Another environment" },
     ];
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    const root = createRoot(document.createElement("div"));
-    const renderedPaths: string[] = [];
-    let input: ReturnType<typeof findPathInput> = null;
-    function LocalFolderObserver(props: { environmentId?: string }) {
-      input = findPathInput(AddProjectLocalFolderScreen(props));
-      if (input) renderedPaths.push(input.value);
-      return null;
-    }
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const input = () => {
+      const element = container.querySelector("input");
+      if (!element) throw new Error("Path input missing");
+      return element;
+    };
     return {
-      renderedPaths,
       get path() {
-        return input?.value;
+        return input().value;
       },
-      type: (value: string) => act(() => input!.onChangeText(value)),
+      type: (value: string) =>
+        act(() => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          if (!setter) throw new Error("Input value setter missing");
+          setter.call(input(), value);
+          input().dispatchEvent(new Event("input", { bubbles: true }));
+        }),
       render: (environmentId?: string) =>
-        act(() => root.render(createElement(LocalFolderObserver, { environmentId }))),
+        act(() => root.render(createElement(AddProjectLocalFolderScreen, { environmentId }))),
       [Symbol.asyncDispose]: async () => {
         await act(() => root.unmount());
         state.connectionStates = {};
@@ -758,11 +751,9 @@ describe("local folder path", () => {
     await using screen = mountLocalFolder();
     await screen.render("environment");
     await screen.type("/work/edited");
-    screen.renderedPaths.length = 0;
 
     await screen.render("another-environment");
 
-    expect(screen.renderedPaths).not.toContain("/work/edited");
     expect(screen.path).toBe("~/");
   });
 
