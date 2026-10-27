@@ -774,8 +774,8 @@ it("draws the cursor a frame was captured with, and says when the picture stops 
   await screen.rerender(
     cardView({
       ...desk,
-      target: { ...desk.target, cursor: undefined },
-    } as PreviewSession).element,
+      target: { kind: "desktop", motionSupport: "supported", pid: 7, windowId: 3, title: "Finder" },
+    }).element,
   );
   await vi.waitFor(() => expect(marker()).toBeNull());
   await screen.rerender(cardView(desk).element);
