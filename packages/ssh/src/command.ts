@@ -13,6 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const SSH_COMMAND_SHUTDOWN_TIMEOUT_MS = 2_000;
@@ -454,7 +455,12 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         env: environment,
         extendEnv: true,
         stdin: {
-          stream: stdinStream(input.stdin, input.onStdinProgress),
+          stream: stdinStream(
+            typeof input.stdin === "string" && isRemoteShellScript(input.remoteCommandArgs)
+              ? withRemoteDeadline(input.stdin, input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS)
+              : input.stdin,
+            input.onStdinProgress,
+          ),
           endOnDone: true,
         },
       }),

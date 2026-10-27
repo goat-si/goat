@@ -30,6 +30,8 @@ const { diffAtom } = await vi.hoisted(async () => {
   return { diffAtom: Atom.make(() => AsyncResult.success(firstPage)) };
 });
 
+const mocks = vi.hoisted(() => ({ diffCommits: [] as Array<string | undefined> }));
+
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => vi.fn()) as never,
@@ -40,7 +42,10 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     ...actual,
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
-      diff: (() => diffAtom) as never,
+      diff: (({ input }: { input: { commit?: string } }) => {
+        mocks.diffCommits.push(input.commit);
+        return diffAtom;
+      }) as never,
     },
   };
 });
@@ -100,6 +105,10 @@ const detail: PullRequestDetailView = {
   },
 };
 
+function setup() {
+  mocks.diffCommits = [];
+}
+
 const tab = (refreshToken: number) => (
   <PullRequestCodeTab
     scrollerRef={() => {}}
@@ -114,6 +123,7 @@ const tab = (refreshToken: number) => (
 );
 
 it("keeps the diff after a refresh that brings back the same page", async () => {
+  setup();
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";
   await using screen = await render(tab(0), { container });
@@ -125,4 +135,38 @@ it("keeps the diff after a refresh that brings back the same page", async () => 
     .element(screen.getByText("This pull request has no file changes."))
     .not.toBeInTheDocument();
   await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+});
+
+it("never requests the diff of a selected commit the pull request no longer has", async () => {
+  setup();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  // The timeline can open a commit that a force-push removed from the pull request.
+  await using screen = await render(
+    <PullRequestCodeTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      reference={detail}
+      detail={{
+        ...detail,
+        commits: [
+          {
+            oid: "kept",
+            messageHeadline: "Kept commit",
+            committedDate: "2026-09-01T00:00:00Z",
+          },
+        ],
+      }}
+      selectedCommitOid="gone"
+      onSelectedCommitChange={() => {}}
+      onRefresh={() => {}}
+    />,
+    { container },
+  );
+
+  await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Diff scope: All commits" }))
+    .toBeVisible();
+  expect(mocks.diffCommits).not.toContain("gone");
 });

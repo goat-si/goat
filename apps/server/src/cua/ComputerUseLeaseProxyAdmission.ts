@@ -6,7 +6,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { callApp, type Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
-import type { ListedApp } from "./ComputerUseScope.ts";
+import { grantedAppId, type ListedApp } from "./ComputerUseScope.ts";
 
 export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId" | "bundleIds">,
@@ -18,7 +18,11 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     readonly interruptions: number;
     readonly idleEpoch: number;
     readonly foreground: ReadonlyArray<ComputerUseForegroundGrant>;
-    readonly listed: ReadonlyMap<number, ListedApp>;
+    /** The apps the proxy knows by pid, and the ones its control may act on. */
+    readonly scope: {
+      readonly listed: ReadonlyMap<number, ListedApp>;
+      readonly apps: ReadonlySet<string> | undefined;
+    };
   },
 ) {
   const name =
@@ -28,7 +32,9 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
   const selectedForeground = requiresForeground({ name, args })
     ? input.foreground.find((grant) => grant.expiresAtMillis > now)
     : undefined;
-  const app = callApp(name, args, input.listed);
+  const { listed, apps } = input.scope;
+  const known = callApp(name, args, listed);
+  const app = known === undefined ? undefined : grantedAppId(known, apps);
   const decision = yield* options.reservation({
     action: "reserve",
     controlId: options.controlId,
@@ -47,7 +53,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     input.id,
     input.message,
     decision,
-    input.listed,
+    listed,
     options.bundleIds,
   );
   return {
