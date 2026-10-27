@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import type * as Acp from "effect-acp/compat";
 import { AcpRequestError } from "effect-acp/errors";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
+import { DRIVER } from "./capabilities.ts";
 import { DevinCloudCliError } from "./cli.ts";
 import { makeTaskObserver, matchingPr, sourcePrompt } from "./task.ts";
 import {
@@ -283,6 +284,55 @@ it.effect(
       assert.equal(prompts, 1);
       yield* observer.assertIdle;
     }),
+);
+it.effect("a sign-in refusal whose failed state cannot be persisted falls back to unknown", () =>
+  Effect.gen(function* () {
+    const events: Adapter.ProviderAdapterV2Event[] = [];
+    const reasons: string[] = [];
+    const observer = yield* makeTaskObserver(
+      (event) =>
+        Effect.sync(() => {
+          events.push(event);
+        }),
+      (reason) =>
+        Effect.sync(() => {
+          reasons.push(reason);
+        }),
+    );
+    yield* observer.bind(
+      {
+        ...taskInput,
+        commitCloudTask: () =>
+          Effect.fail(
+            new Adapter.ProviderAdapterProtocolError({ driver: DRIVER, detail: "disk full" }),
+          ),
+      },
+      false,
+    );
+    yield* observer.run(
+      relay({
+        prompt: () =>
+          Effect.fail(
+            new DevinCloudCliError({
+              stage: "relay",
+              cause: AcpRequestError.fromProtocolError(
+                { code: -32000, message: "Authentication required" },
+                { method: "session/prompt" },
+              ),
+            }),
+          ),
+      }),
+      "task",
+    );
+    const terminals = events.filter((event) => event.type === "turn.terminal");
+    assert.equal(terminals.length, 1);
+    assert.equal(
+      terminals[0]?.type === "turn.terminal" ? terminals[0].threadDisposition : "",
+      "broken",
+    );
+    assert.equal(reasons.length, 1);
+    yield* observer.assertIdle;
+  }),
 );
 it.effect("retains early metadata and sends late blocked metadata through the base port", () =>
   Effect.gen(function* () {

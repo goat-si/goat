@@ -595,7 +595,9 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
       }).pipe(
         Effect.catch((error) =>
           isSignInRequired(error)
-            ? refuse(SIGN_IN_AGAIN, "auth_required", bound)
+            ? refuse(SIGN_IN_AGAIN, "auth_required", bound).pipe(
+                Effect.catch(() => uncertain(UNKNOWN_PROMPT, bound)),
+              )
             : uncertain(UNKNOWN_PROMPT, bound),
         ),
       );
