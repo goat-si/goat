@@ -67,13 +67,18 @@ provider (Codex, Claude, ...)
   revoke do not stop an already-dispatched driver effect, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
+- Stop, stop all, lease end, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
   input that session holds, and sends a cleanup report over the control channel, which does not
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
+- A dropped lease stream between a live proxy and its server is not an end. The proxy
+  reconnects and keeps its driver, but until the server's next update it sends nothing that acts
+  on or shows the screen and cuts off such work in flight, because a Stop, pause or private field
+  cannot reach it meanwhile. Two minutes without the server end the control as `transport_lost`;
+  the proxy stays up and a fresh snapshot can start it again.
 - Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
   historical stop measurement is repeated through this topology before WS6 counts as
   done.

@@ -204,7 +204,10 @@ export const makeInputVerifier = (input: {
           if (baseline?.child !== child || !replyUnverified(line) || !input.live(child))
             return sink.answer(line, status, context);
           return ask(child, baseline.read).pipe(
-            Effect.map((diff) => (diff === undefined ? line : withTreeDiff(line, diff))),
+            // A pause, end or dropped lease stream during the read-back withholds what it saw.
+            Effect.map((diff) =>
+              diff === undefined || !input.live(child) ? line : withTreeDiff(line, diff),
+            ),
             Effect.catchCause(() => Effect.succeed(line)),
             Effect.flatMap((final) => sink.answer(final, status, context)),
             Effect.forkIn(input.scope),

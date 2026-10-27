@@ -247,6 +247,15 @@ export interface LeaseProxyOptions<EU, ED> {
   ) => void;
   /** A cancelled request settled without an output line; its id can be reused now. */
   readonly onCancelledRequestSettled?: (key: string) => void;
+  /**
+   * True while the lease stream reconnects: no Stop or pause can arrive, so nothing but a
+   * transport-safe read is sent. Checked again at the last step before each write to the driver.
+   */
+  readonly transportHeld?: () => boolean;
+  /** Installs the hook that cuts off calls the driver has when the lease stream drops. */
+  readonly onTransportDropReceiver?: (drop: () => void) => void;
+  /** The first driver generation; a control started again continues past its earlier drivers. */
+  readonly firstGeneration?: number;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**

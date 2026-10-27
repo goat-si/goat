@@ -9,6 +9,7 @@ import {
   type LeaseEnd,
   FOREGROUND_NOT_APPROVED,
   LEASE_END_MESSAGES,
+  RECONNECTING,
   PAUSE_STATE,
   PAUSE_NEXT,
   PAUSE_MESSAGES,
@@ -154,6 +155,8 @@ export const unsentCallRefusal = (
   id: JsonRpcId,
   method: string | undefined,
   state: {
+    /** The lease stream is reconnecting and this call is no transport-safe read. */
+    readonly held?: boolean;
     readonly pending: Stopping | undefined;
     readonly finished: LeaseEnd | undefined;
     readonly paused: ComputerUsePauseReason | undefined;
@@ -177,6 +180,7 @@ export const unsentCallRefusal = (
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
+  if (state.held === true) return refusal(id, method, "reconnecting", RECONNECTING);
   if (pending !== undefined && "narrowed" in pending)
     return refusal(
       id,

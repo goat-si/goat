@@ -126,6 +126,8 @@ export const harness = Effect.fn(function* (
     readonly answersCursorTools?: boolean;
     /** Re-read a window as a tree diff after unverified input. */
     readonly verifyInputByTreeDiff?: boolean;
+    /** Stands in for the thread proxy's reconnecting state. */
+    readonly transportHeld?: () => boolean;
     /** The app macOS asks for Automation consent on this host's behalf. */
     readonly automationHolder?: "helper" | "app";
   } = {},
@@ -186,6 +188,7 @@ export const harness = Effect.fn(function* (
     controlId: options.controlId ?? CONTROL,
     ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
     ...(options.verifyInputByTreeDiff ? { verifyInputByTreeDiff: true } : {}),
+    ...(options.transportHeld === undefined ? {} : { transportHeld: options.transportHeld }),
     ...(options.automationHolder === undefined
       ? {}
       : { automationHolder: options.automationHolder }),
