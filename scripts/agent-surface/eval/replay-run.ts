@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - offline replay context and trace files, never a provider client.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - a plain Node script that reads offline replay context and trace files; no Effect runtime.
 import * as NodeFS from "node:fs";
 import * as NodeUtil from "node:util";
 import { loadServedCatalog } from "../servedCatalog.ts";
