@@ -1,4 +1,12 @@
-import type { HostStatusEntry, HubNode, OpenCodexChildBootstrapStatus } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  type ChildReadyProof,
+  type HostStatusEntry,
+  type HubNode,
+  type OpenCodexChildBootstrapStatus,
+  type OpenCodexChildSetup,
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { cloudAutoJoinSaveError, hubDeviceList, presentChildSetup } from "./hubDevices.ts";
@@ -66,7 +74,7 @@ function host(
 
 describe("presentChildSetup", () => {
   it("names the reason and keeps the Home's message for each unfinished state", () => {
-    expect(presentChildSetup({ state: "running", checkedAt: 1 })).toEqual({
+    expect(presentChildSetup({ state: "running", checkedAt: 1 })).toMatchObject({
       state: "running",
       tone: "progress",
       label: "Setting up as OpenCodex Child",
@@ -189,6 +197,8 @@ describe("hubDeviceList", () => {
     expect(rows.map((row) => [row.key, row.childSetup?.label ?? null])).toEqual([
       ["node:n1", "OpenCodex Child setup blocked: npm missing"],
       ["setup:boat-2", "Setting up as OpenCodex Child"],
+      // A linked machine stays listed: linked is not the same as Codex verified through Home.
+      ["setup:boat-3", "Linked · Codex not verified"],
     ]);
   });
 
@@ -251,5 +261,253 @@ describe("cloudAutoJoinSaveError", () => {
     expect(cloudAutoJoinSaveError(false, true)).toMatch(/older GOAT/);
     expect(cloudAutoJoinSaveError(false, false)).toBeNull();
     expect(cloudAutoJoinSaveError(true, true)).toBeNull();
+  });
+});
+
+function childSetupFixture(overrides: Partial<OpenCodexChildSetup> = {}): OpenCodexChildSetup {
+  return {
+    version: 1,
+    operationId: "setup-1",
+    destinationEnvironmentId: EnvironmentId.make("test-child-env"),
+    homeEnvironmentId: EnvironmentId.make("test-home-env"),
+    instanceId: ProviderInstanceId.make("child-codex"),
+    revision: { epoch: "test-epoch", sequence: 1 },
+    steps: [],
+    readiness: "linked",
+    attribution: "home_zero_local_accounts",
+    nextAction: "retry",
+    ...overrides,
+  };
+}
+
+function childProofFixture(overrides: Partial<ChildReadyProof> = {}): ChildReadyProof {
+  const setup = childSetupFixture();
+  return {
+    version: 1,
+    operationId: setup.operationId,
+    destinationEnvironmentId: setup.destinationEnvironmentId,
+    homeEnvironmentId: setup.homeEnvironmentId,
+    instanceId: setup.instanceId,
+    configFingerprint: "config-1",
+    executablePath: "/test/bin/codex",
+    executableVersion: "test-version",
+    linkId: "test-link",
+    listenerInstanceId: "test-listener",
+    linkConnectionGeneration: "test-generation",
+    settingsDigest: "settings-1",
+    catalogDigest: "catalog-1",
+    model: "home-model",
+    completedAt: 0,
+    expiresAt: 86_400_000,
+    attribution: "home_zero_local_accounts",
+    localAccountsDigest: "empty-local-accounts",
+    ...overrides,
+  };
+}
+
+const readySetup = (overrides: Partial<OpenCodexChildSetup> = {}) =>
+  childSetupFixture({
+    readiness: "ready",
+    nextAction: "none",
+    steps: [{ step: "inference_verified", state: "succeeded" }],
+    proof: childProofFixture(),
+    ...overrides,
+  });
+
+describe("Hub Child readiness", () => {
+  const child = (status: OpenCodexChildBootstrapStatus) =>
+    hubDeviceList({ nodes: null, snapshot: null, hosts: [host("test-child", status)] })[0]
+      ?.childSetup;
+
+  it("keeps a linked Child listed as unverified and offers Continue setup on its SSH alias", () => {
+    expect(child({ state: "child", checkedAt: 1 })).toMatchObject({
+      label: "Linked · Codex not verified",
+      tone: "warning",
+      proof: null,
+      host: "test-child",
+      nextAction: "continue_setup",
+      actionable: true,
+    });
+  });
+
+  it("shows Ready only for a current proof of a request the Child made through Home", () => {
+    expect(child({ state: "child", checkedAt: 1, setup: readySetup() })).toMatchObject({
+      label: "Ready",
+      tone: "success",
+      proof: { model: "home-model", completedAt: 0 },
+      nextAction: "none",
+      actionable: false,
+    });
+    expect(child({ state: "degraded", checkedAt: 1, setup: readySetup() })).not.toHaveProperty(
+      "label",
+      "Ready",
+    );
+  });
+
+  it.each([
+    ["the proof has expired", { checkedAt: 86_400_000 }, {}],
+    ["Home attribution is unproven", {}, { attribution: "unproven" as const }],
+  ])("withholds Ready when %s", (_case, status, setup) => {
+    expect(
+      child({ state: "child", checkedAt: 1, ...status, setup: readySetup(setup) }),
+    ).toMatchObject({ label: "Linked · Codex not verified", proof: null });
+  });
+
+  it("withholds Ready and offers Continue setup when the Home kept no proof", () => {
+    const { proof: _proof, ...unproven } = readySetup();
+    expect(child({ state: "child", checkedAt: 1, setup: unproven })).toMatchObject({
+      label: "Linked · Codex not verified",
+      proof: null,
+      nextAction: "retry",
+      actionable: true,
+    });
+  });
+
+  it.each([
+    { operationId: "older-setup" },
+    { destinationEnvironmentId: EnvironmentId.make("other-child") },
+    { homeEnvironmentId: EnvironmentId.make("other-home") },
+    { instanceId: ProviderInstanceId.make("other-instance") },
+  ])("withholds Ready for a proof bound to another setup: %o", (mismatch) => {
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        setup: readySetup({ proof: childProofFixture(mismatch) }),
+      }),
+    ).toMatchObject({ label: "Linked · Codex not verified", proof: null });
+  });
+
+  it.each(["pending", "running", "failed"] as const)(
+    "withholds Ready when a reported step is %s beside an older proof",
+    (state) => {
+      expect(
+        child({
+          state: "child",
+          checkedAt: 1,
+          setup: readySetup({ steps: [{ step: "inference_verified", state }] }),
+        }),
+      ).toMatchObject({ proof: null });
+    },
+  );
+
+  it("names the running step and keeps pending steps pending", () => {
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        setup: childSetupFixture({
+          readiness: "verifying",
+          nextAction: "none",
+          steps: [
+            { step: "codex_installed", state: "succeeded" },
+            { step: "instance_routed", state: "running" },
+            { step: "inference_verified", state: "pending" },
+          ],
+        }),
+      }),
+    ).toMatchObject({
+      label: "Route Codex through Home…",
+      tone: "progress",
+      steps: [
+        { label: "Install Codex", outcome: "succeeded" },
+        { label: "Route Codex through Home", outcome: "running" },
+        { label: "Verify a request through Home", outcome: "pending" },
+      ],
+    });
+  });
+
+  it("names the failed step and keeps the server's recovery action", () => {
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        setup: childSetupFixture({
+          readiness: "invalid",
+          nextAction: "review_settings",
+          steps: [
+            { step: "codex_installed", state: "succeeded" },
+            { step: "instance_routed", state: "failed" },
+          ],
+          failure: {
+            code: "stale_configuration",
+            step: "instance_routed",
+            message: "The instance changed. Review settings.",
+            retryable: false,
+          },
+        }),
+      }),
+    ).toMatchObject({
+      tone: "destructive",
+      detail: "The instance changed. Review settings.",
+      nextAction: "review_settings",
+      actionable: false,
+    });
+  });
+
+  it("offers update guidance only for the server's typed remote_outdated refusal", () => {
+    const refusal = {
+      code: "remote_outdated" as const,
+      step: "goat_available" as const,
+      message: "Update GOAT on this Child, then continue setup.",
+      retryable: false,
+    };
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        nextAction: "update_goat",
+        actionable: false,
+        failure: refusal,
+      }),
+    ).toMatchObject({
+      nextAction: "update_goat",
+      actionable: false,
+      detail: "Update GOAT on this Child, then continue setup.",
+    });
+    // Without the typed refusal, a bare update action is not evidence of an older GOAT.
+    expect(child({ state: "child", checkedAt: 1, nextAction: "update_goat" })).toMatchObject({
+      nextAction: "none",
+      actionable: false,
+    });
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        setup: childSetupFixture({ nextAction: "update_goat" }),
+      }),
+    ).toMatchObject({ nextAction: "update_goat", actionable: false });
+  });
+
+  it("lets nested setup supersede an older outer refusal and honors a non-actionable outer action", () => {
+    expect(
+      child({
+        state: "child",
+        checkedAt: 1,
+        nextAction: "update_goat",
+        actionable: false,
+        failure: {
+          code: "remote_outdated",
+          step: "goat_available",
+          message: "Old refusal.",
+          retryable: false,
+        },
+        setup: childSetupFixture({
+          nextAction: "retry",
+          failure: {
+            code: "probe_failed",
+            step: "inference_verified",
+            message: "Retry verification.",
+            retryable: true,
+          },
+        }),
+      }),
+    ).toMatchObject({ nextAction: "retry", actionable: true, detail: "Retry verification." });
+    expect(
+      child({ state: "child", checkedAt: 1, nextAction: "continue_setup", actionable: false }),
+    ).toMatchObject({ nextAction: "continue_setup", actionable: false });
+    expect(
+      child({ state: "degraded", checkedAt: 1, nextAction: "reconnect_home", actionable: true }),
+    ).toMatchObject({ nextAction: "reconnect_home", actionable: true });
   });
 });
