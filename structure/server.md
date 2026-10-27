@@ -167,10 +167,12 @@ Codex, syncs the Home catalog and routes one bootstrap instance with no provider
 `opencodex-child-setup` purpose per phase; only the Home checks consent, before issuing and after
 every reply, and revokes delegated Child sessions when consent ends. Membership is not Ready:
 Ready needs one real model request through that Child's local OpenCodex and Home, with zero local
-credentials before and after, and expires after 24 hours or on any link, listener, settings,
-catalog, instance, executable or credential change. Status reads never infer: the Home shows a
-recorded Ready only while a short status-phase read of the Child confirms that proof, and shows
-the machine linked and unverified otherwise. Outcomes persist per alias and reach
+credentials before and after and no link reconnect during it (OpenCodex's link connection
+generation), and expires after 24 hours or on any link, reconnect, listener, settings, catalog,
+instance, executable or credential change. Hub and cloud consent generations advance inside the
+settings commit, so setup bound to them stops even before the consent subscriber runs. Status
+reads never infer: the Home shows a recorded Ready only while a short status-phase read of the
+Child confirms that proof, and shows the machine linked and unverified otherwise. Outcomes persist per alias and reach
 `goat_host_status` as the host entry's `opencodexChild`.
 
 `apps/server/src/hub/OpenCodexManagedUpdate.ts` moves GOAT-managed OpenCodex installs to the newest
