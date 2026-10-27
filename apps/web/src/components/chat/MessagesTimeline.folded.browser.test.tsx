@@ -1,10 +1,16 @@
-import { MessageId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, MessageId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
 import { collectThreadFindRanges } from "./threadFindHighlights";
-import { CREATED_AT, click, message, renderTimeline } from "./MessagesTimeline.browserHarness";
+import {
+  CREATED_AT,
+  ENVIRONMENT_ID,
+  click,
+  message,
+  renderTimeline,
+} from "./MessagesTimeline.browserHarness";
 
 const environmentQuery = vi.hoisted(() => ({ data: null as unknown }));
 vi.mock(import("~/state/query"), async (original) => ({
@@ -24,18 +30,27 @@ const threadShells = vi.hoisted(
 );
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
-  useQuietThreadShell: ((ref: { readonly threadId: string } | null) =>
-    (ref && threadShells.get(ref.threadId)) ?? null) as never,
+  useQuietThreadShell: ((
+    ref: { readonly environmentId: string; readonly threadId: string } | null,
+  ) => (ref && threadShells.get(`${ref.environmentId}/${ref.threadId}`)) ?? null) as never,
 }));
 
 function setup({
   scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }>,
-  shells = [] as ReadonlyArray<{ id: string; title: string; deletedAt?: string }>,
+  shells = [] as ReadonlyArray<{
+    id: string;
+    title: string;
+    deletedAt?: string;
+    environmentId?: EnvironmentId;
+  }>,
 } = {}) {
   environmentQuery.data = { tasks: scheduledTasks };
   threadShells.clear();
   for (const shell of shells) {
-    threadShells.set(shell.id, { title: shell.title, deletedAt: shell.deletedAt ?? null });
+    threadShells.set(`${shell.environmentId ?? ENVIRONMENT_ID}/${shell.id}`, {
+      title: shell.title,
+      deletedAt: shell.deletedAt ?? null,
+    });
   }
 }
 
@@ -190,6 +205,34 @@ describe("MessagesTimeline agent messages", () => {
     ]);
     expect(screen.buttons(/^Open /)).toHaveLength(0);
     expect(screen.button(/^CU100 merge manager/).textContent).toContain("Review finished");
+  });
+
+  it("keeps the sender name plain when the sender is on another environment", async () => {
+    setup({
+      shells: [
+        {
+          id: SENDER_THREAD_ID,
+          title: "CU100 merge manager",
+          environmentId: EnvironmentId.make("environment-remote"),
+        },
+      ],
+    });
+    await using screen = await renderTimeline([
+      message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
+    ]);
+    expect(screen.buttons(/^Open /)).toHaveLength(0);
+    expect(screen.button(/^Agent/).textContent).toContain("Review finished");
+  });
+
+  it("names the toggle after the sender when the message has no text", async () => {
+    setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
+    await using screen = await renderTimeline([
+      message("", { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
+    ]);
+    const toggle = screen.button("Message from CU100 merge manager");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("leaves messages sent by GOAT as full bubbles", async () => {

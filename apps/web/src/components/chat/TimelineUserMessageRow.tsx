@@ -269,6 +269,7 @@ function FoldedMessageHeader(props: {
         <button
           type="button"
           aria-expanded={props.expanded}
+          aria-label={props.summary ? undefined : `Message from ${props.label}`}
           onClick={props.onToggle}
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-ring"
         >
