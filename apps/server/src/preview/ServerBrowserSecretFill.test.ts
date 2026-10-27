@@ -76,7 +76,7 @@ const withFill = <A>(
     state: { consumed: number },
   ) => Promise<A>,
   beforeConsume: () => void = () => {},
-  password = PASSWORD,
+  passwords: ReadonlyArray<string> = [PASSWORD],
 ) => {
   const state = { consumed: 0 };
   const secrets = Layer.succeed(
@@ -89,11 +89,8 @@ const withFill = <A>(
       consumeForOrigin: (input) =>
         Effect.sync(beforeConsume).pipe(
           Effect.flatMap(() =>
-            input.origin === "https://login.test" && state.consumed === 0
-              ? Effect.sync(() => {
-                  state.consumed += 1;
-                  return password;
-                })
+            input.origin === "https://login.test" && state.consumed < passwords.length
+              ? Effect.sync(() => passwords[state.consumed++]!)
               : Effect.fail(new SecretRequestError({ reason: "ref_unavailable" })),
           ),
         ),
@@ -222,7 +219,28 @@ it.live("masks a filled value in the escaped and URL-encoded forms a page echoes
       });
     },
     undefined,
-    password,
+    [password],
+  );
+});
+
+it.live("masks lowercase percent escapes, overlapping values and a value no URL can encode", () => {
+  const { tab } = makeTab();
+  const first = "very-private-prefix%2";
+  const second = "&cdefghijklmnopqrstuvwxyz";
+  const unpaired = "pw\uD800abc";
+  return withFill(
+    async (fill) => {
+      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record);
+      const text = [
+        `${first}6cdefghijklmnopqrstuvwxyz`,
+        encodeURIComponent(second).toLowerCase(),
+        unpaired,
+      ].join("\n");
+      const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
+      expect(outcome).toEqual({ ok: true, result: { text: "[secret]\n[secret]\n[secret]" } });
+    },
+    undefined,
+    [first, second, unpaired],
   );
 });
 
@@ -242,5 +260,12 @@ it.live("keeps the fence while an edited filled field still holds part of the va
     );
     field.value = "";
     await fill.guard(tab, request("evaluate", { expression: "1" }));
+    // A page that puts the value back is fenced again, even after a check found the field empty.
+    await fill.guard(tab, request("snapshot", { captureImage: false }));
+    field.type = "password";
+    field.value = PASSWORD;
+    await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
+      "holds a password GOAT filled",
+    );
   });
 });

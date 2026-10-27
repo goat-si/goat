@@ -91,8 +91,10 @@ const FILL = `function (value, origin) {
   return true;
 }`;
 // Any value left in the field counts: an edit must not lift the fence on most of the password.
+// An empty field keeps its fence entry, so a page that puts the value back is fenced again.
 const STILL_FILLED = `function (value) {
-  if (!this.isConnected || this.value === "") return "gone";
+  if (!this.isConnected) return "gone";
+  if (this.value === "") return "empty";
   return this.type === "password" || this.value === value ? "hidden" : "shown";
 }`;
 
@@ -209,24 +211,62 @@ const settledPrivate = (control: SessionControl) =>
       })
     : Promise.resolve(false);
 
+const uriEncoded = (value: string) => {
+  try {
+    return [encodeURIComponent(value)];
+  } catch {
+    // An unpaired surrogate has no URL form for a page to echo.
+    return [];
+  }
+};
+
 /** How a page or a snapshot can write the value back: raw, JSON-escaped, URL- or form-encoded. */
 const encodedForms = (value: string) =>
   [
     value,
     JSON.stringify(value).slice(1, -1),
-    encodeURIComponent(value),
+    ...uriEncoded(value),
     new URLSearchParams({ v: value }).toString().slice(2),
   ].flatMap((form) => [form, form.replaceAll("'", "''")]);
 
-const maskWith = (values: ReadonlySet<string>) => {
-  // Longest first, so a form inside another never leaves the rest showing.
-  const forms = [...new Set([...values].flatMap(encodedForms))].toSorted(
-    (a, b) => b.length - a.length,
+/** A form as a pattern whose percent escapes match in either case, as servers write both. */
+const formPattern = (form: string) =>
+  new RegExp(
+    form
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/%[0-9A-F]{2}/g, (escape) =>
+        escape.replace(/[A-F]/g, (digit) => `[${digit}${digit.toLowerCase()}]`),
+      ),
+    "g",
   );
+
+/** Masks every span any form covers in the original text, so overlapping values all stay hidden. */
+const maskWith = (values: ReadonlySet<string>) => {
+  const patterns = [...new Set([...values].flatMap(encodedForms))]
+    .filter((form) => form !== "")
+    .map(formPattern);
   return (text: string) => {
-    let masked = text;
-    for (const form of forms) masked = masked.split(form).join(MASK);
-    return masked;
+    const spans: Array<readonly [number, number]> = [];
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      for (let found = pattern.exec(text); found !== null; found = pattern.exec(text)) {
+        spans.push([found.index, found.index + found[0].length]);
+        pattern.lastIndex = found.index + 1;
+      }
+    }
+    if (spans.length === 0) return text;
+    let masked = "";
+    let shown = 0;
+    let end = -1;
+    for (const [start, stop] of spans.toSorted((a, b) => a[0] - b[0])) {
+      if (start > end) {
+        if (end >= 0) masked += MASK;
+        masked += text.slice(shown, start);
+      }
+      end = Math.max(end, stop);
+      shown = end;
+    }
+    return masked + MASK + text.slice(shown);
   };
 };
 
@@ -388,7 +428,8 @@ export const make = Effect.gen(function* () {
       return;
     let unconfirmed = false;
     let shown = false;
-    const holding: Array<Fence> = [];
+    let holding = false;
+    const kept: Array<Fence> = [];
     for (const entry of outstanding) {
       const state = await entry.session
         .send("Runtime.callFunctionOn", {
@@ -402,13 +443,15 @@ export const make = Effect.gen(function* () {
           (cause: unknown) => (GONE.test(String(cause)) ? "gone" : "unknown"),
         );
       if (state === "gone") void release(entry);
-      else holding.push(entry);
+      else kept.push(entry);
+      if (state === "gone" || state === "empty") continue;
+      holding = true;
       if (state === "shown") shown = true;
-      else if (state !== "gone" && state !== "hidden") unconfirmed = true;
+      else if (state !== "hidden") unconfirmed = true;
     }
-    fences.set(tab.page, holding);
+    fences.set(tab.page, kept);
     // A text snapshot hides password inputs itself, so only a value shown as plain text stops it.
-    if (textSnapshot ? !shown : holding.length === 0) return;
+    if (textSnapshot ? !shown : !holding) return;
     throw refused(unconfirmed ? UNCONFIRMED : shown ? SHOWN : FENCED);
   };
 
