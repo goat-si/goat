@@ -152,9 +152,14 @@ it("retries failed SVG mounts and reuses successful fetches and parses", async (
     await act(async () => root.render(view(true)));
     await vi.waitFor(() => expect(container.textContent).toContain("Image unavailable"));
     await act(async () => root.render(view(false)));
-    fetchSvg.mockResolvedValue({ ok: true, status: 200, text: async () => "<svg />" } as Response);
+    fetchSvg.mockResolvedValue({ ok: true, status: 200, text: async () => "<svg />" } as Awaited<
+      ReturnType<typeof fetch>
+    >);
     await act(async () => root.render(view(true)));
-    await vi.waitFor(() => expect(container.textContent).not.toContain("Loading image"));
+    await vi.waitFor(() => {
+      expect(container.textContent).not.toContain("Loading image");
+      expect(container.textContent).not.toContain("Image unavailable");
+    });
     expect(fetchSvg).toHaveBeenCalledTimes(2);
     expect(parseSvg).toHaveBeenCalledTimes(1);
     await act(async () => root.render(view(false)));
