@@ -3,7 +3,7 @@ import { cuaDriverKey } from "@goat/provider-core/server/mcpSession";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
-import { call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { call, terminalRefusalSafety } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
   initialize,
   initialized,
@@ -106,7 +106,11 @@ describe("thread proxy settings recovery", () => {
         yield* h.push({ state: "waiting" });
         yield* h.send(call(1, "get_guide"));
         assert.deepInclude((yield* h.next).result, {
-          structuredContent: { refused: "targetRefused", detail: "disabled" },
+          structuredContent: {
+            refused: "targetRefused",
+            detail: "disabled",
+            safety: terminalRefusalSafety,
+          },
           content: [
             {
               type: "text",

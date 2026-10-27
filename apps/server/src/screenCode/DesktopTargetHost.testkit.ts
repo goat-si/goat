@@ -1,3 +1,52 @@
+import * as Effect from "effect/Effect";
+import type {
+  ComputerUsePrimitiveReply,
+  ScreenHostCall,
+  ScreenTargetRef,
+  ThreadId,
+} from "@goat/contracts";
+import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
+import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
+import { ScreenObservations } from "./ScreenObservations.ts";
+import type { ScreenHostContext } from "./ScreenHostBridge.ts";
+import { screenRunLimits } from "./ScreenRunLimits.ts";
+
+/** Fixtures for DesktopTargetHost tests: a primitive channel that answers like the driver. */
+export const context = {
+  runId: "r",
+  turnId: "t",
+  cellId: "c",
+  threadId: "thread",
+  environmentId: "env",
+  limits: screenRunLimits(),
+  invocation: { thread: { threadId: "thread" as ThreadId } },
+} as ScreenHostContext;
+export const call = (
+  method: ScreenHostCall["method"],
+  args: ScreenHostCall["args"] = {},
+  targetRef?: ScreenTargetRef,
+): ScreenHostCall => ({
+  t: "call",
+  runId: "r",
+  turnId: "t",
+  cellId: "c",
+  callId: 1,
+  method,
+  args,
+  deadlineMillis: 1000,
+  ...(targetRef ? { targetRef } : {}),
+});
+export const apps = { apps: [{ pid: 42, name: "Editor", bundle_id: "org.example.Editor" }] };
+export const windows = { windows: [{ pid: 42, window_id: 7, title: "Document" }] };
+export const state = {
+  pid: 42,
+  window_id: 7,
+  tree_markdown: "Apply",
+  elements_complete: true,
+  elements: [{ role: "button", label: "Apply", element_token: "snapshot:1" }],
+};
+
 // Reads shaped as cua-driver-rs-v0.38.0-goat.2 returns them (core window_state_view.rs apply,
 // macOS get_window_state.rs): tokens are <snapshot_id>:N, elements_complete is always false.
 const goat2Element = (snapshot: string, index: number, role: string, label: string) => ({
@@ -92,3 +141,85 @@ export const goat2WindowState = (
               since_status: "unknown_snapshot",
             }
           : goat2Read(goat2Full("s0000000a"), args);
+
+/** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
+export class DriverError {
+  readonly structuredContent: Record<string, unknown>;
+  constructor(structuredContent: Record<string, unknown>) {
+    this.structuredContent = structuredContent;
+  }
+}
+/** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
+export class NotStarted extends DriverError {}
+// The typed refusal fields the lease proxy adds to a driver reply it refused.
+export const typedRefusal = {
+  effect: "refused",
+  refused: "appNotAllowed",
+  detail: "app_not_approved",
+  app: "org.example.Editor",
+};
+
+export const fixture = (
+  override: Partial<Record<string, unknown>> = {},
+  connection = { id: "driver:1" },
+  observations?: ScreenObservations,
+) => {
+  const sent: Array<{ tool: string; args: unknown; expectedConnectionGeneration?: string }> = [];
+  const channel = {
+    request: (request: { tool: string; args: unknown; expectedConnectionGeneration?: string }) =>
+      request.expectedConnectionGeneration !== undefined &&
+      request.expectedConnectionGeneration !== connection.id
+        ? Effect.fail({
+            code: "stale_reference" as const,
+            effectStarted: false,
+            nextStep: "Bind again.",
+          })
+        : Effect.sync(() => {
+            sent.push({
+              tool: request.tool,
+              args: request.args,
+              ...(request.expectedConnectionGeneration === undefined
+                ? {}
+                : { expectedConnectionGeneration: request.expectedConnectionGeneration }),
+            });
+            const answer =
+              override[request.tool] ??
+              (request.tool === "list_apps"
+                ? apps
+                : request.tool === "list_windows"
+                  ? windows
+                  : request.tool === "get_window_state"
+                    ? state
+                    : { effect: "confirmed", evidence: ["driver:acted"] });
+            const value =
+              typeof answer === "function"
+                ? (answer as (args: unknown) => unknown)(request.args)
+                : answer;
+            return {
+              status: value instanceof NotStarted ? "not_started" : "settled",
+              connectionGeneration: connection.id,
+              result:
+                value instanceof DriverError
+                  ? { isError: true, structuredContent: value.structuredContent }
+                  : { structuredContent: value },
+              ...(request.tool === "get_window_state" &&
+              typeof (value as { image?: unknown }).image === "object"
+                ? { image: (value as { image: unknown }).image }
+                : {}),
+            } as unknown as ComputerUsePrimitiveReply;
+          }),
+  } as unknown as ComputerUsePrimitiveChannel["Service"];
+  const leases = {
+    currentControl: () => Effect.succeedSome({ controlId: "control" }),
+    controlState: () => Effect.succeed({ _tag: "active", idle: false }),
+    releaseForeground: () => Effect.succeed(true),
+  } as unknown as ComputerUseLeases["Service"];
+  return {
+    host: createDesktopTargetHost({
+      primitiveChannel: channel,
+      leases,
+      ...(observations ? { observations } : {}),
+    }),
+    sent,
+  };
+};

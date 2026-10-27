@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -83,16 +84,26 @@ export const threadRouteFixture = Effect.fn("ThreadLeaseRouteTest.fixture")(func
       );
       if (response.status !== 200 || response.body._tag !== "Stream")
         return yield* Effect.die("expected lease stream");
-      const updates = yield* response.body.stream.pipe(
+      const updates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
+      const heartbeats = yield* Queue.unbounded<void>();
+      yield* response.body.stream.pipe(
         Stream.orDie,
         Stream.decodeText,
         Stream.splitLines,
-        Stream.map((line) => decode(line)),
-        Stream.toQueue({ capacity: "unbounded" }),
+        Stream.runForEach((line) =>
+          line.length === 0
+            ? Queue.offer(heartbeats, undefined)
+            : Queue.offer(updates, decode(line)),
+        ),
+        Effect.ensuring(Queue.end(updates)),
+        Effect.forkScoped,
       );
       return {
+        headers: response.headers,
         stream: Stream.fromQueue(updates),
         next: Queue.take(updates).pipe(Effect.catchTags({ Done: () => Effect.undefined })),
+        heartbeat: Queue.take(heartbeats),
+        heartbeats: Queue.size(heartbeats),
       };
     }, Effect.provideContext(context));
     let approvals = 0;

@@ -22,6 +22,12 @@ export type Stopping =
   /** An approval that drops apps the control allows: nothing passes until it applies. */
   | { readonly narrowed: true };
 
+/** An update the proxy has taken, with the fence it raised, waiting for the lifecycle lock. */
+export type TakenUpdate = {
+  readonly update: ComputerUseLeaseUpdate | undefined;
+  readonly fence: Stopping | undefined;
+};
+
 export function makeLeaseFences(controlId: string) {
   const fences: Array<Stopping> = [];
   /** The apps of the latest active update taken, applied or not; undefined allows every app. */
@@ -55,8 +61,7 @@ export function makeLeaseFences(controlId: string) {
         return undefined;
       if (update.state !== "ended" && update.controlId !== controlId) return raise({ end: "lost" });
       if (update.state === "paused") return raise({ pause: update.reason });
-      if (update.state === "ended")
-        return raise({ end: update.reason === "unauthorized" ? "lost" : update.reason });
+      if (update.state === "ended") return raise({ end: update.reason });
       if (update.state === "idle") return raise({ idle: true });
       const nextForeground = update.foreground ?? [];
       for (const grant of [...takenForeground, ...appliedForeground])

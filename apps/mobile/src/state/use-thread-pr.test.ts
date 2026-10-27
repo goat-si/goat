@@ -108,8 +108,8 @@ describe("presentThreadLinkedPullRequests", () => {
       presentThreadLinkedPullRequests([
         linkedPr(7, {
           host: "gitlab.com",
-          repository: "t3tools/t3code",
-          url: "https://gitlab.com/t3tools/t3code/-/merge_requests/7",
+          repository: "sample-tools/goat",
+          url: "https://gitlab.com/sample-tools/goat/-/merge_requests/7",
         }),
       ])?.accessibilityLabel,
     ).toBe("#7 merge request open");

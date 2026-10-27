@@ -53,6 +53,8 @@
         "src/claude-history-worker.ts!",
         // The Linux computer use helper, bundled on its own by scripts/build-computer-use-helper-linux.ts.
         "src/cua/linuxHelper/main.ts!",
+        // AcpAdapterV2.test.ts selects this subprocess fixture by path string.
+        "scripts/acp-mock-notice-v1-agent.ts",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/fetch-expo-schema.ts",

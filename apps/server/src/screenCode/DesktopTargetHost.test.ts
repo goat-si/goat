@@ -3,139 +3,29 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import type {
-  ComputerUsePrimitiveReply,
-  ScreenElementRef,
-  ScreenHostCall,
-  ScreenTargetRef,
-  ThreadId,
-} from "@goat/contracts";
+import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { ComputerUseRefusalDetail, computerUseRefusalReason } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
-import type { ScreenHostContext } from "./ScreenHostBridge.ts";
-import { screenRunLimits } from "./ScreenRunLimits.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-
-import { goat2Diff, goat2NoChange, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
-
-const context = {
-  runId: "r",
-  turnId: "t",
-  cellId: "c",
-  threadId: "thread",
-  environmentId: "env",
-  limits: screenRunLimits(),
-  invocation: { thread: { threadId: "thread" as ThreadId } },
-} as ScreenHostContext;
-const call = (
-  method: ScreenHostCall["method"],
-  args: ScreenHostCall["args"] = {},
-  targetRef?: ScreenTargetRef,
-): ScreenHostCall => ({
-  t: "call",
-  runId: "r",
-  turnId: "t",
-  cellId: "c",
-  callId: 1,
-  method,
-  args,
-  deadlineMillis: 1000,
-  ...(targetRef ? { targetRef } : {}),
-});
-const apps = { apps: [{ pid: 42, name: "Editor", bundle_id: "org.example.Editor" }] };
-const windows = { windows: [{ pid: 42, window_id: 7, title: "Document" }] };
-const state = {
-  pid: 42,
-  window_id: 7,
-  tree_markdown: "Apply",
-  elements_complete: true,
-  elements: [{ role: "button", label: "Apply", element_token: "snapshot:1" }],
-};
-
-/** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
-class DriverError {
-  readonly structuredContent: Record<string, unknown>;
-  constructor(structuredContent: Record<string, unknown>) {
-    this.structuredContent = structuredContent;
-  }
-}
-// The typed refusal fields the lease proxy adds to a driver reply it refused.
-const typedRefusal = {
-  effect: "refused",
-  refused: "appNotAllowed",
-  detail: "app_not_approved",
-  app: "org.example.Editor",
-};
-
-const fixture = (
-  override: Partial<Record<string, unknown>> = {},
-  connection = { id: "driver:1" },
-  observations?: ScreenObservations,
-) => {
-  const sent: Array<{ tool: string; args: unknown; expectedConnectionGeneration?: string }> = [];
-  const channel = {
-    request: (request: { tool: string; args: unknown; expectedConnectionGeneration?: string }) =>
-      request.expectedConnectionGeneration !== undefined &&
-      request.expectedConnectionGeneration !== connection.id
-        ? Effect.fail({
-            code: "stale_reference" as const,
-            effectStarted: false,
-            nextStep: "Bind again.",
-          })
-        : Effect.sync(() => {
-            sent.push({
-              tool: request.tool,
-              args: request.args,
-              ...(request.expectedConnectionGeneration === undefined
-                ? {}
-                : { expectedConnectionGeneration: request.expectedConnectionGeneration }),
-            });
-            const answer =
-              override[request.tool] ??
-              (request.tool === "list_apps"
-                ? apps
-                : request.tool === "list_windows"
-                  ? windows
-                  : request.tool === "get_window_state"
-                    ? state
-                    : { effect: "confirmed", evidence: ["driver:acted"] });
-            const value =
-              typeof answer === "function"
-                ? (answer as (args: unknown) => unknown)(request.args)
-                : answer;
-            return {
-              status: "settled",
-              connectionGeneration: connection.id,
-              result:
-                value instanceof DriverError
-                  ? { isError: true, structuredContent: value.structuredContent }
-                  : { structuredContent: value },
-              ...(request.tool === "get_window_state" &&
-              typeof (value as { image?: unknown }).image === "object"
-                ? { image: (value as { image: unknown }).image }
-                : {}),
-            } as unknown as ComputerUsePrimitiveReply;
-          }),
-  } as unknown as ComputerUsePrimitiveChannel["Service"];
-  const leases = {
-    currentControl: () => Effect.succeedSome({ controlId: "control" }),
-    controlState: () => Effect.succeed({ _tag: "active", idle: false }),
-    releaseForeground: () => Effect.succeed(true),
-  } as unknown as ComputerUseLeases["Service"];
-  return {
-    host: createDesktopTargetHost({
-      primitiveChannel: channel,
-      leases,
-      ...(observations ? { observations } : {}),
-    }),
-    sent,
-  };
-};
+import {
+  context,
+  call,
+  apps,
+  windows,
+  state,
+  goat2Diff,
+  goat2NoChange,
+  goat2WindowState,
+  DriverError,
+  NotStarted,
+  typedRefusal,
+  fixture,
+} from "./DesktopTargetHost.testkit.ts";
 
 it.effect(
   "a desktop ref bound before a driver restart is refused before input after the restart",
@@ -208,13 +98,17 @@ it.effect("a desktop capture larger than the JSON cap reaches the host as a boun
 
 it.effect("ambiguous app/window binding refuses input", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture({ list_apps: { apps: [apps.apps[0], apps.apps[0]] } });
+    // Two processes of the app each report a window with the asked-for id.
+    const { host, sent } = fixture({
+      list_apps: { apps: [apps.apps[0], { ...apps.apps[0], pid: 43 }] },
+      list_windows: { windows: [windows.windows[0], { ...windows.windows[0], pid: 43 }] },
+    });
     const result = yield* host
       .bindApp(call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }), context)
       .pipe(Effect.result);
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.code).toBe("target_ambiguous");
-    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps"]);
+    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows"]);
     const windowFixture = fixture({
       list_windows: { windows: [windows.windows[0], windows.windows[0]] },
     });
@@ -252,6 +146,44 @@ it.effect("a window binds when the driver's app list exceeds the primitive chann
     expect(observed.value).toMatchObject({ indexedText: "Apply" });
     expect(sent.at(-1)?.args).toMatchObject({ pid: 42, window_id: 7 });
   }),
+);
+
+it.effect("two processes of one app bind the window the agent named", () =>
+  Effect.gen(function* () {
+    const second = { ...apps.apps[0], pid: 43 };
+    const { host, sent } = fixture({
+      list_apps: { apps: [apps.apps[0], second] },
+      list_windows: (args: { app?: string }) =>
+        args.app === "org.example.Editor"
+          ? { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] }
+          : { windows: [] },
+      get_window_state: { ...state, pid: 43, window_id: 8 },
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
+      context,
+    );
+    yield* host.observe(call("get_window_state", {}, bound.value as ScreenTargetRef), context);
+    expect(sent.at(-1)?.args).toMatchObject({ pid: 43, window_id: 8 });
+  }),
+);
+
+it.effect(
+  "a capped app list does not bind a window of an app whose name only contains the one asked for",
+  () =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        list_apps: { message: "Driver reply exceeded the primitive channel limit." },
+        list_windows: (args: { app?: string }) =>
+          args.app === "Edit"
+            ? { windows: [{ pid: 9, window_id: 7, title: "dump.bin", app_name: "HexEditor" }] }
+            : { windows: [] },
+      });
+      const result = yield* host
+        .bindApp(call("bind_app", { name: "Edit", window_id: 7 }), context)
+        .pipe(Effect.result);
+      expect(result._tag === "Failure" && result.failure.code).toBe("target_missing");
+    }),
 );
 
 it.effect("binding an app the driver does not list reports it missing", () =>
@@ -731,6 +663,59 @@ it.live(
   },
 );
 
+const cellService = (host: ReturnType<typeof fixture>["host"]) =>
+  ScreenRunService.layerWithRuntime({
+    dispatcher: createScreenDispatchRouter({ app: host }),
+    invocation: {
+      command: process.execPath,
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+    },
+    assetResolver: () => resolveScreenRuntimeAsset("dev"),
+  }).pipe(Layer.provide(NodeServices.layer));
+
+it.live(
+  "a cell whose click committed reports possibleCommit after its receipts are cut or a script throws",
+  () => {
+    const { host } = fixture({
+      type_text: new NotStarted({ refused: "targetRefused", detail: "target_busy" }),
+    });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const run = (cellSource: string) =>
+        service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source:
+            "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.click({x: 1, y: 2}); for (let i = 0; i < 16; i++) await screen.list_apps(); " +
+            cellSource,
+        });
+      // Sixteen reads push the committed click out of the error's receipts.
+      const refused = yield* run("await app.typeText({text: 'x'});").pipe(Effect.flip);
+      expect(refused.receipts?.some((receipt) => receipt.method === "click")).toBe(false);
+      expect(refused.receipts?.at(-1)).toMatchObject({
+        method: "type_text",
+        detail: "target_busy",
+      });
+      expect(refused.safety).toMatchObject({ possibleCommit: true, retryClass: "never" });
+      const thrown = yield* run("throw new Error('boom');");
+      expect(thrown.error).toMatchObject({
+        message: expect.stringContaining("boom"),
+        safety: { possibleCommit: true, retryClass: "never" },
+      });
+      yield* service.finishTurn({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "test",
+      });
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
 it.effect("a refused status without an effect is a refusal with nothing started", () =>
   Effect.gen(function* () {
     const { effect: _effect, ...fields } = typedRefusal;
@@ -797,5 +782,25 @@ it.effect(
       // An explicit effect outranks a refused status: the input may have landed.
       const landed = yield* refuse({ ...typedRefusal, effect: "unverifiable", status: "refused" });
       expect(landed).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+    }),
+);
+
+it.effect.each(["unknown", "partial", "suspected_noop", "refused", "confirmed"])(
+  "desktop action safety preserves the driver's %s outcome",
+  (effect) =>
+    Effect.gen(function* () {
+      const { host } = fixture({ click: { effect } });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const result = yield* host
+        .invoke(call("click", { x: 10, y: 20 }, bound.value as ScreenTargetRef), context)
+        .pipe(Effect.result);
+      const safety = result._tag === "Success" ? result.success.safety : result.failure.safety;
+      expect(safety?.possibleCommit).toBe(effect !== "suspected_noop" && effect !== "refused");
+      expect(safety?.retryClass).toBe(
+        effect === "suspected_noop" || effect === "refused" ? "fix_input" : "never",
+      );
     }),
 );
