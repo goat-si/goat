@@ -29,11 +29,12 @@ export function findSendingCall(
 
 /**
  * The row showing the call, else the collapsed turn or segment that holds it (post-steer segments
- * fold under their own key, which `foldKeyOf` gives), else its own superseded attempt, else the collapsed tool group it starts after. An
- * already open fold is skipped, since the call is somewhere inside it.
+ * fold under their own key, which `foldKeyOf` gives), else its own superseded attempt, else the
+ * collapsed tool group holding it. An already open fold is skipped, since the call is inside it.
  */
 export function sendingCallRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
+  entries: ReadonlyArray<TimelineEntry>,
   call: WorkEntry,
   foldKeyOf: (entryId: string) => string | undefined,
 ): number {
@@ -59,14 +60,30 @@ export function sendingCallRowIndex(
     );
     if (attempt >= 0) return attempt;
   }
-  // A collapsed tool group starts at its first call, so the nearest one before this call holds it.
-  return rows.findLastIndex(
-    (row) =>
-      row.kind === "work-toggle" &&
-      !row.expanded &&
-      row.runId === (entry.runId ?? null) &&
-      row.createdAt <= call.createdAt,
-  );
+  return toolGroupRowIndex(rows, entries, call.id);
+}
+
+// Every row starts at a timeline entry and runs until the next row starts, so the row whose start
+// entry is the nearest one at or before the call holds it; timestamps can tie, entry order cannot.
+function toolGroupRowIndex(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  entries: ReadonlyArray<TimelineEntry>,
+  callId: string,
+): number {
+  const position = new Map(entries.map((timelineEntry, index) => [timelineEntry.id, index]));
+  const callPosition = position.get(callId);
+  if (callPosition === undefined) return -1;
+  let holder = -1;
+  let holderPosition = -1;
+  rows.forEach((row, index) => {
+    const start = position.get(row.id.replace(/^work-(?:toggle|live):/, ""));
+    if (start !== undefined && start <= callPosition && start > holderPosition) {
+      holder = index;
+      holderPosition = start;
+    }
+  });
+  const row = rows[holder];
+  return row?.kind === "work-toggle" && !row.expanded ? holder : -1;
 }
 
 const MAX_HISTORY_PAGES = 20;
@@ -123,7 +140,8 @@ export function useSentCallReveal(input: {
     input.listReady &&
     input.history?.loading !== true;
   const entry = pending ? findSendingCall(input.entries, target) : null;
-  const rowIndex = entry === null ? -1 : sendingCallRowIndex(input.rows, entry, input.foldKeyOf);
+  const rowIndex =
+    entry === null ? -1 : sendingCallRowIndex(input.rows, input.entries, entry, input.foldKeyOf);
   const paged = target !== undefined && paging.activation === target.activation;
   const own = pending && paged;
   const pages = own ? paging.count : 0;

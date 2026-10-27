@@ -148,7 +148,7 @@ describe("findSendingCall", () => {
         isExpandedToolGroup: true,
       },
     ];
-    expect(sendingCallRowIndex(rows, secondSend, () => undefined)).toBe(1);
+    expect(sendingCallRowIndex(rows, [], secondSend, () => undefined)).toBe(1);
   });
 
   it("points a call in a superseded attempt at that attempt's own fold", () => {
@@ -174,7 +174,7 @@ describe("findSendingCall", () => {
         completedAt: null,
       },
     } satisfies typeof secondSend;
-    expect(sendingCallRowIndex(rows, inSecond, () => undefined)).toBe(1);
+    expect(sendingCallRowIndex(rows, [], inSecond, () => undefined)).toBe(1);
   });
 
   it("skips an open turn and finds the closed attempt fold inside it", () => {
@@ -204,7 +204,7 @@ describe("findSendingCall", () => {
         completedAt: null,
       },
     } satisfies typeof secondSend;
-    expect(sendingCallRowIndex(rows, inSecond, () => "run-1")).toBe(2);
+    expect(sendingCallRowIndex(rows, [], inSecond, () => "run-1")).toBe(2);
   });
 
   it("goes past an open turn and an open attempt to the closed tool group holding the call", () => {
@@ -222,7 +222,7 @@ describe("findSendingCall", () => {
       },
       {
         kind: "work-toggle",
-        id: "group",
+        id: "work-toggle:send-2",
         createdAt: "2026-10-27T00:00:00.000Z",
         runId,
         groupId: "group",
@@ -245,33 +245,49 @@ describe("findSendingCall", () => {
         completedAt: null,
       },
     } satisfies typeof secondSend;
-    expect(sendingCallRowIndex(rows, call, () => "run-1")).toBe(2);
+    expect(sendingCallRowIndex(rows, [call], call, () => "run-1")).toBe(2);
   });
 
-  it("picks the collapsed tool group the call falls in, not an earlier one", () => {
+  it("picks the collapsed tool group holding the call, not a later one with the same timestamp", () => {
     const runId = RunId.make("run-1");
-    const toggle = (id: string, createdAt: string) => ({
+    const toggle = (startId: string) => ({
       kind: "work-toggle" as const,
-      id,
-      createdAt,
+      id: "work-toggle:" + startId,
+      createdAt: "2026-10-27T00:00:00.000Z",
       runId,
-      groupId: id,
+      groupId: "work-group:" + startId,
       hiddenCount: 2,
       expanded: false,
       summary: "",
       summaryKind: "dynamic-tool" as const,
       hasFailure: false,
     });
+    const later = callTimelineEntry("goat_thread_read", {}, {}, "completed", "read-1");
+    const between = callTimelineEntry("goat_thread_read", {}, {}, "completed", "between");
     const rows: MessagesTimelineRow[] = [
-      toggle("early", "2026-10-27T00:00:00.000Z"),
-      toggle("late", "2026-10-27T00:00:00.000Z"),
-      toggle("after", "2026-10-28T00:00:00.000Z"),
+      toggle("send-1"),
+      {
+        kind: "work",
+        id: "between",
+        createdAt: "",
+        groupedEntries: [between.entry],
+        isExpandedToolGroup: false,
+      },
+      toggle("read-1"),
     ];
-    const call = {
-      ...secondSend,
-      entry: { ...secondSend.entry, runId },
-    } satisfies typeof secondSend;
-    expect(sendingCallRowIndex(rows, call, () => undefined)).toBe(1);
+    // send-2 sits in the group starting at send-1; the later group shares its timestamp.
+    expect(
+      sendingCallRowIndex(
+        rows,
+        [firstSend, secondSend, between, later],
+        secondSend,
+        () => undefined,
+      ),
+    ).toBe(0);
+    // A call that starts its own row after an open one is not inside a collapsed group.
+    expect(
+      sendingCallRowIndex(rows, [firstSend, between, secondSend], secondSend, () => undefined),
+    ).toBe(-1);
   });
 
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {
@@ -287,6 +303,6 @@ describe("findSendingCall", () => {
         expanded: false,
       },
     ];
-    expect(sendingCallRowIndex(rows, secondSend, () => "run-1:steer:s1")).toBe(1);
+    expect(sendingCallRowIndex(rows, [], secondSend, () => "run-1:steer:s1")).toBe(1);
   });
 });
