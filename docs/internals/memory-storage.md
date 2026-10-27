@@ -21,6 +21,8 @@ An idle server does almost no memory work. The worker still wakes every 5 second
 
 - The recovery scan finds threads with unsummarized messages or a due consolidation. It runs on start, on a memory model or hub change, after summary work finished, after a full page, and otherwise every 15 minutes. It starts from the thread projection and probes each thread's tail by index, so its cost follows the thread count rather than the event history.
 - A run counts as settled once any unfinished, failed or cancelled work row exists for it. Work ids are deterministic, so re-deriving a settled run only repeats the same ignored insert. A run that later events invalidated gets a cancelled row for the same reason.
+- Choosing the messages a summary reads (the newest version of each message, run state, exclusions) is one pass over the thread's events in index order, in pages of `MEMORY_SOURCE_SCAN_PAGE_EVENTS` with a yield between them. Per-message correlated subqueries over the same stream are quadratic: on a 13k-event thread they blocked the server's one thread for seconds per chunk.
+- A summary whose generation keeps failing fails for good after `MEMORY_GENERATION_MAX_ATTEMPTS`. A failed row settles its run, so the thread's next finished run queues fresh work instead of every retry rereading the same source.
 - Storage measurement and retention follow the sample interval above.
 
 A due 24-hour consolidation can start up to one scan interval late.
