@@ -1,14 +1,22 @@
-// @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; gdbus is its D-Bus client.
+// @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; gdbus finds the accessibility bus.
 import * as NodeChildProcess from "node:child_process";
+
+import {
+  type AtspiCall,
+  type BusReply,
+  type DbusValue,
+  BusError,
+  makeAtspiBus,
+} from "./atspiBus.ts";
 
 /**
  * Whether a password field has focus in one process, read from AT-SPI (D6 in epic #1140).
  *
  * Cua Driver 0.37.0 does not report the focused element on Linux, so the helper asks AT-SPI
  * itself: one Collection.GetMatches for the FOCUSED state under each top-level window of the
- * process, then the role of what matched. gdbus ships with GLib wherever AT-SPI runs, so this
- * adds no dependency. An answer the bus cannot give is "unknown", never "not secure"; the
- * helper then fails closed.
+ * process, then the role of what matched. gdbus, which ships with GLib wherever AT-SPI runs, finds
+ * the accessibility bus; the reads go over one connection to it (atspiBus.ts). An answer the bus
+ * cannot give is "unknown", never "not secure"; the helper then fails closed.
  */
 
 export interface SecureFocus {
@@ -24,8 +32,10 @@ export type GdbusRunner = (args: ReadonlyArray<string>) => Promise<string>;
 
 const REGISTRY = "org.a11y.atspi.Registry";
 const ROOT = "/org/a11y/atspi/accessible/root";
+const ACCESSIBLE = "org.a11y.atspi.Accessible";
+const UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod";
 // AtspiStateType FOCUSED is 12: bit 12 of the first state word.
-const FOCUSED_STATES = "[4096, 0]";
+const FOCUSED_STATES = [4096, 0];
 // AtspiRole PASSWORD_TEXT.
 const ROLE_PASSWORD_TEXT = 40;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
@@ -34,42 +44,54 @@ const MAX_WINDOWS = 64;
 // AtspiStateType FOCUSED: bit 12 of the first state word.
 const STATE_FOCUSED = 1 << 12;
 // GTK4 has no Collection interface, so focus is found by walking (#1607). Each object costs
-// three gdbus calls (state, role, children); past this many in one probe, focus is reported
-// unknown, which is private. Measured on GTK4: Calculator 98 objects, Text Editor 63, a Nautilus
-// window 215-254, two of them 469 (0.9 s to walk); one showing 79 files in a home folder, 975.
-const MAX_WALK_NODES = 512;
-const UINT32_MAX = 0xffff_ffff;
-// gdbus processes running at once. Each call is its own process; on a 16-thread host, 780 calls
-// took 1.4 s one at a time and 0.43 s at four or eight at once, and no less with more.
+// three calls (state, role, children); past this many in one probe, focus is reported unknown,
+// which is private. Measured on GTK4: Calculator 98 objects, a Nautilus window 215-254, one on a
+// home folder 975, one on /usr/bin (2,119 files) about 6,500; three of those took 0.38 s.
+const MAX_WALK_NODES = 8192;
+// Calls in flight at once on the connection, so a walk does not queue hundreds on the app.
 const CONCURRENT_CALLS = 8;
 
-/** The first state word of a `GetState` reply, `([uint32 N, M],)`; null for any other reply. */
-function parseStates(output: string): number | null {
-  const match = /^\(\[uint32 (\d{1,10}), (?:uint32 )?(\d{1,10})\],\)$/u.exec(output.trim());
-  if (!match) return null;
-  const [first, second] = [Number(match[1]), Number(match[2])];
-  return first <= UINT32_MAX && second <= UINT32_MAX ? first : null;
+type Ref = { readonly bus: string; readonly path: string };
+
+/** The (bus name, object path) list of a GetChildren or GetMatches reply; any other reply throws. */
+function references(reply: BusReply): ReadonlyArray<Ref> {
+  const [list] = reply.body;
+  if (reply.signature !== "a(so)" || !Array.isArray(list))
+    throw new Error("AT-SPI gave a reply that is not a list of objects.");
+  return list.map((item) => {
+    const [bus, path] = Array.isArray(item) ? item : [];
+    if (typeof bus !== "string" || typeof path !== "string")
+      throw new Error("AT-SPI gave a reply that is not a list of objects.");
+    return { bus, path };
+  });
+}
+
+/** The number in a `u` reply, a process id or a role; null for any other reply. */
+function uint32(reply: BusReply): number | null {
+  const [value] = reply.body;
+  return reply.signature === "u" && typeof value === "number" ? value : null;
+}
+
+/** The first word of a GetState reply, an `au` of two words; null for any other reply. */
+function firstStateWord(reply: BusReply): number | null {
+  const [words] = reply.body;
+  if (reply.signature !== "au" || !Array.isArray(words) || words.length !== 2) return null;
+  return typeof words[0] === "number" ? words[0] : null;
+}
+
+/** The interfaces in a GetInterfaces reply, an `as`; null for any other reply. */
+function interfaceNames(reply: BusReply): ReadonlyArray<string> | null {
+  const [names] = reply.body;
+  if (reply.signature !== "as" || !Array.isArray(names)) return null;
+  return names.every((name) => typeof name === "string") ? names.map(String) : null;
 }
 
 /**
- * A gdbus failure whose reply is UnknownMethod. The runner fails with gdbus's own stderr, in the
- * C locale, whose first line is the reply's error; a message can run on to further lines, so
- * nothing after it counts. The message text is the app's, translated, so whether the object
- * really lacks Collection is asked separately (GetInterfaces).
+ * An UnknownMethod error reply, by the name in its header. The message text is the app's,
+ * translated, so whether the object really lacks Collection is asked separately (GetInterfaces).
  */
 function unknownMethod(error: unknown): boolean {
-  const text = error instanceof Error ? error.message : String(error);
-  return (text.split("\n", 1)[0] ?? "").startsWith(
-    "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: ",
-  );
-}
-
-/** The interfaces in a `GetInterfaces` reply, `(['org.a11y.atspi.Accessible', ...],)`. */
-function parseInterfaces(output: string): ReadonlyArray<string> | null {
-  const reply = output.trim();
-  if (reply === "(@as [],)") return [];
-  const match = /^\(\[('[A-Za-z0-9_.]+'(?:, '[A-Za-z0-9_.]+')*)\],\)$/u.exec(reply);
-  return match ? [...(match[1] ?? "").matchAll(/'([^']+)'/gu)].map(([, name]) => name ?? "") : null;
+  return error instanceof BusError && error.errorName === UNKNOWN_METHOD;
 }
 
 /** `('unix:path=...',)` from org.a11y.Bus.GetAddress. */
@@ -95,49 +117,15 @@ export async function a11yBusAddress(run: GdbusRunner): Promise<string> {
   return address;
 }
 
-// One (bus name, object path) element of an `a(so)` as gdbus prints it.
-const REFERENCE = "\\('([^'\\\\]+)', (?:objectpath )?'(/[^'\\\\]*)'\\)";
-// A whole non-empty `(a(so))` reply: the first element carries the type, the rest do not.
-const REFERENCE_LIST = new RegExp(
-  "^\\(\\[\\('[^'\\\\]+', objectpath '/[^'\\\\]*'\\)(?:, " + REFERENCE + ")*\\],\\)$",
-  "u",
-);
-
-/**
- * The (bus name, object path) references in a GetChildren or GetMatches reply, an `(a(so))`.
- * gdbus names the `objectpath` type only on an array's first element, so the rest have none
- * (#1606). Any other reply is not an answer: it throws, and the probe reports focus unknown,
- * which is private, instead of reading a malformed reply as "nothing focused".
- */
-function parseReferences(
-  output: string,
-): ReadonlyArray<{ readonly bus: string; readonly path: string }> {
-  const reply = output.trim();
-  if (/^\(@a\(so\) \[\],\)$/u.test(reply)) return [];
-  if (!REFERENCE_LIST.test(reply))
-    throw new Error("AT-SPI gave a reply that is not a list of objects.");
-  return [...reply.matchAll(new RegExp(REFERENCE, "gu"))].map(([, bus, path]) => ({
-    bus: bus ?? "",
-    path: path ?? "",
-  }));
-}
-
-/** The number in a `(uint32 N,)` reply: a process id or a role. GLib never prints more than 32 bits. */
-function parseUint32(output: string): number | null {
-  const match = /^\(uint32 (\d+),\)$/u.exec(output.trim());
-  const value = match ? Number(match[1]) : Number.NaN;
-  return value <= 0xffff_ffff ? value : null;
-}
-
-/** run, with at most limit calls in flight; the rest wait their turn. */
-function limited(run: GdbusRunner, limit: number): GdbusRunner {
+/** call, with at most limit calls in flight; the rest wait their turn. */
+function limited(call: AtspiCall, limit: number): AtspiCall {
   let active = 0;
   const waiting: Array<() => void> = [];
-  return async (args) => {
+  return async (request) => {
     if (active < limit) active++;
     else await new Promise<void>((resolve) => waiting.push(resolve));
     try {
-      return await run(args);
+      return await call(request);
     } finally {
       const next = waiting.shift();
       if (next) next();
@@ -162,42 +150,51 @@ async function anyInOrder<T, R>(
   return false;
 }
 
-export function makeSecureFocusProbe(run: GdbusRunner) {
-  const runLimited = limited(run, CONCURRENT_CALLS);
+/**
+ * The probe. `run` finds the accessibility bus; `atspi` makes the calls on it, by default over one
+ * connection of this process.
+ */
+export function makeSecureFocusProbe(run: GdbusRunner, atspi?: AtspiCall) {
   let address: Promise<string> | null = null;
   const busByPid = new Map<number, string>();
-
-  const a11yAddress = () => (address ??= a11yBusAddress(runLimited));
-  const call = async (dest: string, path: string, method: string, ...args: string[]) =>
-    runLimited([
-      "call",
-      "--address",
-      await a11yAddress(),
-      "--dest",
-      dest,
-      "--object-path",
+  const a11yAddress = () => (address ??= a11yBusAddress(run));
+  const send = limited(
+    atspi ?? makeAtspiBus({ address: a11yAddress, uid: process.getuid?.() ?? 0 }),
+    CONCURRENT_CALLS,
+  );
+  const call = (
+    destination: string,
+    path: string,
+    iface: string,
+    member: string,
+    signature?: string,
+    body?: ReadonlyArray<DbusValue>,
+  ) =>
+    send({
+      destination,
       path,
-      "--method",
-      method,
-      ...args,
-    ]);
+      iface,
+      member,
+      ...(signature === undefined ? {} : { signature }),
+      ...(body === undefined ? {} : { body }),
+    });
 
   const busFor = async (pid: number) => {
     const known = busByPid.get(pid);
     if (known) return known;
-    const apps = parseReferences(
-      await call(REGISTRY, ROOT, "org.a11y.atspi.Accessible.GetChildren"),
-    );
+    const apps = references(await call(REGISTRY, ROOT, ACCESSIBLE, "GetChildren"));
     let found: string | null = null;
     await anyInOrder(
       apps,
       async ({ bus }) => {
-        const owner = parseUint32(
+        const owner = uint32(
           await call(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
-            "org.freedesktop.DBus.GetConnectionUnixProcessID",
-            bus,
+            "org.freedesktop.DBus",
+            "GetConnectionUnixProcessID",
+            "s",
+            [bus],
           ),
         );
         if (owner !== null) busByPid.set(owner, bus);
@@ -215,17 +212,12 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
     try {
       const bus = await busFor(pid);
       if (bus === null) return { known: false, secure: false, windows: 0 };
-      const windows = parseReferences(
-        await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"),
-      );
+      const windows = references(await call(bus, ROOT, ACCESSIBLE, "GetChildren"));
       if (windows.length > MAX_WINDOWS)
         return { known: false, secure: false, windows: windows.length };
       let walkBudget = MAX_WALK_NODES;
-      type Ref = { readonly bus: string; readonly path: string };
       const readStates = async (node: Ref) => {
-        const states = parseStates(
-          await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
-        );
+        const states = firstStateWord(await call(node.bus, node.path, ACCESSIBLE, "GetState"));
         if (states === null) throw new Error("AT-SPI gave no state set.");
         return states;
       };
@@ -245,10 +237,8 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             level.map(async (node) => {
               const [states, role, children] = await Promise.all([
                 readStates(node),
-                call(node.bus, node.path, "org.a11y.atspi.Accessible.GetRole").then(parseUint32),
-                call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren").then(
-                  parseReferences,
-                ),
+                call(node.bus, node.path, ACCESSIBLE, "GetRole").then(uint32),
+                call(node.bus, node.path, ACCESSIBLE, "GetChildren").then(references),
               ]);
               if (role === null) throw new Error("AT-SPI gave no role.");
               return { node, states, role, children };
@@ -264,25 +254,22 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         return focused;
       };
       const focusedByCollection = async (window: Ref) =>
-        parseReferences(
+        references(
           await call(
             bus,
             window.path,
-            "org.a11y.atspi.Collection.GetMatches",
+            "org.a11y.atspi.Collection",
+            "GetMatches",
             // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
-            "(" + FOCUSED_STATES + ", 1, @a{ss} {}, 1, @ai [], 1, @as [], 1, false)",
-            "1",
-            "4",
-            "true",
+            "(aiia{ss}iaiiasib)uib",
+            [[FOCUSED_STATES, 1, [], 1, [], 1, [], 1, false], 1, 4, true],
           ),
         );
       const anyPassword = (refs: ReadonlyArray<Ref>) =>
         anyInOrder(
           refs,
           async (ref) => {
-            const role = parseUint32(
-              await call(ref.bus, ref.path, "org.a11y.atspi.Accessible.GetRole"),
-            );
+            const role = uint32(await call(ref.bus, ref.path, ACCESSIBLE, "GetRole"));
             if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
             return role;
           },
@@ -298,8 +285,8 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
           seenFocus.push(...matches);
         } catch (error) {
           if (!unknownMethod(error)) throw error;
-          const interfaces = parseInterfaces(
-            await call(bus, window.path, "org.a11y.atspi.Accessible.GetInterfaces"),
+          const interfaces = interfaceNames(
+            await call(bus, window.path, ACCESSIBLE, "GetInterfaces"),
           );
           if (interfaces === null || interfaces.includes("org.a11y.atspi.Collection")) throw error;
           matches = await walkFocused(window);
@@ -307,7 +294,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         if (await anyPassword(matches))
           return { known: true, secure: true, windows: windows.length };
       }
-      // The windows are read one after another, and a walk one object at a time, so focus can
+      // The windows are read one after another, and a walk a level at a time, so focus can
       // move under the probe, within a window or between windows. Everything is asked again:
       // a password field focused through the whole probe is focused now, wherever it is; what
       // was found focused must still be, and the app must still show the same windows, read
@@ -325,7 +312,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         return { known: true, secure: true, windows: windows.length };
       if (await anyInOrder(seenFocus, focusedNow, (focused) => !focused))
         throw new Error("Focus moved while the app was read.");
-      const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
+      const now = references(await call(bus, ROOT, ACCESSIBLE, "GetChildren"));
       const same = (refs: ReadonlyArray<Ref>) => refs.map((ref) => ref.bus + ref.path).join("\n");
       if (same(now) !== same(windows))
         throw new Error("The app's windows changed while they were read.");
