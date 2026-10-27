@@ -1,3 +1,4 @@
+import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useAtomCommand } from "~/state/use-atom-command";
 import type {
@@ -53,7 +54,6 @@ import { PullRequestLabelPicker } from "./PullRequestLabelPicker";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
-  filterPullRequestConversationItems,
   isPullRequestCommentFinished,
   latestPullRequestReviewOutcomes,
   orderPullRequestComments,

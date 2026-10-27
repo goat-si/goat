@@ -210,7 +210,7 @@ describe("SSH manager shutdown ownership", () => {
             return makeSuccessfulProcess(JSON.stringify({ platform, arch, ready: false }));
           if (
             script.includes("installedCandidates") ||
-            (delayedInstall && script.startsWith("set -- --version\n"))
+            (delayedInstall && script.includes("\nset -- --version\n"))
           ) {
             // The probe never answers; the slow install would leave one minute before the deadline.
             return {

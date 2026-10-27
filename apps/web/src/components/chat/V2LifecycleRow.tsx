@@ -36,9 +36,8 @@ import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
   GitForkIcon,
-  MessageSquareIcon,
   MinusIcon,
-  XIcon,
+  SquareIcon,
 } from "~/components/solar";
 
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
@@ -54,7 +53,7 @@ import { ProviderInstanceIcon, providerTextColor } from "./ProviderInstanceIcon"
 import { cn } from "~/lib/utils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { subagentResumedSince } from "./V2LifecycleRow.logic";
-import { Button, InlineButton } from "../ui/button";
+import { InlineButton } from "../ui/button";
 import { GoatWordmark } from "../GoatWordmark";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
@@ -76,7 +75,6 @@ export type { HandoffTimelineRun } from "@goat/client-runtime/handoff";
 export function V2LifecycleRow(props: {
   readonly item: OrchestrationV2TurnItem;
   readonly environmentId: EnvironmentId;
-  readonly resourceSummary?: boolean | undefined;
   readonly createdAt: string;
   readonly timestampFormat: TimestampFormat;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
@@ -86,7 +84,7 @@ export function V2LifecycleRow(props: {
   if (item.type === "run_interrupt_request") {
     return (
       <div className="flex justify-end px-1 py-1" data-v2-item-type={item.type}>
-        <div className="flex max-w-[80%] items-center gap-2 text-xs text-destructive">
+        <div className="flex max-w-[80%] items-center gap-2 text-xs text-muted-foreground">
           <span aria-hidden="true" className="font-mono">
             ■
           </span>
@@ -104,12 +102,7 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "run_interrupt_result") {
     return (
-      <TimelineSystemDivider
-        label="Run interrupted"
-        detail={item.message}
-        tone="danger"
-        icon={XIcon}
-      />
+      <TimelineSystemDivider label="Run interrupted" detail={item.message} icon={SquareIcon} />
     );
   }
   if (item.type === "compaction") {
@@ -150,29 +143,6 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "thread_created") {
-    if (props.resourceSummary) {
-      return (
-        <div
-          data-v2-item-type={item.type}
-          className="flex min-w-0 items-center gap-3 rounded-lg border border-border/60 p-3"
-        >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60">
-            <MessageSquareIcon className="size-4 text-secondary-label" aria-hidden />
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {item.title ?? "Created thread"}
-          </span>
-          <Button
-            size="xs"
-            variant="outline"
-            aria-label={`Open ${item.title ?? "created thread"}`}
-            onClick={() => props.onOpenThread(item.targetThreadId)}
-          >
-            Open chat
-          </Button>
-        </div>
-      );
-    }
     return (
       <WorkLogRow
         data-v2-item-type={item.type}
