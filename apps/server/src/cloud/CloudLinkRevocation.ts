@@ -180,9 +180,10 @@ export const make = Effect.gen(function* () {
     const receipt = yield* send(installed);
     if (receipt) yield* withdrawInstalledLink(installed.credential, receipt.revocationId);
   });
-  const pending = read.pipe(
-    Effect.map((entries) => entries.some((entry) => entry.phase === "local_pending")),
-  );
+  const pending = Effect.gen(function* () {
+    if ((yield* read).some((entry) => entry.phase === "local_pending")) return true;
+    return Option.isSome(yield* secrets.get(CLOUD_WITHDRAWAL_FENCE));
+  });
   const start = reconcile.pipe(
     Effect.catchCause(() => Effect.logWarning("GOAT Connect cleanup is unconfirmed")),
     Effect.repeat(Schedule.spaced("5 minutes")),
