@@ -33,7 +33,7 @@ import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmis
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
-import { makeLeaseFences } from "./leaseUpdateFences.ts";
+import { makeLeaseFences, type TakenUpdate } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason } from "./ComputerUseDriverOutcome.ts";
@@ -46,8 +46,8 @@ import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import { answeredByHelperCursor, answerHelperCursorCall } from "./ComputerUseCursorTools.ts";
 import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
 import { makeInputVerifier } from "./ComputerUseInputVerify.ts";
-import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
-import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
+import { replyImageSize } from "./ComputerUseOverlay.ts";
+import { CAPTURE_HIDE_UNCONFIRMED, captureHidden } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
 import {
   type Envelope,
@@ -65,8 +65,10 @@ import {
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   SCREEN_SHARED,
+  TURN_ENDED,
   WRONG_DISPLAY,
 } from "./ComputerUseLeaseMessages.ts";
+import { dropTransport, heldByTransport } from "./ComputerUseLeaseProxyTransport.ts";
 import {
   type JsonRpcId,
   UNCONFIRMED_DISPLAY,
@@ -373,6 +375,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const active = () => finished === undefined && paused === undefined && !idle;
   const lifecycle = yield* makeLeaseProxyLifecycle({
     connectionId: options.connectionId,
+    firstGeneration: options.firstGeneration,
     startDriver: options.startDriver,
     manifestStamp: options.manifestStamp,
     active,
@@ -510,14 +513,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 ? Effect.sync(() => {
                     idle = true;
                   }).pipe(
-                    Effect.andThen(
-                      interrupt({
-                        _tag: "other",
-                        detail: "control_idle",
-                        message:
-                          "This thread's turn has ended. Computer use is idle until its next turn.",
-                      }),
-                    ),
+                    Effect.andThen(interrupt(TURN_ENDED)),
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
                   )
                 : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
@@ -530,13 +526,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ),
       )
       .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
+  const transportDropped = dropTransport({
+    running: () => finished === undefined && lifecycle.current !== undefined,
+    calls: () => outstanding.values(),
+    interrupt,
+    start,
+  }).pipe(lifecycleLock.withPermits(1), Effect.uninterruptible);
   // Receipt fences apply before the lifecycle lock is available.
-  const applying = yield* Queue.unbounded<{
-    readonly update: ComputerUseLeaseUpdate | undefined;
-    readonly fence: ReturnType<typeof fences.take>;
-  }>();
+  const applying = yield* Queue.unbounded<TakenUpdate | "transport-dropped">();
   yield* Queue.take(applying).pipe(
-    Effect.flatMap(({ update, fence }) => apply(update, fence)),
+    Effect.flatMap((item) =>
+      item === "transport-dropped" ? transportDropped : apply(item.update, item.fence),
+    ),
     Effect.forever,
     // A failed update ends the control as lost here: this fiber is the queue's only reader.
     Effect.catchCause(() => end("lost")),
@@ -556,6 +557,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     Queue.offerUnsafe(applying, { update, fence });
   };
   options.onLeaseUpdateReceiver?.(receive);
+  options.onTransportDropReceiver?.(() => Queue.offerUnsafe(applying, "transport-dropped"));
   const take = (update: ComputerUseLeaseUpdate | undefined) => Effect.sync(() => receive(update));
   yield* options.leaseUpdates.pipe(
     Stream.runForEach(take),
@@ -663,6 +665,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
     const message = decoded.message;
+    // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
+    const held = () => heldByTransport(options.transportHeld, message.method, message.params?.name);
+    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
+    // holds the lock (#1416), counts as applied: the call never reaches a child.
+    let selectedForeground: ComputerUseForegroundGrant | undefined;
+    const notSent = (requestId: JsonRpcId) =>
+      unsentCallRefusal(requestId, message?.method, {
+        held: held(),
+        pending: fences.pending(),
+        finished,
+        paused,
+        idle,
+        lastInterruption,
+        foregroundRevoked:
+          selectedForeground !== undefined && !fences.allowsForeground(selectedForeground),
+      });
     const primitiveCurrent = () =>
       primitive === undefined || options.primitiveCancelled?.(primitive.requestId) !== true;
     const primitiveDeadline = primitive?.deadlineMillis ?? Infinity;
@@ -710,6 +728,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && message?.method === "tools/call") {
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
+      // Before anything reaches the driver; a known pause, end or idle turn answers first.
+      if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(
           refusal(id, message.method, "expired", "This screen call ended before dispatch."),
@@ -784,19 +804,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // call never reached a driver, so it is refused; once sent, an interruption answers it as
     // cut off instead (interrupt above).
     const current = lifecycle.current;
-    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
-    // holds the lock (#1416), counts as applied: the call never reaches a child.
-    let selectedForeground: ComputerUseForegroundGrant | undefined;
-    const notSent = (requestId: JsonRpcId) =>
-      unsentCallRefusal(requestId, message?.method, {
-        pending: fences.pending(),
-        finished,
-        paused,
-        idle,
-        lastInterruption,
-        foregroundRevoked:
-          selectedForeground !== undefined && !fences.allowsForeground(selectedForeground),
-      });
     const stillCurrent = () =>
       lifecycle.current === current &&
       primitiveCurrent() &&
@@ -804,6 +811,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       !idle &&
       paused === undefined &&
       finished === undefined &&
+      !held() &&
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
@@ -823,28 +831,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         codeMode: typeof id === "string" && id.startsWith(PRIMITIVE_ID),
       });
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
-      const overlayChannel = current.driver.overlay;
       if (
-        overlayCallCaptures(
-          typeof message.params?.name === "string" ? message.params.name : "",
+        !(yield* captureHidden(
+          current.driver.overlay,
+          message.params?.name,
           message.params?.arguments,
-        ) &&
-        overlayChannel !== undefined &&
-        "captureHideConfirmed" in overlayChannel &&
-        typeof overlayChannel.captureHideConfirmed === "function" &&
-        !(yield* confirmCaptureHide(
-          overlayChannel,
-          overlayChannel.captureHideConfirmed as () => boolean,
         ))
       ) {
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "capture_hide_unconfirmed",
-            "GOAT could not confirm that its cursor overlay was hidden. This capture did not run; wait for the helper and observe again.",
-          ),
+          refusal(id, message.method, "capture_hide_unconfirmed", CAPTURE_HIDE_UNCONFIRMED),
         );
       }
       if (options.onTarget !== undefined) {
