@@ -17,7 +17,10 @@ import {
 } from "@goat/contracts";
 import { useRef, useState } from "react";
 import { Alert, View } from "react-native";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 import { AppText as Text } from "../../components/ui/AppText";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -36,13 +39,15 @@ export function includesProviderAccount(
   );
 }
 
+type CodexRouteChange =
+  | { readonly modelRoute: "default" }
+  | { readonly opencodexAuth: CodexHomeAuth };
+
 export function buildDefaultCodexRouteMutation(
   environmentId: EnvironmentId,
   instanceId: ProviderInstanceId,
   instance: ProviderInstanceConfig,
-  change: { readonly modelRoute: "default" } | { readonly opencodexAuth: CodexHomeAuth } = {
-    modelRoute: "default",
-  },
+  change: CodexRouteChange = { modelRoute: "default" },
 ) {
   const config =
     typeof instance.config === "object" && instance.config !== null ? instance.config : {};
@@ -63,6 +68,36 @@ const configValue = (instance: ProviderInstanceConfig | undefined, key: string) 
   typeof instance?.config === "object" && instance.config !== null && key in instance.config
     ? (instance.config as Record<string, unknown>)[key]
     : undefined;
+const routeFields = (instance: ProviderInstanceConfig | undefined) =>
+  ["setupMode", "modelRoute", "opencodexBaseUrl", "opencodexAuth"].map((key) =>
+    configValue(instance, key),
+  );
+
+/**
+ * Confirms a change chosen in an Alert against the instance as it is now. If another device
+ * changed the route since the Alert opened, nothing is written; otherwise only the change is
+ * applied over the latest instance.
+ */
+export async function confirmCodexRouteChange(input: {
+  readonly environmentId: EnvironmentId;
+  readonly instanceId: ProviderInstanceId;
+  readonly opened: ProviderInstanceConfig | undefined;
+  readonly readLatest: () => ProviderInstanceConfig | undefined;
+  readonly change: CodexRouteChange;
+  readonly mutate: (mutation: ReturnType<typeof buildDefaultCodexRouteMutation>) => Promise<void>;
+}) {
+  const latest = input.readLatest();
+  const opened = routeFields(input.opened);
+  if (
+    latest === undefined ||
+    input.opened === undefined ||
+    routeFields(latest).some((value, index) => value !== opened[index])
+  )
+    throw new Error("Settings changed on another device. Review them and try again.");
+  await input.mutate(
+    buildDefaultCodexRouteMutation(input.environmentId, input.instanceId, latest, input.change),
+  );
+}
 
 export function CodexHomeRouteStatus({
   environment,
@@ -72,9 +107,8 @@ export function CodexHomeRouteStatus({
   readonly provider: ServerProvider;
 }) {
   const environmentId = environment.environmentId;
-  const config = useEnvironmentQuery(
-    serverEnvironment.configProjection({ environmentId, input: {} }),
-  );
+  const configAtom = serverEnvironment.configProjection({ environmentId, input: {} });
+  const config = useEnvironmentQuery(configAtom);
   const canManageScope = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canMutate = useAtomValue(
     serverEnvironment.mutateProviderInstance.permissionAtom(environmentId),
@@ -103,23 +137,33 @@ export function CodexHomeRouteStatus({
   const managed = configValue(instance, "setupMode") === "managed";
   const homeAuth: CodexHomeAuth =
     configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
-  /** Without a change this only refreshes; a change is written to the selected environment first. */
-  async function run(
-    change?: { readonly modelRoute: "default" } | { readonly opencodexAuth: CodexHomeAuth },
-  ) {
+  /** The instance as the environment reports it now, read when a confirmation is accepted. */
+  const readLatestInstance = () =>
+    Option.getOrNull(AsyncResult.value(appAtomRegistry.get(configAtom)))?.config.settings
+      .providerInstances[provider.instanceId];
+  /**
+   * Without a change this only refreshes. A change confirmed in an Alert is checked against the
+   * instance captured when that Alert opened, then written to the selected environment.
+   */
+  async function run(change?: CodexRouteChange, opened?: ProviderInstanceConfig) {
     if (pendingRef.current) return;
     if (change && !readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
     pendingRef.current = true;
     setPending(true);
     setError(null);
     try {
-      if (change) {
-        if (!instance) throw new Error("Refresh settings and try again.");
-        const result = await mutate(
-          buildDefaultCodexRouteMutation(environmentId, provider.instanceId, instance, change),
-        );
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-      }
+      if (change)
+        await confirmCodexRouteChange({
+          environmentId,
+          instanceId: provider.instanceId,
+          opened,
+          readLatest: readLatestInstance,
+          change,
+          mutate: async (mutation) => {
+            const result = await mutate(mutation);
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        });
       const result = await refresh({
         environmentId,
         input: { instanceId: provider.instanceId, fresh: true, refreshModels: true },
@@ -167,10 +211,15 @@ export function CodexHomeRouteStatus({
                 : "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in.",
               [
                 { text: "Cancel", style: "cancel" },
-                { text: "None", onPress: () => void run({ opencodexAuth: "none" }) },
+                { text: "None", onPress: () => void run({ opencodexAuth: "none" }, instance) },
                 ...(managed
                   ? []
-                  : [{ text: "OpenAI", onPress: () => void run({ opencodexAuth: "openai" }) }]),
+                  : [
+                      {
+                        text: "OpenAI",
+                        onPress: () => void run({ opencodexAuth: "openai" }, instance),
+                      },
+                    ]),
               ],
             )
           }
@@ -195,7 +244,10 @@ export function CodexHomeRouteStatus({
             });
             Alert.alert(disconnect.title, disconnect.instruction, [
               { text: "Cancel", style: "cancel" },
-              { text: disconnect.title, onPress: () => void run({ modelRoute: "default" }) },
+              {
+                text: disconnect.title,
+                onPress: () => void run({ modelRoute: "default" }, instance),
+              },
             ]);
           }}
         />

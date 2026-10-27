@@ -16,7 +16,11 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: vi.fn() }));
 vi.mock("./components/SettingsActionRow", () => ({ SettingsActionRow: "SettingsActionRow" }));
-import { buildDefaultCodexRouteMutation, includesProviderAccount } from "./CodexHomeRouteStatus";
+import {
+  buildDefaultCodexRouteMutation,
+  confirmCodexRouteChange,
+  includesProviderAccount,
+} from "./CodexHomeRouteStatus";
 
 const codex = ProviderDriverKind.make("codex");
 describe("OpenCodex Home routing", () => {
@@ -91,5 +95,53 @@ describe("OpenCodex Home routing", () => {
       config: { modelRoute: "opencodex", opencodexAuth: "none", extensionOption: 42 },
     });
     expect(instance.config).toMatchObject({ opencodexAuth: "openai" });
+  });
+  it("refuses a confirmation after another device changed the route and keeps its settings", async () => {
+    const opened: ProviderInstanceConfig = {
+      driver: codex,
+      config: { modelRoute: "opencodex", opencodexBaseUrl: "http://localhost:10100/v1" },
+    };
+    const latest: ProviderInstanceConfig = {
+      driver: codex,
+      config: { modelRoute: "default", opencodexBaseUrl: "http://localhost:10101/v1" },
+    };
+    const mutate = vi.fn(async () => undefined);
+    for (const change of [{ opencodexAuth: "none" }, { modelRoute: "default" }] as const)
+      await expect(
+        confirmCodexRouteChange({
+          environmentId: EnvironmentId.make("child"),
+          instanceId: ProviderInstanceId.make("child_codex"),
+          opened,
+          readLatest: () => latest,
+          change,
+          mutate,
+        }),
+      ).rejects.toThrow("Settings changed on another device");
+    expect(mutate).not.toHaveBeenCalled();
+  });
+  it("applies only the confirmed authentication over the latest instance", async () => {
+    const opened: ProviderInstanceConfig = {
+      driver: codex,
+      displayName: "Before",
+      config: { modelRoute: "opencodex", opencodexAuth: "openai" },
+    };
+    const latest = { ...opened, displayName: "Renamed elsewhere" };
+    const mutate = vi.fn(async () => undefined);
+    await confirmCodexRouteChange({
+      environmentId: EnvironmentId.make("child"),
+      instanceId: ProviderInstanceId.make("child_codex"),
+      opened,
+      readLatest: () => latest,
+      change: { opencodexAuth: "none" },
+      mutate,
+    });
+    expect(mutate).toHaveBeenCalledExactlyOnceWith(
+      buildDefaultCodexRouteMutation(
+        EnvironmentId.make("child"),
+        ProviderInstanceId.make("child_codex"),
+        latest,
+        { opencodexAuth: "none" },
+      ),
+    );
   });
 });
