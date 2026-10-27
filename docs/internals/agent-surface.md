@@ -432,6 +432,9 @@ resident ([Claude adapter](../../apps/server/src/orchestration-v2/Adapters/Claud
 turn context ([harness test](../../apps/server/src/mcp/harnessListing.test.ts)). Pi defers optional
 tools only when its tool search exists, and keeps core tools active
 ([Pi extension](../../packages/provider-pi/src/server/mcpExtensionSource.ts)).
+Codex also compacts an MCP input schema above 5,000 bytes, which the two launch tools exceed in
+the full listing. The core listing avoids that: `goat_describe` returns their schemas whole as
+result data. `context-budget.ts` names the tools over the limit.
 
 **Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
 authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
