@@ -43,14 +43,18 @@ const settingsTree = [
   '  - [4] AXStaticText "12:00"',
 ].join("\n");
 
-const clickDarkThenDiff = Effect.fn(function* (since: object, diffText: string) {
+const clickDarkThenDiff = Effect.fn(function* (
+  since: object,
+  diffText: string,
+  read: { readonly tree: string; readonly token: string } = { tree: settingsTree, token: "s1:3" },
+) {
   const h = yield* harness({ verifyInputByTreeDiff: true });
   yield* h.push(active());
   yield* h.send(call(1, "get_window_state", { ...window, session: "s" }));
   yield* h.nextToDriver;
-  yield* h.reply(result(1, { snapshot_id: "s1" }, settingsTree));
+  yield* h.reply(result(1, { snapshot_id: "s1" }, read.tree));
   yield* h.nextToProvider;
-  yield* h.send(call(2, "click", { ...window, element_token: "s1:3" }));
+  yield* h.send(call(2, "click", { ...window, element_token: read.token }));
   yield* h.nextToDriver;
   yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
   const reread = yield* h.nextToDriver;
@@ -164,11 +168,52 @@ describe("read-back confirms only a change around the element the input aimed at
     }),
   );
 
-  it.effect("a sibling the click switched off confirms it", () =>
+  it.effect("a sibling that changed is no confirmation, even the radio button it pairs with", () =>
     Effect.gen(function* () {
       const answer = yield* clickDarkThenDiff(
         { since_status: "diff", snapshot_id: "s2" },
         "~ [2] AXRadioButton (Light) unselected",
+      );
+      assert.equal(answer.structuredContent.effect, "unverifiable");
+    }),
+  );
+
+  it.effect(
+    "a clock macOS lists beside the target after folding their group is no confirmation",
+    () =>
+      Effect.gen(function* () {
+        const answer = yield* clickDarkThenDiff(
+          { since_status: "diff", snapshot_id: "s2" },
+          '~ [1] AXStaticText = "12:01"',
+          {
+            tree: [
+              '- AXWindow "Editor"',
+              '  - [0] AXButton "Apply"',
+              '  - [1] AXStaticText = "12:00"',
+            ].join("\n"),
+            token: "s1:0",
+          },
+        );
+        assert.equal(answer.structuredContent.effect, "unverifiable");
+      }),
+  );
+
+  it.effect("a leaf whose own row changed value confirms it", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "diff", snapshot_id: "s2" },
+        "~ [3] AXRadioButton (Dark) selected",
+      );
+      assert.equal(answer.structuredContent.effect, "confirmed");
+    }),
+  );
+
+  it.effect("a change inside the target's own subtree confirms it", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "diff", snapshot_id: "s2" },
+        "~ [3] AXRadioButton (Dark) selected",
+        { tree: settingsTree, token: "s1:1" },
       );
       assert.equal(answer.structuredContent.effect, "confirmed");
     }),
