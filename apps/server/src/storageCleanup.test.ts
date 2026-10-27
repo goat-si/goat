@@ -1,3 +1,4 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
 import * as NodeSqlite from "node:sqlite";
 
@@ -17,6 +18,12 @@ import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2ThreadShell,
   type WorktreeKeepWhen,
   type StorageCleanupSettings,
 } from "@goat/contracts";
@@ -35,18 +42,9 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  ProjectId,
-  RunId,
-  RuntimeRequestId,
-  ThreadId,
-  type OrchestrationV2DomainEvent,
-  type OrchestrationV2ThreadShell,
-} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
-
 import { NOW_MS, DAY_MS, at, shell } from "./storageCleanup.testFixtures.ts";
 
 describe("V2 storage cleanup eligibility", () => {
@@ -219,13 +217,12 @@ const cleanupFixture = (
     let snapshotReads = 0;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
-    const context = yield* Layer.build(StorageCleanup.layer).pipe(
+    const cleanupLayer = StorageCleanup.layer.pipe(Layer.provide(AuxiliarySqlite.layer));
+    const context = yield* Layer.build(cleanupLayer).pipe(
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
         ...git,
         execute: (input) =>
           Effect.gen(function* () {
-            // Before Git's own clean check: inside `git worktree remove`, or on
-            // Windows the same status check the removal makes before deleting.
             if (
               editBeforeRemoval &&
               (input.args.includes("remove") || input.args.includes("--porcelain"))
@@ -814,7 +811,6 @@ describe("subagent worktree ownership", () => {
 describe("deleted thread worktrees", () => {
   const parent = (worktreePath: string) =>
     shell({ branch: "feature", worktreePath, deletedAt: at(-DAY_MS) });
-  // Deleting the parent leaves its native subagent thread in the projection.
   const subagent = (
     owner: OrchestrationV2ThreadShell,
     overrides: Partial<OrchestrationV2ThreadShell> = {},
@@ -1872,14 +1868,13 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
   ),
 );
 
-it.live("keeps a worktree that another GOAT app on this machine still uses", () =>
+it.live("keeps another app's bound worktree even when its database becomes unreadable", () =>
   runCleanupTest(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cleanup-home-" });
       yield* Effect.gen(function* () {
         const fixture = yield* cleanupFixture();
-        // A nightly copy of this app's state binds the same checkout by its absolute path.
         const nightlyState = `${home}/.goat/desktop-nightly/userdata`;
         yield* fs.makeDirectory(nightlyState, { recursive: true });
         const db = new NodeSqlite.DatabaseSync(`${nightlyState}/statev2.sqlite`);
@@ -1891,6 +1886,11 @@ it.live("keeps a worktree that another GOAT app on this machine still uses", () 
         expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
           outcome: "kept",
           reason: "Another GOAT app on this machine uses this worktree",
+        });
+        yield* fs.writeFileString(`${nightlyState}/statev2.sqlite`, "invalid database");
+        expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Another GOAT app's data on this machine could not be checked",
         });
         expect(yield* fs.exists(fixture.worktree)).toBe(true);
       }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));

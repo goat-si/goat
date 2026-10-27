@@ -1,5 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - a short read-only query against another server's WAL database.
-import * as NodeSqlite from "node:sqlite";
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 
 import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
@@ -79,25 +78,13 @@ export interface OtherHomeBindings {
   readonly unreadable: ReadonlyArray<string>;
 }
 
-// Another server writes this database in WAL mode, which lets a read-only reader in without
-// blocking it; a read-only connection never checkpoints into it.
-const readWorktreePaths = (file: string) =>
-  Effect.try({
-    try: () => {
-      const db = new NodeSqlite.DatabaseSync(file, { readOnly: true, timeout: 2000 });
-      try {
-        return db
-          .prepare(
-            "SELECT json_extract(payload_json, '$.worktreePath') AS path FROM orchestration_v2_projection_threads WHERE json_extract(payload_json, '$.worktreePath') IS NOT NULL",
-          )
-          .all()
-          .flatMap((row) => (typeof row.path === "string" ? [row.path] : []));
-      } finally {
-        db.close();
-      }
-    },
-    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
-  });
+const readWorktreePaths = Effect.fn("otherGoatHomes.readWorktreePaths")(function* (file: string) {
+  const reader = yield* AuxiliarySqlite.AuxiliarySqlite;
+  return yield* reader.read({ kind: "worktrees", file }).pipe(
+    Effect.map((rows) => rows.worktreePaths),
+    Effect.mapError((cause) => cause.message),
+  );
+});
 
 /** What the other local GOAT homes' databases bind, so cleanup never removes their checkouts. */
 export const readOtherHomeBindings = Effect.fn("otherGoatHomes.readOtherHomeBindings")(
