@@ -44,3 +44,69 @@ index a396df1298b9c3d2f2faad33563c3cdded50281e..9a41e7d142aaf1d6ce20c2faa89a6f34
    },
    "devDependencies": {
      "@babel/core": "^7.1.5",
+diff --git a/lib/signature.js b/lib/signature.js
+index e2cc3f0..48e0c3f 100644
+--- a/lib/signature.js
++++ b/lib/signature.js
+@@ -43,6 +43,8 @@ function parseSignature (signature) {
+       case '(': // struct
+         while ((ele = next()) !== null && ele !== match[c]) { res.child.push(parseOne(ele)); }
+         checkNotEnd(ele);
++        // An empty struct reads no bytes, so an array of them never ends.
++        if (res.child.length === 0) { throw new Error('Bad signature: empty ' + (c === '(' ? 'struct' : 'dict entry')); }
+         return res;
+     }
+     return res;
+diff --git a/lib/dbus-buffer.js b/lib/dbus-buffer.js
+index 5997156..6bc2d5b 100644
+--- a/lib/dbus-buffer.js
++++ b/lib/dbus-buffer.js
+@@ -154,7 +154,11 @@ DBusBuffer.prototype.readArray = function readArray (eleType, arrayBlobSize) {
+   }
+   const end = this.pos + arrayBlobSize;
+   while (this.pos < end) {
++    const before = this.pos;
+     result.push(this.readTree(eleType));
++    if (this.pos === before) {
++      throw new Error('Array element took no bytes');
++    }
+   }
+   return result;
+ };
+diff --git a/lib/message.js b/lib/message.js
+index 4a15d67..a560869 100644
+--- a/lib/message.js
++++ b/lib/message.js
+@@ -41,6 +41,9 @@ module.exports.unmarshalMessages = function messageParser (
+         }
+         state = 0;
+ 
++        // A message that cannot be read ends the connection with an error instead of
++        // throwing out of this stream listener, which would end the whole process.
++        try {
+         const messageBuffer = new DBusBuffer(fieldsAndBody, 0, endian, readBuf.fds, opts);
+         const unmarshalledHeader = messageBuffer.readArray(
+           headerSignature[0].child[0],
+@@ -63,6 +66,10 @@ module.exports.unmarshalMessages = function messageParser (
+           message.body = messageBuffer.read(message.signature);
+         }
+         onMessage(message);
++        } catch (err) {
++          stream.destroy(err);
++          break;
++        }
+       }
+     }
+   });
+diff --git a/lib/bus.js b/lib/bus.js
+index 5d679eb..a88e1ae 100644
+--- a/lib/bus.js
++++ b/lib/bus.js
+@@ -173,7 +173,6 @@ class MessageBus extends EventEmitter {
+       })
+       .catch((err) => {
+         this.emit('error', err);
+-        throw new Error(err);
+       });
+   }
+ 

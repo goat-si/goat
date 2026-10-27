@@ -3,7 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { type AtspiCall, type BusReply, BusError } from "./atspiBus.ts";
 import { makeSecureFocusProbe, type GdbusRunner } from "./atspiFocus.ts";
 
-const REGISTRY = "org.a11y.atspi.Registry";
+/** The unique name the bus daemon gives as the AT-SPI registry's owner. */
+const REGISTRY = ":1.1000";
 const ROOT = "/org/a11y/atspi/accessible/root";
 const UNKNOWN_METHOD = "org.freedesktop.DBus.Error.UnknownMethod";
 const PLAIN = 1124073472;
@@ -11,7 +12,14 @@ const FOCUSED = 1124077568;
 
 /** gdbus finds the accessibility bus; the fakes below answer the calls on it. */
 const ADDRESS: GdbusRunner = async () => "('unix:path=/run/user/1000/at-spi/bus',)\n";
-const probe = (atspi: AtspiCall) => makeSecureFocusProbe(ADDRESS, atspi);
+/** atspi, with the bus daemon naming REGISTRY as the owner of org.a11y.atspi.Registry. */
+const withRegistry =
+  (atspi: AtspiCall): AtspiCall =>
+  (call, signal) =>
+    call.member === "GetNameOwner"
+      ? Promise.resolve({ signature: "s", body: [REGISTRY] })
+      : atspi(call, signal);
+const probe = (atspi: AtspiCall) => makeSecureFocusProbe(ADDRESS, withRegistry(atspi));
 
 const refs = (...items: ReadonlyArray<readonly [string, string]>): BusReply => ({
   signature: "a(so)",
@@ -411,7 +419,7 @@ describe("makeSecureFocusProbe", () => {
     expect(most).toBeLessThanOrEqual(8);
   });
 
-  it("trusts which app owns a bus name only on the connection it learned it on, and reads across two connections as unknown", async () => {
+  it("trusts which app owns a unique name only on the connection it learned it on, and reads across two connections as unknown", async () => {
     // Connection 1: :1.9 is pid 10. The bus restarts; on connection 2, :1.9 is pid 99.
     let connection = 1;
     let switchAfter = Number.POSITIVE_INFINITY;
@@ -420,27 +428,51 @@ describe("makeSecureFocusProbe", () => {
       if (++calls > switchAfter) connection = 2;
       const name = method(call);
       const reply =
-        name === "org.freedesktop.DBus.GetConnectionUnixProcessID"
-          ? u32(connection === 1 ? 10 : 99)
-          : name === "org.a11y.atspi.Accessible.GetChildren"
-            ? call.destination === REGISTRY
-              ? refs([":1.9", ROOT])
-              : refs([":1.9", "/w"])
-            : name === "org.a11y.atspi.Collection.GetMatches"
-              ? refs()
-              : undefined;
+        name === "org.freedesktop.DBus.GetNameOwner"
+          ? { signature: "s", body: [REGISTRY] }
+          : name === "org.freedesktop.DBus.GetConnectionUnixProcessID"
+            ? u32(connection === 1 ? 10 : 99)
+            : name === "org.a11y.atspi.Accessible.GetChildren"
+              ? call.destination === REGISTRY
+                ? refs([":1.9", ROOT])
+                : refs([":1.9", "/w"])
+              : name === "org.a11y.atspi.Collection.GetMatches"
+                ? refs()
+                : undefined;
       if (reply === undefined) throw new Error("unexpected " + name);
       return { ...reply, connection };
     };
-    expect(await probe(atspi)(10)).toEqual({ known: true, secure: false, windows: 1 });
+    // One probe throughout, so what it cached on connection 1 is what connection 2 tests.
+    const focus = makeSecureFocusProbe(ADDRESS, atspi);
+    expect(await focus(10)).toEqual({ known: true, secure: false, windows: 1 });
     connection = 2;
-    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
-    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
-    // One probe whose reads start on connection 1 and end on connection 2.
+    expect(await focus(10)).toEqual(UNKNOWN);
+    expect(await focus(10)).toEqual(UNKNOWN);
+    expect(await focus(99)).toEqual({ known: true, secure: false, windows: 1 });
+    // One probe whose reads start on one connection and end on another.
     connection = 1;
     calls = 0;
-    switchAfter = 3;
+    switchAfter = 4;
+    expect(await makeSecureFocusProbe(ADDRESS, atspi)(10)).toEqual(UNKNOWN);
+  });
+
+  it("resolves an app to its unique name once and calls only that name, skipping an app listed by a well-known name", async () => {
+    const destinations: string[] = [];
+    const atspi: AtspiCall = async (call) => {
+      destinations.push(call.destination);
+      const name = method(call);
+      if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID")
+        return u32(call.body?.[0] === "org.example.App" ? 10 : 20);
+      if (name === "org.a11y.atspi.Accessible.GetChildren")
+        return call.destination === REGISTRY
+          ? refs(["org.example.App", ROOT], [":1.9", ROOT])
+          : refs([call.destination, "/w"]);
+      if (name === "org.a11y.atspi.Collection.GetMatches") return refs();
+      throw new Error("unexpected " + name);
+    };
     expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+    expect(destinations).not.toContain("org.example.App");
+    expect(await probe(atspi)(20)).toEqual({ known: true, secure: false, windows: 1 });
   });
 
   it("stops reading once a read fails, so nothing goes out past the reads already in flight", async () => {
@@ -473,11 +505,95 @@ describe("makeSecureFocusProbe", () => {
     expect(calls - failedAt).toBeLessThanOrEqual(8);
   });
 
-  it("ends a probe that outlasts its deadline as unknown", async () => {
-    const stuck: AtspiCall = (call) =>
+  it("stops walking as soon as an answer spends the object budget, reading nothing more", async () => {
+    // /w has 100 children with 100 children each: past 8,192 objects once about 81 of them answer.
+    let deepReads = 0;
+    const atspi: AtspiCall = async (call) => {
+      const name = method(call);
+      if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID") return u32(10);
+      if (name === "org.a11y.atspi.Accessible.GetChildren") {
+        if (call.path === ROOT)
+          return call.destination === REGISTRY ? refs([":1.9", ROOT]) : refs([":1.9", "/w"]);
+        if (call.path === "/w")
+          return refs(...Array.from({ length: 100 }, (_, i) => [":1.9", "/c" + i] as const));
+        if (/^\/c\d+$/.test(call.path)) {
+          deepReads++;
+          return refs(
+            ...Array.from({ length: 100 }, (_, i) => [":1.9", call.path + "/" + i] as const),
+          );
+        }
+        return refs();
+      }
+      if (name === "org.a11y.atspi.Collection.GetMatches") throw noCollection(call.path);
+      if (name === "org.a11y.atspi.Accessible.GetInterfaces")
+        return names("org.a11y.atspi.Accessible");
+      if (name === "org.a11y.atspi.Accessible.GetState") return states(PLAIN);
+      if (name === "org.a11y.atspi.Accessible.GetRole") return u32(29);
+      throw new Error("unexpected " + name);
+    };
+    expect(await probe(atspi)(10)).toEqual(UNKNOWN);
+    expect(deepReads).toBeLessThanOrEqual(81 + 8);
+  });
+
+  it("keeps at most eight calls in flight across the whole probe, nested reads included", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const windows = Array.from({ length: 10 }, (_, i) => [":1.9", "/a" + i] as const);
+    const atspi: AtspiCall = async (call) => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await Promise.resolve();
+      inFlight--;
+      const name = method(call);
+      if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID") return u32(10);
+      if (name === "org.a11y.atspi.Accessible.GetChildren")
+        return call.destination === REGISTRY ? refs([":1.9", ROOT]) : refs(...windows);
+      if (name === "org.a11y.atspi.Collection.GetMatches")
+        return refs(
+          ...Array.from({ length: 8 }, (_, i) => [":1.9", call.path + "/m" + i] as const),
+        );
+      if (name === "org.a11y.atspi.Accessible.GetRole") return u32(29);
+      if (name === "org.a11y.atspi.Accessible.GetState") return states(FOCUSED);
+      throw new Error("unexpected " + name);
+    };
+    expect(await probe(atspi)(10)).toEqual({ known: true, secure: false, windows: 10 });
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(8);
+  });
+
+  it("returns only once every read it started has stopped, and sends none after its deadline", async () => {
+    let pending = 0;
+    let sentAfterDeadline = 0;
+    const atspi: AtspiCall = (call, signal) => {
+      if (signal?.aborted) sentAfterDeadline++;
+      if (method(call) !== "org.freedesktop.DBus.GetConnectionUnixProcessID")
+        return bus(null)(call, signal);
+      pending++;
+      return new Promise<BusReply>((_, reject) =>
+        signal?.addEventListener(
+          "abort",
+          () => {
+            pending--;
+            reject(new Error("cancelled"));
+          },
+          { once: true },
+        ),
+      );
+    };
+    expect(await makeSecureFocusProbe(ADDRESS, withRegistry(atspi), { deadlineMs: 1 })(10)).toEqual(
+      UNKNOWN,
+    );
+    expect(pending).toBe(0);
+    expect(sentAfterDeadline).toBe(0);
+  });
+
+  it("ends a probe whose read never answers as unknown at its deadline", async () => {
+    const stuck: AtspiCall = (call, signal) =>
       method(call) === "org.a11y.atspi.Accessible.GetChildren" && call.destination !== REGISTRY
         ? new Promise<BusReply>(() => {})
-        : bus(null)(call);
-    expect(await makeSecureFocusProbe(ADDRESS, stuck, { deadlineMs: 1 })(10)).toEqual(UNKNOWN);
+        : bus(null)(call, signal);
+    expect(await makeSecureFocusProbe(ADDRESS, withRegistry(stuck), { deadlineMs: 1 })(10)).toEqual(
+      UNKNOWN,
+    );
   });
 });

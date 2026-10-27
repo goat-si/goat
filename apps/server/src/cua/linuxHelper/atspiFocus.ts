@@ -5,9 +5,10 @@ import * as NodeChildProcess from "node:child_process";
 import {
   type AtspiCall,
   type BusReply,
-  type DbusValue,
   BusError,
+  DAEMON,
   makeAtspiBus,
+  untilAborted,
 } from "./atspiBus.ts";
 
 /**
@@ -120,15 +121,34 @@ export async function a11yBusAddress(run: GdbusRunner): Promise<string> {
   return address;
 }
 
-/** One probe: its reads all come from one connection, and none starts once it has ended. */
+/** One probe: it shares one cap on calls in flight, and nothing it starts outlives its signal. */
 interface ProbeRun {
-  ended: boolean;
+  readonly signal: AbortSignal;
+  readonly stop: () => void;
+  /** The connection its reads came from; a read from another one ends the probe. */
   connection: number | undefined;
+  inFlight: number;
+  readonly waiting: Array<() => void>;
+}
+
+/** A turn at one of the probe's call slots, or a rejection once the probe is stopped. */
+async function slot(probe: ProbeRun): Promise<() => void> {
+  if (probe.inFlight >= WORKERS)
+    await untilAborted(new Promise<void>((resolve) => probe.waiting.push(resolve)), probe.signal);
+  else probe.inFlight++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = probe.waiting.shift();
+    if (next) next();
+    else probe.inFlight--;
+  };
 }
 
 /**
  * read over items, WORKERS at a time and in item order, stopping at the first failure or once the
- * probe has ended; an item never read has no answer.
+ * probe has stopped; an item never read has no answer.
  */
 async function readEach<T, R>(
   probe: ProbeRun,
@@ -139,7 +159,7 @@ async function readEach<T, R>(
   let next = 0;
   let failed = false;
   const worker = async () => {
-    while (!failed && !probe.ended && next < items.length) {
+    while (!failed && !probe.signal.aborted && next < items.length) {
       const index = next++;
       const item = items[index];
       if (item === undefined) return;
@@ -185,12 +205,12 @@ export function makeSecureFocusProbe(
   options: { readonly deadlineMs?: number } = {},
 ) {
   let address: Promise<string> | null = null;
-  // Which app owns which bus name, as learned on connection ownersOn; a new connection may
+  // Which app owns which unique name, as learned on connection ownersOn; a new connection may
   // give the same unique name to another process, so it starts empty.
   const busByPid = new Map<number, string>();
   let ownersOn: number | undefined;
   const a11yAddress = () => (address ??= a11yBusAddress(run));
-  const send = atspi ?? makeAtspiBus({ address: a11yAddress, uid: process.getuid?.() ?? 0 });
+  const send = atspi ?? makeAtspiBus({ address: a11yAddress });
 
   const probeFocus = async (probe: ProbeRun, pid: number): Promise<SecureFocus> => {
     const call = async (
@@ -199,56 +219,76 @@ export function makeSecureFocusProbe(
       iface: string,
       member: string,
       signature?: string,
-      body?: ReadonlyArray<DbusValue>,
+      body?: ReadonlyArray<unknown>,
     ) => {
-      if (probe.ended) throw new Error("The probe has ended.");
-      const reply = await send({
-        destination,
-        path,
-        iface,
-        member,
-        ...(signature === undefined ? {} : { signature }),
-        ...(body === undefined ? {} : { body }),
-      });
-      const connection = reply.connection ?? 0;
-      if (ownersOn !== connection) {
-        busByPid.clear();
-        ownersOn = connection;
+      const release = await slot(probe);
+      try {
+        if (probe.signal.aborted) throw new Error("The probe has ended.");
+        const reply = await untilAborted(
+          send(
+            {
+              destination,
+              path,
+              iface,
+              member,
+              ...(signature === undefined ? {} : { signature }),
+              ...(body === undefined ? {} : { body }),
+            },
+            probe.signal,
+          ),
+          probe.signal,
+        );
+        const connection = reply.connection ?? 0;
+        if (ownersOn !== connection) {
+          busByPid.clear();
+          ownersOn = connection;
+        }
+        probe.connection ??= connection;
+        if (probe.connection !== connection)
+          throw new Error("The accessibility bus connection changed during the probe.");
+        return reply;
+      } finally {
+        release();
       }
-      probe.connection ??= connection;
-      if (probe.connection !== connection)
-        throw new Error("The accessibility bus connection changed during the probe.");
-      return reply;
     };
 
+    // Every name is resolved once, to the unique name of its owner, and only that name is
+    // called: a well-known name can change owner between two calls.
     const busFor = async () => {
       const known = busByPid.get(pid);
       if (known) {
         probe.connection = ownersOn;
         return known;
       }
-      const apps = references(await call(REGISTRY, ROOT, ACCESSIBLE, "GetChildren"));
+      const owner = await call(DAEMON, "/org/freedesktop/DBus", DAEMON, "GetNameOwner", "s", [
+        REGISTRY,
+      ]);
+      const [registry] = owner.body;
+      if (owner.signature !== "s" || typeof registry !== "string" || !registry.startsWith(":"))
+        throw new Error("The bus daemon gave no owner for the AT-SPI registry.");
+      const apps = references(await call(registry, ROOT, ACCESSIBLE, "GetChildren")).filter(
+        ({ bus }) => bus.startsWith(":"),
+      );
       let found: string | null = null;
       await anyInOrder(
         probe,
         apps,
         async ({ bus }) => {
-          const owner = uint32(
-            await call(
-              "org.freedesktop.DBus",
-              "/org/freedesktop/DBus",
-              "org.freedesktop.DBus",
-              "GetConnectionUnixProcessID",
-              "s",
-              [bus],
-            ),
+          const reply = await call(
+            DAEMON,
+            "/org/freedesktop/DBus",
+            DAEMON,
+            "GetConnectionUnixProcessID",
+            "s",
+            [bus],
           );
-          if (owner !== null && ownersOn === probe.connection) busByPid.set(owner, bus);
-          return { bus, owner };
+          const appPid = uint32(reply);
+          if (appPid !== null && ownersOn === probe.connection) busByPid.set(appPid, bus);
+          return { bus, appPid };
         },
-        ({ bus, owner }) => {
-          if (owner === pid) found = bus;
-          return owner === pid;
+        ({ bus, appPid }) => {
+          if (appPid === pid) found = bus;
+          return appPid === pid;
         },
       );
       return found;
@@ -259,6 +299,7 @@ export function makeSecureFocusProbe(
     const windows = references(await call(bus, ROOT, ACCESSIBLE, "GetChildren"));
     if (windows.length > MAX_WINDOWS)
       return { known: false, secure: false, windows: windows.length };
+    // Objects a walk may still find; each GetChildren answer spends its count at once.
     let walkBudget = MAX_WALK_NODES;
     const readStates = async (node: Ref) => {
       const states = firstStateWord(await call(node.bus, node.path, ACCESSIBLE, "GetState"));
@@ -271,21 +312,23 @@ export function makeSecureFocusProbe(
     const seenFocus: Ref[] = [];
     // Every object of the window, for a toolkit without Collection: its state and role, read a
     // level of the tree at a time. A hidden container can still hold focus, so none is skipped;
-    // an unreadable answer or an exhausted budget throws, so focus is unknown, and ends the probe.
+    // an unreadable answer or an exhausted budget ends the probe, so focus is unknown.
     const walkFocused = async (window: Ref) => {
       const focused: Ref[] = [];
+      walkBudget -= 1;
+      if (walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
       for (let level: ReadonlyArray<Ref> = [window]; level.length > 0;) {
-        walkBudget -= level.length;
-        if (walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
         const answers = await readEach(probe, level, async (node) => {
           try {
             const states = await readStates(node);
             const role = uint32(await call(node.bus, node.path, ACCESSIBLE, "GetRole"));
             if (role === null) throw new Error("AT-SPI gave no role.");
             const children = references(await call(node.bus, node.path, ACCESSIBLE, "GetChildren"));
+            walkBudget -= children.length;
+            if (walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
             return { node, states, role, children };
           } catch (error) {
-            probe.ended = true;
+            probe.stop();
             throw error;
           }
         });
@@ -297,8 +340,6 @@ export function makeSecureFocusProbe(
           const { node, states, role, children } = answer.value;
           if (role === ROLE_PASSWORD_TEXT) passwords.push(node);
           if ((states & STATE_FOCUSED) !== 0) focused.push(node);
-          if (next.length + children.length > walkBudget)
-            throw new Error("Too many accessible objects to find focus.");
           for (const child of children) next.push(child);
         }
         level = next;
@@ -315,7 +356,7 @@ export function makeSecureFocusProbe(
           "GetMatches",
           // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
           "(aiia{ss}iaiiasib)uib",
-          [[FOCUSED_STATES, 1, [], 1, [], 1, [], 1, false], 1, 4, true],
+          [[FOCUSED_STATES, 1, {}, 1, [], 1, [], 1, false], 1, 4, true],
         ),
       );
     const anyPassword = (refs: ReadonlyArray<Ref>) =>
@@ -373,25 +414,30 @@ export function makeSecureFocusProbe(
     return { known: true, secure: false, windows: windows.length };
   };
 
+  // Returns once everything the probe started has stopped: past the deadline nothing it began
+  // is still sent or awaited.
   return async (pid: number): Promise<SecureFocus> => {
-    const probe: ProbeRun = { ended: false, connection: undefined };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("The probe ran past its deadline.")),
-        options.deadlineMs ?? PROBE_DEADLINE_MS,
-      );
-    });
+    const controller = new AbortController();
+    const probe: ProbeRun = {
+      signal: controller.signal,
+      stop: () => controller.abort(),
+      connection: undefined,
+      inFlight: 0,
+      waiting: [],
+    };
+    const deadline = setTimeout(() => controller.abort(), options.deadlineMs ?? PROBE_DEADLINE_MS);
+    const body = probeFocus(probe, pid);
     try {
-      return await Promise.race([probeFocus(probe, pid), deadline]);
+      return await untilAborted(body, controller.signal);
     } catch {
       // A restarted app gets a new bus name; look it up again next time.
       busByPid.delete(pid);
       address = null;
       return { known: false, secure: false, windows: 0 };
     } finally {
-      probe.ended = true;
-      clearTimeout(timer);
+      clearTimeout(deadline);
+      controller.abort();
+      await body.catch(() => undefined);
     }
   };
 }
