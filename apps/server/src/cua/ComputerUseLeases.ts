@@ -937,7 +937,10 @@ const make = Effect.gen(function* () {
       const listed = blockedTurns.size > 0;
       blockedTurns.clear();
       const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
-      return listed || ended.length > 0;
+      // Turning computer use off outranks Stop, so the channel closes a stopped thread's proxy.
+      const stopped = [...controls].filter(([, r]) => r.ended?.startsWith("stopped") === true);
+      for (const [id, record] of stopped) controls.set(id, { ...record, ended: "disabled" });
+      return listed || ended.length > 0 || stopped.length > 0;
     }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
     grants: live(undefined, true),
     release: (handoffIds) =>
