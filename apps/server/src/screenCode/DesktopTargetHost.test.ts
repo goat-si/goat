@@ -13,6 +13,7 @@ import type {
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
+import { ScreenObservations } from "./ScreenObservations.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import type { ScreenHostContext } from "./ScreenHostBridge.ts";
 import { screenRunLimits } from "./ScreenRunLimits.ts";
@@ -112,12 +113,14 @@ const goat2NoChange = {
   elements: [],
   tree_format: "both",
 };
-const goat2WindowState = (args: Record<string, unknown>, screenshotSnapshot = "s0000000a") =>
+const goat2WindowState = (
+  args: Record<string, unknown>,
+  screenshot: Record<string, unknown> = { snapshot_id: "s0000000a" },
+) =>
   args.include_accessibility_tree === false
     ? {
         window_id: 7,
         pid: 42,
-        snapshot_id: screenshotSnapshot,
         elements_complete: false,
         tree_markdown: "",
         tree_format: "markdown",
@@ -132,6 +135,7 @@ const goat2WindowState = (args: Record<string, unknown>, screenshotSnapshot = "s
           width: 100,
           height: 80,
         },
+        ...screenshot,
       }
     : args.since === "s0000000a"
       ? goat2Diff
@@ -148,6 +152,7 @@ const goat2WindowState = (args: Record<string, unknown>, screenshotSnapshot = "s
 const fixture = (
   override: Partial<Record<string, unknown>> = {},
   connection = { id: "driver:1" },
+  observations?: ScreenObservations,
 ) => {
   const sent: Array<{ tool: string; args: unknown; expectedConnectionGeneration?: string }> = [];
   const channel = {
@@ -196,7 +201,14 @@ const fixture = (
     controlState: () => Effect.succeed({ _tag: "active", idle: false }),
     releaseForeground: () => Effect.succeed(true),
   } as unknown as ComputerUseLeases["Service"];
-  return { host: createDesktopTargetHost({ primitiveChannel: channel, leases }), sent };
+  return {
+    host: createDesktopTargetHost({
+      primitiveChannel: channel,
+      leases,
+      ...(observations ? { observations } : {}),
+    }),
+    sent,
+  };
 };
 
 it.effect(
@@ -445,10 +457,9 @@ it.effect(
   "a desktop screenshot keeps the tree's element refs only while the driver keeps its snapshot",
   () =>
     Effect.gen(function* () {
-      let screenshotSnapshot = "s0000000a";
+      let screenshot: Record<string, unknown> = { snapshot_id: "s0000000a" };
       const { host, sent } = fixture({
-        get_window_state: (args: Record<string, unknown>) =>
-          goat2WindowState(args, screenshotSnapshot),
+        get_window_state: (args: Record<string, unknown>) => goat2WindowState(args, screenshot),
       });
       const bound = yield* host.bindApp(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
@@ -475,18 +486,63 @@ it.effect(
       expect(sent.at(-1)?.args).toMatchObject({ since: "s0000000a" });
       expect(diff.mode).toBe("diff");
 
-      const next = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+      // Another snapshot, the tree's snapshot invalidated, or no snapshot named: refs retire.
+      for (const replacing of [
+        { snapshot_id: "s0000000e" },
+        { snapshot_id: "s0000000a", invalidated_snapshot_ids: ["s0000000a"] },
+        { snapshot_id: undefined },
+      ]) {
+        const next = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+          .value as Observed;
+        screenshot = replacing;
+        const replaced = yield* host.observe(call("screenshot", {}, ref), context);
+        expect(replaced.imageMetadata?.observationId).not.toBe(next.observationId);
+        const before = sent.length;
+        const stale = yield* host
+          .invoke(call("click", { elementRef: next.elements[1]?.ref }, ref), context)
+          .pipe(Effect.result);
+        expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
+        expect(sent).toHaveLength(before);
+      }
+    }),
+);
+
+it.effect("a desktop read that fails to render still retires the refs the driver replaced", () =>
+  Effect.gen(function* () {
+    class SecondRenderFails extends ScreenObservations {
+      renders = 0;
+      override renderObservation(input: Parameters<ScreenObservations["renderObservation"]>[0]) {
+        if (++this.renders === 2)
+          throw new Error("Screen observation metadata exceeds tree budget");
+        return super.renderObservation(input);
+      }
+    }
+    for (const method of ["get_accessibility_tree", "screenshot"] as const) {
+      const { host, sent } = fixture(
+        {
+          get_window_state: (args: Record<string, unknown>) =>
+            goat2WindowState(args, { snapshot_id: "s0000000e" }),
+        },
+        undefined,
+        new SecondRenderFails(),
+      );
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const tree = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
         .value as Observed;
-      screenshotSnapshot = "s0000000e";
-      const replaced = yield* host.observe(call("screenshot", {}, ref), context);
-      expect(replaced.imageMetadata?.observationId).not.toBe(next.observationId);
+      const failed = yield* host.observe(call(method, {}, ref), context).pipe(Effect.result);
+      expect(failed._tag === "Failure" && failed.failure.code).toBe("tree_limit");
       const before = sent.length;
       const stale = yield* host
-        .invoke(call("click", { elementRef: next.elements[1]?.ref }, ref), context)
+        .invoke(call("click", { elementRef: tree.elements[1]?.ref }, ref), context)
         .pipe(Effect.result);
       expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
       expect(sent).toHaveLength(before);
-    }),
+    }
+  }),
 );
 
 it.effect("desktop select_text is unsupported before any target lookup and sends nothing", () =>

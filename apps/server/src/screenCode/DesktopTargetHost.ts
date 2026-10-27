@@ -299,6 +299,22 @@ export const createDesktopTargetHost = (deps: {
             : args.mode === "query"
               ? "desktop_query_unsupported"
               : undefined;
+      // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
+      // tree's observation stays and only gains this region. Any other read has retired them in
+      // the driver, so the old refs go now, before a render that may fail.
+      const invalidated = array(state.invalidated_snapshot_ids);
+      const kept =
+        capture &&
+        bound.snapshotId !== undefined &&
+        string(state.snapshot_id) === bound.snapshotId &&
+        !invalidated.includes(bound.snapshotId)
+          ? bound.observationId
+          : undefined;
+      if (kept === undefined) {
+        observations.evictTarget(bound.ref.id);
+        delete bound.observationId;
+        delete bound.snapshotId;
+      }
       const render = Effect.try({
         try: () =>
           observations.renderObservation({
@@ -332,19 +348,10 @@ export const createDesktopTargetHost = (deps: {
         bound.snapshotId = string(state.snapshot_id);
         return { value: observation, category: "unverifiable" };
       }
-      // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
-      // tree's observation stays and only gains this region. Any other snapshot replaces it.
-      const invalidated = array(state.invalidated_snapshot_ids);
-      let observationId =
-        bound.snapshotId !== undefined &&
-        string(state.snapshot_id) === bound.snapshotId &&
-        !invalidated.includes(bound.snapshotId)
-          ? bound.observationId
-          : undefined;
+      let observationId = kept;
       if (observationId === undefined) {
         observationId = (yield* render).observationId;
         bound.observationId = observationId;
-        delete bound.snapshotId;
       }
       const imagePart = reply.image;
       const width = integer(state.screenshot_width);
