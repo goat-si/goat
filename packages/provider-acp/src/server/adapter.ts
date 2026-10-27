@@ -84,13 +84,13 @@ import {
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
-  sessionUpdateIsReplay,
   toolCallVisibleOutputChanged,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "./runtimeModel.ts";
+import { isReplayedAcpNotice } from "./noticeProjection.ts";
 import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
@@ -4514,6 +4514,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (isReplayedAcpNotice(notification)) return;
           if (
             followsAgentWorkState &&
             flavor.extractSubagentSessionEvent !== undefined &&
@@ -5050,14 +5051,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               break;
             }
             default: {
-              const parsed = parseSessionUpdateEvent(notification);
-              for (const event of parsed.events) {
+              for (const event of parseSessionUpdateEvent(notification).events) {
                 if (event._tag === "ToolCallUpdated") {
                   yield* emitTool(context, event.toolCall);
                 } else if (event._tag === "PlanUpdated") {
                   yield* emitPlan(context, event.payload);
                 } else if (event._tag === "NoticeReceived") {
-                  if (!sessionUpdateIsReplay(notification)) yield* emitNotice(context, event);
+                  yield* emitNotice(context, event);
                 } else if (event._tag === "UnknownUpdate") {
                   yield* emitTool(context, {
                     toolCallId: `${context.nativeTurnId}:unsupported:${event.updateType}`,

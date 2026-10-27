@@ -586,7 +586,7 @@ const program = Effect.gen(function* () {
       }
       parameterizedModelPicker = request.capabilities?._meta?.parameterizedModelPicker === true;
       return {
-        protocolVersion: 2,
+        protocolVersion: Number(process.env.GOAT_ACP_PROTOCOL_VERSION ?? "2"),
         info: { name: "t3-acp-mock-agent", version: "0.0.0" },
         ...(omitInitializeModelState ? {} : { _meta: { modelState: modelState() } }),
         capabilities: {
@@ -1189,7 +1189,6 @@ const program = Effect.gen(function* () {
             sessionId: requestedSessionId,
             update: {
               sessionUpdate: "agent_message_chunk",
-              messageId: "mock-notice-message",
               content: { type: "text", text },
             },
           });

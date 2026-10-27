@@ -134,7 +134,7 @@
   "apps/mobile/src/state/use-selected-thread-requests.ts": { "nonNull": 1 },
   "apps/mobile/src/state/use-terminal-session.ts": { "nonNull": 1 },
   "apps/mobile/src/state/use-thread-outbox-drain.ts": { "lines": 1372 },
-  "apps/server/scripts/acp-mock-agent.ts": { "lines": 2756 },
+  "apps/server/scripts/acp-mock-agent.ts": { "lines": 2755 },
   "apps/server/scripts/migrate-dev-db.ts": { "nonNull": 1 },
   "apps/server/scripts/record-codex-app-server-replay-fixture.ts": { "lines": 1662, "nonNull": 2 },
   "apps/server/scripts/record-grok-acp-replay-fixture.ts": { "nonNull": 1 },

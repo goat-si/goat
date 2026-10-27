@@ -4,6 +4,18 @@ export const mockSessionNotices = [
     update: { sessionUpdate: "notice", severity: "info", title: "Replayed announcement" },
   },
   {
+    _meta: { isReplay: true },
+    update: { sessionUpdate: "notice", severity: "info" },
+  },
+  {
+    _meta: { isReplay: true },
+    update: { sessionUpdate: "notice", severity: "info", title: 42 },
+  },
+  {
+    _meta: { isReplay: true },
+    update: { sessionUpdate: "notice", severity: 42, title: "Wrong severity type" },
+  },
+  {
     update: {
       sessionUpdate: "notice",
       severity: "info",
