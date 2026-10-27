@@ -40,6 +40,8 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  /** The menu-bar / notification-area icon; off also stops closing to it. */
+  readonly trayIconEnabled: boolean;
   readonly updateInstallPolicy: DesktopUpdateInstallPolicy;
   readonly pendingUpdate: DesktopUpdateState["pendingUpdate"];
   readonly updateChannel: DesktopUpdateChannel;
@@ -82,6 +84,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
+  trayIconEnabled: true,
   updateInstallPolicy: "restart-when-idle",
   pendingUpdate: null,
   updateChannel: "latest",
@@ -108,6 +111,7 @@ const DesktopSettingsDocument = Schema.Struct({
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  trayIconEnabled: Schema.optionalKey(Schema.Boolean),
   updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
   pendingUpdate: Schema.optionalKey(DesktopUpdatePendingRecordSchema),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
@@ -164,6 +168,9 @@ export class DesktopAppSettings extends Context.Service<
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setHeadlessServerAttachEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setTrayIconEnabled: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setPreviewSessionStackPoppedOut: (
@@ -254,6 +261,7 @@ function normalizeDesktopSettingsDocument(
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
+    trayIconEnabled: parsed.trayIconEnabled !== false,
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
@@ -278,6 +286,10 @@ function toDesktopSettingsDocument(
 
   if (settings.headlessServerAttachEnabled !== defaults.headlessServerAttachEnabled) {
     document.headlessServerAttachEnabled = settings.headlessServerAttachEnabled;
+  }
+
+  if (settings.trayIconEnabled !== defaults.trayIconEnabled) {
+    document.trayIconEnabled = settings.trayIconEnabled;
   }
 
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
@@ -423,6 +435,12 @@ function setLocalEnvironmentEnabled(settings: DesktopSettings, enabled: boolean)
   return settings.localEnvironmentEnabled === enabled
     ? settings
     : { ...settings, localEnvironmentEnabled: enabled };
+}
+
+function setTrayIconEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.trayIconEnabled === enabled
+    ? settings
+    : { ...settings, trayIconEnabled: enabled };
 }
 
 function applyWslWindowsFallback(settings: DesktopSettings): DesktopSettings {
@@ -641,6 +659,10 @@ export const make = Effect.gen(function* () {
           attributes: { enabled },
         }),
       ),
+    setTrayIconEnabled: (enabled) =>
+      persist((settings) => setTrayIconEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setTrayIconEnabled", { attributes: { enabled } }),
+      ),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -705,6 +727,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setLocalEnvironmentEnabled(settings, enabled)),
         setHeadlessServerAttachEnabled: (enabled) =>
           update((settings) => setHeadlessServerAttachEnabled(settings, enabled)),
+        setTrayIconEnabled: (enabled) =>
+          update((settings) => setTrayIconEnabled(settings, enabled)),
         applyWslWindowsFallback: update(applyWslWindowsFallback),
         applyWslWindowsFallbackInMemory: update(applyWslWindowsFallback),
       });

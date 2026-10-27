@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { createTrayPicks, type TrayPick } from "./trayPicks.ts";
+import { createTrayPicks } from "./trayPicks.ts";
+
+type TrayPick = { readonly environmentId: string; readonly threadId: string };
 
 function renderer() {
   const received: TrayPick[] = [];
@@ -20,7 +22,7 @@ const pick = (threadId: string): TrayPick => ({ environmentId: "local", threadId
 
 describe("createTrayPicks", () => {
   it("holds a pick made before any renderer listens and delivers it once", () => {
-    const picks = createTrayPicks<ReturnType<typeof renderer>>("open");
+    const picks = createTrayPicks<TrayPick, ReturnType<typeof renderer>>("open");
     const window = renderer();
     picks.pick(pick("a"));
     picks.listening(window);
@@ -29,7 +31,7 @@ describe("createTrayPicks", () => {
   });
 
   it("keeps a pick made during a reload for the reloaded renderer, newest pick winning", () => {
-    const picks = createTrayPicks<ReturnType<typeof renderer>>("open");
+    const picks = createTrayPicks<TrayPick, ReturnType<typeof renderer>>("open");
     const before = renderer();
     picks.listening(before);
     expect(picks.gone(before)).toBe(true);
@@ -42,7 +44,7 @@ describe("createTrayPicks", () => {
   });
 
   it("does not send to a destroyed renderer", () => {
-    const picks = createTrayPicks<ReturnType<typeof renderer>>("open");
+    const picks = createTrayPicks<TrayPick, ReturnType<typeof renderer>>("open");
     const window = renderer();
     picks.listening(window);
     window.destroyed = true;

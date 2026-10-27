@@ -6,6 +6,7 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { AtomRegistry } from "effect/reactivity";
 
+import { requestNewThread } from "./newThreadRequests";
 import { environmentProjects } from "./state/projects";
 import { liveShellEnvironmentIdsAtom } from "./state/shell";
 import { environmentThreadShells } from "./state/threads";
@@ -13,6 +14,7 @@ import { environmentThreadShells } from "./state/threads";
 // Read through the bridge so the contracts index, which most tests import, stays untouched.
 type DesktopTrayMenu = Parameters<NonNullable<DesktopBridge["setTrayMenu"]>>[0];
 type DesktopTrayThread = DesktopTrayMenu["attention"][number];
+type DesktopTrayAction = Parameters<Parameters<NonNullable<DesktopBridge["onTrayAction"]>>[0]>[0];
 
 // The tray shows a handful; the cap keeps the IPC payload small however many threads exist.
 const SECTION_LIMIT = 20;
@@ -127,12 +129,16 @@ export function startDesktopTray(
   };
 
   // The thread route waits for its environment's shells, so a fresh window can navigate at once.
-  const openThread = (picked: Pick<DesktopTrayThread, "environmentId" | "threadId">) => {
+  const onAction = (action: DesktopTrayAction) => {
+    if (action.kind === "new-thread") {
+      requestNewThread();
+      return;
+    }
     void router.navigate({
       to: "/$environmentId/$threadId",
       params: {
-        environmentId: EnvironmentId.make(picked.environmentId),
-        threadId: ThreadId.make(picked.threadId),
+        environmentId: EnvironmentId.make(action.environmentId),
+        threadId: ThreadId.make(action.threadId),
       },
     });
   };
@@ -141,7 +147,7 @@ export function startDesktopTray(
     registry.subscribe(environmentThreadShells.quietThreadShellsAtom, schedule),
     registry.subscribe(environmentProjects.projectsAtom, schedule),
     registry.subscribe(liveShellEnvironmentIdsAtom, schedule),
-    bridge.onTrayOpenThread?.(openThread) ?? (() => {}),
+    bridge.onTrayAction?.(onAction) ?? (() => {}),
   ];
   schedule();
   return () => {

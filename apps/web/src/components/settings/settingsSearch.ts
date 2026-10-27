@@ -707,6 +707,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "tray-icon",
+    title: "Menu bar and tray icon",
+    to: "/settings/general",
+    searchTerms: ["menu bar tray notification area taskbar panel icon hide show close background"],
+    desktopOnly: true,
+  },
+  {
     id: "icon-credits",
     title: "Icons",
     to: "/settings/general",

@@ -3,12 +3,16 @@ import type * as Electron from "electron";
 
 export type DesktopTrayMenu = Parameters<NonNullable<DesktopBridge["setTrayMenu"]>>[0];
 export type DesktopTrayThread = DesktopTrayMenu["attention"][number];
+export type DesktopTrayAction = Parameters<
+  Parameters<NonNullable<DesktopBridge["onTrayAction"]>>[0]
+>[0];
 
 const SECTION_ROWS = 5;
 const TITLE_CODE_POINTS = 40;
 
 export interface TrayMenuActions {
   readonly openApp: () => void;
+  readonly newThread: () => void;
   readonly openThread: (thread: DesktopTrayThread) => void;
   readonly quit: () => void;
 }
@@ -17,6 +21,8 @@ export interface TrayMenuInput {
   readonly menu: DesktopTrayMenu;
   readonly platform: NodeJS.Platform;
   readonly appName: string;
+  /** macOS 14+ draws NSMenu section headers; elsewhere a section title is a disabled row. */
+  readonly nativeHeaders: boolean;
   readonly actions: TrayMenuActions;
 }
 
@@ -54,7 +60,7 @@ function section(
   const shown = threads.slice(0, SECTION_ROWS).map((thread) => threadItem(thread, input));
   const rest = threads.slice(SECTION_ROWS).map((thread) => threadItem(thread, input));
   return [
-    { label: title, enabled: false },
+    input.nativeHeaders ? { type: "header", label: title } : { label: title, enabled: false },
     ...shown,
     ...(rest.length > 0 ? [{ label: "More", submenu: rest }] : []),
   ];
@@ -69,6 +75,7 @@ export function trayMenuTemplate(input: TrayMenuInput): Electron.MenuItemConstru
   ].filter((items) => items.length > 0);
   return [
     { label: trayLabel(`Open ${appName}`), click: actions.openApp },
+    { label: "New Thread", click: actions.newThread },
     ...sections.flatMap((items) => [{ type: "separator" as const }, ...items]),
     { type: "separator" },
     { label: trayLabel(`Quit ${appName}`), click: actions.quit },

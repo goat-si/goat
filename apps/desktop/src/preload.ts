@@ -121,17 +121,28 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => ipcRenderer.removeListener(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
   },
   setTrayMenu: (menu) => ipcRenderer.invoke(IpcChannels.SET_TRAY_MENU_CHANNEL, menu),
-  onTrayOpenThread: (listener) => {
+  onTrayAction: (listener) => {
     const decode = Schema.decodeUnknownOption(
-      Schema.Struct({ environmentId: Schema.String, threadId: Schema.String }),
+      Schema.Union([
+        Schema.Struct({
+          kind: Schema.Literal("open-thread"),
+          environmentId: Schema.String,
+          threadId: Schema.String,
+        }),
+        Schema.Struct({ kind: Schema.Literal("new-thread") }),
+      ]),
     );
     const handler = (_event: Electron.IpcRendererEvent, raw: unknown) => {
-      const thread = decode(raw);
-      if (thread._tag === "Some") listener(thread.value);
+      const action = decode(raw);
+      if (action._tag === "Some") listener(action.value);
     };
-    ipcRenderer.on(IpcChannels.TRAY_OPEN_THREAD_CHANNEL, handler);
-    return () => ipcRenderer.removeListener(IpcChannels.TRAY_OPEN_THREAD_CHANNEL, handler);
+    ipcRenderer.on(IpcChannels.TRAY_ACTION_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.TRAY_ACTION_CHANNEL, handler);
   },
+  getTrayIconEnabled: () =>
+    ipcRenderer.sendSync(IpcChannels.GET_TRAY_ICON_ENABLED_CHANNEL) !== false,
+  setTrayIconEnabled: (enabled) =>
+    ipcRenderer.invoke(IpcChannels.SET_TRAY_ICON_ENABLED_CHANNEL, enabled),
   onTrackpadScrollEnd: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);

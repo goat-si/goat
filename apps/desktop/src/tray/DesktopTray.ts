@@ -1,18 +1,35 @@
-import type { DesktopTrayMenu, DesktopTrayThread } from "./trayMenu.ts";
 import * as Electron from "electron";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import { SET_TRAY_MENU_CHANNEL, TRAY_OPEN_THREAD_CHANNEL } from "../ipc/channels.ts";
+import {
+  GET_TRAY_ICON_ENABLED_CHANNEL,
+  SET_TRAY_ICON_ENABLED_CHANNEL,
+  SET_TRAY_MENU_CHANNEL,
+  TRAY_ACTION_CHANNEL,
+} from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import { trayMenuTemplate } from "./trayMenu.ts";
+import {
+  trayMenuTemplate,
+  type DesktopTrayAction,
+  type DesktopTrayMenu,
+  type DesktopTrayThread,
+} from "./trayMenu.ts";
 import { createTrayPicks } from "./trayPicks.ts";
+import {
+  attachCloseToTray,
+  openSessionWatcherBus,
+  statusNotifierHostAvailable,
+} from "./trayResidency.ts";
 
 const { logWarning } = makeComponentLogger("desktop-tray");
 
@@ -33,11 +50,6 @@ const TrayMenuPayload = Schema.Struct({
 
 const EMPTY_MENU: DesktopTrayMenu = { attention: [], running: [], pinned: [] };
 
-class DesktopTrayCreateError extends Schema.TaggedError<DesktopTrayCreateError>()(
-  "DesktopTrayCreateError",
-  { cause: Schema.Defect() },
-) {}
-
 // The Template suffix makes macOS tint the mark for the menu bar; Windows and Linux get the
 // app tile, which reads on light and dark taskbars alike.
 function trayIconFile(platform: NodeJS.Platform): string {
@@ -46,42 +58,9 @@ function trayIconFile(platform: NodeJS.Platform): string {
   return "tray/tray-linux.png";
 }
 
-const createTray = Effect.fn("desktop.tray.create")(function* (
-  platform: NodeJS.Platform,
-  appName: string,
-) {
-  const assets = yield* DesktopAssets.DesktopAssets;
-  const iconPath = yield* assets
-    .resolveResourcePath(trayIconFile(platform))
-    .pipe(Effect.orElseSucceed(() => Option.none<string>()));
-  if (Option.isNone(iconPath)) {
-    yield* logWarning("tray icon missing; tray disabled", { file: trayIconFile(platform) });
-    return Option.none<Electron.Tray>();
-  }
-  return yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => {
-        const image = Electron.nativeImage.createFromPath(iconPath.value);
-        if (platform === "darwin") image.setTemplateImage(true);
-        const tray = new Electron.Tray(image);
-        tray.setToolTip(appName);
-        return tray;
-      },
-      catch: (cause) => new DesktopTrayCreateError({ cause }),
-    }),
-    (tray) =>
-      Effect.sync(() => {
-        if (!tray.isDestroyed()) tray.destroy();
-      }),
-  ).pipe(
-    Effect.asSome,
-    Effect.catch((error) =>
-      logWarning("could not create tray; tray disabled", { cause: String(error.cause) }).pipe(
-        Effect.as(Option.none<Electron.Tray>()),
-      ),
-    ),
-  );
-});
+function macOSMajor(): number {
+  return Number.parseInt(process.getSystemVersion().split(".")[0] ?? "0", 10);
+}
 
 /** The menu-bar / notification-area icon listing threads the renderer reports. */
 export const installDesktopTray = Effect.fn("desktop.tray.install")(function* () {
@@ -89,9 +68,20 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronApp = yield* ElectronApp.ElectronApp;
+  const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const desktopState = yield* DesktopState.DesktopState;
   const { platform, displayName } = environment;
-  const tray = yield* createTray(platform, displayName);
+  const nativeHeaders = platform === "darwin" && macOSMajor() >= 14;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const warn = (message: string, annotations: Record<string, unknown>) =>
+    void runPromise(logWarning(message, annotations));
+
+  const iconFile = trayIconFile(platform);
+  const iconPath = yield* (yield* DesktopAssets.DesktopAssets)
+    .resolveResourcePath(iconFile)
+    .pipe(Effect.orElseSucceed(() => Option.none<string>()));
+  if (Option.isNone(iconPath)) yield* logWarning("tray icon missing; tray disabled", { iconFile });
 
   const run = <E>(effect: Effect.Effect<void, E>, action: string) =>
     void runPromise(
@@ -99,44 +89,81 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
         Effect.catchCause((cause) => logWarning("tray action failed", { action, cause })),
       ),
     );
-  // Picks wait for a renderer that has published a menu, which it does only after it listens.
+  // Actions wait for a renderer that has published a menu, which it does only after it listens.
   // It navigates itself, so a thread on a live remote opens while the local server is down.
-  const picks = createTrayPicks<Electron.WebContents>(TRAY_OPEN_THREAD_CHANNEL);
+  const picks = createTrayPicks<DesktopTrayAction, Electron.WebContents>(TRAY_ACTION_CHANNEL);
+  // activate shows a hidden window and recreates one macOS closed; its renderer then receives this.
+  const pick = (action: DesktopTrayAction, name: string) =>
+    run(desktopWindow.activate.pipe(Effect.andThen(Effect.sync(() => picks.pick(action)))), name);
   const actions = {
     openApp: () => run(desktopWindow.activate, "open-app"),
-    // activate recreates a window macOS closed; its renderer receives the pick once it publishes.
+    newThread: () => pick({ kind: "new-thread" }, "new-thread"),
     openThread: (thread: DesktopTrayThread) =>
-      run(
-        desktopWindow.activate.pipe(
-          Effect.andThen(
-            Effect.sync(() =>
-              picks.pick({ environmentId: thread.environmentId, threadId: thread.threadId }),
-            ),
-          ),
-        ),
+      pick(
+        { kind: "open-thread", environmentId: thread.environmentId, threadId: thread.threadId },
         "open-thread",
       ),
     quit: () => run(electronApp.quit, "quit"),
   };
 
+  let tray: Electron.Tray | null = null;
+  let menu = EMPTY_MENU;
   let applied: string | null = null;
-  const apply = (menu: DesktopTrayMenu) => {
-    if (Option.isNone(tray) || tray.value.isDestroyed()) return;
+  const render = () => {
+    if (tray === null || tray.isDestroyed()) return;
     const key = JSON.stringify(menu);
     if (key === applied) return;
     applied = key;
-    tray.value.setContextMenu(
+    tray.setContextMenu(
       Electron.Menu.buildFromTemplate(
-        trayMenuTemplate({ menu, platform, appName: displayName, actions }),
+        trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions }),
       ),
     );
   };
-  apply(EMPTY_MENU);
-  // A left click on a Windows notification-area icon opens nothing by default.
-  if (Option.isSome(tray) && platform === "win32") {
-    const value = tray.value;
-    value.on("click", () => value.popUpContextMenu());
-  }
+  const showIcon = () => {
+    if (tray !== null || Option.isNone(iconPath)) return;
+    try {
+      const image = Electron.nativeImage.createFromPath(iconPath.value);
+      if (platform === "darwin") image.setTemplateImage(true);
+      const created = new Electron.Tray(image);
+      created.setToolTip(displayName);
+      // A left click on a Windows notification-area icon opens nothing by default.
+      if (platform === "win32") created.on("click", () => created.popUpContextMenu());
+      tray = created;
+      applied = null;
+      render();
+    } catch (cause) {
+      warn("could not create tray; tray disabled", { cause: String(cause) });
+    }
+  };
+  const hideIcon = () => {
+    if (tray !== null && !tray.isDestroyed()) tray.destroy();
+    tray = null;
+  };
+  yield* Effect.addFinalizer(() => Effect.sync(hideIcon));
+  if ((yield* appSettings.get).trayIconEnabled) showIcon();
+
+  // The lifecycle cancels the first before-quit while backends stop; only the one it lets through
+  // is the real quit.
+  let quitAllowed = false;
+  yield* electronApp.on("before-quit", (event: Electron.Event) => {
+    if (!event.defaultPrevented) quitAllowed = true;
+  });
+  let sessionEnding = false;
+  const quitting = () => quitAllowed || runSync(Ref.get(desktopState.quitting));
+  const closingWindows = new Set<number>();
+  const keepWhenClosed = (window: Electron.BrowserWindow) => {
+    if (platform === "darwin" || closingWindows.has(window.id)) return;
+    closingWindows.add(window.id);
+    window.once("closed", () => closingWindows.delete(window.id));
+    window.on("session-end", () => {
+      sessionEnding = true;
+    });
+    attachCloseToTray(window, {
+      context: () => ({ platform, iconShown: tray !== null, quitting: quitting(), sessionEnding }),
+      hostAvailable: () => statusNotifierHostAvailable(openSessionWatcherBus),
+    });
+  };
 
   // Rows go stale once their renderer reloads or is gone (macOS keeps running windowless).
   const listen = (contents: Electron.WebContents) => {
@@ -149,7 +176,9 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
     const forget = () => {
       contents.removeListener("did-start-navigation", onNavigation);
       contents.removeListener("destroyed", forget);
-      if (picks.gone(contents)) apply(EMPTY_MENU);
+      if (!picks.gone(contents)) return;
+      menu = EMPTY_MENU;
+      render();
     };
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", forget);
@@ -161,13 +190,36 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       channel: SET_TRAY_MENU_CHANNEL,
       payload: TrayMenuPayload,
       result: Schema.Void,
-      handler: (menu, event) =>
+      handler: (next, event) =>
         Effect.sync(() => {
-          apply(menu);
+          menu = next;
+          render();
           const sender =
             event === undefined ? undefined : Electron.webContents.fromId(event.sender.id);
-          if (sender !== undefined && !sender.isDestroyed()) listen(sender);
+          if (sender === undefined || sender.isDestroyed()) return;
+          const window = Electron.BrowserWindow.fromWebContents(sender);
+          if (window !== null) keepWhenClosed(window);
+          listen(sender);
         }),
+    }),
+  );
+  yield* ipc.handleSync(
+    DesktopIpc.makeSyncIpcMethod({
+      channel: GET_TRAY_ICON_ENABLED_CHANNEL,
+      result: Schema.Boolean,
+      handler: () => appSettings.get.pipe(Effect.map((settings) => settings.trayIconEnabled)),
+    }),
+  );
+  yield* ipc.handle(
+    DesktopIpc.makeIpcMethod({
+      channel: SET_TRAY_ICON_ENABLED_CHANNEL,
+      payload: Schema.Boolean,
+      result: Schema.Void,
+      handler: Effect.fn("desktop.tray.setIconEnabled")(function* (enabled) {
+        yield* appSettings.setTrayIconEnabled(enabled);
+        if (enabled) showIcon();
+        else hideIcon();
+      }),
     }),
   );
 });

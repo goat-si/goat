@@ -13,9 +13,14 @@ interface DesktopTrayMenu {
   readonly pinned: readonly DesktopTrayThread[];
 }
 
+/** What a tray pick asks the renderer to do. */
+type DesktopTrayAction =
+  | ({ readonly kind: "open-thread" } & Pick<DesktopTrayThread, "environmentId" | "threadId">)
+  | { readonly kind: "new-thread" };
+
 export interface DesktopTrayBridge {
   setTrayMenu?: (menu: DesktopTrayMenu) => Promise<void>;
-  onTrayOpenThread?: (
-    listener: (thread: Pick<DesktopTrayThread, "environmentId" | "threadId">) => void,
-  ) => () => void;
+  onTrayAction?: (listener: (action: DesktopTrayAction) => void) => () => void;
+  getTrayIconEnabled?: () => boolean;
+  setTrayIconEnabled?: (enabled: boolean) => Promise<void>;
 }

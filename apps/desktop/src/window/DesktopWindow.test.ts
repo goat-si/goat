@@ -183,6 +183,7 @@ function layerTest(input: {
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
     setHeadlessServerAttachEnabled: () => Effect.die("unexpected headless server toggle"),
+    setTrayIconEnabled: () => Effect.die("unexpected tray icon toggle"),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
