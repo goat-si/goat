@@ -78,6 +78,10 @@ export interface ChildState {
   purposeHome: EnvironmentId;
   codexVersion: string;
   settingsDigest: string;
+  /** Runs inside each native probe request before it answers; a test may hold one there. */
+  duringProbe: () => Effect.Effect<void>;
+  /** The bootstrap instance has a hydration or session pending, so its route cannot be held. */
+  routeBusy: boolean;
   /** Runs inside each `ocx status` read before it answers; a test may hold one there. */
   duringStatus: () => Effect.Effect<void>;
   /** Wraps each settings commit of a provider instance: hold it, or fail after it lands. */
@@ -134,6 +138,8 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     settingsDigest: "settings-digest",
     commit: (write) => write,
     duringStatus: () => Effect.void,
+    duringProbe: () => Effect.void,
+    routeBusy: false,
     ...overrides,
   };
   const probes = yield* Ref.make(0);
@@ -199,7 +205,10 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(CodexRoute.CodexRouteState)({
       admission: Semaphore.makeUnsafe(1),
       revision: () => state.revision,
-      reserveUse: () => Effect.void,
+      reserveUse: () =>
+        state.routeBusy
+          ? Effect.fail(new ServerSettingsError({ settingsPath: "<test>", operation: "normalize" }))
+          : Effect.void,
     }),
     Layer.mock(CodexInstallation.CodexInstallation)({
       managedDirectory: "/fixture/managed",
@@ -255,6 +264,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(ReadyProbe.CodexReadyProbe)({
       probe: () =>
         Ref.update(probes, (n) => n + 1).pipe(
+          Effect.andThen(Effect.suspend(() => state.duringProbe())),
           Effect.andThen(Effect.sync(() => onProbe(state))),
           Effect.as({
             model: "home-model",

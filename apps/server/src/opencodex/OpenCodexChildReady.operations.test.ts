@@ -130,4 +130,66 @@ it.layer(NodeServices.layer)("OpenCodexChildReady operations", (it) => {
       expect(stored?.setup?.failure).toBeUndefined();
     }),
   );
+
+  it.effect("coalesces concurrent probes of one operation into one model request", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hold = true;
+      const f = yield* fixture({
+        duringProbe: () => {
+          if (!hold) return Effect.void;
+          hold = false;
+          return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)));
+        },
+      });
+      yield* f.routed;
+      const first = yield* Effect.forkChild(f.call("probe"));
+      yield* Deferred.await(entered);
+      const retry = yield* Effect.forkChild(f.call("probe"));
+      // Another operation waits its turn instead of sending a second request.
+      expect(failureCode(yield* f.call("probe", f.state.revision, "op-2"))).toBe("instance_busy");
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(first)).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+      expect(yield* Fiber.join(retry)).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+      expect(yield* f.probes).toBe(1);
+    }),
+  );
+
+  it.effect("configure answers only once the instance hydrated, and no probe runs before", () =>
+    Effect.gen(function* () {
+      const written = yield* Deferred.make<void>();
+      const hydrated = yield* Deferred.make<void>();
+      // As the settings service does: the commit lands, then waits for the provider to apply it.
+      const f = yield* fixture({
+        commit: (write) =>
+          write.pipe(
+            Effect.tap(() => Deferred.succeed(written, undefined)),
+            Effect.tap(() => Deferred.await(hydrated)),
+          ),
+      });
+      expect((yield* f.call("installCodex")).kind).toBe("ok");
+      expect((yield* f.call("syncCatalog")).kind).toBe("ok");
+      const configuring = yield* Effect.forkChild(f.call("configure"));
+      yield* Deferred.await(written);
+      expect(failureCode(yield* f.call("probe"))).toBe("route_unverified");
+      expect(yield* f.probes).toBe(0);
+      yield* Deferred.succeed(hydrated, undefined);
+      expect((yield* Fiber.join(configuring)).kind).toBe("ok");
+      expect((yield* f.call("probe")).kind).toBe("ok");
+      expect(yield* f.probes).toBe(1);
+    }),
+  );
+
+  it.effect("refuses to probe while the instance's hydration is pending", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      f.state.routeBusy = true;
+      expect(failureCode(yield* f.call("probe"))).toBe("instance_busy");
+      expect(yield* f.probes).toBe(0);
+      f.state.routeBusy = false;
+      expect((yield* f.call("probe")).kind).toBe("ok");
+    }),
+  );
 });

@@ -2,11 +2,17 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { CodexSettings, ProviderInstanceId } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import { codexHomeRouteArgv } from "../provider/CodexHomeRouteConfig.ts";
@@ -190,6 +196,8 @@ const fixture = Effect.fn("CodexReadyProbe.test.fixture")(function* (
     /** The installed managed executable differs from the one the runtime acquired. */
     readonly replacedExecutable?: boolean;
     readonly routeUnavailable?: boolean;
+    /** Replaces the native process with this spawner. */
+    readonly spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -237,6 +245,11 @@ const fixture = Effect.fn("CodexReadyProbe.test.fixture")(function* (
         }),
       ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-ready-probe-" })),
+      Layer.provide(
+        options.spawner === undefined
+          ? Layer.empty
+          : Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, options.spawner),
+      ),
       Layer.provideMerge(NodeServices.layer),
     ),
   );
@@ -347,5 +360,40 @@ it.live("never launches Codex when the hydrated runtime and installed executable
     const f = yield* fixture({ replacedExecutable: true });
     expect(yield* failureOf(f.probe)).toBe("route_unverified");
     expect(yield* f.peerLog).toEqual([]);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+/** An app-server that starts and never answers; its scope's close is observable. */
+const silentAppServer = (spawned: Deferred.Deferred<void>, closed: Deferred.Deferred<void>) =>
+  ChildProcessSpawner.make(() =>
+    Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Deferred.succeed(closed, undefined));
+      yield* Deferred.succeed(spawned, undefined);
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: Deferred.await(closed).pipe(Effect.as(ChildProcessSpawner.ExitCode(143))),
+        isRunning: Effect.succeed(true),
+        kill: () => Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout: Stream.never,
+        stderr: Stream.never,
+        all: Stream.never,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      });
+    }),
+  );
+
+it.effect("closes the scoped app-server and fails probe_timeout when the deadline passes", () =>
+  Effect.gen(function* () {
+    const spawned = yield* Deferred.make<void>();
+    const closed = yield* Deferred.make<void>();
+    const f = yield* fixture({ spawner: silentAppServer(spawned, closed) });
+    const running = yield* Effect.forkChild(failureOf(f.probe));
+    yield* Deferred.await(spawned);
+    yield* TestClock.adjust("60 seconds");
+    expect(yield* Fiber.join(running)).toBe("probe_timeout");
+    yield* Deferred.await(closed);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
