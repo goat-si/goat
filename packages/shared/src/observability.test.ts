@@ -1,6 +1,8 @@
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
+import * as PlatformError from "effect/PlatformError";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +24,8 @@ import {
   makeLocalFileTracer,
   makeTraceSink,
   type EffectTraceRecord,
+  type LocalFileTracerOptions,
+  type TraceSinkOptions,
   type TraceRecord,
   OtlpHeadersFromString,
   truncateTraceAttributes,
@@ -643,3 +647,111 @@ describe("failed span exits", () => {
     }),
   );
 });
+
+
+it.effect("skips local records before attribute traversal and still ends delegate spans", () =>
+  Effect.gen(function* () {
+    let traversals = 0;
+    const records: TraceRecord[] = [];
+    const delegates: Tracer.NativeSpan[] = [];
+    const options: LocalFileTracerOptions & { shouldRecord: (span: Tracer.Span) => boolean } = {
+      filePath: "unused", maxBytes: 1024, maxFiles: 1, batchWindowMs: 1000,
+      shouldRecord: (span) => span.name !== "sqlite",
+      sink: { filePath: "unused", push: (record) => records.push(record),
+        flush: Effect.void, close: () => Effect.void },
+      delegate: Tracer.make({ span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        delegates.push(span);
+        return span;
+      } }),
+    };
+    const tracer = yield* makeLocalFileTracer(options);
+    for (let i = 0; i < 1000; i++) {
+      const span = tracer.span({ name: "sqlite", parent: Option.none(), annotations: Context.empty(),
+        links: [], startTime: 0n, kind: "client", root: true, sampled: true });
+      span.attribute("fixture", { get value() { traversals++; return "payload"; } });
+      span.end(1_000_000n, Exit.void);
+    }
+    assert.equal(records.length, 0);
+    assert.equal(traversals, 0);
+    assert.equal(delegates.length, 1000);
+    assert.isTrue(delegates.every((span) => span.status._tag === "Ended"));
+  }),
+);
+
+it.effect("counts serialization and oversized trace losses exactly once across flushes", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "trace-loss-" });
+    const losses = new Map<string, number>();
+    const options: TraceSinkOptions & {
+      onDrop: (reason: string, count: number) => Effect.Effect<void>;
+    } = {
+      filePath: path.join(dir, "trace.ndjson"), maxBytes: 1024, maxFiles: 1, batchWindowMs: 1000,
+      onDrop: (reason, count) => Effect.sync(() => {
+        losses.set(reason, (losses.get(reason) ?? 0) + count);
+      }),
+    };
+    const sink = yield* makeTraceSink(options);
+    const circular: unknown[] = [];
+    circular.push(circular);
+    sink.push({ ...makeRecord("bad"), attributes: { circular } });
+    sink.push(makeRecord("big", "x".repeat(2048)));
+    sink.push(makeRecord("kept"));
+    yield* sink.flush;
+    yield* sink.flush;
+    assert.deepEqual([...losses].sort(), [["oversize", 1], ["serialization", 1]]);
+    assert.deepEqual((yield* readTraceRecords(options.filePath)).map((r) => r.name), ["kept"]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+
+it.effect("accounts for overflow and disk loss once and resumes successful writes", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "trace-loss-" });
+    const tracePath = path.join(dir, "trace.ndjson");
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let failing = true;
+    const losses = new Map<string, number>();
+    const problem = PlatformError.systemError({
+      _tag: "PermissionDenied", module: "FileSystem", method: "writeFile",
+      description: "fixture denial", pathOrDescriptor: tracePath,
+    });
+    const options: TraceSinkOptions & {
+      onDrop: (reason: string, count: number) => Effect.Effect<void>;
+    } = {
+      filePath: tracePath, maxBytes: 5_000_000, maxFiles: 1, batchWindowMs: 10_000,
+      onDrop: (reason, count) => Effect.sync(() => {
+        losses.set(reason, (losses.get(reason) ?? 0) + count);
+      }),
+    };
+    const sink = yield* makeTraceSink(options).pipe(
+      Effect.provideService(FileSystem.FileSystem, {
+        ...fs, writeFile: (file, data, writeOptions) => Effect.gen(function* () {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+          if (failing) return yield* Effect.fail(problem);
+          yield* fs.writeFile(file, data, writeOptions);
+        }),
+      }),
+    );
+    sink.push(makeRecord("first"));
+    const flushing = yield* Effect.forkChild(sink.flush);
+    yield* Deferred.await(entered);
+    for (let i = 0; i < 3; i++) sink.push({ ...makeRecord("large"), attributes: { payload: "x".repeat(2_000_000) } });
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(flushing);
+    yield* sink.flush;
+    assert.deepEqual([...losses].sort(), [["disk", 3], ["overflow", 1]]);
+    failing = false;
+    sink.push(makeRecord("recovered"));
+    yield* sink.flush;
+    yield* sink.flush;
+    assert.deepEqual([...losses].sort(), [["disk", 3], ["overflow", 1]]);
+    assert.deepEqual((yield* readTraceRecords(tracePath)).map((r) => r.name), ["recovered"]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);

@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
+import * as Tracer from "effect/Tracer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -217,3 +219,49 @@ describe("Observability.layer", () => {
       }),
   );
 });
+
+it.effect.each(["Info", "Debug", "Trace"] as const)(
+  "applies the local SQL policy at %s while preserving OTLP spans",
+  (traceMinLevel) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sql-policy-" });
+      const bodies: string[] = [];
+      const layerConfig = Layer.effect(
+        ServerConfig.ServerConfig,
+        Effect.gen(function* () {
+          const base = yield* ServerConfig.ServerConfig;
+          return ServerConfig.make({
+            ...base, traceMinLevel, otlpTracesUrl: "http://otlp.test/v1/traces",
+          });
+        }),
+      ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
+      const tracePath = yield* Effect.gen(function* () {
+        const tracer = yield* Tracer.Tracer;
+        const parent = Tracer.externalSpan({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
+        for (let index = 0; index < 1_000; index++) {
+          const span = tracer.span({
+            name: "sqlite", parent: Option.some(parent), annotations: Context.empty(),
+            links: [], startTime: 0n, kind: "client", root: false, sampled: true,
+          });
+          span.attribute("db.lock_wait_ms", 0);
+          span.attribute("fixture.id", index);
+          span.end(1_000_000n, Exit.void);
+        }
+        yield* Effect.void.pipe(Effect.withSpan("policy-fixture"));
+        return (yield* ServerConfig.ServerConfig).serverTracePath;
+      }).pipe(Effect.provide(Observability.layer.pipe(
+        Layer.provideMerge(layerConfig), Layer.provide(ResourceAttribution.layer),
+        Layer.provide(layerTraceCollector(bodies)),
+      )));
+      const records = (yield* fs.readFileString(tracePath)).trim().split("\n")
+        .filter(Boolean).map((line) => JSON.parse(line) as EffectTraceRecord)
+        .filter((record) => record.name === "sqlite");
+      const expectedIds = traceMinLevel === "Info" ? [] : Array.from({ length: 1_000 }, (_, i) => i);
+      assert.deepEqual(records.map((record) => record.attributes["fixture.id"]), expectedIds);
+      const bytes = records.reduce((total, record) => total + Buffer.byteLength(`${JSON.stringify(record)}\n`), 0);
+      if (traceMinLevel === "Info") assert.equal(bytes, 0);
+      else assert.isAbove(bytes, 0);
+      assert.equal(exportedSpans(bodies).filter((span) => span.name === "sqlite").length, 1_000);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
