@@ -74,7 +74,7 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
         inside
           .locator(id)
           .evaluate((input) => [
-            (input as HTMLInputElement).files?.[0]?.name ?? null,
+            (input as unknown as { files: ArrayLike<{ name: string }> }).files[0]?.name ?? null,
             (globalThis as unknown as { changes: number }).changes,
           ]);
       expect(await state("#g")).toEqual(["note.txt", 1]);

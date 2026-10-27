@@ -3,7 +3,7 @@
 import type { PreviewAutomationUploadInput } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
-import type { CDPSession, ElementHandle, Page, Protocol } from "playwright-core";
+import type { CDPSession, ElementHandle, Page } from "playwright-core";
 
 import {
   DEFAULT_TIMEOUT_MS,
@@ -27,7 +27,9 @@ const framedInput = async (handle: ElementHandle, key: string) => {
     .catch(() => context.newCDPSession(frame.page()));
   try {
     const worlds: Array<number> = [];
-    const onContext = (event: Protocol.Runtime.executionContextCreatedPayload) => {
+    const onContext = (event: {
+      readonly context: { readonly id: number; readonly auxData?: unknown };
+    }) => {
       const aux = event.context.auxData as { isDefault?: boolean } | undefined;
       if (aux?.isDefault === true) worlds.push(event.context.id);
     };
