@@ -16,10 +16,6 @@ import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
-import { Route as SettingsMemoryRouteImport } from './routes/settings.memory'
-import { Route as SettingsHubRouteImport } from './routes/settings.hub'
-import { Route as SettingsGoatBotRouteImport } from './routes/settings.goat-bot'
-import { Route as SettingsDecisionInboxRouteImport } from './routes/settings.decision-inbox'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
@@ -36,10 +32,14 @@ import { Route as ChatSettingsScheduledTasksRouteImport } from './routes/_chat.s
 import { Route as ChatSettingsProvidersRouteImport } from './routes/_chat.settings.providers'
 import { Route as ChatSettingsProjectsRouteImport } from './routes/_chat.settings.projects'
 import { Route as ChatSettingsOpenSourceLicensesRouteImport } from './routes/_chat.settings.open-source-licenses'
+import { Route as ChatSettingsMemoryRouteImport } from './routes/_chat.settings.memory'
 import { Route as ChatSettingsKeybindingsRouteImport } from './routes/_chat.settings.keybindings'
 import { Route as ChatSettingsIntegrationsRouteImport } from './routes/_chat.settings.integrations'
+import { Route as ChatSettingsHubRouteImport } from './routes/_chat.settings.hub'
+import { Route as ChatSettingsGoatBotRouteImport } from './routes/_chat.settings.goat-bot'
 import { Route as ChatSettingsGeneralRouteImport } from './routes/_chat.settings.general'
 import { Route as ChatSettingsDiagnosticsRouteImport } from './routes/_chat.settings.diagnostics'
+import { Route as ChatSettingsDecisionInboxRouteImport } from './routes/_chat.settings.decision-inbox'
 import { Route as ChatSettingsConnectionsRouteImport } from './routes/_chat.settings.connections'
 import { Route as ChatSettingsBetaRouteImport } from './routes/_chat.settings.beta'
 import { Route as ChatSettingsArchivedRouteImport } from './routes/_chat.settings.archived'
@@ -80,26 +80,6 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => ChatRoute,
-} as any)
-const SettingsMemoryRoute = SettingsMemoryRouteImport.update({
-  id: '/settings/memory',
-  path: '/settings/memory',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsHubRoute = SettingsHubRouteImport.update({
-  id: '/settings/hub',
-  path: '/settings/hub',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsGoatBotRoute = SettingsGoatBotRouteImport.update({
-  id: '/settings/goat-bot',
-  path: '/settings/goat-bot',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsDecisionInboxRoute = SettingsDecisionInboxRouteImport.update({
-  id: '/settings/decision-inbox',
-  path: '/settings/decision-inbox',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   id: '/projects/$projectKey',
@@ -184,6 +164,11 @@ const ChatSettingsOpenSourceLicensesRoute =
     path: '/open-source-licenses',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
+const ChatSettingsMemoryRoute = ChatSettingsMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsKeybindingsRoute = ChatSettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
@@ -195,6 +180,16 @@ const ChatSettingsIntegrationsRoute =
     path: '/integrations',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
+const ChatSettingsHubRoute = ChatSettingsHubRouteImport.update({
+  id: '/hub',
+  path: '/hub',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
+const ChatSettingsGoatBotRoute = ChatSettingsGoatBotRouteImport.update({
+  id: '/goat-bot',
+  path: '/goat-bot',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsGeneralRoute = ChatSettingsGeneralRouteImport.update({
   id: '/general',
   path: '/general',
@@ -205,6 +200,12 @@ const ChatSettingsDiagnosticsRoute = ChatSettingsDiagnosticsRouteImport.update({
   path: '/diagnostics',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsDecisionInboxRoute =
+  ChatSettingsDecisionInboxRouteImport.update({
+    id: '/decision-inbox',
+    path: '/decision-inbox',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsConnectionsRoute = ChatSettingsConnectionsRouteImport.update({
   id: '/connections',
   path: '/connections',
@@ -253,20 +254,20 @@ export interface FileRoutesByFullPath {
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
-  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
-  '/settings/goat-bot': typeof SettingsGoatBotRoute
-  '/settings/hub': typeof SettingsHubRoute
-  '/settings/memory': typeof SettingsMemoryRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/appearance': typeof ChatSettingsAppearanceRoute
   '/settings/archived': typeof ChatSettingsArchivedRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/connections': typeof ChatSettingsConnectionsRoute
+  '/settings/decision-inbox': typeof ChatSettingsDecisionInboxRoute
   '/settings/diagnostics': typeof ChatSettingsDiagnosticsRoute
   '/settings/general': typeof ChatSettingsGeneralRoute
+  '/settings/goat-bot': typeof ChatSettingsGoatBotRoute
+  '/settings/hub': typeof ChatSettingsHubRoute
   '/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
+  '/settings/memory': typeof ChatSettingsMemoryRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
   '/settings/projects': typeof ChatSettingsProjectsRoute
   '/settings/providers': typeof ChatSettingsProvidersRoute
@@ -290,10 +291,6 @@ export interface FileRoutesByTo {
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
-  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
-  '/settings/goat-bot': typeof SettingsGoatBotRoute
-  '/settings/hub': typeof SettingsHubRoute
-  '/settings/memory': typeof SettingsMemoryRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -301,10 +298,14 @@ export interface FileRoutesByTo {
   '/settings/archived': typeof ChatSettingsArchivedRoute
   '/settings/beta': typeof ChatSettingsBetaRoute
   '/settings/connections': typeof ChatSettingsConnectionsRoute
+  '/settings/decision-inbox': typeof ChatSettingsDecisionInboxRoute
   '/settings/diagnostics': typeof ChatSettingsDiagnosticsRoute
   '/settings/general': typeof ChatSettingsGeneralRoute
+  '/settings/goat-bot': typeof ChatSettingsGoatBotRoute
+  '/settings/hub': typeof ChatSettingsHubRoute
   '/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/settings/keybindings': typeof ChatSettingsKeybindingsRoute
+  '/settings/memory': typeof ChatSettingsMemoryRoute
   '/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
   '/settings/projects': typeof ChatSettingsProjectsRoute
   '/settings/providers': typeof ChatSettingsProvidersRoute
@@ -330,10 +331,6 @@ export interface FileRoutesById {
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
   '/_chat/usage': typeof ChatUsageRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
-  '/settings/decision-inbox': typeof SettingsDecisionInboxRoute
-  '/settings/goat-bot': typeof SettingsGoatBotRoute
-  '/settings/hub': typeof SettingsHubRoute
-  '/settings/memory': typeof SettingsMemoryRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -341,10 +338,14 @@ export interface FileRoutesById {
   '/_chat/settings/archived': typeof ChatSettingsArchivedRoute
   '/_chat/settings/beta': typeof ChatSettingsBetaRoute
   '/_chat/settings/connections': typeof ChatSettingsConnectionsRoute
+  '/_chat/settings/decision-inbox': typeof ChatSettingsDecisionInboxRoute
   '/_chat/settings/diagnostics': typeof ChatSettingsDiagnosticsRoute
   '/_chat/settings/general': typeof ChatSettingsGeneralRoute
+  '/_chat/settings/goat-bot': typeof ChatSettingsGoatBotRoute
+  '/_chat/settings/hub': typeof ChatSettingsHubRoute
   '/_chat/settings/integrations': typeof ChatSettingsIntegrationsRoute
   '/_chat/settings/keybindings': typeof ChatSettingsKeybindingsRoute
+  '/_chat/settings/memory': typeof ChatSettingsMemoryRoute
   '/_chat/settings/open-source-licenses': typeof ChatSettingsOpenSourceLicensesRoute
   '/_chat/settings/projects': typeof ChatSettingsProjectsRoute
   '/_chat/settings/providers': typeof ChatSettingsProvidersRoute
@@ -371,20 +372,20 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
-    | '/settings/decision-inbox'
-    | '/settings/goat-bot'
-    | '/settings/hub'
-    | '/settings/memory'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/beta'
     | '/settings/connections'
+    | '/settings/decision-inbox'
     | '/settings/diagnostics'
     | '/settings/general'
+    | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/memory'
     | '/settings/open-source-licenses'
     | '/settings/projects'
     | '/settings/providers'
@@ -408,10 +409,6 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/projects/$projectKey'
-    | '/settings/decision-inbox'
-    | '/settings/goat-bot'
-    | '/settings/hub'
-    | '/settings/memory'
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -419,10 +416,14 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/beta'
     | '/settings/connections'
+    | '/settings/decision-inbox'
     | '/settings/diagnostics'
     | '/settings/general'
+    | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/memory'
     | '/settings/open-source-licenses'
     | '/settings/projects'
     | '/settings/providers'
@@ -447,10 +448,6 @@ export interface FileRouteTypes {
     | '/_chat/settings'
     | '/_chat/usage'
     | '/projects/$projectKey'
-    | '/settings/decision-inbox'
-    | '/settings/goat-bot'
-    | '/settings/hub'
-    | '/settings/memory'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
@@ -458,10 +455,14 @@ export interface FileRouteTypes {
     | '/_chat/settings/archived'
     | '/_chat/settings/beta'
     | '/_chat/settings/connections'
+    | '/_chat/settings/decision-inbox'
     | '/_chat/settings/diagnostics'
     | '/_chat/settings/general'
+    | '/_chat/settings/goat-bot'
+    | '/_chat/settings/hub'
     | '/_chat/settings/integrations'
     | '/_chat/settings/keybindings'
+    | '/_chat/settings/memory'
     | '/_chat/settings/open-source-licenses'
     | '/_chat/settings/projects'
     | '/_chat/settings/providers'
@@ -479,10 +480,6 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   WelcomeRoute: typeof WelcomeRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
-  SettingsDecisionInboxRoute: typeof SettingsDecisionInboxRoute
-  SettingsGoatBotRoute: typeof SettingsGoatBotRoute
-  SettingsHubRoute: typeof SettingsHubRoute
-  SettingsMemoryRoute: typeof SettingsMemoryRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -535,34 +532,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
-    }
-    '/settings/memory': {
-      id: '/settings/memory'
-      path: '/settings/memory'
-      fullPath: '/settings/memory'
-      preLoaderRoute: typeof SettingsMemoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/hub': {
-      id: '/settings/hub'
-      path: '/settings/hub'
-      fullPath: '/settings/hub'
-      preLoaderRoute: typeof SettingsHubRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/goat-bot': {
-      id: '/settings/goat-bot'
-      path: '/settings/goat-bot'
-      fullPath: '/settings/goat-bot'
-      preLoaderRoute: typeof SettingsGoatBotRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/decision-inbox': {
-      id: '/settings/decision-inbox'
-      path: '/settings/decision-inbox'
-      fullPath: '/settings/decision-inbox'
-      preLoaderRoute: typeof SettingsDecisionInboxRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/projects/$projectKey': {
       id: '/projects/$projectKey'
@@ -676,6 +645,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsOpenSourceLicensesRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/memory': {
+      id: '/_chat/settings/memory'
+      path: '/memory'
+      fullPath: '/settings/memory'
+      preLoaderRoute: typeof ChatSettingsMemoryRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/keybindings': {
       id: '/_chat/settings/keybindings'
       path: '/keybindings'
@@ -690,6 +666,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsIntegrationsRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/hub': {
+      id: '/_chat/settings/hub'
+      path: '/hub'
+      fullPath: '/settings/hub'
+      preLoaderRoute: typeof ChatSettingsHubRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/goat-bot': {
+      id: '/_chat/settings/goat-bot'
+      path: '/goat-bot'
+      fullPath: '/settings/goat-bot'
+      preLoaderRoute: typeof ChatSettingsGoatBotRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/general': {
       id: '/_chat/settings/general'
       path: '/general'
@@ -702,6 +692,13 @@ declare module '@tanstack/react-router' {
       path: '/diagnostics'
       fullPath: '/settings/diagnostics'
       preLoaderRoute: typeof ChatSettingsDiagnosticsRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/decision-inbox': {
+      id: '/_chat/settings/decision-inbox'
+      path: '/decision-inbox'
+      fullPath: '/settings/decision-inbox'
+      preLoaderRoute: typeof ChatSettingsDecisionInboxRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/connections': {
@@ -754,10 +751,14 @@ interface ChatSettingsRouteChildren {
   ChatSettingsArchivedRoute: typeof ChatSettingsArchivedRoute
   ChatSettingsBetaRoute: typeof ChatSettingsBetaRoute
   ChatSettingsConnectionsRoute: typeof ChatSettingsConnectionsRoute
+  ChatSettingsDecisionInboxRoute: typeof ChatSettingsDecisionInboxRoute
   ChatSettingsDiagnosticsRoute: typeof ChatSettingsDiagnosticsRoute
   ChatSettingsGeneralRoute: typeof ChatSettingsGeneralRoute
+  ChatSettingsGoatBotRoute: typeof ChatSettingsGoatBotRoute
+  ChatSettingsHubRoute: typeof ChatSettingsHubRoute
   ChatSettingsIntegrationsRoute: typeof ChatSettingsIntegrationsRoute
   ChatSettingsKeybindingsRoute: typeof ChatSettingsKeybindingsRoute
+  ChatSettingsMemoryRoute: typeof ChatSettingsMemoryRoute
   ChatSettingsOpenSourceLicensesRoute: typeof ChatSettingsOpenSourceLicensesRoute
   ChatSettingsProjectsRoute: typeof ChatSettingsProjectsRoute
   ChatSettingsProvidersRoute: typeof ChatSettingsProvidersRoute
@@ -772,10 +773,14 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsArchivedRoute: ChatSettingsArchivedRoute,
   ChatSettingsBetaRoute: ChatSettingsBetaRoute,
   ChatSettingsConnectionsRoute: ChatSettingsConnectionsRoute,
+  ChatSettingsDecisionInboxRoute: ChatSettingsDecisionInboxRoute,
   ChatSettingsDiagnosticsRoute: ChatSettingsDiagnosticsRoute,
   ChatSettingsGeneralRoute: ChatSettingsGeneralRoute,
+  ChatSettingsGoatBotRoute: ChatSettingsGoatBotRoute,
+  ChatSettingsHubRoute: ChatSettingsHubRoute,
   ChatSettingsIntegrationsRoute: ChatSettingsIntegrationsRoute,
   ChatSettingsKeybindingsRoute: ChatSettingsKeybindingsRoute,
+  ChatSettingsMemoryRoute: ChatSettingsMemoryRoute,
   ChatSettingsOpenSourceLicensesRoute: ChatSettingsOpenSourceLicensesRoute,
   ChatSettingsProjectsRoute: ChatSettingsProjectsRoute,
   ChatSettingsProvidersRoute: ChatSettingsProvidersRoute,
@@ -827,10 +832,6 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   WelcomeRoute: WelcomeRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
-  SettingsDecisionInboxRoute: SettingsDecisionInboxRoute,
-  SettingsGoatBotRoute: SettingsGoatBotRoute,
-  SettingsHubRoute: SettingsHubRoute,
-  SettingsMemoryRoute: SettingsMemoryRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

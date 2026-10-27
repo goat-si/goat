@@ -63,6 +63,8 @@ computer. The agent checks the screen again after you hand control back. A
 password or passkey step in a browser tab pauses its view and input. In desktop
 apps this is switched off for now; see
 [Work that runs on its own](#work-that-runs-on-its-own).
+When an agent asks for a password for a sign-in page, the card shows the site.
+GOAT types the password into that site's password field, and the agent gets only a reference.
 
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
@@ -86,6 +88,13 @@ Declining or cancelling ends that request. A newer request replaces the old
 one. An agent waits up to ten minutes for your answer, or until the request
 expires if sooner. If it stops waiting, answering later wakes the thread so it
 can continue.
+
+On a Mac, a few actions, such as saving a document while its app stays in the
+background or renaming a file through Finder, also need macOS Automation
+permission for that app. macOS asks once per app. Until someone at the Mac
+answers, or while it is off in **System Settings > Privacy & Security >
+Automation**, the agent stops that action and tells you, naming the app when it
+can.
 
 Your pointer stays where you put it. By default agents never move it: they
 click through an element's accessibility action, the keyboard, or a background

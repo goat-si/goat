@@ -60,6 +60,8 @@ export interface PreviewAutomationInvokeInput {
 
 export interface PreviewAutomationConnectOptions {
   readonly preferred?: boolean;
+  /** Only the server's own browser may fill secrets: other hosts never get the operation. */
+  readonly inProcess?: boolean;
 }
 
 export class PreviewAutomationBroker extends Context.Service<
@@ -87,6 +89,7 @@ interface ClientConnection {
   readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
   readonly focused: boolean;
   readonly preferred: boolean;
+  readonly inProcess: boolean;
   readonly liveTabs: NonNullable<PreviewAutomationHostFocus["liveTabs"]>;
   readonly focusOrder: number;
   readonly queue: Queue.Queue<PreviewAutomationStreamEvent, Cause.Done>;
@@ -183,7 +186,9 @@ const readResultTabId = (result: unknown): PreviewTabId | null | undefined => {
 const supportsOperation = (
   connection: ClientConnection,
   operation: PreviewAutomationOperation,
-): boolean => connection.supportedOperations.has(operation);
+): boolean =>
+  connection.supportedOperations.has(operation) &&
+  (operation !== "fillSecret" || connection.inProcess);
 
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
@@ -413,6 +418,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
       focused: false,
       preferred: options?.preferred ?? false,
+      inProcess: options?.inProcess ?? false,
       liveTabs: [],
       focusOrder: 0,
       queue,

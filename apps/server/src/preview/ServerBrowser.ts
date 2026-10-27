@@ -104,6 +104,7 @@ import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -403,6 +404,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  const secretFill = yield* ServerBrowserSecretFill.make;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -1634,8 +1636,7 @@ const make = Effect.gen(function* () {
   };
 
   const requireTab = async (request: PreviewAutomationRequest) => {
-    if (!request.agentSessionId)
-      throw new BrowserControlInterrupted("The agent session is missing. Reconnect the provider.");
+    SessionControl.requireAgentSession(request);
     const owned = [...tabs.values()].filter(
       (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
     );
@@ -1691,10 +1692,7 @@ const make = Effect.gen(function* () {
           (tab) => statusWithTitle(tab, request.agentSessionId),
         );
       case "open": {
-        if (!request.agentSessionId)
-          throw new BrowserControlInterrupted(
-            "The agent session is missing. Reconnect the provider.",
-          );
+        SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
         const reuse = open.reuseExistingTab ?? true;
@@ -1835,6 +1833,8 @@ const make = Effect.gen(function* () {
       }
     }
     const tab = await requireTab(request);
+    if (request.operation === "fillSecret")
+      return secretFill.fill(tab, request, deadlineMs, recordAction);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)
@@ -1842,8 +1842,7 @@ const make = Effect.gen(function* () {
           "Only the agent session that opened this tab can close it.",
           "agentMismatch",
         );
-      if (tab.control.controller !== null)
-        throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
       void tab.control.close().catch(constVoid);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
@@ -1852,8 +1851,7 @@ const make = Effect.gen(function* () {
     }
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
-      if (tab.control.controller !== null)
-        throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      tab.control.assertNoHumanControl();
       await resolveDialog(tab, input as PreviewAutomationDialogInput);
       return statusWithTitle(tab, request.agentSessionId);
     }
@@ -1901,6 +1899,7 @@ const make = Effect.gen(function* () {
     signal?: AbortSignal,
   ) => {
     const input = request.input;
+    await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = () => ServerBrowserScreen.screenActionGate(tab, request);
     switch (request.operation) {
@@ -2065,6 +2064,7 @@ const make = Effect.gen(function* () {
           },
         }),
       }),
+      Effect.map(secretFill.mask(request)),
       Effect.flatMap((outcome) =>
         broker.respond({
           clientId: SERVER_HOST_CLIENT_ID,
@@ -2505,7 +2505,7 @@ const make = Effect.gen(function* () {
         environmentId,
         supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS],
       },
-      { preferred: true },
+      { preferred: true, inProcess: true },
     )
     .pipe(
       Effect.flatMap((events) =>

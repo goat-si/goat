@@ -169,7 +169,11 @@ describe("scopeVerdict", () => {
       listed,
       true,
     );
-    assert.deepEqual(listed.get(KAKAO.pid), { id: KAKAO.bundle_id, name: KAKAO.name });
+    assert.deepEqual(listed.get(KAKAO.pid), {
+      id: KAKAO.bundle_id,
+      name: KAKAO.name,
+      bundleId: KAKAO.bundle_id,
+    });
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });
 
@@ -185,7 +189,11 @@ describe("scopeVerdict", () => {
       listed,
       true,
     );
-    assert.deepEqual(listed.get(42), { id: "org.example.Editor", name: "Editor" });
+    assert.deepEqual(listed.get(42), {
+      id: "org.example.Editor",
+      name: "Editor",
+      bundleId: "org.example.Editor",
+    });
   });
 
   it("launches an app under a list only by an approved bundle id on macOS, and never elsewhere", () => {

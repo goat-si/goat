@@ -279,10 +279,12 @@ export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 export const CuaAgentPermissionsBlock = Schema.Struct({
   reason: Schema.Literal("permissionsNotGranted"),
   /** The grants macOS has not given the app that holds them, GOAT Computer Use or GOAT. */
-  missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording"])).check(
+  missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording", "automation"])).check(
     Schema.isMinLength(1),
   ),
   holder: Schema.Literals(["helper", "app"]),
+  /** For automation: the bundle id of the app macOS must let the holder control, when known. */
+  target: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type CuaAgentPermissionsBlock = typeof CuaAgentPermissionsBlock.Type;
 
@@ -307,9 +309,20 @@ export type CuaAgentBlock = typeof CuaAgentBlock.Type;
 export const cuaAgentBlockLists = (block: CuaAgentPermissionsBlock): string =>
   block.missing
     .map((grant) =>
-      grant === "accessibility" ? "Accessibility" : "Screen & System Audio Recording",
+      grant === "accessibility"
+        ? "Accessibility"
+        : grant === "automation"
+          ? "Automation"
+          : "Screen & System Audio Recording",
     )
     .join(" and ");
+
+const holderName = (block: CuaAgentPermissionsBlock) =>
+  block.holder === "helper" ? "GOAT Computer Use" : "GOAT";
+
+/** Automation is per target app and only stops the actions that send it Apple Events. */
+const automationOnly = (block: CuaAgentPermissionsBlock) =>
+  block.missing.every((grant) => grant === "automation");
 
 /** A Windows desktop block's short title, by its cause; the helper's detail says the rest. */
 const desktopTitle = {
@@ -321,7 +334,9 @@ const desktopTitle = {
 /** A short title for a block, such as a session card's: what is missing, not the whole sentence. */
 export const cuaAgentBlockTitle = (block: CuaAgentBlock): string =>
   block.reason === "permissionsNotGranted"
-    ? `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`
+    ? automationOnly(block)
+      ? `Allow ${holderName(block)} to control ${block.target ?? "this app"} in Automation`
+      : `Allow ${holderName(block)} in ${cuaAgentBlockLists(block)}`
     : block.blocker === undefined
       ? "GOAT Computer Use cannot use this desktop"
       : desktopTitle[block.blocker];
@@ -337,9 +352,11 @@ export const CUA_STALE_ACCESSIBILITY_ADVICE =
 
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
-  block.reason === "permissionsNotGranted"
-    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security${block.missing.includes("accessibility") ? ` > Accessibility. ${CUA_STALE_ACCESSIBILITY_ADVICE}` : "."}`
-    : `Computer use cannot start: ${block.detail}`;
+  block.reason !== "permissionsNotGranted"
+    ? `Computer use cannot start: ${block.detail}`
+    : automationOnly(block)
+      ? `macOS has not allowed ${holderName(block)} to control ${block.target ?? "this app"}. A person at this Mac allows it in System Settings > Privacy & Security > Automation, or answers the prompt macOS shows.`
+      : `Computer use cannot start: macOS has not allowed ${holderName(block)} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security${block.missing.includes("accessibility") ? ` > Accessibility. ${CUA_STALE_ACCESSIBILITY_ADVICE}` : "."}`;
 
 /**
  * What of a block newer readiness still bears out: only the grants it does not report granted,
@@ -357,8 +374,10 @@ export const cuaAgentBlockUnder = (
       ? undefined
       : block;
   if (block.holder !== "helper") return block;
+  // Readiness never reports Automation, so it cannot clear that grant.
   const missing = block.missing.filter(
     (grant) =>
+      grant === "automation" ||
       readiness.grants[grant === "accessibility" ? "accessibility" : "screenCapture"] !== "granted",
   );
   if (missing.length === block.missing.length) return block;
@@ -648,6 +667,10 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "pointer_locked",
   /** The helper may still draw over a capture because its hide was not acknowledged. */
   "capture_hide_unconfirmed",
+  /** macOS does not let the holder send this app Apple Events (System Settings > Automation). */
+  "automation_not_allowed",
+  /** macOS may still be waiting for a person to answer its Automation prompt for this app. */
+  "automation_pending",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -660,6 +683,10 @@ export const computerUseRefusalReason = (
       return "userStoppedSession";
     case "waiting_for_human":
       return "userIntervened";
+    case "automation_not_allowed":
+      return "permissionsNotGranted";
+    case "automation_pending":
+      return "permissionsPending";
     case "app_not_approved":
       return "appNotAllowed";
     case "helper_restarted":

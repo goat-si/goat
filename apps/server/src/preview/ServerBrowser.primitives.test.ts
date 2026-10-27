@@ -23,6 +23,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -177,6 +178,7 @@ const dependencies = Layer.mergeAll(
     turn: () => Effect.void,
   }),
   PreviewAgentActivity.layer,
+  Layer.mock(SecretRequests.SecretRequests)({}),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-primitives-" })),
   Layer.provideMerge(NodeServices.layer),

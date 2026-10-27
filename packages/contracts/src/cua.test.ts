@@ -14,7 +14,10 @@ import {
   ComputerUseRequestInput,
   ComputerUseRequestResult,
   CuaHostStatus,
+  CuaAgentBlock,
   cuaAgentBlockMessage,
+  cuaAgentBlockUnder,
+  DesktopCuaDriverReport,
   DesktopCuaWatch,
 } from "./cua.ts";
 import {
@@ -436,5 +439,65 @@ describe("a macOS grant that reads off", () => {
       holder: "helper",
     });
     expect(message).not.toContain("off and on again");
+  });
+});
+
+const decodeAgentBlock = Schema.decodeUnknownSync(CuaAgentBlock);
+const decodeDesktopReport = Schema.decodeUnknownSync(DesktopCuaDriverReport);
+
+describe("a macOS Automation block", () => {
+  const automation = {
+    reason: "permissionsNotGranted",
+    missing: ["automation"],
+    holder: "helper",
+    target: "com.apple.TextEdit",
+  } as const;
+
+  it("still decodes the Accessibility and Screen Recording blocks older desktops send", () => {
+    const older: unknown = {
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "app",
+    };
+    expect(decodeAgentBlock(older)).toEqual(older);
+    expect(decodeAgentBlock(automation as unknown)).toEqual(automation);
+  });
+
+  it("names the app and the Automation list, and no readiness report clears it", () => {
+    const message = cuaAgentBlockMessage(automation);
+    expect(message).toContain("control com.apple.TextEdit");
+    expect(message).toContain("System Settings > Privacy & Security > Automation");
+    expect(message).not.toContain("cannot start");
+    // Readiness reports Accessibility and Screen Recording only, never a per-app Automation grant.
+    expect(
+      cuaAgentBlockUnder(automation, {
+        grants: { accessibility: "granted", screenCapture: "granted" },
+        helper: "authenticated",
+        capture: "ready",
+        tree: "ready",
+        input: "background",
+        blockers: [],
+        reasons: [],
+      }),
+    ).toEqual(automation);
+  });
+
+  it("leaves desktop reports from a newer peer readable when their block has a grant this one does not know", () => {
+    // An older server decoding this build's automation block reads it the same way.
+    const fromNewerPeer: unknown = {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: "r1",
+      status: "unavailable",
+      message: "Computer use cannot start.",
+      block: { reason: "permissionsNotGranted", missing: ["inputMonitoring"], holder: "helper" },
+    };
+    expect(decodeDesktopReport(fromNewerPeer)).toEqual({
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: "r1",
+      status: "unavailable",
+      message: "Computer use cannot start.",
+    });
   });
 });

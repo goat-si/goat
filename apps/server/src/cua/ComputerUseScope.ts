@@ -41,6 +41,8 @@ const SCREEN_TOOLS: ReadonlySet<string> = new Set(["bring_to_front"]);
 export interface ListedApp {
   readonly id: string;
   readonly name: string | undefined;
+  /** The bundle id list_apps reported, apart from an id that is only the app's name. */
+  readonly bundleId?: string;
 }
 
 export type ScopeVerdict =
@@ -67,7 +69,7 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const text = (value: unknown) =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 
-const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
+export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
   const pid = args?.pid ?? record(args?.target)?.pid;
   return typeof pid === "number" && Number.isInteger(pid) ? pid : undefined;
 };
@@ -143,7 +145,12 @@ export function scopeVerdict(input: {
  */
 export function learnApps(value: unknown, into: Map<number, ListedApp>, listing: boolean): void {
   for (const entry of listing ? listedApps(value) : namedApps(value)) {
-    if (listing) into.set(entry.pid, { id: entry.id, name: entry.name });
+    if (listing)
+      into.set(entry.pid, {
+        id: entry.id,
+        name: entry.name,
+        ...(entry.bundleId === undefined ? {} : { bundleId: entry.bundleId }),
+      });
     else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
   }
 }
@@ -156,9 +163,10 @@ const namedApp = (value: unknown): NamedApp | undefined => {
   const object = record(value);
   const pid = object?.pid;
   const name = text(object?.app_name) ?? text(object?.name);
-  const id = text(object?.bundle_id) ?? name;
+  const bundleId = text(object?.bundle_id);
+  const id = bundleId ?? name;
   return typeof pid === "number" && Number.isInteger(pid) && id !== undefined
-    ? { pid, id, name }
+    ? { pid, id, name, ...(bundleId === undefined ? {} : { bundleId }) }
     : undefined;
 };
 

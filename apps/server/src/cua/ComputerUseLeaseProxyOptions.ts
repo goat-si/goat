@@ -250,6 +250,8 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */
   readonly answersCursorTools?: boolean;
+  /** On macOS, the app macOS asks for Automation consent: the helper, or GOAT in development. */
+  readonly automationHolder?: "helper" | "app";
   readonly onCursorReport?: (report: AgentCursorReport) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
