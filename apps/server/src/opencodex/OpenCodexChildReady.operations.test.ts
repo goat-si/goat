@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ServerSettingsError } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
-import { failureCode, fixture } from "./OpenCodexChildReady.testkit.ts";
+import { failureCode, fixture, home } from "./OpenCodexChildReady.testkit.ts";
 
 // How setup operations succeed one another on a Child: request history, ownership across a
 // crash, journal writes racing a newer operation, probe coalescing and the hydration barrier.
@@ -70,6 +72,62 @@ it.layer(NodeServices.layer)("OpenCodexChildReady operations", (it) => {
       crashAfterCommit = false;
       expect((yield* f.call("configure", f.state.revision, "op-2")).kind).toBe("ok");
       expect((yield* f.call("probe", f.state.revision, "op-2")).kind).toBe("ok");
+    }),
+  );
+
+  it.effect("a status read that finds a broken proof never overwrites a newer operation", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hold = false;
+      const f = yield* fixture({
+        duringStatus: () => {
+          if (!hold) return Effect.void;
+          hold = false;
+          return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)));
+        },
+      });
+      yield* f.routed;
+      expect((yield* f.call("probe")).kind).toBe("ok");
+      // The status read will find the proof broken, and is held while it reads the facts.
+      f.state.codexVersion = "0.157.0";
+      hold = true;
+      const reading = yield* Effect.forkChild(f.status);
+      yield* Deferred.await(entered);
+      expect((yield* f.call("installCodex", f.state.revision, "op-2")).kind).toBe("ok");
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(reading);
+      const stored = yield* f.journal.read(home);
+      expect(stored?.operationId).toBe("op-2");
+      expect(stored?.setup).toMatchObject({ operationId: "op-2", readiness: "linked" });
+    }),
+  );
+
+  it.effect("an older operation's late stage and failure never write over a newer operation", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hold = true;
+      const f = yield* fixture({
+        commit: (write) => {
+          if (!hold) return write;
+          hold = false;
+          return Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(write),
+          );
+        },
+      });
+      expect((yield* f.call("installCodex")).kind).toBe("ok");
+      expect((yield* f.call("syncCatalog")).kind).toBe("ok");
+      const late = yield* Effect.forkChild(f.call("configure"));
+      yield* Deferred.await(entered);
+      expect((yield* f.call("installCodex", f.state.revision, "op-2")).kind).toBe("ok");
+      yield* Deferred.succeed(release, undefined);
+      expect(failureCode(yield* Fiber.join(late))).toBe("stale_configuration");
+      const stored = yield* f.journal.read(home);
+      expect(stored?.operationId).toBe("op-2");
+      expect(stored?.setup?.failure).toBeUndefined();
     }),
   );
 });

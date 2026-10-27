@@ -77,6 +77,17 @@ export class ChildReadyJournal extends Context.Service<
       home: EnvironmentId,
       operation: ChildReadyOperation,
     ) => Effect.Effect<void, ChildReadyJournalError>;
+    /**
+     * Applies `change` to the operation stored now, inside the write lock; undefined writes
+     * nothing. Answers whether it wrote and the operation stored afterwards.
+     */
+    readonly updateIf: (
+      home: EnvironmentId,
+      change: (current: ChildReadyOperation | undefined) => ChildReadyOperation | undefined,
+    ) => Effect.Effect<
+      { readonly written: boolean; readonly operation: ChildReadyOperation | undefined },
+      ChildReadyJournalError
+    >;
     /** Drops a proof whose binding changed; the operation and its ownership stay. */
     readonly removeProof: (home: EnvironmentId) => Effect.Effect<void, ChildReadyJournalError>;
   }
@@ -160,6 +171,17 @@ export const make = Effect.gen(function* () {
     }),
     put: Effect.fn("ChildReadyJournal.put")(function* (home, operation) {
       yield* update((operations) => ({ ...operations, [home]: operation }));
+    }),
+    updateIf: Effect.fn("ChildReadyJournal.updateIf")(function* (home, change) {
+      return yield* writing.withPermits(1)(
+        Effect.gen(function* () {
+          const { operations } = yield* current;
+          const next = change(operations[home]);
+          if (next === undefined) return { written: false, operation: operations[home] };
+          yield* persist({ version: 1, operations: { ...operations, [home]: next } });
+          return { written: true, operation: next };
+        }),
+      );
     }),
     removeProof: Effect.fn("ChildReadyJournal.removeProof")(function* (home) {
       yield* update((operations) => {

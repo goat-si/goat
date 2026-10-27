@@ -150,13 +150,15 @@ const make = Effect.gen(function* () {
     input: ChildReadyPrepareInput,
     failure: ChildReadyFailure,
   ) {
-    const operation = yield* journal.read(input.homeEnvironmentId);
-    // Only the authorized Home's current operation; another Home's or a newer one stays as is.
-    if (operation === undefined || operation.operationId !== input.operationId) return;
-    const { running: _running, ...rest } = operation;
-    yield* journal.put(input.homeEnvironmentId, {
-      ...rest,
-      ...(rest.setup === undefined ? {} : { setup: withFailure(rest.setup, failure) }),
+    // Only the authorized Home's current operation, compared inside the journal's write lock;
+    // another Home's or a newer operation stays as is.
+    yield* journal.updateIf(input.homeEnvironmentId, (operation) => {
+      if (operation === undefined || operation.operationId !== input.operationId) return undefined;
+      const { running: _running, ...rest } = operation;
+      return {
+        ...rest,
+        ...(rest.setup === undefined ? {} : { setup: withFailure(rest.setup, failure) }),
+      };
     });
   });
 

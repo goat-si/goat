@@ -78,6 +78,8 @@ export interface ChildState {
   purposeHome: EnvironmentId;
   codexVersion: string;
   settingsDigest: string;
+  /** Runs inside each `ocx status` read before it answers; a test may hold one there. */
+  duringStatus: () => Effect.Effect<void>;
   /** Wraps each settings commit of a provider instance: hold it, or fail after it lands. */
   commit: (
     write: Effect.Effect<ServerSettings, ServerSettingsError>,
@@ -131,6 +133,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     codexVersion: "0.156.1",
     settingsDigest: "settings-digest",
     commit: (write) => write,
+    duringStatus: () => Effect.void,
     ...overrides,
   };
   const probes = yield* Ref.make(0);
@@ -220,7 +223,8 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(ProcessRunner.ProcessRunner)({
       run: (input) =>
         Effect.gen(function* () {
-          if (input.args[0] === "status")
+          if (input.args[0] === "status") {
+            yield* state.duringStatus();
             return yield* ok(
               encodeJson({
                 runtimeRole: state.role,
@@ -232,6 +236,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
                   : { link: { connectionGeneration: state.connectionGeneration } }),
               }),
             );
+          }
           if (input.args[0] === "sync") {
             const fs = yield* FileSystem.FileSystem;
             const path = yield* Path.Path;
