@@ -67,7 +67,7 @@ it.effect(
         const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
         assert.deepStrictEqual(
-          recorded.map((row) => [row.migration_id, row.name]),
+          recorded.map((row) => [row.migration_id, row.name] as const),
           migrationManifest,
         );
         const columns = yield* sql<{
