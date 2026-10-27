@@ -114,8 +114,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
-// A service provided here shadows a test's own mock, so tests that stub the
-// provider registry start from this layer.
+// A service here shadows a test's mock, so registry stubs start from this layer.
 const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(layerNoFleetSync),
