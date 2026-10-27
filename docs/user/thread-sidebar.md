@@ -12,6 +12,9 @@ Its workspace starts from the project's configured default, which falls back to
 A draft with text or attachments stays saved with its selection. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
+On mobile, when you pick a project that is on more than one machine, the thread
+starts on a connected one if any is connected.
+
 When you change a new thread's project, GOAT stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
