@@ -87,6 +87,26 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
         }
       }
     }
+    // pnpm retains old versions in its store; staged roots must use the server's selected versions.
+    const serverDir = path.resolve(
+      path.dirname(NodeURL.fileURLToPath(import.meta.url)),
+      "../../apps/server",
+    );
+    const server = decodeManifest(
+      yield* fileSystem.readFileString(path.join(serverDir, "package.json")),
+    );
+    for (const name of Object.keys(
+      selectCliRuntimeExternalDependencies(server.dependencies ?? {}),
+    )) {
+      installed.set(
+        name,
+        decodeManifest(
+          yield* fileSystem.readFileString(
+            path.join(serverDir, "node_modules", name, "package.json"),
+          ),
+        ),
+      );
+    }
     return installed;
   }).pipe(Effect.cached, Effect.runSync);
 
