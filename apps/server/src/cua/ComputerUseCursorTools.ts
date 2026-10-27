@@ -10,6 +10,7 @@
 import * as Effect from "effect/Effect";
 
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { movesPointer, targetOf } from "./computerUseTarget.ts";
 
 export interface HelperCursor {
   readonly view: () => { readonly enabled: boolean; readonly visible: boolean };
@@ -124,3 +125,51 @@ export const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(funct
     state,
   );
 });
+
+const finite = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/**
+ * A move_cursor that only moves the agent cursor over one window. The driver runs without an
+ * overlay under the helper and refuses it (facility_unavailable), so the proxy moves GOAT's cursor
+ * instead. A desktop move, which moves the person's pointer, still goes to the driver.
+ */
+export function isWindowCursorMove(name: unknown, args: unknown): boolean {
+  const input = record(args);
+  return (
+    name === "move_cursor" &&
+    targetOf(args) !== undefined &&
+    !movesPointer(args) &&
+    input?.scope !== "desktop" &&
+    finite(input?.x) &&
+    finite(input?.y)
+  );
+}
+
+/** The answer to a window move_cursor the helper's cursor carried out. */
+export function windowCursorMoveAnswer(
+  id: JsonRpcId,
+  args: unknown,
+  view: { readonly enabled: boolean; readonly visible: boolean },
+): string {
+  const input = record(args);
+  const target = targetOf(args);
+  const shown = view.enabled
+    ? "It is on screen there."
+    : "It is disabled, so nothing is drawn until set_agent_cursor_enabled turns it on.";
+  return reply(
+    id,
+    `GOAT moved its agent cursor to (${String(input?.x)}, ${String(input?.y)}) in window ${String(target?.windowId)}. The person's pointer did not move. ${shown}`,
+    {
+      effect: "confirmed",
+      drawn_by: "goat_helper",
+      pointer_moved: false,
+      pid: target?.pid,
+      window_id: target?.windowId,
+      x: input?.x,
+      y: input?.y,
+      enabled: view.enabled,
+      visible: view.enabled && view.visible,
+    },
+  );
+}

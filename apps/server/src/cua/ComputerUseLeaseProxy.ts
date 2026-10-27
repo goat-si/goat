@@ -42,7 +42,12 @@ import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
-import { AGENT_CURSOR_TOOLS, answerCursorTool } from "./ComputerUseCursorTools.ts";
+import {
+  AGENT_CURSOR_TOOLS,
+  answerCursorTool,
+  isWindowCursorMove,
+  windowCursorMoveAnswer,
+} from "./ComputerUseCursorTools.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
@@ -804,6 +809,26 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
       const line = yield* answerCursorTool(id, String(name), message?.params?.arguments, overlay);
       return yield* sink.answer(line, "settled", { tool: String(name) });
+    }
+    if (
+      isRequest &&
+      options.answersCursorTools &&
+      isWindowCursorMove(name, message?.params?.arguments)
+    ) {
+      if (!stillCurrent()) return yield* sink.answer(notSent(id));
+      const key = JSON.stringify(id);
+      yield* drawOverlay({
+        type: "call",
+        id: key,
+        name: "move_cursor",
+        args: message?.params?.arguments,
+      });
+      yield* drawOverlay({ type: "reply", id: key });
+      return yield* sink.answer(
+        windowCursorMoveAnswer(id, message?.params?.arguments, overlay.view()),
+        "settled",
+        { tool: "move_cursor" },
+      );
     }
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
