@@ -37,7 +37,7 @@ const makeTab = (faults: { readonly fillReply?: boolean; readonly stillFilled?: 
       if (faults.fillReply) throw new Error("Target closed");
       return { result: { value: true } };
     }
-    if (fn.includes("this.value === value")) {
+    if (fn.includes('return "empty"')) {
       if (faults.stillFilled) throw new Error("Session closed");
       // Runs the page-side check against the scripted field.
       const check = new Function(`return (${fn});`)() as (this: object, value: unknown) => unknown;
@@ -235,24 +235,29 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   // Hex digits right after a value's end or start must not hide it by looking like an escape.
   const trailingPercent = "long-password%a";
   const hexStart = "aBcdefgh123";
+  // Playwright's snapshot writes control characters as \xNN.
+  const control = "long\u0001password";
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 6; i++) await fill.fill(tab, fillRequest, later(), record);
       const text = [
         `${first}6cdefghijklmnopqrstuvwxyz`,
         encodeURIComponent(second).toLowerCase(),
         unpaired,
         `${trailingPercent}b`,
         `%2${hexStart}`,
+        String.raw`- textbox: "long\x01password"`,
       ].join("\n");
       const outcome = fill.mask(request("fetch", {}))({ ok: true, result: { text } });
       expect(outcome).toEqual({
         ok: true,
-        result: { text: "[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]" },
+        result: {
+          text: '[secret]\n[secret]\n[secret]\n[secret]b\n%2[secret]\n- textbox: "[secret]"',
+        },
       });
     },
     undefined,
-    [first, second, unpaired, trailingPercent, hexStart],
+    [first, second, unpaired, trailingPercent, hexStart, control],
   );
 });
 
@@ -289,6 +294,12 @@ it.live("keeps the fence while an edited filled field still holds part of the va
     );
     field.value = "";
     await fill.guard(tab, request("evaluate", { expression: "1" }));
+    // Revealed with its value unchanged, the field still shows the password as plain text.
+    field.value = PASSWORD;
+    await expect(fill.guard(tab, request("snapshot", { captureImage: false }))).rejects.toThrow(
+      "shows a password GOAT filled as plain text",
+    );
+    field.value = "";
     // A page that puts the value back is fenced again, even after a check found the field empty.
     await fill.guard(tab, request("snapshot", { captureImage: false }));
     field.type = "password";

@@ -447,17 +447,20 @@ const openReaders = async (page: Page, cdp: CDPSession) => {
   };
 };
 
+/** How Playwright's snapshot quotes text: JSON's escapes, and \xNN for the unnamed controls. */
+export const playwrightQuoted = (value: string) =>
+  value.replace(/[\\"\p{Cc}]/gu, (char) =>
+    '\\"\b\f\n\r\t'.includes(char)
+      ? JSON.stringify(char).slice(1, -1)
+      : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
+
 /** Short values need word boundaries to avoid masking unrelated text. */
 const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
-      // Playwright writes control characters like JSON does, with \xNN for the unnamed ones.
-      const quoted = value.replace(/[\\"\p{Cc}]/gu, (char) =>
-        '\\"\b\f\n\r\t'.includes(char)
-          ? JSON.stringify(char).slice(1, -1)
-          : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-      );
+      const quoted = playwrightQuoted(value);
       const forms = [value, json, quoted].flatMap((form) => [form, form.replaceAll("'", "''")]);
       return [...new Set(forms)].map((form) => ({ form, word: value.length < 4 }));
     })

@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
+import { playwrightQuoted, ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 /** The part of a server browser tab this module reads. */
@@ -92,19 +92,16 @@ const FILL = `function (value, origin) {
 }`;
 // Any value left in the field counts: an edit must not lift the fence on most of the password.
 // An empty field keeps its fence entry, so a page that puts the value back is fenced again.
-const STILL_FILLED = `function (value) {
+// Revealed, even unchanged, it shows as plain text, which snapshots quote in forms of their own.
+const STILL_FILLED = `function () {
   if (!this.isConnected) return "gone";
   if (this.value === "") return "empty";
-  return this.type === "password" || this.value === value ? "hidden" : "shown";
+  return this.type === "password" ? "hidden" : "shown";
 }`;
 
 interface Target {
   readonly session: CDPSession;
   readonly objectId: string;
-}
-
-interface Fence extends Target {
-  readonly value: string;
 }
 
 const isWebOrigin = (origin: unknown): origin is string =>
@@ -225,6 +222,7 @@ const encodedForms = (value: string) =>
   [
     value,
     JSON.stringify(value).slice(1, -1),
+    playwrightQuoted(value),
     ...uriEncoded(value),
     new URLSearchParams({ v: value }).toString().slice(2),
   ].flatMap((form) => [form, form.replaceAll("'", "''")]);
@@ -339,7 +337,7 @@ export const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const filledValues = new Map<ThreadId, Set<string>>();
-  const fences = new WeakMap<Page, Array<Fence>>();
+  const fences = new WeakMap<Page, Array<Target>>();
 
   const consume = (input: {
     readonly ref: PreviewAutomationFillSecretInput["secretRef"];
@@ -396,7 +394,7 @@ export const make = Effect.gen(function* () {
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
             // Fenced before dispatch: a lost reply may still have typed the value.
-            const entry: Fence = { ...target, value };
+            const entry: Target = { ...target };
             const outstanding = fences.get(tab.page) ?? [];
             outstanding.push(entry);
             fences.set(tab.page, outstanding);
@@ -454,13 +452,12 @@ export const make = Effect.gen(function* () {
     let unconfirmed = false;
     let shown = false;
     let holding = false;
-    const kept: Array<Fence> = [];
+    const kept: Array<Target> = [];
     for (const entry of outstanding) {
       const state = await entry.session
         .send("Runtime.callFunctionOn", {
           objectId: entry.objectId,
           functionDeclaration: STILL_FILLED,
-          arguments: [{ value: entry.value }],
           returnByValue: true,
         })
         .then(
