@@ -69,7 +69,24 @@ export const primitiveReplySink = (
       const resultObject = record(rawResult);
       const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
       const imagePart = content.map(record).find((part) => part?.type === "image");
-      const state = record(resultObject?.structuredContent);
+      const jsonRecord = (text: unknown) => {
+        if (typeof text !== "string") return undefined;
+        try {
+          return record(JSON.parse(text));
+        } catch {
+          return undefined;
+        }
+      };
+      // Cua Driver sends a window read with an image as that image and its state in JSON text.
+      const textState =
+        resultObject?.structuredContent === undefined
+          ? content
+              .map(record)
+              .filter((part) => part?.type === "text")
+              .map((part) => jsonRecord(part?.text))
+              .find((value) => value !== undefined)
+          : undefined;
+      const state = record(resultObject?.structuredContent) ?? textState;
       const width = state?.screenshot_width;
       const height = state?.screenshot_height;
       const bytes = imagePart?.data;
@@ -99,10 +116,11 @@ export const primitiveReplySink = (
         : undefined;
       const imageError = imagePart !== undefined && !validImage;
       const strippedResult =
-        imagePart === undefined
+        imagePart === undefined && textState === undefined
           ? rawResult
           : {
               ...resultObject,
+              ...(textState === undefined ? {} : { structuredContent: textState }),
               content: content.filter((part) => record(part)?.type !== "image"),
             };
       const bounded = (value: unknown) => {
