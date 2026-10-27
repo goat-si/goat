@@ -245,6 +245,20 @@ describe("activeComposerDraftKey", () => {
   });
 });
 
+it.each([
+  { threadKey: "env-settings:new-thread", draftKey: "new-task:draft-settings" },
+  { threadKey: "env-settings:pending-thread", draftKey: "pending-task:message-settings" },
+])("keeps settings prompt changes in $draftKey", async ({ threadKey, draftKey }) => {
+  await waitForComposerDraftsLoaded();
+  setComposerDraftText(threadKey, "other work");
+  setComposerDraftText(draftKey, "task prompt");
+
+  setActiveComposerDraftText(threadKey, draftKey, "ultrathink\ntask prompt");
+
+  expect(getComposerDraftSnapshot(draftKey).text).toBe("ultrathink\ntask prompt");
+  expect(getComposerDraftSnapshot(threadKey).text).toBe("other work");
+});
+
 it("redirects a settings callback after the queued edit ends", () => {
   const threadKey = "env-settings:thread-settings";
   const editKey = queuedEditDraftKey(threadKey, RunId.make("run-1"));

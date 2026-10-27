@@ -15,7 +15,7 @@ import {
 import { uploadedComposerContext } from "../lib/composerContext";
 import { appAtomRegistry } from "./atom-registry";
 import { abortComposerDraftOperations } from "./composerDraftOperations";
-import { queuedEditDraftKey } from "./queued-edit-draft-key";
+import { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
 import { setThreadComposerError } from "./thread-composer-error";
 import {
   clearComposerDraft,
@@ -45,15 +45,14 @@ export { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-ke
 export const getQueuedRunEdit = queuedRunEdits.get;
 
 /**
- * The draft a sheet opened for `requestedKey` should edit now: a queued edit's
- * draft only while that edit is still open, else the thread's own draft.
+ * Only queued-edit drafts redirect to the thread draft after their edit ends.
  */
 export function activeComposerDraftKey(
   threadKey: string,
   requestedKey: string,
   edit: QueuedRunEdit | null,
 ): string {
-  if (requestedKey === threadKey) return threadKey;
+  if (!isQueuedEditDraftKey(requestedKey)) return requestedKey;
   return edit !== null && queuedEditDraftKey(threadKey, edit.runId) === requestedKey
     ? requestedKey
     : threadKey;
