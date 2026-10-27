@@ -315,6 +315,16 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
   },
 );
 
+/** The executable a Linux pid runs, as the driver attests it; a replaced binary names no file. */
+const linuxExecutable = (pid: number) => {
+  try {
+    const path = NodeFS.readlinkSync("/proc/" + pid + "/exe");
+    return path.startsWith("/") && !path.endsWith(" (deleted)") ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
   const drivers = new Set<NodeChildProcess.ChildProcess>();
@@ -715,6 +725,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         }),
       answersCursorTools: drawsOverlay,
       verifyInputByTreeDiff: platform === "darwin",
+      ...(platform === "linux" ? { executableOf: linuxExecutable } : {}),
       ...(automationHolder === undefined ? {} : { automationHolder }),
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its

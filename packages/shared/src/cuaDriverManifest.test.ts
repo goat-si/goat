@@ -13,6 +13,8 @@ import {
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
   cuaRequestableApps,
+  cuaAppKey,
+  isExcludedCuaApplication,
   cuaDriverCapabilityManifest,
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
@@ -202,6 +204,26 @@ describe("cuaDriverManifest", () => {
         ["SI.GOAT.DESKTOP"],
       ),
     ).toEqual(["com.apple.TextEdit", "com.apple.finder"]);
+  });
+
+  // A standalone server excludes only its own runtime; a GOAT app beside it shows approval cards.
+  it("never admits or offers any GOAT desktop channel or its computer use helper", () => {
+    const listed = [
+      { bundle_id: "si.goat.desktop", name: "GOAT" },
+      { bundle_id: "si.goat.desktop.nightly", name: "GOAT (Nightly)" },
+      { bundle_id: "si.goat.desktop.dev", name: "GOAT (Dev)" },
+      { bundle_id: "si.goat.desktop.computer-use", name: "GOAT Computer Use" },
+      { bundle_id: "si.goat.desktop.nightly.computer-use", name: "GOAT Computer Use" },
+      { bundle_id: "org.gnome.TextEditor", name: "Text Editor" },
+    ];
+    expect(admittedCuaApplications(listed, ["si.goat.server"])).toEqual(["org.gnome.TextEditor"]);
+    expect(cuaRequestableApps(listed, ["si.goat.server"])).toEqual(["org.gnome.TextEditor"]);
+    for (const id of [
+      "si.goat.desktop",
+      "SI.GOAT.DESKTOP.NIGHTLY",
+      "si.goat.desktop.dev.computer-use",
+    ])
+      expect(isExcludedCuaApplication(id)).toBe(true);
   });
 
   // #1598: NordPass, Proton Pass and 1Password for Safari are credential stores too.
@@ -404,6 +426,14 @@ describe("cuaDriverManifest", () => {
       cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications: [] })),
     ).toEqual([]);
     expect(() => cuaDriverManifestApplications("    - bundle_id: invalid")).toThrow();
+  });
+
+  it("finds a Linux executable approval missing when only a path differing by case is admitted", () => {
+    expect(missingCuaDriverApplications(["/opt/Notes", "/opt/notes"], ["/opt/notes"])).toEqual([
+      "/opt/Notes",
+    ]);
+    expect(cuaAppKey("/opt/Notes")).toBe("/opt/Notes");
+    expect(cuaAppKey("\\\\?\\C:\\Apps\\Notes.exe")).toBe(cuaAppKey("c:/apps//NOTES.exe"));
   });
 
   it("finds missing approvals using the same bundle and Windows path identities as admission", () => {
