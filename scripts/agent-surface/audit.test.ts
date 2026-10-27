@@ -36,3 +36,33 @@ it("renders a byte-identical audit when every line of every cited file moves (#1
   expect(before.firstLine).not.toBe("");
   expect(after.page).toBe(before.page);
 });
+
+it("accepts documented CLI dispatch paths and boolean negation without masking invalid flags", async () => {
+  shifted.on = false;
+  vi.resetModules();
+  const { collectCli } = await import("./inventory.ts");
+  const { checkCliMention } = await import("./cliDrift.ts");
+  const cli = await collectCli();
+  const mention = (text: string) => ({ text, ref: { path: "docs/example.md", line: 1 } });
+
+  for (const command of [
+    "goat service install --no-start",
+    "goat storage --dry-run",
+    "goat storage --clean",
+    "goat cua-lease-proxy --control",
+    "goat provider sync --json",
+  ]) {
+    expect(checkCliMention(mention(command), cli), command).toBeNull();
+  }
+  for (const command of [
+    "goat service install --no-base-dir",
+    "goat storage --erase",
+    "goat cua-lease-proxy --erase",
+    "goat provider sync --erase",
+    "goat operation wait --erase",
+    "goat provider sync --query x",
+    "goat operation wait --detail full",
+  ]) {
+    expect(checkCliMention(mention(command), cli), command).not.toBeNull();
+  }
+});

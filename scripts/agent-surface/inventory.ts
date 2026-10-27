@@ -2,8 +2,8 @@
 /**
  * Inventory of GOAT's agent surface, read from source: every tool the `/mcp`
  * endpoint mounts and every command in the `goat` CLI tree. Nothing here is a
- * hand-maintained list. Toolkits come from `apps/server/src/mcp/toolkits/<name>/tools.ts`
- * and the CLI from `makeCli` in `apps/server/src/binCli.ts`.
+ * hand-maintained list. Toolkit source is checked against the agent-surface
+ * registry, and the CLI comes from `makeCli` in `apps/server/src/binCli.ts`.
  *
  *   node scripts/agent-surface/inventory.ts            # JSON to stdout
  *   node scripts/agent-surface/inventory.ts --tools    # one line per tool
@@ -17,7 +17,6 @@ import * as NodeURL from "node:url";
 
 export const repoRoot = NodePath.resolve(import.meta.dirname, "../..");
 const serverRoot = NodePath.join(repoRoot, "apps/server");
-const toolkitsRoot = NodePath.join(serverRoot, "src/mcp/toolkits");
 const mcpServerFile = "apps/server/src/mcp/McpHttpServer.ts";
 
 export interface SourceRef {
@@ -35,6 +34,7 @@ export interface SchemaField {
 export interface ToolEntry {
   readonly name: string;
   readonly toolkit: string;
+  readonly toolkitSource: string;
   readonly source: SourceRef | null;
   readonly handler: SourceRef | null;
   /** `McpToolAccess.*` declaration the handler uses; the server enforces this. */
@@ -445,28 +445,59 @@ export async function collectTools(): Promise<{
     const entry = resolve.resolveAgentSurfaceEntry(name);
     return entry !== undefined && resolve.isKeyedWrite(entry);
   };
+  const { agentSurfaceRegistry } = (await importFile(
+    NodePath.join(repoRoot, "packages/contracts/src/agentSurface/registry.ts"),
+  )) as { agentSurfaceRegistry: Record<string, { name: string; toolkit: string }> };
+  const registered = new Map(
+    Object.values(agentSurfaceRegistry).map((entry) => [entry.name, entry.toolkit]),
+  );
 
   const mcpServerSource = readLines(mcpServerFile).join("\n");
+  const mountedFiles = new Set<string>();
+  const visitImports = (file: string) => {
+    if (mountedFiles.has(file)) return;
+    mountedFiles.add(file);
+    for (const match of readLines(file)
+      .join("\n")
+      .matchAll(/from\s+["'](\.\.?\/[^"']+\.ts)["']/g)) {
+      const imported = NodePath.posix.normalize(
+        NodePath.posix.join(NodePath.posix.dirname(file), match[1] ?? ""),
+      );
+      if (
+        imported.startsWith("apps/server/src/mcp/toolkits/") &&
+        NodeFS.existsSync(NodePath.join(repoRoot, imported))
+      ) {
+        visitImports(imported);
+      }
+    }
+  };
+  visitImports(mcpServerFile);
   const imageRegistered = new Set(
     [...mcpServerSource.matchAll(/register(\w+)\(\)/g)].map((match) => match[1] ?? ""),
   );
   const tools = new Map<string, ToolEntry>();
-  const unmounted: Array<string> = [];
-  const dirs = NodeFS.readdirSync(toolkitsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  for (const dir of dirs) {
-    const toolsFile = "apps/server/src/mcp/toolkits/" + dir + "/tools.ts";
-    const handlersFile = "apps/server/src/mcp/toolkits/" + dir + "/handlers.ts";
-    if (!NodeFS.existsSync(NodePath.join(repoRoot, toolsFile))) continue;
-    if (!mcpServerSource.includes('"./toolkits/' + dir + '/tools.ts"')) unmounted.push(dir);
+  const unmounted = new Set<string>();
+  const toolkitFiles = sourceFiles(["apps/server/src/mcp/toolkits"]).filter((file) =>
+    /\/(?:tools|healthTools)\.ts$/.test(file),
+  );
+  for (const toolsFile of toolkitFiles) {
+    const handlersFile = toolsFile.replace(/(?:tools|healthTools)\.ts$/, "handlers.ts");
+    const nestedHandlersFile = toolsFile.endsWith("/healthTools.ts")
+      ? toolsFile.replace(/healthTools\.ts$/, "healthHandlers.ts")
+      : handlersFile;
     const module = await importFile(NodePath.join(repoRoot, toolsFile));
-    const access = handlerAccess(handlersFile);
+    const access = handlerAccess(nestedHandlersFile);
+    const storageAccess = handlerAccess("apps/server/src/mcp/toolkits/storage/handlers.ts");
     for (const exported of Object.values(module)) {
       if (!isToolkit(exported)) continue;
       for (const tool of Object.values(exported.tools)) {
+        const toolkit = registered.get(tool.name);
+        if (toolkit === undefined) continue;
+        if (!mountedFiles.has(toolsFile)) unmounted.add(toolkit);
         if (tools.has(tool.name)) continue;
+        const declarationFile = tool.name.startsWith("goat_storage_")
+          ? "apps/server/src/mcp/toolkits/storage/tools.ts"
+          : toolsFile;
         const input = ToolApi.getJsonSchema(tool);
         const success = ToolApi.getJsonSchemaFromSchema(tool.successSchema);
         const failure = ToolApi.getJsonSchemaFromSchema(tool.failureSchema);
@@ -486,9 +517,10 @@ export async function collectTools(): Promise<{
         const description = tool.description ?? "";
         const readOnly = getReference(tool.annotations, ToolApi.Readonly) === true;
         const titleValue = getAnnotation(tool.annotations, ToolApi.Title);
+        const handlers = tool.name.startsWith("goat_storage_") ? storageAccess : access;
         const handler =
-          access.get(tool.name) ??
-          [...access.entries()].find(
+          handlers.get(tool.name) ??
+          [...handlers.entries()].find(
             ([key]) => key.startsWith("[") && resolvesTo(key, tool.name),
           )?.[1];
         const pascal = tool.name
@@ -497,8 +529,9 @@ export async function collectTools(): Promise<{
           .join("");
         tools.set(tool.name, {
           name: tool.name,
-          toolkit: dir,
-          source: locateTool(toolsFile, tool.name),
+          toolkit,
+          toolkitSource: toolsFile,
+          source: locateTool(declarationFile, tool.name),
           handler: handler?.ref ?? null,
           access: handler?.access ?? null,
           title: typeof titleValue === "string" ? titleValue : null,
@@ -536,14 +569,17 @@ export async function collectTools(): Promise<{
           ),
           humanSteps: humanStepsFor(description + " " + JSON.stringify(input)),
           imageResult:
-            imageRegistered.has(pascal) || imageRegistered.has(pascal.replace(/^Html/, "Html")),
+            imageRegistered.has(pascal) || imageRegistered.has(pascal.replace(/^Goat/, "")),
         });
       }
     }
   }
+  const missing = [...registered.keys()].filter((name) => !tools.has(name));
+  if (missing.length > 0)
+    throw new Error("Registry tools missing from toolkits: " + missing.join(", "));
   return {
     tools: [...tools.values()].sort((a, b) => a.name.localeCompare(b.name)),
-    unmountedToolkits: unmounted,
+    unmountedToolkits: [...unmounted].sort(),
   };
 }
 

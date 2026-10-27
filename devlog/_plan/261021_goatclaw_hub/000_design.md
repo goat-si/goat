@@ -29,7 +29,7 @@ OpenCodex's own Remote Link and Hub flows over the SSH connections it already ha
 and consumes the Home's pool and quota. [ADR-0021](../../../structure/decisions/ADR-0021-goatclaw-hub.md) is
 the authoritative record. It supersedes the earlier supervisor decision D14 (OpenCodex Hub + Remote Link as
 GOAT's default proxy path; OpenCodex Remote Workspace experimental for remote execution), whose documents
-were uncommitted local notes and no longer exist. The D14 in `devlog/_plan/261013_remove-t3-internals` is an
+were uncommitted local notes and no longer exist. The D14 in `devlog/_fin/261013_remove-t3-internals` is an
 unrelated dead-code rule.
 
 **Hub-agnostic, hub decided.** The user chose (DH1): the hub stays on **jun's MacBook Pro**, the current Remote

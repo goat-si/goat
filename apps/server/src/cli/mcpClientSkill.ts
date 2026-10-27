@@ -83,15 +83,21 @@ Each token entry below stores a reference to \`GOAT_MCP_TOKEN\`, which the clien
 starts, so the token itself stays out of the config file. Keep the single quotes where shown:
 they stop the shell from expanding the reference while the server is added.
 
+The entries for clients that can set headers also send \`x-goat-tool-listing: core\`. GOAT then
+lists only \`goat_describe\` and \`goat_call\`, about 2 KB of tool definitions instead of about
+210 KB, and the client reaches every other capability through them. Every tool stays callable
+by its own name either way. Leave the header out only if the client must list every tool
+directly.
+
 ### Claude Code
 
 \`\`\`sh
 # OAuth
-claude mcp add --transport http goat <url>
+claude mcp add --transport http goat <url> --header "x-goat-tool-listing: core"
 claude mcp login goat
 # Client token
 claude mcp add-json --scope user goat \\
-  '{"type":"http","url":"<url>","headers":{"Authorization":"Bearer \${GOAT_MCP_TOKEN}"}}'
+  '{"type":"http","url":"<url>","headers":{"x-goat-tool-listing":"core","Authorization":"Bearer \${GOAT_MCP_TOKEN}"}}'
 claude mcp list
 \`\`\`
 
@@ -106,12 +112,14 @@ codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN
 codex mcp list
 \`\`\`
 
-The same entry in \`~/.codex/config.toml\`:
+\`codex mcp add\` has no header option, so add \`http_headers\` to the entry it wrote in
+\`~/.codex/config.toml\` (an OAuth entry has no \`bearer_token_env_var\`):
 
 \`\`\`toml
 [mcp_servers.goat]
 url = "<url>"
 bearer_token_env_var = "GOAT_MCP_TOKEN"
+http_headers = { "x-goat-tool-listing" = "core" }
 \`\`\`
 
 ### Cursor
@@ -123,7 +131,10 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
   "mcpServers": {
     "goat": {
       "url": "<url>",
-      "headers": { "Authorization": "Bearer \${env:GOAT_MCP_TOKEN}" }
+      "headers": {
+        "x-goat-tool-listing": "core",
+        "Authorization": "Bearer \${env:GOAT_MCP_TOKEN}"
+      }
     }
   }
 }
@@ -139,7 +150,10 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
     "goat": {
       "type": "http",
       "url": "<url>",
-      "headers": { "Authorization": "Bearer \${env:GOAT_MCP_TOKEN}" }
+      "headers": {
+        "x-goat-tool-listing": "core",
+        "Authorization": "Bearer \${env:GOAT_MCP_TOKEN}"
+      }
     }
   }
 }
@@ -158,7 +172,10 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
         "type": "remote",
         "url": "<url>",
         "oauth": false,
-        "headers": { "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }
+        "headers": {
+          "x-goat-tool-listing": "core",
+          "Authorization": "Bearer {env:GOAT_MCP_TOKEN}"
+        }
       }
     }
   }
@@ -166,12 +183,12 @@ bearer_token_env_var = "GOAT_MCP_TOKEN"
 \`\`\`
 
 OpenCode V1 lists servers directly under \`mcp\` instead of \`mcp.servers\`. For OAuth, leave out
-\`oauth\` and \`headers\` and sign in from \`/mcps\` in the TUI.
+\`oauth\` and the \`Authorization\` header and sign in from \`/mcps\` in the TUI.
 
 ### Gemini CLI
 
 \`\`\`sh
-gemini mcp add --scope user --transport http \\
+gemini mcp add --scope user --transport http --header 'x-goat-tool-listing: core' \\
   --header 'Authorization: Bearer \${GOAT_MCP_TOKEN}' goat <url>
 \`\`\`
 
@@ -194,7 +211,15 @@ clients take this shape, for example Claude Desktop's \`claude_desktop_config.js
   "mcpServers": {
     "goat": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "<url>", "--header", "Authorization:\${GOAT_MCP_AUTH}"],
+      "args": [
+        "-y",
+        "mcp-remote",
+        "<url>",
+        "--header",
+        "x-goat-tool-listing:core",
+        "--header",
+        "Authorization:\${GOAT_MCP_AUTH}"
+      ],
       "env": { "GOAT_MCP_AUTH": "Bearer <token>" }
     }
   }
@@ -232,7 +257,8 @@ Other bots and SDKs need the same three things: the URL, streamable HTTP, and th
 
 Send \`initialize\` with protocol version \`2025-06-18\` and
 \`Accept: application/json, text/event-stream\`, then send every later request with the
-\`mcp-session-id\` header from that response. End the session with an HTTP \`DELETE\` when done.
+\`mcp-session-id\` header from that response. Add \`x-goat-tool-listing: core\` to every request for
+the two-tool listing. End the session with an HTTP \`DELETE\` when done.
 
 ## 4. Verify
 
@@ -275,6 +301,7 @@ issue a separate token on each environment a client connects to directly.
 | 401 on every request                                      | The token is missing, revoked, expired, or from another environment. The header must be exactly \`Authorization: Bearer <token>\`, and the client process must see the variable. Issue a new token. |
 | Literal \`\${env:…}\`, \`{env:…}\` or \`\${GOAT_MCP_TOKEN}\` sent | The client started without the variable. Start it from a shell that exports it, or set it system-wide, then restart.                                                                              |
 | Sign-in page cannot finish                                | The URL is plain \`http\` on a non-loopback address. Use Tailscale HTTPS, an SSH tunnel to \`127.0.0.1\`, or a client token.                                                                          |
+| Only \`goat_describe\` and \`goat_call\` are listed           | Expected with \`x-goat-tool-listing: core\`. Find a capability with \`goat_describe\` and run it with \`goat_call\`, or remove the header to list every tool.                                           |
 | 404 or 405 while connecting, or an SSE error              | The client uses the old SSE transport (\`"type": "sse"\`, Gemini \`url\`), or the path does not end in \`/mcp\`. Switch to streamable HTTP, or bridge with \`mcp-remote\`.                                |
 | 404 on every call after the environment restarted         | The client still sends its old \`mcp-session-id\`. Restart or reconnect the client so it initializes a new session.                                                                                 |
 | Client reports an unsupported protocol version            | GOAT answers every \`initialize\` with MCP \`2025-06-18\`. Update the client, or bridge with \`mcp-remote\`.                                                                                            |

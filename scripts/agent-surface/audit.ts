@@ -12,7 +12,6 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import {
-  type CliEntry,
   type Inventory,
   type SourceRef,
   collectInventory,
@@ -21,6 +20,7 @@ import {
   sourceFiles,
 } from "./inventory.ts";
 import { at, files, ref } from "./citations.ts";
+import { type CliDrift, type CliMention, checkCliMention } from "./cliDrift.ts";
 import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
 import { code, groupBy, list, pct, table, TICK } from "./markdown.ts";
 
@@ -79,11 +79,6 @@ const toolMentions = (
   return out;
 };
 
-interface CliMention {
-  readonly text: string;
-  readonly ref: SourceRef;
-}
-
 const FENCE = new RegExp("^\\s*" + TICK + TICK + TICK);
 const SPAN = new RegExp(TICK + "([^" + TICK + "]+)" + TICK, "g");
 
@@ -106,52 +101,6 @@ const cliMentions = (files: ReadonlyArray<string>): Array<CliMention> => {
     });
   }
   return out;
-};
-
-interface CliDrift {
-  readonly text: string;
-  readonly ref: SourceRef;
-  readonly problem: string;
-}
-
-const checkCliMention = (mention: CliMention, cli: ReadonlyArray<CliEntry>): CliDrift | null => {
-  const words = mention.text.split(/\s+/);
-  let entry = cli.find((command) => command.path.length === 1);
-  let consumed = 1;
-  for (let index = 1; index < words.length; index++) {
-    const word = words[index] ?? "";
-    if (word.startsWith("-") || word.startsWith("<") || !/^[a-z][a-z-]*$/.test(word)) break;
-    const path = [...words.slice(0, index), word].join(" ");
-    const child = cli.find((command) => command.path.join(" ") === path);
-    if (!child) {
-      const takesArgument = entry?.params.some((param) => param.kind === "argument") ?? false;
-      if (entry && entry.subcommands.length > 0 && !takesArgument) {
-        return {
-          text: mention.text,
-          ref: mention.ref,
-          problem: "no subcommand " + code(word) + " under " + code(entry.path.join(" ")),
-        };
-      }
-      break;
-    }
-    entry = child;
-    consumed = index + 1;
-  }
-  if (!entry) return null;
-  const flags = new Set(
-    entry.params.filter((param) => param.kind === "flag").map((param) => param.name),
-  );
-  for (const word of words.slice(consumed)) {
-    const flag = /^(--[a-z][a-z0-9-]*)/.exec(word)?.[1];
-    if (flag && flag !== "--help" && flag !== "--version" && !flags.has(flag)) {
-      return {
-        text: mention.text,
-        ref: mention.ref,
-        problem: code(entry.path.join(" ")) + " has no " + code(flag),
-      };
-    }
-  }
-  return null;
 };
 
 const SYNONYMS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
@@ -321,7 +270,7 @@ export function render(inventory: Inventory): string {
     members.filter((member) => member.pagination.length > 0).length,
     [...new Set(members.map((member) => member.error.failureMode))].join(", "),
     new Set(members.flatMap((member) => member.error.tags)).size,
-    "apps/server/src/mcp/toolkits/" + name + "/tools.ts",
+    members[0]?.toolkitSource ?? "(source not found)",
   ]);
 
   const misplaced = tools.filter((entry) => {
@@ -344,7 +293,7 @@ export function render(inventory: Inventory): string {
       .join(", "),
   ]);
 
-  const fixes = rankedFixes(inventory, a, {
+  const fixes = rankedFixes(a, {
     extraKeys: extraKeys.length,
     undescribed: undescribed.length,
     allUndescribed: allUndescribed.length,
@@ -445,7 +394,7 @@ export function render(inventory: Inventory): string {
     "",
     "## Naming",
     "",
-    "Tool names follow three shapes, so an agent cannot guess a name from the resource and verb it wants:",
+    "Shipped toolkit names follow three shapes. The canonical listed name is derived from the registry path, so these counts measure compatibility names:",
     "",
     table(
       ["Shape", "Count", "Examples"],
@@ -619,18 +568,14 @@ export function render(inventory: Inventory): string {
           "."
         : ""),
     "- **Image results.** " +
-      code("preview_snapshot") +
-      ", " +
-      code("device_screenshot") +
-      ", and " +
-      code("html_preview") +
-      " are registered by hand to return image content (" +
+      list(tools.filter((tool) => tool.imageResult).map((tool) => tool.name)) +
+      " are registered directly to return image content (" +
       at(
         "apps/server/src/mcp/McpHttpServer.ts",
         /const imageToolRegistration/,
         "imageToolRegistration",
       ) +
-      "), outside the toolkit path every other tool uses.",
+      ").",
     "",
     "## Descriptions and examples",
     "",
@@ -788,23 +733,25 @@ export function render(inventory: Inventory): string {
       human.map((entry) => code(entry.name) + " (" + entry.humanSteps.join(", ") + ")").join(", ") +
       ".",
     "",
-    "There is no single handoff primitive. Each case has its own tool, error code, or CLI step, and none returns a resumable handle the agent can wait on.",
+    "Human steps still use different approvals, errors, and CLI actions. Accepted tasks, SSH setup, provider syncs, and approved provider changes can return a signed " +
+      code("meta.operation") +
+      " handle for " +
+      code("operation.read/wait/cancel") +
+      "; other human steps have no common wait path.",
     "",
     "## CLI",
     "",
-    "The CLI operates a server; it is not an agent interface. Its " +
+    "The operator CLI has " +
       listedCli.length +
-      " listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and GOAT Connect. " +
-      "Nothing lists, reads, or drives threads or tasks, and projects only have " +
-      code("goat project add") +
+      " listed commands for server operations. Registry commands are dispatched before that tree loads: " +
+      code("goat describe") +
       ", " +
-      code("remove") +
-      ", and " +
-      code("rename") +
-      ". " +
-      "The one generic bridge, " +
+      code("goat call") +
+      ", and generated " +
+      code("goat <resource> <verb>") +
+      " commands expose the agent surface. The legacy " +
       code("goat acp-mcp-call") +
-      ", is unlisted and its arguments are undescribed (" +
+      " remains an alias (" +
       ref(command("goat acp-mcp-call")?.source ?? null) +
       ").",
     "",
@@ -864,7 +811,7 @@ export function render(inventory: Inventory): string {
     a.cliDrift.length === 0
       ? "Every " +
         code("goat ...") +
-        " invocation in the docs resolves to a real command and its flags."
+        " invocation in the docs names a real command and flags it accepts; flag values are not checked."
       : "CLI invocations in the docs that do not resolve:\n\n" +
         table(
           ["Text", "Problem", "Where"],
@@ -879,7 +826,9 @@ export function render(inventory: Inventory): string {
       " are named in neither docs nor agent prompts: " +
       list(a.unprompted, 24) +
       ". " +
-      "Agents learn these only from the MCP catalog.",
+      "Agents can discover these with " +
+      code("goat_describe") +
+      ".",
     "",
     "Listed CLI commands no doc invokes: " +
       (a.undocumentedCli.length
@@ -892,7 +841,9 @@ export function render(inventory: Inventory): string {
     "",
     "The server's " +
       code("/llms.txt") +
-      " lists every registry path with its summary, but arguments and examples are still served only by the MCP catalog.",
+      " lists every registry path with its summary. " +
+      code("goat_describe") +
+      " serves input and output schemas from the registered tools; examples are not served yet.",
     "",
     "## Fixes ranked by agent impact",
     "",
@@ -907,7 +858,6 @@ interface Fix {
 }
 
 function rankedFixes(
-  inventory: Inventory,
   a: ReturnType<typeof analyse>,
   n: {
     readonly extraKeys: number;
@@ -942,14 +892,14 @@ function rankedFixes(
       body: 'Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.',
     },
     {
-      title: "Serve the full tool reference from the registry.",
+      title: "Complete the on-demand tool reference.",
       body:
         a.unprompted.length +
         " tools appear in no doc or prompt. " +
         code("/llms.txt") +
-        " now lists every path for the calling credential; " +
+        " lists every path for the calling credential, and " +
         code("goat_describe") +
-        " should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).",
+        " already serves schemas from the registered tools. Add examples and related paths there without committed reference pages (decision D14 in agent-surface.md).",
     },
     {
       title: "Describe every parameter.",
@@ -986,15 +936,6 @@ function rankedFixes(
         ", so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.",
     },
     {
-      title: "One naming grammar.",
-      body:
-        "Pick one shape for all " +
-        inventory.tools.length +
-        " tools, keep old names as hidden aliases for a release, and drop the partial " +
-        code("goat_") +
-        " prefix that the MCP server name already supplies.",
-    },
-    {
       title: "Derive hints from enforcement.",
       body:
         "Compute " +
@@ -1011,17 +952,6 @@ function rankedFixes(
         "Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make " +
         code("goat --version") +
         " the first-run check.",
-    },
-    {
-      title: "Give the CLI an agent face.",
-      body:
-        "Add listed " +
-        code("goat tool list") +
-        " and " +
-        code("goat tool call <name> --json") +
-        " generated from the same registry, so shells and CI reach every MCP capability through one documented grammar. Today only the unlisted " +
-        code("acp-mcp-call") +
-        " exists.",
     },
     {
       title: code("--json") + " on every listed leaf command.",
