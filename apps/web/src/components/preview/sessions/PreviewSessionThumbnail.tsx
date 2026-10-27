@@ -219,7 +219,7 @@ function DesktopThumbnail(props: {
           />
         )}
         {stale ? (
-          <span className="pointer-events-none absolute top-2 left-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
+          <span className="pointer-events-none absolute top-2 right-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
             Picture not updating
           </span>
         ) : null}
