@@ -122,29 +122,24 @@ function rowsOf(line: string): ReadonlyArray<Row> {
   return rows;
 }
 
-/** Rows indexed [start, end] around a target: its parent's subtree, siblings included. */
+/** Rows indexed [start, end]: the target's own row and its subtree. */
 type Neighbourhood = { readonly start: number; readonly end: number };
 
 /**
- * Where in the read a change would show the input landed, or undefined when unknown. The parent
- * and its subtree's end come from every row's indentation, numbered or not, so an unnumbered
- * group bounds its own controls.
+ * Where in the read a change would show the input landed, or undefined when unknown. Siblings
+ * and parents never count: macOS folds groups, so unrelated controls can share a parent. The
+ * subtree ends at the next row, numbered or not, that is no deeper than the target.
  */
 function neighbourhood(rows: ReadonlyArray<Row>, target: number): Neighbourhood | undefined {
   const at = rows.findIndex((row) => row.index === target);
   const row = rows[at];
   if (row === undefined) return undefined;
-  let parent = at - 1;
-  while (parent >= 0 && (rows[parent]?.indent ?? 0) >= row.indent) parent--;
-  // With no parent row in the read, only the target's own subtree is known to be its.
-  if (parent < 0) parent = at;
-  const floor = parent === at ? row.indent : (rows[parent]?.indent ?? row.indent);
-  let last = at;
-  while (last + 1 < rows.length && (rows[last + 1]?.indent ?? -1) > floor) last++;
-  const numbered = rows
-    .slice(parent, last + 1)
-    .flatMap((each) => (each.index === undefined ? [] : [each.index]));
-  return { start: Math.min(...numbered), end: Math.max(...numbered) };
+  let end = target;
+  for (const each of rows.slice(at + 1)) {
+    if (each.indent <= row.indent) break;
+    if (each.index !== undefined) end = each.index;
+  }
+  return { start: target, end };
 }
 
 /** The element an input names, by token of the baseline snapshot or by index. */
@@ -160,8 +155,8 @@ const REINDEXED = /^reindexed: \[(\d+)-\d+\]/u;
 
 /**
  * Whether a diff's +, ~ or - rows touch the neighbourhood. + and ~ rows carry the new read's
- * numbers and - rows the old one's, so this holds only while the neighbourhood kept its numbers:
- * no row up to its first one moved, and no numbered row before it came or went.
+ * numbers and - rows the old one's, so this holds only while the target kept its number: no row
+ * up to it moved, and no numbered row before it came or went.
  */
 function touches(diffText: string, around: Neighbourhood | undefined): boolean {
   if (around === undefined) return false;
@@ -180,7 +175,7 @@ function touches(diffText: string, around: Neighbourhood | undefined): boolean {
 
 /**
  * The input's answer with the diff read's outcome added, or the answer unchanged when the read
- * failed. Only a "diff" whose rows touch the target's neighbourhood confirms: a clock or spinner
+ * failed. Only a "diff" whose rows touch the target or its subtree confirms: a clock or spinner
  * elsewhere changes the tree too. "no_change" says nothing moved; a fallback full read, or most of
  * the tree changing, only names the new snapshot.
  */
@@ -203,9 +198,9 @@ function withTreeDiff(line: string, diff: unknown, around: Neighbourhood | undef
     diffText =
       diffText.slice(0, MAX_DIFF_CHARS) + "\n… (diff cut short; read the window for the rest)";
   const lead = changed
-    ? "GOAT re-read the window after this input and the accessibility tree around its target changed, so the input landed."
+    ? "GOAT re-read the window after this input and its target, or what the target contains, changed, so the input landed."
     : treeChanged
-      ? "GOAT re-read the window after this input; its accessibility tree changed, but not where GOAT could tie it to this input's target, so it may or may not have landed. Check the target before resending."
+      ? "GOAT re-read the window after this input; its accessibility tree changed, but not at this input's target, so it may or may not have landed. Check the target before resending."
       : unchanged
         ? "GOAT re-read the window after this input and its accessibility tree did not change. The input may still have changed only pixels; check a screenshot before resending."
         : "GOAT re-read the window after this input as a full read.";
