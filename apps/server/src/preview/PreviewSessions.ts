@@ -15,6 +15,7 @@ import {
   type ComputerUseRefusalReason,
   type CuaAgentBlock,
   cuaAgentBlockTitle,
+  type HandoffError,
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
@@ -57,7 +58,7 @@ export class PreviewSessions extends Context.Service<
     readonly control: (
       input: PreviewSessionControlInput,
       sessionId: AuthSessionId,
-    ) => Effect.Effect<PreviewSessionControlResult>;
+    ) => Effect.Effect<PreviewSessionControlResult, HandoffError>;
     /** One viewer's live picture of a desktop session (#1370). */
     readonly frames: DesktopFrames.DesktopFrames["Service"]["frames"];
   }
@@ -339,6 +340,8 @@ const make = Effect.gen(function* () {
       if (input.control === "takeover") return { applied: false, reason: "unsupported" } as const;
       if (input.control === "stop")
         yield* fenceScreen({ threadId: tab.threadId, tabId: tab.tabId });
+      // The record first: a hand back it did not take leaves the tab held and the error shown.
+      else if (Option.isSome(requests)) yield* requests.value.handBack(id);
       const applied = yield* browser.value.controlSession({
         ...tab,
         control: input.control === "stop" ? "stop" : "handBack",
@@ -366,13 +369,9 @@ const make = Effect.gen(function* () {
     // The pause is the host's: a person on the desktop holds every agent there.
     if (input.control === "takeover") yield* leases.value.pause("takeover");
     else if (input.control === "handBack") {
-      yield* leases.value.resume;
       // Ends this control's request only; another thread's stays held for the person.
-      const recorded = Option.isSome(requests)
-        ? yield* requests.value.handBackDesktop(controlId)
-        : true;
-      // The screen is handed back; its record retries until stored, and the person learns it lags.
-      if (!recorded) return { applied: false, reason: "not_allowed" } as const;
+      if (Option.isSome(requests)) yield* requests.value.handBack(id);
+      yield* leases.value.resume;
     } else {
       const threadId = ThreadId.make(live.control.threadId);
       const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);

@@ -7,6 +7,7 @@ import {
   CommandId,
   type Handoff,
   type HandoffActor,
+  HandoffError,
   isHandoffPending,
   type OrchestrationV2DomainEvent,
   OrchestratorMcpFailure,
@@ -18,6 +19,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,7 +39,6 @@ import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import type { HandoffEnded } from "./ServerBrowserScreen.ts";
-import type { HandoffEnd } from "./SessionControl.ts";
 
 /** Long enough to find the device and finish a sign-in; the wake tells the agent it expired. */
 const REQUEST_MINUTES = 30;
@@ -81,9 +82,11 @@ export class PreviewHandoffs extends Context.Service<
     }) => Effect.Effect<PreviewRequestHandoffResult, OrchestratorMcpFailure>;
     /** The open request's reason for each desktop control that has one, by control id. */
     readonly desktopReasons: Effect.Effect<ReadonlyMap<string, string>>;
-    /** A person handed a desktop control back. Stop and other ends are seen on the control. */
-    /** False when the record of the hand back is not written yet; the next check retries it. */
-    readonly handBackDesktop: (controlId: string) => Effect.Effect<boolean>;
+    /**
+     * A person handed a tab or desktop control back, by preview session id. Fails, leaving the
+     * request held, when its record could not be written; the person can hand it back again.
+     */
+    readonly handBack: (sessionId: string) => Effect.Effect<void, HandoffError>;
     /** A handoff record changed; one of these that ended frees its target. The watcher's step. */
     readonly recordEnded: (handoff: Handoff) => Effect.Effect<void>;
     /** Settles desktop requests whose control ended. Runs on every control change. */
@@ -105,6 +108,7 @@ const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
+  const crypto = yield* Crypto.Crypto;
   const lock = yield* Semaphore.make(1);
   const locked = lock.withPermits(1);
   const scope = yield* Effect.scope;
@@ -152,19 +156,36 @@ const make = Effect.gen(function* () {
         ? leases.value.hold(entry.target.controlId, false)
         : Effect.void;
 
-  /** Whether the record took the end. */
-  const transition = (
-    input: { readonly threadId: ThreadId; readonly handoffId: TurnItemId },
+  /** Hand backs whose record a first write did not take; the request stays held for them. */
+  const unwritten = new Set<TurnItemId>();
+  const storedEnded = (entry: { readonly threadId: ThreadId; readonly handoffId: TurnItemId }) =>
+    handoffs.read({ threadId: entry.threadId, handoffId: entry.handoffId }).pipe(
+      Effect.map((stored) => !isHandoffPending(stored.state)),
+      Effect.orElseSucceed(() => false),
+    );
+
+  /**
+   * Records how a request ended. A first write uses the id a thread answer with the same outcome
+   * uses, so the two never both apply; a retry takes a fresh one, since a refused id stays
+   * refused. Fails only while the stored record still waits.
+   */
+  const transition = Effect.fn("PreviewHandoffs.transition")(function* (
+    entry: { readonly threadId: ThreadId; readonly handoffId: TurnItemId },
     state: "completed" | "cancelled",
     actor: HandoffActor,
-  ) =>
-    threads
+    retry = false,
+  ) {
+    if (retry && (yield* storedEnded(entry))) return;
+    const fresh = crypto
+      .randomUUIDv4()
+      .pipe(Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })));
+    const repeat = retry ? `:${yield* fresh}` : "";
+    const written = yield* threads
       .dispatch({
         type: "handoff.transition",
-        // The id a thread answer with the same outcome uses, so the two never both apply.
-        commandId: CommandId.make(`handoff:${input.handoffId}:${state}`),
-        threadId: input.threadId,
-        handoffId: input.handoffId,
+        commandId: CommandId.make(`handoff:${entry.handoffId}:${state}${repeat}`),
+        threadId: entry.threadId,
+        handoffId: entry.handoffId,
         state,
         actor,
       })
@@ -172,52 +193,45 @@ const make = Effect.gen(function* () {
         Effect.as(true),
         Effect.catchCause((cause) =>
           Effect.logWarning("a screen handoff end was not recorded", {
-            handoffId: input.handoffId,
+            handoffId: entry.handoffId,
             cause,
           }).pipe(Effect.as(false)),
         ),
       );
-
-  /** Ends whose record was not written yet, by handoff id; each check tries them again. */
-  const unsettled = new Map<
-    TurnItemId,
-    {
-      readonly entry: Pending;
-      readonly state: "completed" | "cancelled";
-      readonly actor: HandoffActor;
-    }
-  >();
-  /** Writes an end the screen already applied, keeping it for a retry until it is stored. */
-  const write = Effect.fn("PreviewHandoffs.write")(function* (
-    entry: Pending,
-    state: "completed" | "cancelled",
-    actor: HandoffActor,
-  ) {
-    const stored = yield* transition(entry, state, actor);
-    if (stored) unsettled.delete(entry.handoffId);
-    else unsettled.set(entry.handoffId, { entry, state, actor });
-    return stored;
+    // Answered or expired meanwhile: nothing is left to write.
+    if (written || (yield* storedEnded(entry))) return;
+    return yield* new HandoffError({ reason: "unavailable" });
   });
 
-  /** The record side of an end a person made on the screen. */
-  const settle = (entry: Pending, end: HandoffEnd) =>
-    write(entry, end === "handedBack" ? "completed" : "cancelled", SCREEN);
+  /** The agent's own end: a person stopped it or put the thread away, so no wake follows. */
+  const asAgent = (entry: Pending): HandoffActor => ({ type: "agent", threadId: entry.threadId });
 
-  const take = (key: string) =>
-    Effect.sync(() => {
-      const entry = pending.get(key);
-      if (entry !== undefined) pending.delete(key);
-      return entry;
-    });
-
-  const handBackDesktop = Effect.fn("PreviewHandoffs.handBackDesktop")(function* (
-    controlId: string,
+  /** Ends a request on the screen side and records it; a failed write is logged and dropped. */
+  const end = Effect.fn("PreviewHandoffs.end")(function* (
+    key: string,
+    entry: Pending,
+    actor: HandoffActor | null,
   ) {
-    const entry = yield* take(`${DESKTOP_SESSION_PREFIX}${controlId}`);
-    if (entry === undefined) return true;
-    // The person handed it back, so the control acts again even if the record lags.
+    pending.delete(key);
+    unwritten.delete(entry.handoffId);
     yield* release(entry);
-    return yield* settle(entry, "handedBack");
+    if (actor !== null) yield* transition(entry, "cancelled", actor).pipe(Effect.ignore);
+  });
+
+  /** A person's hand back: the record first, so a write that fails leaves the request held. */
+  const handBackEntry = Effect.fn("PreviewHandoffs.handBackEntry")(function* (
+    key: string,
+    entry: Pending,
+  ) {
+    yield* transition(entry, "completed", SCREEN, unwritten.has(entry.handoffId)).pipe(
+      Effect.tapError(() => Effect.sync(() => unwritten.add(entry.handoffId))),
+    );
+    yield* end(key, entry, null);
+  });
+
+  const handBack = Effect.fn("PreviewHandoffs.handBack")(function* (sessionId: string) {
+    const entry = pending.get(sessionId);
+    if (entry !== undefined) yield* handBackEntry(sessionId, entry);
   }, locked);
 
   const reconcileDesktop = Effect.gen(function* () {
@@ -231,12 +245,10 @@ const make = Effect.gen(function* () {
       if (entry.target.kind !== "desktop") continue;
       const state = states.get(entry.target.controlId);
       if (state !== undefined && state._tag !== "ended") continue;
-      // Stopped, expired, replaced or turned off: nothing is held for the person any more. Only
-      // a person's Stop is theirs; the agent is told the others ended without them.
+      // Stopped, expired, replaced or turned off: nothing is held for the person any more. A
+      // person's Stop stays stopped; the agent is told the others ended without them.
       const stopped = state?.reason === "stopped" || state?.reason === "stopped_all";
-      pending.delete(key);
-      yield* release(entry);
-      yield* write(entry, "cancelled", stopped ? SCREEN : { type: "server" });
+      yield* end(key, entry, stopped ? asAgent(entry) : { type: "server" });
     }
   }).pipe(locked);
 
@@ -245,8 +257,9 @@ const make = Effect.gen(function* () {
     const entry = pending.get(key);
     // A late end of an earlier request on this tab leaves the newer one alone.
     if (entry === undefined || entry.handoffId !== ended.requestId) return;
-    pending.delete(key);
-    yield* settle(entry, ended.end);
+    // Nobody waits on the stream's hand back: a failed write is logged and the next check retries.
+    if (ended.end === "handedBack") return yield* handBackEntry(key, entry).pipe(Effect.ignore);
+    yield* end(key, entry, ended.end === "stopped" ? asAgent(entry) : SCREEN);
   }, locked);
 
   /**
@@ -275,24 +288,8 @@ const make = Effect.gen(function* () {
   const recordEnded = Effect.fn("PreviewHandoffs.recordEnded")(function* (handoff: Handoff) {
     if (handoff.target.path !== PREVIEW_HANDOFF_PATH || isHandoffPending(handoff.state)) return;
     for (const [key, entry] of pending)
-      if (entry.handoffId === handoff.handoffId) {
-        pending.delete(key);
-        yield* release(entry);
-      }
+      if (entry.handoffId === handoff.handoffId) yield* end(key, entry, null);
   }, locked);
-
-  /**
-   * Ends a request with its thread, as the agent would: no wake follows, since a person stopped
-   * or put the thread away and waking it would start the turn they ended.
-   */
-  const endWithThread = Effect.fn("PreviewHandoffs.endWithThread")(function* (
-    key: string,
-    entry: Pending,
-  ) {
-    pending.delete(key);
-    yield* release(entry);
-    yield* write(entry, "cancelled", { type: "agent", threadId: entry.threadId });
-  });
 
   /** The thread was put away, or (with runId) a person stopped that one turn of it. */
   const threadEnded = Effect.fn("PreviewHandoffs.threadEnded")(function* (
@@ -301,28 +298,22 @@ const make = Effect.gen(function* () {
   ) {
     for (const [key, entry] of pending)
       if (entry.threadId === threadId && (runId === undefined || entry.runId === runId))
-        yield* endWithThread(key, entry);
+        yield* end(key, entry, asAgent(entry));
   }, locked);
 
   /** Checks every open request against what is stored, so a missed event delays it at most. */
   const reconcileRecords = Effect.gen(function* () {
-    for (const [handoffId, unsaved] of unsettled) {
-      const stored = yield* handoffs
-        .read({ threadId: unsaved.entry.threadId, handoffId })
-        .pipe(Effect.option);
-      // Answered or expired meanwhile: nothing is left to write.
-      if (Option.isSome(stored) && !isHandoffPending(stored.value.state))
-        unsettled.delete(handoffId);
-      else yield* write(unsaved.entry, unsaved.state, unsaved.actor);
-    }
     for (const [key, entry] of pending) {
       const record = yield* handoffs
         .read({ threadId: entry.threadId, handoffId: entry.handoffId })
         .pipe(Effect.option);
       if (Option.isNone(record)) continue;
       if (!isHandoffPending(record.value.state)) {
-        pending.delete(key);
-        yield* release(entry);
+        yield* end(key, entry, null);
+        continue;
+      }
+      if (unwritten.has(entry.handoffId)) {
+        yield* handBackEntry(key, entry).pipe(Effect.ignore);
         continue;
       }
       const shell = yield* orchestrator.getThreadShell(entry.threadId).pipe(Effect.option);
@@ -336,7 +327,7 @@ const make = Effect.gen(function* () {
         Option.isSome(shell) &&
         (shell.value === null || shell.value.archivedAt !== null || shell.value.deletedAt !== null);
       if (putAway || (cause !== undefined && THREAD_ENDS.has(cause)))
-        yield* endWithThread(key, entry);
+        yield* end(key, entry, asAgent(entry));
     }
   }).pipe(locked);
 
@@ -455,15 +446,17 @@ const make = Effect.gen(function* () {
         // Asked again while it waits: the hold stands, and an end already queued settles it.
         if (existing?.handoffId === entry.handoffId) return created;
         // An earlier request whose end is still queued: its hold gives way to this one.
-        if (existing !== undefined) yield* release(existing);
+        if (existing !== undefined) {
+          unwritten.delete(existing.handoffId);
+          yield* release(existing);
+        }
         pending.set(key, entry);
         if (yield* hold(entry)) {
           if (entry.target.kind === "desktop") yield* watchExpiry(entry, entry.target.expiresAt);
           return created;
         }
-        pending.delete(key);
-        // The tab closed or a person stopped it in between: nothing is waiting.
-        yield* settle(entry, "ended");
+        // The tab closed or a person stopped it in between. This call's error tells the agent.
+        yield* end(key, entry, asAgent(entry));
         return undefined;
       }).pipe(locked);
       if (handoff === undefined)
@@ -489,11 +482,10 @@ const make = Effect.gen(function* () {
         AND json_extract(payload_json, '$.handoff.target.path') = ${PREVIEW_HANDOFF_PATH}`;
     for (const row of rows) {
       const handoffId = TurnItemId.make(row.turn_item_id);
-      if (unsettled.has(handoffId)) continue;
       if ([...pending.values()].some((entry) => entry.handoffId === handoffId)) continue;
       yield* transition({ threadId: ThreadId.make(row.thread_id), handoffId }, "cancelled", {
         type: "server",
-      });
+      }).pipe(Effect.ignore);
     }
   }).pipe(
     locked,
@@ -546,7 +538,7 @@ const make = Effect.gen(function* () {
         if (entry.target.kind === "desktop") reasons.set(entry.target.controlId, entry.reason);
       return reasons;
     }),
-    handBackDesktop,
+    handBack,
     recordEnded,
     handle,
     reconcileDesktop,

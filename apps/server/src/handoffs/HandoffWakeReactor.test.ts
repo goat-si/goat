@@ -502,7 +502,7 @@ it.effect("keeps handoff wakes pending while held and dispatches after release",
 );
 
 it.effect(
-  "wakes an agent after a hand back or a decline, and leaves it stopped after a person's stop",
+  "wakes an agent when a person hands back, declines or cancels its screen request, not after a Stop",
   () =>
     withWorld((world) =>
       Effect.gen(function* () {
@@ -519,12 +519,23 @@ it.effect(
           person,
         );
         yield* world.reactor.handle(yield* resolution(world, declined.handoffId, "declined"));
-        const stopped = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        // A person's Cancel request on the card, as the mobile app sends it.
+        const cancelled = yield* ask(world, PREVIEW_HANDOFF_PATH);
         yield* world.handoffs.respond(
-          { threadId, handoffId: stopped.handoffId, action: "cancelled" },
+          { threadId, handoffId: cancelled.handoffId, action: "cancelled" },
           person,
         );
-        yield* world.reactor.handle(yield* resolution(world, stopped.handoffId, "cancelled"));
+        yield* world.reactor.handle(yield* resolution(world, cancelled.handoffId, "cancelled"));
+        // A Stop on the screen is recorded as the agent's own end, so the stopped agent stays so.
+        const stopped = yield* ask(world, PREVIEW_HANDOFF_PATH);
+        yield* world.orchestrator.dispatch({
+          type: "handoff.transition",
+          commandId: CommandId.make(`handoff:${stopped.handoffId}:cancelled`),
+          threadId,
+          handoffId: stopped.handoffId,
+          state: "cancelled",
+          actor: { type: "agent", threadId },
+        });
         yield* world.reactor.reconcile;
         const sent = yield* wakes(world);
         const textOf = (handoffId: string, state: string) =>
@@ -533,9 +544,11 @@ it.effect(
           "was handed back by a person. The screen is yours again.",
         );
         expect(textOf(declined.handoffId, "declined")).toContain("was declined by a person.");
-        // Stop really stops: the record stays, and the agent reads it when a person wakes it.
+        expect(textOf(cancelled.handoffId, "cancelled")).toContain(
+          "Do not act on that tab or screen again unless they ask",
+        );
         expect(textOf(stopped.handoffId, "cancelled")).toBeUndefined();
-        expect(sent).toHaveLength(2);
+        expect(sent).toHaveLength(3);
       }),
     ),
 );

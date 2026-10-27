@@ -421,7 +421,7 @@ describe("SessionControl", () => {
     expect(dispatched).toEqual([]);
   });
 
-  it("holds a tab an agent handed to a person until they hand it back, not when their viewer drops", async () => {
+  it("holds a tab an agent handed to a person until their hand back is recorded, not when their viewer drops", async () => {
     const control = new SessionControl("agent");
     const ends: string[] = [];
     control.onHandoffEnd((end) => ends.push(end));
@@ -440,11 +440,17 @@ describe("SessionControl", () => {
     expect([control.handoffReason, ends]).toEqual(["Sign in with the code on your phone.", []]);
     await control.take("viewer");
     await control.release("viewer");
-    expect([control.handoffReason, ends]).toEqual([null, ["handedBack"]]);
+    // Held until the hand back is recorded, which then ends it without reporting it again.
+    expect([control.handoffReason, ends]).toEqual([
+      "Sign in with the code on your phone.",
+      ["handedBack"],
+    ]);
+    expect(control.agentCanActNow("agent")).toBe(false);
+    control.endHandoff(null);
     await expect(control.agent("agent", async () => "resumed")).resolves.toBe("resumed");
     control.requestHandoff("Solve the CAPTCHA.");
     control.stopAgents();
-    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "ended"]]);
+    expect([control.handoffReason, ends]).toEqual([null, ["handedBack", "stopped"]]);
   });
 
   it("lets the request's own end free the tab without reporting a person's hand back", async () => {

@@ -34,8 +34,8 @@ const HUMAN_MESSAGE = "A human controls this tab.";
 const HANDOFF_MESSAGE =
   "This tab waits for the person you asked to finish a step; act again once they hand it back.";
 
-/** How an agent's request for a person ended on the tab: handed back, or stopped or closed. */
-export type HandoffEnd = "handedBack" | "ended";
+/** How a person ended an agent's request on the tab: handed back, stopped, or closed. */
+export type HandoffEnd = "handedBack" | "stopped" | "ended";
 
 /** What a secret fill may do from inside its queued turn. */
 export interface SecretFence {
@@ -186,7 +186,7 @@ export class SessionControl {
     this.epoch++;
     this.onGenerationChange();
     this.cut(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
-    this.clearRequest("ended");
+    this.clearRequest("stopped");
     this.changed();
   }
 
@@ -500,7 +500,9 @@ export class SessionControl {
         "Only the controlling viewer can release this browser tab.",
       );
     }
-    if (handedBack) this.clearRequest("handedBack");
+    // The request stays held until its record takes the hand back, which then ends it here.
+    if (handedBack && this.requested !== null)
+      for (const listener of this.handoffListeners) listener("handedBack", this.requestId);
     this.changeOwner(null);
     await this.enqueue(async () => {
       await Promise.all(this.handoff);

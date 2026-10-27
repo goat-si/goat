@@ -37,6 +37,7 @@ import { SessionControl } from "./SessionControl.ts";
 const environmentId = EnvironmentId.make("test-environment");
 const reason = "Sign in with the code from your phone.";
 const controlId = "control:1";
+const desktopSession = `${PreviewHandoffs.DESKTOP_SESSION_PREFIX}${controlId}`;
 
 /** PreviewHandoffs over a real thread and handoff store, one agent tab and one desktop control. */
 const world = (
@@ -76,13 +77,19 @@ const world = (
     // The screen's end is recorded once its transition command commits.
     const settled = yield* Deferred.make<string>();
     let failing = options.failedWrites ?? 0;
+    // Like the orchestrator's receipts: an id that was refused stays refused.
+    const refused = new Set<string>();
+    const failed = yield* Deferred.make<void>();
     const dispatch = (
       command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
     ) =>
-      command.type === "handoff.transition" && failing > 0
+      command.type === "handoff.transition" && (failing > 0 || refused.has(command.commandId))
         ? Effect.suspend(() => {
-            failing--;
-            return Effect.die("the record write failed");
+            if (failing > 0) failing--;
+            refused.add(command.commandId);
+            return Deferred.succeed(failed, undefined).pipe(
+              Effect.andThen(Effect.die("the record write failed")),
+            );
           })
         : orchestrator
             .dispatch(command)
@@ -185,6 +192,7 @@ const world = (
       requests,
       control,
       settled,
+      failed,
       desktop,
       endControl,
       deliverWithheld,
@@ -198,7 +206,7 @@ it.effect(
   () =>
     withHarness(({ orchestrator }) =>
       Effect.gen(function* () {
-        const { handoffs, requests, control, settled } = yield* world(orchestrator);
+        const { handoffs, requests, control, settled, freed } = yield* world(orchestrator);
         const asked = { threadId, providerInstanceId: instanceId, reason, tabId: "tab-1" };
         const result = yield* requests.request(asked);
         expect(result.handoff).toMatchObject({
@@ -219,6 +227,8 @@ it.effect(
           "completed",
           { type: "client", label: "Agent screen" },
         ]);
+        // Freed only once the record took the hand back.
+        yield* Deferred.await(freed);
         expect(control.agentCanActNow("agent-session")).toBe(true);
       }),
     ),
@@ -263,7 +273,7 @@ it.effect("holds only the asking agent's desktop control, until the person hands
       expect(desktop).toEqual([`${controlId}:true`]);
       expect(yield* requests.desktopReasons).toEqual(new Map([[controlId, reason]]));
 
-      yield* requests.handBackDesktop(controlId);
+      yield* requests.handBack(desktopSession);
       expect(yield* Deferred.await(settled)).toBe("completed");
       expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
       expect(yield* requests.desktopReasons).toEqual(new Map());
@@ -285,7 +295,9 @@ it.effect("cancels a desktop request once its control stops, by whatever path st
       yield* requests.reconcileDesktop;
       expect(yield* Deferred.await(settled)).toBe("cancelled");
       const handoffId = TurnItemId.make(result.handoff.handoffId);
-      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("cancelled");
+      // A person's Stop is recorded as the agent's own end, so the stopped agent is not woken.
+      const record = yield* handoffs.read({ threadId, handoffId });
+      expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
       expect(yield* requests.desktopReasons).toEqual(new Map());
     }),
   ),
@@ -314,9 +326,10 @@ it.effect("cancels requests a restart left with nothing held", () =>
 it.effect("frees the tab when a person hands it back while the agent is asking again", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
-      const { handoffs, requests, control, settled, deliverWithheld } = yield* world(orchestrator, {
-        withholdEnds: true,
-      });
+      const { handoffs, requests, control, settled, deliverWithheld, freed } = yield* world(
+        orchestrator,
+        { withholdEnds: true },
+      );
       const asked = { threadId, providerInstanceId: instanceId, reason, tabId: "tab-1" };
       const result = yield* requests.request(asked);
       yield* Effect.promise(async () => {
@@ -329,6 +342,7 @@ it.effect("frees the tab when a person hands it back while the agent is asking a
       expect(yield* Deferred.await(settled)).toBe("completed");
       const handoffId = TurnItemId.make(result.handoff.handoffId);
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
+      yield* Deferred.await(freed);
       expect(control.agentCanActNow("agent-session")).toBe(true);
     }),
   ),
@@ -504,7 +518,7 @@ it.effect("leaves a newer turn's request held when a Stop of an earlier turn arr
   ),
 );
 
-it.effect("keeps a desktop hand back until its record is written, and says when it was not", () =>
+it.effect("keeps a desktop request held when its hand back is not recorded, and says so", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
       const { handoffs, requests, settled, desktop } = yield* world(orchestrator, {
@@ -513,38 +527,79 @@ it.effect("keeps a desktop hand back until its record is written, and says when 
       });
       const result = yield* requests.request({ threadId, providerInstanceId: instanceId, reason });
       const handoffId = TurnItemId.make(result.handoff.handoffId);
-      expect(yield* requests.handBackDesktop(controlId)).toBe(false);
-      // The person handed it back, so the hold ends now; the record follows on the next check.
-      expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
+      const failure = yield* requests.handBack(desktopSession).pipe(Effect.flip);
+      expect(failure.reason).toBe("unavailable");
+      expect(desktop).toEqual([`${controlId}:true`]);
+      expect(yield* requests.desktopReasons).toEqual(new Map([[controlId, reason]]));
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("pending");
-      yield* TestClock.adjust("15 seconds");
+      // The person sees the error and hands it back again.
+      yield* requests.handBack(desktopSession);
       expect(yield* Deferred.await(settled)).toBe("completed");
+      expect(desktop).toEqual([`${controlId}:true`, `${controlId}:false`]);
       expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
     }),
   ),
 );
 
-it.effect("retries a browser hand back whose record write failed", () =>
-  withHarness(({ orchestrator }) =>
-    Effect.gen(function* () {
-      const { handoffs, requests, control, settled } = yield* world(orchestrator, {
-        brokenStream: true,
-        failedWrites: 1,
-      });
-      const result = yield* requests.request({
-        threadId,
-        providerInstanceId: instanceId,
-        reason,
-        tabId: "tab-1",
-      });
-      yield* Effect.promise(async () => {
-        await control.take("viewer");
-        await control.release("viewer");
-      });
-      yield* TestClock.adjust("15 seconds");
-      expect(yield* Deferred.await(settled)).toBe("completed");
-      const handoffId = TurnItemId.make(result.handoff.handoffId);
-      expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
-    }),
-  ),
+it.effect(
+  "keeps a tab held when a hand back on its stream is not recorded, until a check records it",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, requests, control, settled, failed, freed } = yield* world(orchestrator, {
+          brokenStream: true,
+          failedWrites: 1,
+        });
+        const result = yield* requests.request({
+          threadId,
+          providerInstanceId: instanceId,
+          reason,
+          tabId: "tab-1",
+        });
+        const handoffId = TurnItemId.make(result.handoff.handoffId);
+        yield* Effect.promise(async () => {
+          await control.take("viewer");
+          await control.release("viewer");
+        });
+        yield* Deferred.await(failed);
+        expect(control.handoffReason).toBe(reason);
+        expect(control.agentCanActNow("agent-session")).toBe(false);
+        yield* TestClock.adjust("15 seconds");
+        expect(yield* Deferred.await(settled)).toBe("completed");
+        yield* Deferred.await(freed);
+        expect((yield* handoffs.read({ threadId, handoffId })).state).toBe("completed");
+        expect(control.agentCanActNow("agent-session")).toBe(true);
+      }),
+    ),
+);
+
+it.effect(
+  "ends a tab's request as the agent's own when a person stops it, so no wake follows",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, requests, control, settled, failed } = yield* world(orchestrator, {
+          brokenStream: true,
+          failedWrites: 1,
+        });
+        const result = yield* requests.request({
+          threadId,
+          providerInstanceId: instanceId,
+          reason,
+          tabId: "tab-1",
+        });
+        const handoffId = TurnItemId.make(result.handoff.handoffId);
+        // A hand back that was not recorded, then Stop: the Stop is what ends it.
+        yield* Effect.promise(async () => {
+          await control.take("viewer");
+          await control.release("viewer");
+        });
+        yield* Deferred.await(failed);
+        control.stopAgents();
+        expect(yield* Deferred.await(settled)).toBe("cancelled");
+        yield* TestClock.adjust("15 seconds");
+        const record = yield* handoffs.read({ threadId, handoffId });
+        expect([record.state, record.actor]).toEqual(["cancelled", { type: "agent", threadId }]);
+      }),
+    ),
 );
