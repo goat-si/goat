@@ -108,7 +108,8 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     set({
       hidden: !shown,
       revealedWhileNarrow: shown && narrow,
-      revealedThreads: unrevealed,
+      // Hiding is the window's choice, so no thread's agent reveal outlasts it.
+      revealedThreads: shown ? unrevealed : new Set(),
       ...(shown
         ? {
             hiddenLive: new Map(
@@ -123,7 +124,8 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     });
   },
   setNarrow: (narrow) => {
-    if (get().narrow !== narrow) set({ narrow, revealedWhileNarrow: false });
+    if (get().narrow !== narrow)
+      set({ narrow, revealedWhileNarrow: false, revealedThreads: new Set() });
   },
   dismiss: (session) =>
     set((state) => ({
@@ -205,7 +207,7 @@ export function openPreviewSessionStack(input?: {
   if (windowWide) writeHidden(false);
   usePreviewSessionStack.setState((state) => ({
     ...(windowWide ? { hidden: false, revealedWhileNarrow: state.narrow } : {}),
-    ...(asked && !windowWide
+    ...(asked && !windowWide && (state.hidden || state.narrow)
       ? { revealedThreads: new Set(state.revealedThreads).add(threadKey) }
       : {}),
     ...(input?.focus && asked ? { hiddenLive: withoutRevealed(state.hiddenLive, input) } : {}),
