@@ -272,7 +272,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   /* GOAT Bot's Messages colors stay local to its conversation. */
   --color-goat-bubble-out-top: var(--goat-bubble-out-top);
   --color-goat-bubble-out: var(--goat-bubble-out);
-  --color-goat-bubble-out-foreground: #fff;
+  --color-goat-bubble-out-foreground: var(--goat-bubble-out-foreground);
   --color-goat-bubble-in: var(--goat-bubble-in);
   --color-goat-bubble-in-foreground: var(--goat-bubble-in-foreground);
   --color-channel-dev: var(--channel-dev);
@@ -1283,6 +1283,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   color-scheme: light;
   --goat-bubble-out-top: var(--blue);
   --goat-bubble-out: var(--blue);
+  --goat-bubble-out-foreground: #fff;
   --goat-bubble-in: #e9e9eb;
   --goat-bubble-in-foreground: #000;
   --goat-composer-fill: #f3f3f3;
@@ -1375,6 +1376,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   @variant dark {
     color-scheme: dark;
     --blue: #339cff;
+    /* White on the lighter dark-mode blue falls under 3:1. */
+    --goat-bubble-out-foreground: #0d0d0d;
     --goat-bubble-in: #3a3a3c;
     --goat-bubble-in-foreground: #fff;
     --goat-composer-fill: #262626;
