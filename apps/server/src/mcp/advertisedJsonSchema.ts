@@ -1,5 +1,5 @@
 import * as Predicate from "effect/Predicate";
-import { Tool } from "effect/ai";
+import { McpSchema, Tool } from "effect/ai";
 
 type Json = unknown;
 type JsonObject = { [key: string]: Json };
@@ -125,3 +125,15 @@ const compact = (schema: Json, optional: boolean): Json => {
  */
 export const advertisedJsonSchema = (tool: Tool.Any) =>
   compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+
+export const advertisedRegistration = <Registration extends { readonly tool: McpSchema.Tool }>(
+  registration: Registration,
+): Registration => ({
+  ...registration,
+  tool: new McpSchema.Tool({
+    ...registration.tool,
+    inputSchema: compact(registration.tool.inputSchema, false) as ReturnType<
+      typeof Tool.getJsonSchema
+    >,
+  }),
+});
