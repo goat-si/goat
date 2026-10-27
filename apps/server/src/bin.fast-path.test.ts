@@ -70,7 +70,9 @@ it.effect.each(["--version", "__ssh-helper"] as const)(
 it.effect.each([
   { label: "unknown flag", args: ["__ssh-helper", "protocol", "--invalid-helper-flag"] },
   { label: "missing flag value", args: ["__ssh-helper", "protocol", "--runtime-file"] },
-])("preserves full CLI errors for helper arguments: $label", ({ args }) =>
+  { label: "completions", args: ["__ssh-helper", "protocol", "--completions", "bash"] },
+  { label: "help", args: ["__ssh-helper", "protocol", "--help"] },
+])("matches the full CLI for helper arguments: $label", ({ args }) =>
   Effect.gen(function* () {
     vi.resetModules();
     let running: Effect.Effect<Exit.Exit<unknown, unknown>> | undefined;
@@ -113,8 +115,7 @@ it.effect.each([
     yield* Effect.promise(() => import("./bin.ts"));
     assert.isDefined(running);
     const actual = yield* running.pipe(Effect.provideService(Console.Console, console));
-    assert.isTrue(Exit.isFailure(expected));
-    assert.isTrue(Exit.isFailure(actual));
+    expect(actual._tag).toBe(expected._tag);
     if (Exit.isFailure(expected) && Exit.isFailure(actual)) {
       expect(Cause.squash(actual.cause)).toEqual(Cause.squash(expected.cause));
     }

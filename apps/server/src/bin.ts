@@ -9,6 +9,9 @@ import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 import { isEntrypoint } from "./entrypoint.ts";
 
+// Effect CLI built-ins describe the whole command tree, so they need the full CLI.
+const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--help", "-h"]);
+
 if (
   isEntrypoint({
     moduleUrl: import.meta.url,
@@ -26,7 +29,10 @@ if (
   if (command === "--version" && process.argv.length === 3) {
     const { runVersionMain } = await import("./cli/helperMain.ts");
     runVersionMain();
-  } else if (command === "__ssh-helper") {
+  } else if (
+    command === "__ssh-helper" &&
+    !process.argv.some((arg) => FULL_CLI_BUILTINS.has(arg.split("=")[0] ?? arg))
+  ) {
     const { runSshHelperMain } = await import("./cli/helperMain.ts");
     await runSshHelperMain(process.argv.slice(2));
   } else if (command === "__document-text") {
