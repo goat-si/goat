@@ -144,10 +144,74 @@ codesign --verify --deep --strict "/Applications/GOAT (Nightly).app"
 codesign -d --entitlements :- "/Applications/GOAT (Nightly).app"
 ```
 
-## Restricting sign-ups
+## Invite beta access and suspension
 
-Use Clerk's allowlist for permitted email addresses or domains, or Restricted mode for invitation-only
-sign-up. An enabled empty allowlist blocks all new sign-ups.
+Clerk sign-up restrictions control who can create an identity. Relay access is a separate,
+explicit invitation keyed by Clerk user ID; an absent account is denied. Clerk dashboard bans
+and deletes do not synchronize relay status during the beta. Use the relay operator workflow
+below. A Clerk ban or unban is an optional manual action; the relay never performs it.
 
-Sign-up restrictions do not revoke an existing account's access. Ban the account in Clerk when
-its active sessions and future sign-ins must be disabled.
+Provision a nonempty `RELAY_OPERATOR_SECRET` through the trusted deployment environment, and
+supply the same secret and an HTTPS `RELAY_OPERATOR_URL` to the operator CLI. Keep the secret out
+of command arguments, logs, client configuration, and browser bundles. From `infra/relay`:
+
+```sh
+vp run accounts:access show user_fixture
+vp run accounts:access allow user_fixture --key 10000000-0000-4000-8000-000000000001
+vp run accounts:access suspend user_fixture --key 10000000-0000-4000-8000-000000000002
+```
+
+These example IDs are fixtures. Each intentional command needs a fresh idempotency key. Reusing
+one for a different command returns a conflict. A suspension first commits relay denial and a
+new account epoch, retires endpoint identities, and invalidates relay trust and delivery
+eligibility. It returns an operation record; HTTP 202 and CLI exit 2 mean hook cleanup is still
+pending. Use `operation <id>` to inspect it or `resume <id>` to advance it. The five-minute cron
+also resumes due operations in bounded batches. Opposite transitions conflict while cleanup is
+pending. Allow creates a new epoch only after relay cleanup finishes; it restores none of the
+old credentials, registrations, queued deliveries, or held hooks.
+
+The default limits are one held current-generation tunnel allocation, ten active environment
+links including publish-only links, and ten mobile device records. Existing tunnel overrides,
+including zero, remain authoritative. Failed and in-flight current-generation reservations
+still consume capacity. Strict aligned hourly request budgets are 20 link challenges, 10 links
+or create-capable recoveries, 120 token exchanges, and 120 connects. Registration and publication
+have separate approximate minute limits. A 403 reports access or resource policy, a 429 carries
+`Retry-After`, and unavailable authorization storage or limiters return 503.
+
+After suspension and allow, explicitly relink each host and register its mobile devices again.
+The new endpoint generation changes the Connect address and webhook URLs; update webhook
+senders. Ordinary unlink/relink retains the endpoint generation. A continuously repeated stage
+inventory removes retired tunnels and DNS records, even if a delayed provider mutation appears
+after an earlier empty scan. Provider cleanup is best effort and does not block allow; its
+observed resource backlog remains visible during failures. Current-generation abandoned creates
+are adopted on the next link or recovery request, not automatically by the live tunnel reaper.
+
+Hosts with a ready connector probe their public environment descriptor at most once every ten
+minutes. Two failures request recovery. DNS repair takes up to twenty minutes for detection,
+plus recovery scheduling/backoff (two to thirty minutes), and depends on relay reachability and
+available request budget. DNS-only repair charges `connect`; a missing tunnel must acquire the
+`link` allowance before creation. Honor a longer `Retry-After`. There is no unconditional repair
+or provider-cleanup deadline.
+
+Relay suspension does not close already issued environment-direct sessions or LAN, Tailscale,
+and SSH sessions. An external send already admitted before suspension may finish; it cannot
+restore delivery eligibility. The beta supports one owning account per environment key.
+Transfer requires unlink and cleanup on the existing owner followed by a fresh signed link.
+
+## Migrating a relay to account policy
+
+Keep admission closed and drain old Workers, queue consumers, and outstanding provisioning
+before applying the forward migrations and guarded runtime together. The migration refuses
+conflicting active environment keys, malformed allocation identities, and negative tunnel
+limits. Resolve those records explicitly; it never picks an owner or invites historical users.
+Legacy endpoint identities bind to the running stage on first guarded use because a sanitized
+tunnel name cannot recover the original raw stage. Legacy credentials and tokens require relink
+or refresh, and old queue/hook payloads are dropped. Roll back with a forward fix while admission
+stays closed; an old Worker does not enforce the new tables.
+
+The relay CI lane includes real PostgreSQL migration and concurrency tests and local workerd
+restart tests. Hosted Linux runners may install PostgreSQL; self-hosted runners must provide
+`pg_config`, `initdb`, `postgres`, `pg_ctl`, and `psql` (or test-only `PG_BIN`). The prerequisite
+creates and stops a private socket-only cluster. It never accepts a live relay database URL.
+A missing prerequisite fails the lane rather than skipping proof. Worker fixtures require local
+Alchemy provider mode and refuse a cloud fallback. Public Connect activation remains separate.
