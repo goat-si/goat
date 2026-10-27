@@ -130,6 +130,8 @@ export const ScreenRunCell = Schema.Struct({
   source: utf8Text(64 * 1024),
   resetValues: Schema.Boolean,
   limits: ScreenRunLimits,
+  /** The parent's epoch-ms wall deadline, so time spent starting the child counts on both sides. */
+  deadlineMillis: natural,
 });
 export type ScreenRunCell = typeof ScreenRunCell.Type;
 

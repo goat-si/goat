@@ -76,6 +76,7 @@ describe("screen code wire contracts", () => {
         source: "한".repeat(22_000),
         resetValues: false,
         limits: DEFAULT_SCREEN_RUN_LIMITS,
+        deadlineMillis: 0,
       }),
     ).toThrow();
   });
