@@ -360,6 +360,7 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly followsCurrentCheckout?: boolean;
   readonly pullRequestReference?: string;
 }
 
@@ -373,6 +374,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  followsCurrentCheckout: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
 });
 
@@ -436,6 +438,11 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.withLabel("mobile:composer-drafts"),
 );
 
+export const composerDraftsLoadedAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:composer-drafts-loaded"),
+);
+
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:sticky-composer-model-selection"),
@@ -472,6 +479,7 @@ const persistenceQueue = new SerializedAsyncQueue();
 
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
+  appAtomRegistry.set(composerDraftsLoadedAtom, false);
   persistRetryNeeded = false;
 }
 
@@ -1004,6 +1012,7 @@ export function ensureComposerDraftsLoaded(): void {
         ),
       });
     }
+    appAtomRegistry.set(composerDraftsLoadedAtom, true);
   });
   loadPromise = loading;
   void loading.catch((cause) => {
@@ -1650,6 +1659,7 @@ export function mergeComposerDraftContentState(
 export async function mergeComposerDraftContent(
   draftKey: string,
   content: ComposerDraftContent,
+  options?: { readonly onMerge: (before: ComposerDraft, merged: ComposerDraft) => void },
 ): Promise<{ readonly skippedAttachmentCount: number }> {
   ensureComposerDraftsLoaded();
   if (loadPromise !== null) {
@@ -1671,6 +1681,7 @@ export async function mergeComposerDraftContent(
     (attachment) =>
       !currentAttachmentIds.has(attachment.id) && !nextAttachmentIds.has(attachment.id),
   ).length;
+  options?.onMerge(normalizeDraft(current[draftKey]), normalizeDraft(next[draftKey]));
   // Publish content and receipt before awaiting disk; concurrent typing then preserves the receipt in later serialized writes.
   if (next !== current) {
     appAtomRegistry.set(composerDraftsAtom, next);
@@ -1679,29 +1690,6 @@ export async function mergeComposerDraftContent(
     writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
   );
   return { skippedAttachmentCount };
-}
-
-export async function restoreComposerDraftSnapshot(
-  draftKey: string,
-  snapshot: ComposerDraft,
-): Promise<void> {
-  ensureComposerDraftsLoaded();
-  if (loadPromise !== null) {
-    await loadPromise;
-  }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  const next = restoreComposerDraftSnapshotState(
-    appAtomRegistry.get(composerDraftsAtom),
-    draftKey,
-    snapshot,
-  );
-  appAtomRegistry.set(composerDraftsAtom, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
 }
 
 export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): boolean {
@@ -1759,6 +1747,9 @@ export function undoComposerDraftMergeState(
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
     workspaceSelection: undoSetting("workspaceSelection"),
+    importedShareIds: existing.importedShareIds?.filter(
+      (id) => snapshot.importedShareIds?.includes(id) || !merged.importedShareIds?.includes(id),
+    ),
   };
   return withComposerDraft(current, draftKey, draft);
 }

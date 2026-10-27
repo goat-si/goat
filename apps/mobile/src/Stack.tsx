@@ -94,6 +94,7 @@ import {
   ExistingThreadSettingsRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
+import { newTaskFlowKey } from "./features/threads/new-task-flow-state";
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsNavigationRouteScreen } from "./features/settings/SettingsNavigationRouteScreen";
@@ -536,7 +537,10 @@ function RootStackLayout(props: {
       .slice(0, props.state.index + 1)
       .filter((route) => !isWorkspaceOverlayRoute(route.name)),
   );
-  const draftRoute = props.state.routes.findLast((route) => route.name === "Thread");
+  const draftRoute = props.state.routes.findLast(isDraftThreadRoute);
+  const draftRouteOnTop =
+    draftRoute !== undefined &&
+    props.state.routes.findLast((route) => route.name === "Thread") === draftRoute;
   const draftParams = (
     draftRoute?.params as
       | { draft?: { draftId?: string | string[]; pendingTaskId?: string | string[] } }
@@ -570,7 +574,8 @@ function RootStackLayout(props: {
 
   return (
     <NewTaskFlowProvider
-      active={isDraftThreadRoute(draftRoute)}
+      active={draftRouteOnTop}
+      flowKey={draftRoute === undefined ? undefined : newTaskFlowKey(draftRoute)}
       routeDraftId={routeDraftId}
       routePendingTaskId={routePendingTaskId}
     >

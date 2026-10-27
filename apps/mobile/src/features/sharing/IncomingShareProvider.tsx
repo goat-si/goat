@@ -19,6 +19,7 @@ import {
   type IncomingShareDraft,
 } from "./incoming-share-model";
 import { createIncomingSharePayloadReader } from "./incoming-share-native";
+import { coalescedRun } from "../../lib/coalescedRun";
 import { IncomingShareInbox } from "./incoming-share-inbox";
 import { persistComposerAttachmentFile } from "../../lib/composerImages";
 import {
@@ -202,7 +203,7 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
   const [drafts, setDrafts] = useState<ReadonlyArray<IncomingShareDraft>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -212,36 +213,31 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
     };
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (refreshPromiseRef.current) {
-      return refreshPromiseRef.current;
-    }
-
-    const operation = (async () => {
-      try {
-        const snapshot = await incomingShareInbox.refresh({ ingestNative: enabled });
-        if (mountedRef.current) {
-          setDrafts(snapshot);
-          setError(null);
-        }
-      } catch (cause) {
-        const persisted = await incomingShareInbox
-          .refresh({ ingestNative: false })
-          .catch(() => null);
-        if (mountedRef.current) {
-          if (persisted) {
-            setDrafts(persisted);
+  const refresh = useMemo(
+    () =>
+      coalescedRun(async () => {
+        try {
+          const snapshot = await incomingShareInbox.refresh({ ingestNative: enabled });
+          if (mountedRef.current) {
+            setDrafts(snapshot);
+            setError(null);
           }
-          setError(cause instanceof Error ? cause : new Error("Could not import shared content."));
+        } catch (cause) {
+          const persisted = await incomingShareInbox
+            .refresh({ ingestNative: false })
+            .catch(() => null);
+          if (mountedRef.current) {
+            if (persisted) {
+              setDrafts(persisted);
+            }
+            setError(
+              cause instanceof Error ? cause : new Error("Could not import shared content."),
+            );
+          }
         }
-      }
-    })().finally(() => {
-      refreshPromiseRef.current = null;
-    });
-
-    refreshPromiseRef.current = operation;
-    return operation;
-  }, [enabled]);
+      }),
+    [enabled],
+  );
 
   useEffect(() => {
     void refresh().finally(() => {

@@ -13,7 +13,9 @@ A draft with text or attachments stays saved with its selection. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
 On mobile, when you pick a project that is on more than one machine, the thread
-starts on a connected one if any is connected.
+starts on a connected one if any is connected. **Settings → Thread behavior → Use last
+project** reuses the current or last project for new threads. Turn it off to choose a
+project each time. Shared content stays available if you cancel project selection.
 
 When you change a new thread's project, GOAT stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
