@@ -101,8 +101,8 @@ export const secretSpans = (text: string, forms: ReadonlyArray<SecretForm>, cut 
   return forms.flatMap((form) => spansOf(searched, form, cut));
 };
 
-/** What a fetch's renderer drops or rewrites around a value: spaces and link brackets. */
-const DROPPED = /[\s[\]]/u;
+/** What a fetch's renderer drops or rewrites: spaces, link brackets, and slashes (URLs turn \ into /). */
+const DROPPED = /[\s[\]/\\]/u;
 
 /**
  * The text without spaces and brackets, each kept character mapped to the span it came from.

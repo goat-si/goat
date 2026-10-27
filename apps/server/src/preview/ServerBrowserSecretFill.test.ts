@@ -319,13 +319,14 @@ it.live("masks a link label whose dropped brackets join escapes, symbols or a cu
   const { tab } = makeTab();
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 4; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record);
       const fetched = (text: string, truncated: boolean) =>
         fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
       const labels = [
         "[alpha%41beta](https://x/)",
         "[!@#7$%(8)&*9](https://x/)",
         "[continue](https://x/alpha%FF%20beta)",
+        "[next](https://x/p/m7Q/n8Rv9)",
         "ordinary prose",
       ];
       expect(fetched(labels.join("\n"), false)).toEqual({
@@ -335,6 +336,7 @@ it.live("masks a link label whose dropped brackets join escapes, symbols or a cu
             "[[secret]](https://x/)",
             "[[secret]](https://x/)",
             "[continue](https://x/[secret])",
+            "[next](https://x/p/[secret])",
             "ordinary prose",
           ].join("\n"),
           truncated: false,
@@ -346,7 +348,7 @@ it.live("masks a link label whose dropped brackets join escapes, symbols or a cu
       });
     },
     undefined,
-    ["alpha%[41]beta", "!@#[7]$%(8)&*9", "alpha[beta]gamma", "alpha%FF beta"],
+    ["alpha%[41]beta", "!@#[7]$%(8)&*9", "alpha[beta]gamma", "alpha%FF beta", "m7Q\\n8Rv9"],
   );
 });
 
