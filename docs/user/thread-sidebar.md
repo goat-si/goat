@@ -384,7 +384,8 @@ launched thread expands its group. While the group is folded, a launched thread 
 keeps its launcher in **Priority**, and one waiting for an approval or an answer shows on the
 launcher row. The group counts once in Priority and on the activity bell. A launched thread you
 pinned, one whose launcher is archived, deleted, or on a machine this app is not connected to,
-and one still working under a snoozed launcher keep their own rows. Search lists launched threads
+one still working under a snoozed launcher, and finished work you have not settled under a settled
+launcher keep their own rows. Search lists launched threads
 like any other. In **Projects**, a thread folds only under a launcher in the same project.
 
 Expand a tool call in the conversation to see its full command and output.

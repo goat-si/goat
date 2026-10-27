@@ -23,6 +23,7 @@ export function thread(
     readonly input?: boolean;
     readonly pinned?: boolean;
     readonly snoozedUntil?: string;
+    readonly settled?: boolean;
     readonly createdAt?: string;
   } = {},
 ): LaunchFoldThread {
@@ -37,6 +38,7 @@ export function thread(
     },
     createdAt: options.createdAt ?? "2026-10-27T10:00:00.000Z",
     pinnedAt: options.pinned ? "2026-10-27T10:00:00.000Z" : null,
+    settledOverride: options.settled ? "settled" : null,
     snoozedUntil: options.snoozedUntil ?? null,
     snoozedAt: options.snoozedUntil ? "2026-10-27T10:00:00.000Z" : null,
     hasPendingApprovals: options.approval ?? false,

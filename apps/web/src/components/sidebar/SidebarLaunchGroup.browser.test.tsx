@@ -25,7 +25,7 @@ function LaunchList(props: {
         {children ? (
           <SidebarLaunchGroup
             parentKey={entryKey}
-            children={children}
+            threads={children}
             shownChildren={groups.shownChildren(entryKey)}
             expanded={groups.isExpanded(entryKey)}
             onToggle={groups.toggle}

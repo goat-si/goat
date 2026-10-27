@@ -1125,7 +1125,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                 <SidebarMenuSubItem className="w-full">
                   <SidebarLaunchGroup
                     parentKey={threadKey}
-                    children={launched}
+                    threads={launched}
                     shownChildren={launchGroups.shownChildren(threadKey)}
                     expanded={launchGroups.isExpanded(threadKey)}
                     onToggle={launchGroups.toggle}

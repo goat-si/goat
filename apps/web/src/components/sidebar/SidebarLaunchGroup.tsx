@@ -31,16 +31,16 @@ function launchGroupSummaryText(summary: ReturnType<typeof summarizeLaunchGroup>
  */
 export function SidebarLaunchGroup<T extends LaunchFoldThread>(props: {
   readonly parentKey: string;
-  readonly children: readonly T[];
+  readonly threads: readonly T[];
   readonly shownChildren: readonly T[];
   readonly expanded: boolean;
   readonly onToggle: (parentKey: string) => void;
   readonly onShowAll: (parentKey: string) => void;
   readonly renderRow: (thread: T) => ReactNode;
 }) {
-  const summary = summarizeLaunchGroup(props.children);
+  const summary = summarizeLaunchGroup(props.threads);
   const text = launchGroupSummaryText(summary);
-  const hidden = props.expanded ? props.children.length - props.shownChildren.length : 0;
+  const hidden = props.expanded ? props.threads.length - props.shownChildren.length : 0;
   return (
     <div data-launch-group={props.parentKey} onPointerDown={(event) => event.stopPropagation()}>
       <button
@@ -54,8 +54,11 @@ export function SidebarLaunchGroup<T extends LaunchFoldThread>(props: {
           aria-hidden
           className={cn("size-3 shrink-0 transition-transform", props.expanded && "rotate-90")}
         />
-        <span className="min-w-0 truncate tabular-nums">{text}</span>
-        <span aria-hidden className="ml-auto inline-flex shrink-0 items-center gap-0.5 pl-1">
+        <span className="shrink-0 tabular-nums">{text}</span>
+        <span
+          aria-hidden
+          className="ml-auto flex min-w-0 items-center justify-end gap-0.5 overflow-hidden pl-1"
+        >
           {summary.states.slice(0, MAX_DOTS).map((state, index) => (
             // oxlint-disable-next-line react/no-array-index-key -- Dots have no identity beyond their position.
             <span key={index} className={cn("size-1.5 rounded-full", DOT_CLASS[state])} />

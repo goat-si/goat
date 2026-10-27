@@ -11,6 +11,7 @@ export type LaunchFoldThread = Pick<
   | "lineage"
   | "createdAt"
   | "pinnedAt"
+  | "settledOverride"
   | "snoozedUntil"
   | "snoozedAt"
   | "hasPendingApprovals"
@@ -83,10 +84,9 @@ function liftOf(thread: LaunchFoldThread): LaunchLift | null {
 }
 
 /**
- * Folds launched threads under their launcher's row in `visible`. A launcher that is a subagent
- * folds them under the subagent's owner row (`all` holds the subagent shells). A thread whose
- * launcher has no row here (archived, deleted, out of scope, another machine not connected),
- * a pinned thread, and a live thread whose launcher is snoozed keep their own row.
+ * Folds launched threads under their launcher's row in `visible` (a subagent launcher: its owner's
+ * row). No row for the launcher, a pin, live work under a snoozed launcher, or unsettled finished
+ * work under a settled one keeps the thread's own row: folding never hides a thread.
  */
 export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   readonly visible: readonly T[];
@@ -111,7 +111,11 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
     if (candidate === null || seen.has(candidate)) continue;
     const parent = visibleByKey.get(candidate);
     if (parent === undefined || input.sameList?.(thread, parent) === false) continue;
-    if (launchChildState(thread) !== "finished" && effectiveSnoozed(parent, { now: input.now }))
+    const live = launchChildState(thread) !== "finished";
+    if (live && effectiveSnoozed(parent, { now: input.now })) continue;
+    // Live work lifts a settled launcher into Priority; finished work you have not settled
+    // would sit in the closed settled shelf, so it keeps its row.
+    if (!live && parent.settledOverride === "settled" && thread.settledOverride !== "settled")
       continue;
     parentKeyByKey.set(own, candidate);
   }

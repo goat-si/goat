@@ -3347,7 +3347,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               launched === undefined ? undefined : (
                                 <SidebarLaunchGroup
                                   parentKey={threadKey}
-                                  children={launched}
+                                  threads={launched}
                                   shownChildren={launchGroups.shownChildren(threadKey)}
                                   expanded={launchGroups.isExpanded(threadKey)}
                                   onToggle={launchGroups.toggle}

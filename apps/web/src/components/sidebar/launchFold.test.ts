@@ -97,6 +97,21 @@ describe("foldLaunchedThreads", () => {
     expect(ids(result.childrenByParentKey.get(key("root")) ?? [])).toEqual(["done"]);
   });
 
+  it("keeps unsettled finished work out of a settled launcher's closed shelf, but folds live work", () => {
+    const result = fold([
+      thread("root", { settled: true }),
+      thread("running", { launchedBy: "root", status: "running" }),
+      thread("done-unsettled", { launchedBy: "root" }),
+      thread("done-settled", { launchedBy: "root", settled: true }),
+    ]);
+    expect(ids(result.roots)).toEqual(["root", "done-unsettled"]);
+    expect(ids(result.childrenByParentKey.get(key("root")) ?? [])).toEqual([
+      "running",
+      "done-settled",
+    ]);
+    expect(result.liftByKey.get(key("root"))).toBe("working");
+  });
+
   it("keeps every thread on a launch loop at the top level", () => {
     const result = fold([
       thread("a", { launchedBy: "b" }),
