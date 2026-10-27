@@ -18,7 +18,10 @@ import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { DEFAULT_GLASS_OPACITY, GlassOpacity } from "./desktopWindowMaterial.ts";
+import {
+  GlassClientSettingFields,
+  GlassClientSettingPatchFields,
+} from "./desktopWindowMaterial.ts";
 export { GlassOpacity, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY } from "./desktopWindowMaterial.ts";
 import {
   ForwardCompatibleNullable,
@@ -405,12 +408,7 @@ export const ClientSettingsSchema = Schema.Struct({
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
   ),
-  glassOpacity: GlassOpacity.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLASS_OPACITY)),
-  ),
-  desktopSystemMaterialEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
+  ...GlassClientSettingFields,
   fontSizeInterface: InterfaceFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_INTERFACE_FONT_SIZE)),
   ),
@@ -2117,8 +2115,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
-  glassOpacity: Schema.optionalKey(GlassOpacity),
-  desktopSystemMaterialEnabled: Schema.optionalKey(Schema.Boolean),
+  ...GlassClientSettingPatchFields,
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),
   fontSizePrompt: Schema.optionalKey(PromptFontSize),

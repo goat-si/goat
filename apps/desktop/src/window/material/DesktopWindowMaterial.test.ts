@@ -18,6 +18,42 @@ vi.mock("electron", () => ({
 }));
 
 describe("DesktopWindowMaterial", () => {
+  it.effect(
+    "Liquid Glass activates material with the switch off and Default turns it off again",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* makeFixture({ enabled: false });
+        yield* f.material.afterReveal(f.window);
+        assert.equal((yield* Queue.take(f.states)).reason, "off");
+        yield* f.commit({ appearancePreset: "liquid-glass" });
+        const active = yield* Queue.take(f.states);
+        assert.equal(active.reason, "active");
+        assert.isTrue(active.enabled);
+        assert.isTrue(f.model.live);
+        yield* f.commit({ appearancePreset: "default" });
+        const off = yield* Queue.take(f.states);
+        assert.equal(off.reason, "off");
+        assert.isFalse(off.enabled);
+        assert.isFalse(f.model.live);
+        assert.isFalse(Option.getOrThrow(yield* f.settingsStore.get).desktopSystemMaterialEnabled);
+      }),
+  );
+
+  it.effect("leaving Liquid Glass keeps material active when the switch is on", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture({ enabled: true });
+      yield* f.material.afterReveal(f.window);
+      yield* Queue.take(f.states);
+      yield* f.commit({ appearancePreset: "liquid-glass" });
+      yield* f.commit({ appearancePreset: "default" });
+      const state = yield* f.material.getState(1);
+      assert.equal(state.reason, "active");
+      assert.isTrue(state.enabled);
+      assert.isTrue(f.model.live);
+      assert.equal(f.model.releases, 0);
+    }),
+  );
+
   it.effect("applies after reveal, toggles once, and restores solid backing before release", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();

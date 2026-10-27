@@ -1,5 +1,6 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
+  isSystemMaterialRequested,
   type DesktopWindowMaterialState,
   type DesktopWindowMaterialReason,
 } from "@goat/contracts";
@@ -81,7 +82,7 @@ export const make = Effect.gen(function* () {
   const policy = (entry: WindowRecord) =>
     resolveWindowMaterial({
       capability,
-      enabled: settings.desktopSystemMaterialEnabled,
+      enabled: isSystemMaterialRequested(settings),
       glassOpacity: settings.glassOpacity,
       ...accessibility,
       restartRequired: needsTransparentWindow && !entry.transparent && !probeFailed,
@@ -93,7 +94,7 @@ export const make = Effect.gen(function* () {
     const applied = reason === "active" && adapter !== null ? adapter.kind : ("none" as const);
     const next = {
       capability,
-      enabled: settings.desktopSystemMaterialEnabled,
+      enabled: isSystemMaterialRequested(settings),
       ...accessibility,
       applied,
       reason,
@@ -218,7 +219,7 @@ export const make = Effect.gen(function* () {
   yield* settingsStore.onCommitted((committed) => {
     settingsRevision++;
     const changed =
-      committed.desktopSystemMaterialEnabled !== settings.desktopSystemMaterialEnabled ||
+      isSystemMaterialRequested(committed) !== isSystemMaterialRequested(settings) ||
       committed.glassOpacity !== settings.glassOpacity;
     settings = committed;
     if (changed) for (const entry of windows.values()) schedule(request(entry));
@@ -245,7 +246,7 @@ export const make = Effect.gen(function* () {
   return DesktopWindowMaterial.of({
     // Probe before creating the window so a Mac that cannot attach glass keeps an opaque window.
     windowOptions: Effect.gen(function* () {
-      if (adapter === null || !needsTransparentWindow || !settings.desktopSystemMaterialEnabled)
+      if (adapter === null || !needsTransparentWindow || !isSystemMaterialRequested(settings))
         return {};
       const prepared = yield* adapter.prepare().pipe(Effect.result);
       if (prepared._tag === "Success") return { transparent: true as const };
@@ -289,7 +290,7 @@ export const make = Effect.gen(function* () {
         state: {
           revision: 0,
           capability,
-          enabled: settings.desktopSystemMaterialEnabled,
+          enabled: isSystemMaterialRequested(settings),
           ...accessibility,
           applied: "none",
           reason: "unrevealed",
