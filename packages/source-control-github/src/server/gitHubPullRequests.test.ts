@@ -10,7 +10,7 @@ it("names a fork's head repository from its owner when gh leaves nameWithOwner o
       {
         number: 642,
         title: "fix: use commit as the default git action without origin",
-        url: "https://github.com/pingdotgg/t3code/pull/642",
+        url: "https://github.com/goat-si/goat/pull/642",
         baseRefName: "main",
         headRefName: "fix/git-action-default-without-origin",
         isCrossRepository: true,
@@ -21,7 +21,7 @@ it("names a fork's head repository from its owner when gh leaves nameWithOwner o
   );
 
   expect(Result.getOrThrow(decoded)[0]).toMatchObject({
-    headRepositoryNameWithOwner: "binbandit/t3code",
+    headRepositoryNameWithOwner: "binbandit/goat",
     headRepositoryOwnerLogin: "binbandit",
   });
 });
