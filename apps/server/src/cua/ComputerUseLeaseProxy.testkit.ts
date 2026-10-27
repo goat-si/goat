@@ -124,6 +124,8 @@ export const harness = Effect.fn(function* (
     readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
     /** The helper draws the agent cursor, so the proxy answers the cursor tools. */
     readonly answersCursorTools?: boolean;
+    /** The app macOS asks for Automation consent on this host's behalf. */
+    readonly automationHolder?: "helper" | "app";
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -181,6 +183,9 @@ export const harness = Effect.fn(function* (
       ),
     controlId: options.controlId ?? CONTROL,
     ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
+    ...(options.automationHolder === undefined
+      ? {}
+      : { automationHolder: options.automationHolder }),
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
     input: Stream.fromQueue(input),
