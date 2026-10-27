@@ -25,6 +25,7 @@
         // These fixture scripts are injected into a browser page by path.
         "fixtures/*/*.js",
         "knip-schemas.ts",
+        "agent-surface/eval/replay-run.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
         "worktree-add.ts",
