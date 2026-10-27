@@ -208,7 +208,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(CodexRoute.CodexRouteState)({
       admission: Semaphore.makeUnsafe(1),
       revision: () => state.revision,
-      generation: () => "fixture:0",
+      bindRuntime: (_id, identity) => Effect.succeed(identity),
       assertGeneration: () => Effect.void,
       reserveUse: () =>
         state.routeBusy

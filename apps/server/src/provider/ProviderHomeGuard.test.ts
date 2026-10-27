@@ -119,7 +119,7 @@ it.effect("refuses a default or foreign model before a Home session opens or a t
       instance,
       home,
       state,
-      state.generation(instance.instanceId),
+      yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
     );
     const turn = (model: string) => selected<ProviderAdapter.ProviderAdapterV2TurnInput>(model);
     for (const model of ["default", "other/model"]) {
@@ -161,7 +161,7 @@ it.effect.each([
       instance,
       row.runtime,
       state,
-      state.generation(instance.instanceId),
+      yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
     );
     const current = settingsWith({ "pi-home": { driver: "pi", modelRoute: "default" } });
     const next = settingsWith({ "pi-home": { driver: "pi", modelRoute: "opencodex" } });
@@ -187,7 +187,7 @@ it.effect("refuses foreign models for every text operation and routed OpenCode m
         instance,
         home,
         state,
-        state.generation(instance.instanceId),
+        yield* state.bindRuntime(instance.instanceId, "fixture-entry"),
       );
       const operations = guarded.textGeneration as unknown as Record<string, TextOperation>;
       for (const operation of TEXT_OPERATIONS) {
@@ -209,39 +209,26 @@ it.effect("refuses foreign models for every text operation and routed OpenCode m
 );
 
 it.effect(
-  "rejects a retained runtime after its instance is reconfigured without affecting another",
+  "rejects a retained runtime once the registry binds a changed entry, without affecting another",
   () =>
     Effect.gen(function* () {
       const state = yield* Routes.CodexRouteState;
-      const guard = (id: string) => {
+      const guard = Effect.fn("ProviderHomeGuardTest.guard")(function* (
+        id: string,
+        identity: string,
+      ) {
         const { instance, seen } = fakeInstance(id, "pi");
-        return {
-          seen,
-          instance: guardProviderHomeInstance(
-            instance,
-            home,
-            state,
-            state.generation(instance.instanceId),
-          ),
-        };
-      };
-      const retained = guard("pi-a");
-      const unrelated = guard("pi-b");
-      yield* state.committed(
-        settingsWith({
-          "pi-a": { driver: "pi", modelRoute: "default" },
-          "pi-b": { driver: "pi", modelRoute: "default" },
-        }),
-        settingsWith({
-          "pi-a": { driver: "pi", modelRoute: "opencodex" },
-          "pi-b": { driver: "pi", modelRoute: "default" },
-        }),
-      );
+        const generation = yield* state.bindRuntime(instance.instanceId, identity);
+        return { seen, instance: guardProviderHomeInstance(instance, home, state, generation) };
+      });
+      const retained = yield* guard("pi-a", "entry-a1");
+      const unrelated = yield* guard("pi-b", "entry-b1");
+      // The registry rebuilt pi-a from a changed entry.
+      const recreated = yield* guard("pi-a", "entry-a2");
       const stale = yield* open(retained.instance, HOME_MODEL).pipe(Effect.result);
       assert.equal(stale._tag, "Failure");
       assert.deepEqual(retained.seen, []);
       yield* open(unrelated.instance, HOME_MODEL);
-      const recreated = guard("pi-a");
       yield* open(recreated.instance, HOME_MODEL);
       assert.deepEqual(recreated.seen, [`open:${HOME_MODEL}`]);
     }).pipe(Effect.provide(Routes.layerState)),
@@ -255,13 +242,13 @@ it.effect("reports the Home endpoint and models only from a routed runtime", () 
       routedSource,
       home,
       state,
-      state.generation(routedSource.instanceId),
+      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry"),
     );
     const plain = guardProviderHomeInstance(
       routedSource,
       undefined,
       state,
-      state.generation(routedSource.instanceId),
+      yield* state.bindRuntime(routedSource.instanceId, "fixture-entry"),
     );
     for (const snapshot of [
       yield* routed.snapshot.getSnapshot,

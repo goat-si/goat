@@ -30,7 +30,18 @@ export const withProviderHomeRoute = <C, R, U>(
         ...(cause === undefined ? {} : { cause }),
       });
     const leases = yield* Routes.CodexRouteState;
-    const generation = leases.generation(input.instanceId);
+    // The effective entry the registry hydrated; an identical rebuild keeps the same identity.
+    const generation = yield* leases
+      .bindRuntime(
+        input.instanceId,
+        Routes.instanceFingerprint({
+          driver: driver.driverKind,
+          environment: input.environment,
+          enabled: input.enabled,
+          config: input.config,
+        }),
+      )
+      .pipe(Effect.mapError((cause) => unavailable(cause.message, cause)));
     const route = yield* decodeRoute(input.config).pipe(
       Effect.mapError(() => unavailable("This instance's Home route settings are invalid.")),
     );

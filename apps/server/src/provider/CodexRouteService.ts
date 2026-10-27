@@ -115,8 +115,14 @@ export class CodexRouteState extends Context.Service<
   {
     readonly admission: Semaphore.Semaphore;
     readonly revision: () => SettingsRevision;
-    /** Process-local token a created runtime captures; a commit that changes the instance bumps it. */
-    readonly generation: (id: ProviderInstanceId) => string;
+    /**
+     * Binds the runtime the registry built from an effective entry, named by that entry's
+     * fingerprint. A runtime stays admitted until the registry binds a different entry for its id.
+     */
+    readonly bindRuntime: (
+      id: ProviderInstanceId,
+      identity: string,
+    ) => Effect.Effect<string, ServerSettingsError>;
     readonly assertGeneration: (
       id: ProviderInstanceId,
       expected: string,
@@ -146,11 +152,10 @@ const makeState = Effect.gen(function* () {
   const epoch = NodeCrypto.randomUUID();
   let sequence = 0;
   const leases = new Map<string, number>();
-  const generations = new Map<string, number>();
-  const generation = (id: ProviderInstanceId) => `${epoch}:${generations.get(id) ?? 0}`;
+  const bound = new Map<string, string>();
   const assertGeneration = (id: ProviderInstanceId, expected: string) =>
     Effect.suspend(() =>
-      generation(id) === expected
+      bound.get(id) === expected
         ? Effect.void
         : Effect.fail(
             RouteSettingsError.explained("This provider runtime was replaced. Refresh and retry."),
@@ -182,7 +187,10 @@ const makeState = Effect.gen(function* () {
   return CodexRouteState.of({
     admission,
     revision,
-    generation,
+    bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity) {
+      yield* admission.withPermits(1)(Effect.sync(() => bound.set(id, identity)));
+      return identity;
+    }),
     assertGeneration: Effect.fn("CodexRouteState.assertGeneration")(function* (id, expected) {
       yield* admission.withPermits(1)(assertGeneration(id, expected));
     }),
@@ -266,7 +274,6 @@ const makeState = Effect.gen(function* () {
               instanceFingerprint(current.providerInstances[id]) !==
               instanceFingerprint(next.providerInstances[id]),
           );
-        for (const id of ids) generations.set(id, (generations.get(id) ?? 0) + 1);
         if (ids.length > 0)
           pending.set(sequence, { ids, ack: yield* Deferred.make<void, ServerSettingsError>() });
         return revision();
