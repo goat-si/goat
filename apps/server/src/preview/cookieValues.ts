@@ -18,7 +18,8 @@ const MIN_TOKEN_LENGTH = 3;
 /** Pattern source per compiled RegExp; a page can hold thousands of cookies of up to 4 KiB. */
 const MAX_PATTERN_SOURCE = 32_768;
 
-type Span = readonly [number, number];
+/** A span to hide; one with its own marker keeps it unless it merges with another kind. */
+export type Span = readonly [number, number, string?];
 /** A filled entry is a secret GOAT typed, matched as a substring however short. */
 type Cookies = ReadonlyArray<{
   readonly name: string;
@@ -124,23 +125,24 @@ function cutTailSpan(text: string, prepared: Prepared): ReadonlyArray<Span> {
   return [];
 }
 
-/** The text with the spans, merged where they touch or overlap, replaced by REDACTED. */
+/** The text with the spans, merged where they touch or overlap, replaced by their marker. */
 function replaceSpans(text: string, spans: ReadonlyArray<Span>) {
   if (spans.length === 0) return text;
   const sorted = [...spans].sort((left, right) => left[0] - right[0]);
   let result = "";
-  let [from, to] = sorted[0] ?? [0, 0];
+  let [from, to, marker = REDACTED] = sorted[0] ?? [0, 0];
   let copied = 0;
-  for (const [start, end] of sorted.slice(1)) {
+  for (const [start, end, kind = REDACTED] of sorted.slice(1)) {
     if (start <= to) {
       to = Math.max(to, end);
+      if (kind !== marker) marker = REDACTED;
       continue;
     }
-    result += text.slice(copied, from) + REDACTED;
+    result += text.slice(copied, from) + marker;
     copied = to;
-    [from, to] = [start, end];
+    [from, to, marker] = [start, end, kind];
   }
-  return result + text.slice(copied, from) + REDACTED + text.slice(to);
+  return result + text.slice(copied, from) + marker + text.slice(to);
 }
 
 /** What a cookie list needs for matching, built once per list and kept while the list lives. */
@@ -198,13 +200,19 @@ function prepare(cookies: Cookies) {
 /**
  * Each cookie is redacted wherever it appears as name=value, which is how an echoed Cookie or
  * Set-Cookie header looks. Its value is redacted anywhere once it has six characters, and as a
- * whole token from three; a filled secret anywhere. Every kind of match is found in the original
- * text and only then replaced, so one never hides another; no pattern is built from a value.
+ * whole token from three; a filled secret anywhere. Every kind of match, the caller's `marked`
+ * spans included, is found in the original text and only then replaced, so one never hides
+ * another; no pattern is built from a value.
  */
-export const redactCookieValues = (text: string, cookies: Cookies) => {
+export const redactCookieValues = (
+  text: string,
+  cookies: Cookies,
+  marked: ReadonlyArray<Span> = [],
+) => {
   const prepared = prepare(cookies);
   const { sortedLong, pairForms, tokenForms, filled } = prepared;
-  if (sortedLong.length + pairForms.length + tokenForms.length + filled.length === 0) return text;
+  if (sortedLong.length + pairForms.length + tokenForms.length + filled.length === 0)
+    return replaceSpans(text, marked);
   const pairs = matchInBatches(
     text,
     prepared.pairForms,
@@ -224,5 +232,6 @@ export const redactCookieValues = (text: string, cookies: Cookies) => {
     ...pairs,
     ...tokens,
     ...secretSpans(text, filled),
+    ...marked,
   ]);
 };

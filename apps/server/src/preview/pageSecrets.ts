@@ -12,7 +12,7 @@ import type {
 } from "@goat/contracts";
 import type { Page } from "playwright-core";
 
-import { MIN_SECRET_LENGTH, redactCookieValues } from "./cookieValues.ts";
+import { MIN_SECRET_LENGTH, redactCookieValues, type Span } from "./cookieValues.ts";
 
 const MASKED_VALUE = "••••••••";
 
@@ -72,8 +72,21 @@ export const rememberSecret = (page: Pick<Page, "context">, value: string) => {
   filledSecrets.set(context, (filledSecrets.get(context) ?? new Set<string>()).add(value));
 };
 
+/** Where field values show, as dots; found with the other secrets so neither splits the other. */
+const dottedSpans = (
+  text: string,
+  dotted: RegExp,
+  offset = 0,
+  kept = (_: number, __: number) => false,
+) =>
+  [...text.matchAll(dotted)].flatMap(({ index, 0: match }): Array<Span> =>
+    kept(index, index + match.length)
+      ? []
+      : [[offset + index, offset + index + match.length, MASKED_VALUE]],
+  );
+
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
-  redactCookieValues(dotted ? text.replace(dotted, MASKED_VALUE) : text, cookies);
+  redactCookieValues(text, cookies, dotted ? dottedSpans(text, dotted) : []);
 
 /** Masks every string in an evaluation result, object keys included: all of it is the page's. */
 export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
@@ -121,20 +134,20 @@ const TREE_LINE =
   /^(\s*- '?[^\s"':]+)( "(?:[^"\\]|\\.)*"| \/(?:.*?\/)?)?((?: \[(?:active|checked(?:=mixed)?|disabled|expanded|level=\d+|pressed(?:=mixed)?|selected|ref=(?:f\d+)?e\d+|cursor=pointer|box=-?\d+,-?\d+,\d+,\d+)\])*'?)(:.*)?$/;
 
 /** Preserve roles and attributes so refs work; unquoted /.../ names can make matches cross boundaries. */
-export const maskTree = (tree: string, dotted: RegExp) =>
-  tree
-    .split("\n")
-    .map((line) => {
-      const node = TREE_LINE.exec(line);
-      const name = node?.[1]?.length ?? 0;
-      const attributes = name + (node?.[2]?.length ?? 0);
-      const end = attributes + (node?.[3]?.length ?? 0);
-      const kept = (from: number, to: number) => to <= name || (from >= attributes && to <= end);
-      return line.replace(dotted, (match: string, offset: number) =>
-        kept(offset, offset + match.length) ? match : MASKED_VALUE,
-      );
-    })
-    .join("\n");
+export const maskTree = (tree: string, dotted: RegExp | undefined, cookies: Cookies) => {
+  const spans: Array<Span> = [];
+  let offset = 0;
+  for (const line of dotted ? tree.split("\n") : []) {
+    const node = TREE_LINE.exec(line);
+    const name = node?.[1]?.length ?? 0;
+    const attributes = name + (node?.[2]?.length ?? 0);
+    const end = attributes + (node?.[3]?.length ?? 0);
+    const kept = (from: number, to: number) => to <= name || (from >= attributes && to <= end);
+    if (dotted) spans.push(...dottedSpans(line, dotted, offset, kept));
+    offset += line.length + 1;
+  }
+  return redactCookieValues(tree, cookies, spans);
+};
 
 /** A snapshot's console, network and action records with the page's text in them masked. */
 export const maskSnapshotRecords = (

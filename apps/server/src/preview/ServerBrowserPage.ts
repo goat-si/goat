@@ -730,7 +730,7 @@ const capture = async (
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
   const { accessibilityTree, ...treeFields } = screenTree(
-    `${mask(layersLine)}\n${filled(maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted))}`,
+    `${mask(layersLine)}\n${filled(maskTree(redacted, dotted, cookies))}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
   return {
