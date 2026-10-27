@@ -1,8 +1,24 @@
+// @effect-diagnostics nodeBuiltinImport:off - a plain Node script helper that loads a server module by path; no Effect runtime.
 /** Judges one documented `goat ...` invocation against the command trees that dispatch it. */
-import { agentSurfaceInvocation } from "../../apps/server/src/cli/agentSurfaceCommand.ts";
-import { type CliEntry, type SourceRef, readLines } from "./inventory.ts";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import { type CliEntry, type SourceRef, readLines, repoRoot } from "./inventory.ts";
 import { SHIPPED_TOOL_NAMES } from "./listedNames.ts";
 import { code } from "./markdown.ts";
+
+// Loaded at runtime like inventory.ts loads toolkits: the scripts project cannot list server
+// sources, so a static import fails its typecheck.
+const { agentSurfaceInvocation } = (await import(
+  NodeURL.pathToFileURL(NodePath.join(repoRoot, "apps/server/src/cli/agentSurfaceCommand.ts")).href
+)) as {
+  readonly agentSurfaceInvocation: (
+    argv: ReadonlyArray<string>,
+    input: { readonly stdin: () => string; readonly file: (path: string) => string },
+  ) =>
+    | { readonly kind: "usage"; readonly message: string }
+    | { readonly kind: "help" | "call" }
+    | undefined;
+};
 
 export interface CliMention {
   readonly text: string;
