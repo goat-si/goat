@@ -5,6 +5,8 @@ import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
@@ -209,5 +211,93 @@ it.effect("marks unexpected app-server exit as provider process exit", () =>
     yield* Deferred.succeed(terminated, new Error("app-server exited"));
     const failure = yield* Queue.take(events).pipe(Effect.flip);
     assert.equal(failure.source, "provider_process_exit");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("retires a silent initialize before the provider can be reused", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const lateResponse = yield* Deferred.make<void>();
+    const finished = yield* Deferred.make<void>();
+    const released = yield* Deferred.make<void>();
+    let spawns = 0;
+    const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
+      open: (openInput) =>
+        Effect.gen(function* () {
+          const first = ++spawns === 1;
+          if (first) yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+          const driver = yield* CodexReplay.makeReplayDriver(
+            appServerProcess({
+              nativeThreadId: first ? "silent-initialize" : "fresh-initialize",
+              stopsAfterThreadStart: false,
+            }),
+            {
+              beforeEmitInbound: (entry) =>
+                first && entry.label === "initialize"
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(lateResponse)),
+                    )
+                  : Effect.void,
+            },
+          );
+          const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                  providerSessionId: openInput.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.provide(context),
+          );
+        }),
+    };
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const threadId = ThreadId.make("thread:silent-initialize");
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const first = yield* runtime
+        .ensureThread({ threadId, modelSelection, runtimePolicy })
+        .pipe(
+          Effect.exit,
+          Effect.ensuring(Deferred.succeed(finished, undefined)),
+          Effect.forkScoped,
+        );
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("61 seconds");
+      assert.isTrue(yield* Deferred.isDone(finished));
+      const result = yield* Fiber.join(first);
+      assert.equal(result._tag, "Failure");
+      yield* Deferred.succeed(lateResponse, undefined);
+      yield* Deferred.await(released);
+      const next = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const attached = yield* next.ensureThread({ threadId, modelSelection, runtimePolicy });
+      assert.equal(attached.nativeThreadRef?.nativeId, "fresh-initialize");
+      assert.equal(spawns, 2);
+    }).pipe(
+      Effect.provide(
+        ProviderReplayHarness.layerWithRegistry(
+          { name: "codex-silent-initialize" },
+          CodexAdapterV2Testkit.layerWithClientFactory({
+            scenario: "codex-silent-initialize",
+            clientFactory,
+          }),
+          { runEffectWorker: false },
+        ),
+      ),
+    );
   }).pipe(Effect.scoped),
 );

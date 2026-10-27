@@ -24,7 +24,136 @@ const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effe
     return yield* use(terminals).pipe(Effect.ensuring(terminals.disposeAll));
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
+const makeDrainFixture = Effect.fn("test.makeDrainFixture")(function* () {
+  const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+  const observedExit = yield* Deferred.make<void>();
+  const stdoutStarted = yield* Deferred.make<void>();
+  const stderrStarted = yield* Deferred.make<void>();
+  const closeStdout = yield* Deferred.make<void>();
+  const closeStderr = yield* Deferred.make<void>();
+  let stoppedPumps = 0;
+  const pipe = (name: string, started: Deferred.Deferred<void>, close: Deferred.Deferred<void>) =>
+    Stream.concat(
+      Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+        Stream.map(() => new TextEncoder().encode(`${name}-start\n`)),
+      ),
+      Stream.fromEffect(Deferred.await(close)).pipe(
+        Stream.map(() => new TextEncoder().encode(`${name}-tail\n`)),
+      ),
+    ).pipe(
+      Stream.ensuring(
+        Effect.sync(() => {
+          stoppedPumps++;
+        }),
+      ),
+    );
+  const child = ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Deferred.await(exited).pipe(
+      Effect.tap(() => Deferred.succeed(observedExit, undefined)),
+    ),
+    isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+    kill: () => Effect.void,
+    stdin: Sink.drain,
+    stdout: pipe("stdout", stdoutStarted, closeStdout),
+    stderr: pipe("stderr", stderrStarted, closeStderr),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+    unref: Effect.succeed(Effect.void),
+  });
+  const terminals = yield* makeAcpClientTerminals({ defaultCwd: "/fixture" }).pipe(
+    Effect.provideService(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() => Effect.succeed(child)),
+    ),
+  );
+  yield* Effect.addFinalizer(() =>
+    Deferred.succeed(closeStdout, undefined).pipe(
+      Effect.andThen(Deferred.succeed(closeStderr, undefined)),
+      Effect.andThen(Deferred.succeed(exited, ChildProcessSpawner.ExitCode(7))),
+      Effect.andThen(terminals.disposeAll),
+    ),
+  );
+  const terminal = yield* terminals.create({ sessionId: "session", command: "fixture" });
+  yield* Deferred.await(stdoutStarted);
+  yield* Deferred.await(stderrStarted);
+  return {
+    terminals,
+    request: { sessionId: "session", ...terminal },
+    exited,
+    observedExit,
+    closeStdout,
+    closeStderr,
+    stoppedPumps: () => stoppedPumps,
+  };
+});
+
 describe("AcpClientTerminals", () => {
+  it.effect.each([
+    { pipes: "both", holdStdout: true, holdStderr: true },
+    { pipes: "stdout", holdStdout: true, holdStderr: false },
+    { pipes: "stderr", holdStdout: false, holdStderr: true },
+  ])(
+    "publishes terminal exit when a descendant keeps $pipes output pipes open",
+    ({ holdStdout, holdStderr }) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeDrainFixture();
+        const { terminals, request } = fixture;
+        if (!holdStdout) yield* Deferred.succeed(fixture.closeStdout, undefined);
+        if (!holdStderr) yield* Deferred.succeed(fixture.closeStderr, undefined);
+        const waiting = yield* terminals.waitForExit(request).pipe(Effect.forkScoped);
+        yield* Deferred.succeed(fixture.exited, ChildProcessSpawner.ExitCode(7));
+        yield* Deferred.await(fixture.observedExit);
+        yield* TestClock.adjust("1999 millis");
+        expect(waiting.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("1 milli");
+        expect(waiting.pollUnsafe()).toBeDefined();
+        expect(yield* Fiber.join(waiting)).toEqual({ exitCode: 7, signal: null });
+        expect(fixture.stoppedPumps()).toBe(2);
+        const output = yield* terminals.output(request);
+        expect(output.output).toContain("stdout-start\n");
+        expect(output.output).toContain("stderr-start\n");
+        expect(output.output.includes("stdout-tail\n")).toBe(!holdStdout);
+        expect(output.output.includes("stderr-tail\n")).toBe(!holdStderr);
+        expect(output.truncated).toBe(true);
+        yield* terminals.release(request);
+        yield* Deferred.succeed(fixture.closeStdout, undefined);
+        yield* Deferred.succeed(fixture.closeStderr, undefined);
+        expect(terminals.readOutputSnapshot("session", request.terminalId)).toEqual(output);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("drains both output pipes before the post-exit deadline without truncation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeDrainFixture();
+      const { terminals, request } = fixture;
+      const waiting = yield* terminals.waitForExit(request).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("10 seconds");
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      expect((yield* terminals.output(request)).truncated).toBe(false);
+      expect(fixture.stoppedPumps()).toBe(0);
+      yield* Deferred.succeed(fixture.exited, ChildProcessSpawner.ExitCode(7));
+      yield* Deferred.await(fixture.observedExit);
+      yield* TestClock.adjust("1999 millis");
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(fixture.closeStdout, undefined);
+      yield* Deferred.succeed(fixture.closeStderr, undefined);
+      expect(yield* Fiber.join(waiting)).toEqual({ exitCode: 7, signal: null });
+      expect(fixture.stoppedPumps()).toBe(2);
+      const output = yield* terminals.output(request);
+      expect(output.output.split("\n").filter(Boolean).sort()).toEqual([
+        "stderr-start",
+        "stderr-tail",
+        "stdout-start",
+        "stdout-tail",
+      ]);
+      expect(output.truncated).toBe(false);
+      yield* terminals.release(request);
+      expect(terminals.readOutputSnapshot("session", request.terminalId)).toEqual(output);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("runs a command, buffers output, and reports the exit status", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {

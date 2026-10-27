@@ -315,6 +315,16 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
   },
 );
 
+/** The executable a Linux pid runs, as the driver attests it; a replaced binary names no file. */
+const linuxExecutable = (pid: number) => {
+  try {
+    const path = NodeFS.readlinkSync("/proc/" + pid + "/exe");
+    return path.startsWith("/") && !path.endsWith(" (deleted)") ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
   const drivers = new Set<NodeChildProcess.ChildProcess>();
@@ -367,6 +377,19 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const manifestFlag = descriptor.args.indexOf("--capability-manifest");
   const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
 
+  // Fire and forget: a lost report only delays the host's record, never this connection. One
+  // queue for every driver this proxy starts, so no working report, of this driver or a later
+  // one, can land before a crash reported ahead of it.
+  let reported = Promise.resolve();
+  const send = (body: DriverWatchReport | undefined) => {
+    if (body === undefined) return;
+    reported = reported
+      .then(() => report(url, authorization, body))
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  };
   const startDriver = (overlay: boolean) =>
     Effect.acquireRelease(
       Effect.sync(() => {
@@ -379,9 +402,6 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         );
         drivers.add(child);
         const watch = makeDriverWatch();
-        // Fire and forget: a lost report only delays the host's record, never this connection.
-        const send = (body: DriverWatchReport | undefined) =>
-          body === undefined ? undefined : void report(url, authorization, body);
         child.once("exit", (code) => {
           drivers.delete(child);
           send(watch.exited(code ?? undefined));
@@ -705,6 +725,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         }),
       answersCursorTools: drawsOverlay,
       verifyInputByTreeDiff: platform === "darwin",
+      ...(platform === "linux" ? { executableOf: linuxExecutable } : {}),
       ...(automationHolder === undefined ? {} : { automationHolder }),
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its
