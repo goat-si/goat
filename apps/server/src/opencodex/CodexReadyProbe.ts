@@ -69,7 +69,7 @@ const probeLaunchArgs = (servers: ReadonlyArray<string>) =>
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 /** The MCP servers the effective config names, or undefined when one cannot be overridden. */
-export const configuredMcpServers = (config: Readonly<Record<string, unknown>>) => {
+const configuredMcpServers = (config: Readonly<Record<string, unknown>>) => {
   const servers = config.mcp_servers;
   if (servers === undefined || servers === null) return [];
   if (!isRecord(servers)) return undefined;
@@ -77,7 +77,7 @@ export const configuredMcpServers = (config: Readonly<Record<string, unknown>>) 
   return names.every((name) => MCP_SERVER_NAME.test(name)) ? names : undefined;
 };
 /** Whether the effective config offers the model no tool: every server, feature and search off. */
-export const offersNoTools = (config: Readonly<Record<string, unknown>>) => {
+const offersNoTools = (config: Readonly<Record<string, unknown>>) => {
   const servers = config.mcp_servers;
   const features = config.features;
   return (

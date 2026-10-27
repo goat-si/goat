@@ -35,7 +35,7 @@ const unconfirmed: ChildReadyFailure = {
 };
 
 /** Why the Child's own fresh status does not hold the exact proof this Home recorded. */
-export const confirmationFailure = (
+const confirmationFailure = (
   recorded: ChildReadyProof,
   answer: ChildReadyDeviceResult,
   now: number,
@@ -66,7 +66,7 @@ export const confirmationFailure = (
 };
 
 /** A Ready the Child did not confirm reads as linked and unverified, with why; never Ready. */
-export const withUnverifiedReady = (status: Status, failure: ChildReadyFailure): Status => {
+const withUnverifiedReady = (status: Status, failure: ChildReadyFailure): Status => {
   if (status.setup === undefined) return status;
   const { proof: _proof, ...setup } = status.setup;
   return {
