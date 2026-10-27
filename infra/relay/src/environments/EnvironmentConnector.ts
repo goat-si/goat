@@ -1,3 +1,6 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
@@ -125,6 +128,8 @@ export class EnvironmentMintResponseInvalid extends Schema.TaggedError<Environme
 }
 
 export type EnvironmentConnectorError =
+  | EnvironmentOwnership.OwnershipError
+  | RelayRateLimits.RateLimitError
   | EnvironmentConnectNotAuthorized
   | EnvironmentMintRequestFailed
   | EnvironmentMintRequestTimedOut
@@ -382,6 +387,9 @@ export function validateManagedEndpoint(input: {
 }
 
 const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const settings = yield* RelayConfiguration.RelayConfiguration;
@@ -419,6 +427,7 @@ const make = Effect.gen(function* () {
 
   return EnvironmentConnector.of({
     status: Effect.fn("relay.environment_connector.status")(function* (input) {
+      const admitted = yield* access.admit(input.userId);
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,
         "relay.operation": "status",
@@ -441,6 +450,11 @@ const make = Effect.gen(function* () {
         operation: "status",
         link,
         allocation,
+      });
+      yield* ownership.assertActive({
+        ...admitted,
+        environmentId: input.environmentId,
+        environmentPublicKey: link.environmentPublicKey,
       });
       const now = yield* DateTime.now;
       const expiresAt = DateTime.add(now, { minutes: 2 });
@@ -490,6 +504,7 @@ const make = Effect.gen(function* () {
       );
       const checkedAt = DateTime.formatIso(now);
       const traceId = yield* currentTraceId;
+      yield* access.requireAllowed(admitted);
       const environmentClient = yield* makeEnvironmentClient(endpoint.httpBaseUrl);
       const responseOption = yield* environmentClient.connect.health({ payload: { proof } }).pipe(
         withoutRedirects,
@@ -572,6 +587,7 @@ const make = Effect.gen(function* () {
       };
     }),
     connect: Effect.fn("relay.environment_connector.connect")(function* (input) {
+      const admitted = yield* access.admit(input.userId);
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,
         "relay.operation": "connect",
@@ -604,6 +620,12 @@ const make = Effect.gen(function* () {
         link,
         allocation,
       });
+      yield* ownership.assertActive({
+        ...admitted,
+        environmentId: input.environmentId,
+        environmentPublicKey: link.environmentPublicKey,
+      });
+      yield* rates.charge({ userId: input.userId, operation: "connect" });
       const now = yield* DateTime.now;
       const expiresAt = DateTime.add(now, { minutes: 2 });
       const nonce = yield* crypto.randomUUIDv4().pipe(
@@ -653,6 +675,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
+      yield* access.requireAllowed(admitted);
       const environmentClient = yield* makeEnvironmentClient(endpoint.httpBaseUrl);
       const decoded = yield* environmentClient.connect
         .goatMintCredential({ payload: { proof } })
