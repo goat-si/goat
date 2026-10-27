@@ -10,8 +10,9 @@ const RUN = "run-cards";
 const shells = vi.hoisted(() => new Map<string, unknown>());
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
-  useThreadShell: ((ref: { readonly environmentId: string; readonly threadId: string } | null) =>
-    (ref && shells.get(`${ref.environmentId}/${ref.threadId}`)) ?? null) as never,
+  useQuietThreadShell: ((
+    ref: { readonly environmentId: string; readonly threadId: string } | null,
+  ) => (ref && shells.get(`${ref.environmentId}/${ref.threadId}`)) ?? null) as never,
 }));
 
 function shell(
@@ -21,6 +22,8 @@ function shell(
     readonly run?: string;
     readonly input?: boolean;
     readonly deleted?: boolean;
+    readonly subagentRequest?: boolean;
+    readonly backgroundWork?: boolean;
   },
 ) {
   return {
@@ -28,6 +31,10 @@ function shell(
     deletedAt: state.deleted ? "2026-10-27T00:00:00.000Z" : null,
     hasPendingApprovals: false,
     hasPendingUserInput: state.input ?? false,
+    pendingSubagentRequest: state.subagentRequest ? "approval" : null,
+    pendingBackgroundTasks: state.backgroundWork
+      ? [{ kind: "subagent", id: "child", startedAt: "2026-10-27T00:00:00.000Z" }]
+      : [],
     runtime: state.runtime === undefined ? null : { status: state.runtime },
     latestRun: state.run === undefined ? null : { status: state.run },
   };
@@ -70,6 +77,20 @@ describe("turn thread cards", () => {
     expect(screen.buttons("Open Lane 2, Waiting")).toHaveLength(1);
     await click(screen.button("Open Lane 3, Failed"));
     expect(onOpenThread).toHaveBeenCalledWith("lane-3");
+  });
+
+  it("keeps a thread waiting on its children or their requests out of Done", async () => {
+    setup([
+      ["lane-1", shell("Lane 1", { runtime: "idle", run: "completed", backgroundWork: true })],
+      ["lane-2", shell("Lane 2", { runtime: "idle", run: "completed", subagentRequest: true })],
+    ]);
+    await using screen = await renderTimeline([
+      launch("lane-1", "Lane 1"),
+      launch("lane-2", "Lane 2"),
+      answer,
+    ]);
+    expect(screen.buttons("Open Lane 1, Working")).toHaveLength(1);
+    expect(screen.buttons("Open Lane 2, Waiting")).toHaveLength(1);
   });
 
   it("shows three cards and the rest behind +N more", async () => {

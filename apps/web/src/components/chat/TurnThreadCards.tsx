@@ -1,11 +1,12 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { RocketIcon, SendIcon } from "~/components/solar";
 import { use, useState } from "react";
 
 import { cn } from "../../lib/utils";
-import { useThreadShell } from "../../state/entities";
+import { useQuietThreadShell } from "../../state/entities";
 import { Button } from "../ui/button";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import { TimelineRowCtx } from "./timelineRowContext";
@@ -24,14 +25,21 @@ const STATUS: Record<CardStatus, { readonly label: string; readonly dot: string 
 };
 
 function cardStatus(shell: EnvironmentThreadShell): CardStatus {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return "waiting";
+  if (
+    shell.hasPendingApprovals ||
+    shell.hasPendingUserInput ||
+    shell.pendingSubagentRequest != null
+  )
+    return "waiting";
   const runtime = shell.runtime?.status;
   if (
     runtime === "preparing" ||
     runtime === "starting" ||
     runtime === "running" ||
     runtime === "waiting" ||
-    runtime === "queued"
+    runtime === "queued" ||
+    // An idle thread still waiting on its background work or children has not finished.
+    backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks)
   )
     return "working";
   const run = shell.latestRun?.status;
@@ -77,7 +85,8 @@ function TurnThreadCard(props: {
 }) {
   const { target } = props;
   // A thread on another machine has no proven connection here, so it is named but not opened.
-  const shell = useThreadShell(
+  // Quiet: a card changes with its title and status, not with every streamed token.
+  const shell = useQuietThreadShell(
     target.host === null ? scopeThreadRef(props.environmentId, target.threadId as ThreadId) : null,
   );
   const title = shell?.title.trim() || target.title || "Another thread";
