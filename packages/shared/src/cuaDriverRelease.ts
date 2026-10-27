@@ -6,8 +6,22 @@ export const CUA_DRIVER_VERSION = "0.38.0-goat.2";
 /** The macOS helper app that owns computer use's TCC identity (Contents/Helpers in GOAT.app). */
 export const COMPUTER_USE_HELPER_NAME = "GOAT Computer Use";
 
-/** One helper per desktop channel, so stable, nightly and dev each keep their own grants. */
+/** Each desktop channel's app id, which a dev launcher overrides with a per-checkout one. */
+export const DESKTOP_CHANNEL_APP_IDS = {
+  stable: "si.goat.desktop",
+  nightly: "si.goat.desktop.nightly",
+  dev: "si.goat.desktop.dev",
+} as const;
+export type DesktopChannel = keyof typeof DESKTOP_CHANNEL_APP_IDS;
+
 export const computerUseHelperBundleId = (desktopAppId: string) => `${desktopAppId}.computer-use`;
+
+/**
+ * One helper per desktop channel, so stable, nightly and dev each keep their own grants. It never
+ * follows a dev checkout's own app id: macOS would keep one grant per checkout.
+ */
+export const computerUseHelperBundleIdForChannel = (channel: DesktopChannel) =>
+  computerUseHelperBundleId(DESKTOP_CHANNEL_APP_IDS[channel]);
 
 const archives = {
   "darwin-universal": {

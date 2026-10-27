@@ -445,8 +445,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   driver under the helper that reports the helper's bundle identity and service pid, reads a
   non-empty accessibility tree and captures a non-blank window. The desktop verify
   (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
-  permission guide should drag the helper bundle into System Settings;
-  `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
+  permission guide drags the app that holds the grants into System Settings: the helper bundle
+  when one runs, GOAT.app otherwise (`apps/desktop/src/ipc/methods/cua.ts`,
+  `apps/desktop/src/permissions/MacPermissionHelper.ts`). The desktop expects its channel's
+  helper id (`computerUseHelperBundleIdForChannel` in `packages/shared/src/cuaDriverRelease.ts`),
+  never one derived from a dev checkout's own app id, so every dev checkout runs the one
+  `si.goat.desktop.dev.computer-use` helper and macOS keeps one set of its grants (#1275).
 - **Guided macOS grant** (lead decision D14, Jun's highest priority). Onboarding walks two steps,
   Accessibility, then Screen & System Audio Recording. Each step opens the exact System Settings
   pane and places a small always-on-top guide panel next to it that shows the helper's real app
