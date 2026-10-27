@@ -121,15 +121,15 @@ export class CodexRouteState extends Context.Service<
     readonly admission: Semaphore.Semaphore;
     readonly revision: () => SettingsRevision;
     /**
-     * Binds the runtime the registry built from an effective entry, named by that entry's
-     * fingerprint. A runtime stays admitted until the registry binds a different entry for its id.
-     * A snapshot older than the instance's latest committed change is refused, not published.
+     * Binds a runtime built from an effective entry for the lifetime of the caller's scope, the
+     * registry's per-instance scope. Removal, replacement by any driver and a failed replacement
+     * close it, so a retained reference stops being admitted. A superseded snapshot is refused.
      */
     readonly bindRuntime: (
       id: ProviderInstanceId,
       identity: string,
       revision: SettingsRevision | undefined,
-    ) => Effect.Effect<string, ServerSettingsError>;
+    ) => Effect.Effect<string, ServerSettingsError, Scope.Scope>;
     readonly assertGeneration: (
       id: ProviderInstanceId,
       expected: string,
@@ -161,6 +161,19 @@ const makeState = Effect.gen(function* () {
   const leases = new Map<string, number>();
   const bound = new Map<string, string>();
   const changedAt = new Map<string, number>();
+  let bindings = 0;
+  const assertCurrent = (id: ProviderInstanceId, hydrating: SettingsRevision | undefined) =>
+    Effect.suspend(() =>
+      hydrating !== undefined &&
+      hydrating.epoch === epoch &&
+      (changedAt.get(id) ?? 0) > hydrating.sequence
+        ? Effect.fail(
+            RouteSettingsError.explained(
+              "Provider settings changed again before this runtime started. Applying the newer settings.",
+            ),
+          )
+        : Effect.void,
+    );
   const assertGeneration = (id: ProviderInstanceId, expected: string) =>
     Effect.suspend(() =>
       bound.get(id) === expected
@@ -196,23 +209,24 @@ const makeState = Effect.gen(function* () {
     admission,
     revision,
     bindRuntime: Effect.fn("CodexRouteState.bindRuntime")(function* (id, identity, hydrating) {
-      yield* admission.withPermits(1)(
-        Effect.suspend(() => {
-          if (
-            hydrating !== undefined &&
-            hydrating.epoch === epoch &&
-            (changedAt.get(id) ?? 0) > hydrating.sequence
-          )
-            return Effect.fail(
-              RouteSettingsError.explained(
-                "Provider settings changed again before this runtime started. Applying the newer settings.",
-              ),
-            );
-          bound.set(id, identity);
-          return Effect.void;
-        }),
+      return yield* Effect.acquireRelease(
+        admission.withPermits(1)(
+          assertCurrent(id, hydrating).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                // Unique per binding, so an identical rebuild does not revive a closed runtime.
+                const token = `${identity}#${++bindings}`;
+                bound.set(id, token);
+                return token;
+              }),
+            ),
+          ),
+        ),
+        (token) =>
+          Effect.sync(() => {
+            if (bound.get(id) === token) bound.delete(id);
+          }),
       );
-      return identity;
     }),
     assertGeneration: Effect.fn("CodexRouteState.assertGeneration")(function* (id, expected) {
       yield* admission.withPermits(1)(assertGeneration(id, expected));

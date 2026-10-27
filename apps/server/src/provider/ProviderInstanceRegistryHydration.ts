@@ -77,6 +77,14 @@ export const deriveProviderInstanceConfigMap = (
   return merged as ProviderInstanceConfigMap;
 };
 
+/** Reconciles one settings snapshot; every runtime built from it is bound to its revision. */
+export const reconcileSnapshot = (
+  mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape,
+  configMap: ProviderInstanceConfigMap,
+  revision: CodexRoute.SettingsRevision | undefined,
+) =>
+  mutator.reconcile(configMap).pipe(Effect.provideService(CodexRoute.HydratingRevision, revision));
+
 const settingsWatcher = (
   suppliedChanges?: Stream.Stream<
     {
@@ -111,10 +119,7 @@ const settingsWatcher = (
             : Effect.succeed(next.settings)
           ).pipe(
             Effect.flatMap((current) =>
-              // Runtimes built from this snapshot are bound to its revision.
-              mutator
-                .reconcile(deriveProviderInstanceConfigMap(current))
-                .pipe(Effect.provideService(CodexRoute.HydratingRevision, next.revision)),
+              reconcileSnapshot(mutator, deriveProviderInstanceConfigMap(current), next.revision),
             ),
             Effect.tap(() =>
               Option.isSome(routeState) && next.revision
