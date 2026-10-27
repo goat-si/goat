@@ -91,6 +91,7 @@ import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import { imageToolFailure, imageToolSuccess, previewSnapshotFailure } from "./imageToolResult.ts";
 import { decodeAsAdvertised } from "./decodeAsAdvertised.ts";
+import { advertisedJsonSchema, advertisedRegistration } from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -556,7 +557,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
     tool: new McpSchema.Tool({
       name: tool.name,
       description: Tool.getDescription(tool),
-      inputSchema: Tool.getJsonSchema(tool),
+      inputSchema: advertisedJsonSchema(tool),
       annotations: {
         ...Context.getOption(tool.annotations, Tool.Title).pipe(
           Option.map((title) => ({ title })),
@@ -690,7 +691,7 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
     tool: new McpSchema.Tool({
       name: tool.name,
       description: Tool.getDescription(tool),
-      inputSchema: Tool.getJsonSchema(tool),
+      inputSchema: advertisedJsonSchema(tool),
       annotations: {
         ...Context.getOption(tool.annotations, Tool.Title).pipe(
           Option.map((title) => ({ title })),
@@ -1075,7 +1076,9 @@ const withListedNames = <A, E, R>(registration: Effect.Effect<A, E, R>) =>
     Effect.provideService(registration, McpServer.McpServer, {
       ...server,
       addTool: (options) =>
-        server.addTool(forwardedContentRegistration(listedRegistration(options))),
+        server.addTool(
+          forwardedContentRegistration(listedRegistration(advertisedRegistration(options))),
+        ),
     }),
   );
 

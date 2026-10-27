@@ -9,6 +9,7 @@ import type { McpServer } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ScreenRunService from "../../../screenCode/ScreenRunService.ts";
 import { decodeAsAdvertised } from "../../decodeAsAdvertised.ts";
+import { advertisedJsonSchema } from "../../advertisedJsonSchema.ts";
 import { imageToolFailure } from "../../imageToolResult.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { screenRunMcpResult } from "./result.ts";
@@ -24,7 +25,7 @@ export const screenRunTool = Effect.gen(function* () {
     tool: new McpSchema.Tool({
       name: tool.name,
       description: Tool.getDescription(tool),
-      inputSchema: Tool.getJsonSchema(tool),
+      inputSchema: advertisedJsonSchema(tool),
       annotations: {
         ...Context.getOption(tool.annotations, Tool.Title).pipe(
           Option.map((title) => ({ title })),
