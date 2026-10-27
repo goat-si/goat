@@ -86,6 +86,7 @@ const TASKS = [
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-relay",
   "test-ingest",
   "test-memory-growth",
   "build",
@@ -111,6 +112,7 @@ const TASK_ROOTS = {
   "test-mobile": ["apps/mobile"],
   "test-shared": ["packages/shared"],
   "test-server": ["apps/server"],
+  "test-relay": ["infra/relay"],
   build: ["apps/desktop", "apps/server"],
 };
 
@@ -121,7 +123,7 @@ const TASK_ROOTS = {
 const BUILD_ONLY_EDGES = [["apps/server", "apps/web"]];
 
 /** Directories outside apps/ and packages/ that only typecheck and lint cover. */
-const TYPECHECK_ONLY_RE = /^(?:infra\/[^/]+|oxlint-plugin-goat)\//;
+const TYPECHECK_ONLY_RE = /^(?:infra\/(?!relay\/)[^/]+|oxlint-plugin-goat)\//;
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -132,7 +134,7 @@ function isDocument(file) {
 /** Reads apps/* and packages/* package.json files into a map of directory to workspace dependencies. */
 function readWorkspace(root) {
   const manifests = new Map();
-  for (const parent of ["apps", "packages"]) {
+  for (const parent of ["apps", "packages", "infra"]) {
     let entries = [];
     try {
       entries = fs.readdirSync(path.join(root, parent), { withFileTypes: true });
@@ -140,6 +142,7 @@ function readWorkspace(root) {
       continue;
     }
     for (const entry of entries) {
+      if (parent === "infra" && entry.name !== "relay") continue;
       const file = path.join(root, parent, entry.name, "package.json");
       if (!entry.isDirectory() || !fs.existsSync(file)) continue;
       manifests.set(parent + "/" + entry.name, JSON.parse(fs.readFileSync(file, "utf8")));
@@ -183,7 +186,7 @@ function closure(workspace, roots, skippedEdges = []) {
 
 /** The workspace package directory that owns file, or undefined. */
 function packageOf(workspace, file) {
-  const match = /^(apps|packages)\/([^/]+)\//.exec(file);
+  const match = /^(apps|packages|infra)\/([^/]+)\//.exec(file);
   if (!match) return undefined;
   const dir = match[1] + "/" + match[2];
   return workspace.has(dir) ? dir : undefined;

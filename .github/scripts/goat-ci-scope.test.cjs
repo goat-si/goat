@@ -173,7 +173,7 @@ describe("selectTasks", () => {
   });
 
   it("typechecks infra and the lint plugin without running suites", () => {
-    assert.deepEqual(tasksFor("infra/relay/src/index.ts"), ["check", "typecheck"]);
+    assert.deepEqual(tasksFor("infra/unrelated/src/index.ts"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
   });
@@ -369,8 +369,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists sixteen jobs for a full run: twelve tasks and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 16);
+  it("lists seventeen jobs for a full run including relay and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 17);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -539,5 +539,32 @@ describe("planRun", () => {
     assert.equal(result.full, true);
     assert.doesNotMatch(result.note, /[\r\n]/);
     assert.match(result.note, /evil matrix=/);
+  });
+});
+
+describe("relay workspace coverage", () => {
+  it("selects relay for direct and each runtime dependency change", () => {
+    for (const file of [
+      "infra/relay/src/auth/RelayTokens.ts",
+      "packages/contracts/src/relay.ts",
+      "packages/shared/src/relayJwt.ts",
+      "packages/client-runtime/src/relay/managedRelay.ts",
+    ])
+      assert.ok(tasksFor(file).includes("test-relay"), file);
+  });
+  it("keeps unrelated infra outside the relay lane", () => {
+    assert.ok(!tasksFor("infra/other/src/main.ts").includes("test-relay"));
+  });
+  it("wires a failing PostgreSQL prerequisite before both relay test lanes", () => {
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    assert.ok(
+      workflow.includes(
+        "matrix.task == 'test-relay' || (matrix.task == 'test-changed' && contains(needs.scope.outputs.changed_tests, 'infra/relay/'))",
+      ),
+    );
+    assert.ok(
+      workflow.indexOf("node infra/relay/scripts/test-postgres.ts check") <
+        workflow.indexOf("- name: Test relay"),
+    );
   });
 });
