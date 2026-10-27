@@ -92,6 +92,9 @@ vi.mock("./settingsLayout", () => ({
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { CodexSetupSection } from "./CodexSetupSection";
 
+const writablePrimaryEnvironmentId =
+  primaryEnvironmentIdAtom as Atom.Writable<EnvironmentId | null>;
+
 const environmentId = EnvironmentId.make("remote");
 const primaryId = EnvironmentId.make("primary");
 const instanceId = ProviderInstanceId.make("codex");
@@ -136,17 +139,19 @@ const provider: ServerProvider = {
 
 function setup({ update = false, local = true, primary = false } = {}) {
   for (const mock of Object.values(mocks)) mock.mockReset();
-  const installation = Atom.make(
+  const installation = Atom.make<AsyncResult.AsyncResult<ProviderInstallState, never>>(
     AsyncResult.success(installState({ installedVersion: update ? "1" : "2" })),
   );
-  const auth = Atom.make(AsyncResult.success(authState()));
+  const auth = Atom.make<AsyncResult.AsyncResult<ProviderAuthState, never>>(
+    AsyncResult.success(authState()),
+  );
   const handoff = Atom.make<AsyncResult.AsyncResult<ChatGptHandoffState, never>>(
     AsyncResult.initial(),
   );
   const connection = Atom.make({
     connection: { phase: primary ? "connected" : "disconnected" },
   }).pipe(Atom.keepAlive);
-  appAtomRegistry.set(primaryEnvironmentIdAtom, primary ? primaryId : null);
+  appAtomRegistry.set(writablePrimaryEnvironmentId, primary ? primaryId : null);
   mocks.auth.mockReturnValue(auth);
   mocks.install.mockReturnValue(installation);
   mocks.handoff.mockReturnValue(handoff);
@@ -326,7 +331,7 @@ it("uses the primary environment connected while install was running", async () 
   await using screen = await render(ui());
   await screen.getByRole("button", { name: "Continue with ChatGPT" }).click();
   await act(() => {
-    appAtomRegistry.set(primaryEnvironmentIdAtom, primaryId);
+    appAtomRegistry.set(writablePrimaryEnvironmentId, primaryId);
     appAtomRegistry.set(state.connection, { connection: { phase: "connected" } });
   });
   await publish(
