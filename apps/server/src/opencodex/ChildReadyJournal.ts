@@ -38,8 +38,11 @@ export const ChildReadyOperation = Schema.Struct({
   /** The owned envelope as stored, the expectedInstance of the next settings commit. */
   ownedInstance: Schema.optional(ProviderInstanceConfig),
   deleted: Schema.optional(Schema.Boolean),
-  /** A paid request began for this operation; without a recorded outcome it is never repeated. */
-  probeStarted: Schema.optional(Schema.Boolean),
+  /**
+   * The operation whose one paid request began. That operation never requests again, whatever
+   * became of its outcome or proof; a new operation id starts clean.
+   */
+  probeRequestedFor: Schema.optional(TrimmedNonEmptyString),
   catalog: Schema.optional(
     Schema.Struct({
       home: Schema.String,

@@ -162,7 +162,7 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
       const operation = yield* f.journal.read(home);
       if (operation === undefined) return yield* Effect.die("Expected a setup operation");
       // A request began and this process stopped before recording how it ended.
-      yield* f.journal.put(home, { ...operation, probeStarted: true });
+      yield* f.journal.put(home, { ...operation, probeRequestedFor: "op-1" });
       expect(failureCode(yield* f.call("probe"))).toBe("interrupted");
       expect(yield* f.probes).toBe(0);
     }),

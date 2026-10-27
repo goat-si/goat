@@ -249,8 +249,13 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         current,
         step,
       );
+      // Request history belongs to its operation and is never carried into a new one.
+      const { probeRequestedFor, ...carried } = previous ?? {};
       const base: Journal.ChildReadyOperation = {
-        ...previous,
+        ...carried,
+        ...(previous?.operationId === input.operationId && probeRequestedFor !== undefined
+          ? { probeRequestedFor }
+          : {}),
         operationId: input.operationId,
         homeEnvironmentId: input.homeEnvironmentId,
         destinationEnvironmentId: input.destinationEnvironmentId,
@@ -503,17 +508,19 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       const step = "inference_verified" as const;
       const operation = yield* operationFor(input, step);
       const id = bootstrapInstanceId(input.homeEnvironmentId);
-      // A proof this operation already earned is answered again while every binding holds.
-      const recorded = operation.setup.proof;
-      if (recorded !== undefined && recorded.operationId === input.operationId) {
-        const facts = yield* currentFacts(yield* deps.observe(input), id, step);
-        if (bindingFailure(recorded, facts) === undefined)
-          return { kind: "ok" as const, setup: operation.setup } satisfies ChildReadyResult;
+      // One paid request per operation. Its proof is answered again while every binding holds;
+      // a failure, a proof invalidated since, or an unrecorded outcome needs a new operation.
+      if (operation.probeRequestedFor === input.operationId || uncertain.has(uncertainKey(input))) {
+        const recorded = operation.setup.proof;
+        if (recorded === undefined || recorded.operationId !== input.operationId)
+          return yield* childError(operation.setup.failure?.code ?? "interrupted", step);
+        const broken = bindingFailure(
+          recorded,
+          yield* currentFacts(yield* deps.observe(input), id, step),
+        );
+        if (broken !== undefined) return yield* childError(broken, step);
+        return { kind: "ok" as const, setup: operation.setup } satisfies ChildReadyResult;
       }
-      // One paid request per operation: a recorded outcome is answered again, and a request
-      // that may have completed unrecorded is never repeated automatically.
-      if (operation.probeStarted === true || uncertain.has(uncertainKey(input)))
-        return yield* childError(operation.setup.failure?.code ?? "interrupted", step);
       if (operation.catalog === undefined || operation.ownedFingerprint === undefined)
         return yield* childError("route_unverified", step);
       yield* requireRevision(input.expectedRevision, step);
@@ -540,7 +547,7 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
         .put(input.homeEnvironmentId, {
           ...operation,
           running: step,
-          probeStarted: true,
+          probeRequestedFor: input.operationId,
           setup: { ...operation.setup, readiness: "verifying", steps: stepStates(step, "running") },
         })
         .pipe(storage(step));
@@ -607,10 +614,11 @@ export const makeLinkedOperations = Effect.fn("OpenCodexChildReady.makeLinkedOpe
       if (setup.proof === undefined) return yield* childError("route_unverified", step);
       const broken = bindingFailure(setup.proof, yield* currentFacts(after, id, step));
       if (broken !== undefined) return yield* childError(broken, step);
-      const { probeStarted: _started, ...settled } = operation;
-      yield* finishStage(input.homeEnvironmentId, { ...settled, setup: clean }, step).pipe(
-        Effect.tapError(() => Effect.sync(() => uncertain.add(uncertainKey(input)))),
-      );
+      yield* finishStage(
+        input.homeEnvironmentId,
+        { ...operation, probeRequestedFor: input.operationId, setup: clean },
+        step,
+      ).pipe(Effect.tapError(() => Effect.sync(() => uncertain.add(uncertainKey(input)))));
       return { kind: "ok" as const, setup: clean } satisfies ChildReadyResult;
     });
 

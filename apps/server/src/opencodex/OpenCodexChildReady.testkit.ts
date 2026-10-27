@@ -321,18 +321,21 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     ),
   );
   /** installCodex → syncCatalog → configure, the stages before the paid check. */
-  const routed = Effect.gen(function* () {
-    for (const action of ["installCodex", "syncCatalog", "configure"] as const) {
-      const result = yield* call(action);
-      if (result.kind !== "ok") return result;
-    }
-    return undefined;
-  });
+  const routedAs = (operationId: string) =>
+    Effect.gen(function* () {
+      for (const action of ["installCodex", "syncCatalog", "configure"] as const) {
+        const result = yield* call(action, state.revision, operationId);
+        if (result.kind !== "ok") return result;
+      }
+      return undefined;
+    });
+  const routed = routedAs("op-1");
   return {
     state,
     call,
     status,
     routed,
+    routedAs,
     removeInstance,
     journal,
     storedInstance,
