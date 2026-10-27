@@ -66,6 +66,8 @@ export GOAT_MCP_TOKEN="$(goat auth client create --name "Cursor on laptop" --tok
 - `--scope orchestration:read` alone makes it read-only.
   `--scope orchestration:read --scope orchestration:operate --scope orchestration:approve` also
   lets it answer approval requests; give that only to a trusted orchestrator.
+- `--scope orchestration:operate --scope settings:write` lets an outside client change host
+  settings, including `computer_use.update`. Add these explicitly; the default token cannot.
 - If the environment runs with a non-default `--base-dir`, pass the same one here.
 
 Put the export where the client reads its environment: a shell profile, a secret manager, or the
