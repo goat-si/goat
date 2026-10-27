@@ -5,7 +5,7 @@ import { render } from "../../../test/render";
 import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold";
 import { NOW, key, thread } from "./launchFold.fixtures";
 import { SidebarLaunchGroup } from "./SidebarLaunchGroup";
-import { useLaunchGroups } from "./useLaunchGroups";
+import { resetLaunchGroupSession, useLaunchGroups } from "./useLaunchGroups";
 
 const keyOf = (entry: LaunchFoldThread) =>
   scopedThreadKey(scopeThreadRef(entry.environmentId, entry.id));
@@ -26,6 +26,7 @@ function LaunchList(props: {
           <SidebarLaunchGroup
             parentKey={entryKey}
             threads={children}
+            stateByKey={fold.stateByKey}
             shownChildren={groups.shownChildren(entryKey)}
             expanded={groups.isExpanded(entryKey)}
             onToggle={groups.toggle}
@@ -46,6 +47,7 @@ function LaunchList(props: {
 
 function setup() {
   localStorage.removeItem("goat:sidebar:launch-groups-expanded");
+  resetLaunchGroupSession();
 }
 
 const lanes = (count: number, options: Parameters<typeof thread>[1] = {}) =>
@@ -121,7 +123,7 @@ describe("SidebarLaunchGroup", () => {
     const threads = [
       thread("coordinator"),
       ...lanes(7),
-      thread("grandchild", { launchedBy: "lane-7", status: "running" }),
+      thread("grandchild", { launchedBy: "lane-7" }),
     ];
     await using screen = await render(
       <LaunchList threads={threads} route={key("grandchild")} />,

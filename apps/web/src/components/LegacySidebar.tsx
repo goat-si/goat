@@ -970,6 +970,8 @@ interface SidebarProjectThreadListProps {
   activeRouteThreadKey: string | null;
   openSubagent: ReturnType<typeof useSidebarOpenSubagent>;
   launchFold: LaunchFold<SidebarThreadSummary>;
+  /** The route's row key, with an open subagent standing for its owner row. */
+  launchRouteKey: string | null;
   childAttentionByKey: ReadonlyMap<string, SidebarChildAttention>;
   openPullRequestsInRightPanel: boolean;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
@@ -1055,7 +1057,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     expandThreadListForProject,
     collapseThreadListForProject,
   } = props;
-  const launchGroups = useLaunchGroups(props.launchFold, activeRouteThreadKey);
+  const launchGroups = useLaunchGroups(props.launchFold, props.launchRouteKey);
   const launchFold = props.launchFold;
   const showMoreButtonRender = <button type="button" />;
   const showLessButtonRender = <button type="button" />;
@@ -1126,6 +1128,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                   <SidebarLaunchGroup
                     parentKey={threadKey}
                     threads={launched}
+                    stateByKey={launchFold.stateByKey}
                     shownChildren={launchGroups.shownChildren(threadKey)}
                     expanded={launchGroups.isExpanded(threadKey)}
                     onToggle={launchGroups.toggle}
@@ -2422,6 +2425,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         activeRouteThreadKey={activeRouteThreadKey}
         openSubagent={openSubagent}
         launchFold={launchFold}
+        launchRouteKey={routeRowKey}
         childAttentionByKey={childAttentionByKey}
         openPullRequestsInRightPanel={openPullRequestsInRightPanel}
         threadJumpLabelByKey={threadJumpLabelByKey}
@@ -3361,9 +3365,10 @@ function useLegacySidebarThreads(input: {
   );
   // The same fold each project list draws, so keyboard order matches the rows.
   const launchFold = foldLaunchedThreads({
-    visible: [...listedByProject.values()].flat(),
+    visible: [...[...listedByProject.values()].flat(), ...pinnedThreads],
     all: allThreadShells,
     now: `${nowMinute}:00.000Z`,
+    delegatedAttentionByKey: childAttentionByKey,
     sameList: (child, parent) =>
       logicalProjectKeyForThread(child) === logicalProjectKeyForThread(parent),
   });
@@ -3420,7 +3425,11 @@ function useLegacySidebarThreads(input: {
     );
   });
   const visibleSidebarThreadKeys = resolveProjectsViewThreadOrder(
-    pinnedThreads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+    launchGroups.renderedOrder(
+      pinnedThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+    ),
     projectThreadKeys,
   );
   const threadJumpCommandByKey = new Map<

@@ -55,7 +55,12 @@ export function useSidebarPriorityCount() {
   );
   const now = `${nowMinute}:00.000Z`;
   // Activity lists a launcher's folded threads under it, so the bell counts the group once.
-  const fold = foldLaunchedThreads({ visible, all: threads, now });
+  const fold = foldLaunchedThreads({
+    visible,
+    all: threads,
+    now,
+    delegatedAttentionByKey: index.attentionByOwnerKey,
+  });
   const attentionByOwnerKey = new Map(index.attentionByOwnerKey);
   const childWorkKeys = new Set<string>();
   for (const [key, lift] of fold.liftByKey) {

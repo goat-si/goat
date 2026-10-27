@@ -1,3 +1,4 @@
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import { ChevronRightIcon } from "~/components/solar";
 import type { ReactNode } from "react";
 
@@ -32,13 +33,20 @@ function launchGroupSummaryText(summary: ReturnType<typeof summarizeLaunchGroup>
 export function SidebarLaunchGroup<T extends LaunchFoldThread>(props: {
   readonly parentKey: string;
   readonly threads: readonly T[];
+  readonly stateByKey: ReadonlyMap<string, LaunchChildState>;
   readonly shownChildren: readonly T[];
   readonly expanded: boolean;
   readonly onToggle: (parentKey: string) => void;
   readonly onShowAll: (parentKey: string) => void;
   readonly renderRow: (thread: T) => ReactNode;
 }) {
-  const summary = summarizeLaunchGroup(props.threads);
+  const summary = summarizeLaunchGroup(
+    props.threads.map(
+      (thread) =>
+        props.stateByKey.get(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))) ??
+        "finished",
+    ),
+  );
   const text = launchGroupSummaryText(summary);
   const hidden = props.expanded ? props.threads.length - props.shownChildren.length : 0;
   return (

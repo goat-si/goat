@@ -1,6 +1,6 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import * as Schema from "effect/Schema";
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { launchAncestorKeys, type LaunchFold, type LaunchFoldThread } from "./launchFold";
@@ -8,8 +8,35 @@ import { launchAncestorKeys, type LaunchFold, type LaunchFoldThread } from "./la
 const EXPANDED_KEY = "goat:sidebar:launch-groups-expanded";
 const ExpandedRecord = Schema.Record(Schema.String, Schema.Boolean);
 const NO_EXPANDED: Readonly<Record<string, boolean>> = {};
+const NO_KEYS: ReadonlySet<string> = new Set();
 /** Children a group lists before "+N more". */
 const LAUNCH_GROUP_CHILD_LIMIT = 5;
+
+// Every list that draws or orders launch groups reads one session state, so "+N more" and a
+// collapse made while a folded thread is open agree between the rows and keyboard order.
+interface LaunchGroupSession {
+  readonly showAll: ReadonlySet<string>;
+  readonly route: string | null;
+  readonly routeCollapsed: ReadonlySet<string>;
+}
+let session: LaunchGroupSession = { showAll: new Set(), route: null, routeCollapsed: new Set() };
+const sessionListeners = new Set<() => void>();
+function setSession(next: LaunchGroupSession) {
+  session = next;
+  for (const listener of sessionListeners) listener();
+}
+const subscribeSession = (listener: () => void) => {
+  sessionListeners.add(listener);
+  return () => {
+    sessionListeners.delete(listener);
+  };
+};
+const readSession = () => session;
+
+/** Tests start each case from a fresh session. */
+export function resetLaunchGroupSession() {
+  setSession({ showAll: new Set(), route: null, routeCollapsed: new Set() });
+}
 
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -35,17 +62,14 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
   routeThreadKey: string | null,
 ): LaunchGroups<T> {
   const [stored, setStored] = useLocalStorage(EXPANDED_KEY, NO_EXPANDED, ExpandedRecord);
-  const [showAllKeys, setShowAllKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const [routeCollapse, setRouteCollapse] = useState({
-    route: routeThreadKey,
-    keys: new Set<string>() as ReadonlySet<string>,
-  });
-  if (routeCollapse.route !== routeThreadKey)
-    setRouteCollapse({ route: routeThreadKey, keys: new Set() });
+  const current = useSyncExternalStore(subscribeSession, readSession, readSession);
+  const showAllKeys = current.showAll;
+  // A collapse made while a folded thread is open lasts until the route changes.
+  const routeCollapsed = current.route === routeThreadKey ? current.routeCollapsed : NO_KEYS;
   const routeAncestors = routeThreadKey === null ? [] : launchAncestorKeys(fold, routeThreadKey);
   const routePath = new Set(routeThreadKey === null ? [] : [routeThreadKey, ...routeAncestors]);
   const pendingReveal = routeAncestors.filter(
-    (key) => stored[key] !== true && !routeCollapse.keys.has(key),
+    (key) => stored[key] !== true && !routeCollapsed.has(key),
   );
   // oxlint-disable-next-line goat/react-effect-budget -- Opening a folded thread writes its groups' expansion to storage, so they stay open after navigating away.
   useEffect(() => {
@@ -57,7 +81,7 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
   }, [pendingReveal, setStored]);
   const isExpanded = (parentKey: string) =>
     routeAncestors.includes(parentKey)
-      ? !routeCollapse.keys.has(parentKey)
+      ? !routeCollapsed.has(parentKey)
       : stored[parentKey] === true;
   const shownChildren = (parentKey: string): readonly T[] => {
     const children = fold.childrenByParentKey.get(parentKey) ?? [];
@@ -73,10 +97,10 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
     toggle: (parentKey) => {
       const next = !isExpanded(parentKey);
       if (routeAncestors.includes(parentKey)) {
-        const keys = new Set(routeCollapse.keys);
+        const keys = new Set(routeCollapsed);
         if (next) keys.delete(parentKey);
         else keys.add(parentKey);
-        setRouteCollapse({ route: routeThreadKey, keys });
+        setSession({ ...session, route: routeThreadKey, routeCollapsed: keys });
       }
       setStored((current) =>
         Object.fromEntries([
@@ -85,7 +109,8 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
         ]),
       );
     },
-    showAll: (parentKey) => setShowAllKeys((current) => new Set([...current, parentKey])),
+    showAll: (parentKey) =>
+      setSession({ ...session, showAll: new Set([...session.showAll, parentKey]) }),
     shownChildren,
     renderedOrder: (rootKeys) => {
       const order: string[] = [];

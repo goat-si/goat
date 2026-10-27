@@ -16,7 +16,11 @@ import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useThreadShellsForProjectRefs } from "../../state/entities";
 import type { SidebarThreadSummary } from "../../types";
 import { useUiStateStore } from "../../uiStateStore";
-import { isProjectsViewListedThread, resolveProjectsViewPreview } from "../LegacySidebar.logic";
+import {
+  isProjectsViewListedThread,
+  isProjectsViewPinnedThread,
+  resolveProjectsViewPreview,
+} from "../LegacySidebar.logic";
 import {
   resolveProjectStatusIndicator,
   resolveThreadLastVisitedAt,
@@ -44,6 +48,9 @@ function resolveProjectThreadStatus(
     },
   });
 }
+
+const keyOfThread = (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) =>
+  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
 // Separate hooks keep array caches independent of the route-dependent panel.
 export function useProjectThreads(
@@ -102,30 +109,37 @@ export function useProjectThreads(
       resolveThreadLastVisitedAt(thread.lastVisitedAt, threadLastVisitedAts[index] ?? undefined),
     ]),
   );
-  const listedThreads =
-    pinnedThreads ??
-    sortThreads(
-      excludeGlobalAgentThreads(
-        projectThreads.filter((thread) => {
-          const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          return isProjectsViewListedThread(
-            thread,
-            childAttentionByKey.has(key) || openSubagentOwnerKey === key,
-          );
-        }),
-        globalAgentRef,
-        goatBotRef,
-      ),
-      threadSortOrder,
-    );
+  const listedInProjects = sortThreads(
+    excludeGlobalAgentThreads(
+      sidebarThreads.filter((thread) => {
+        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        return isProjectsViewListedThread(
+          thread,
+          childAttentionByKey.has(key) || openSubagentOwnerKey === key,
+        );
+      }),
+      globalAgentRef,
+      goatBotRef,
+    ),
+    threadSortOrder,
+  );
+  const listedThreads = pinnedThreads ?? listedInProjects;
   const nowMinute = useNowMinute();
-  // A thread launched by another listed thread folds under it; the project status still counts it.
+  // Launched threads fold under their launcher, pinned or not; the project status still counts
+  // them. The pinned section shows pinned roots and a project list the rest.
+  const pinnedRoots = pinnedThreads ?? sidebarThreads.filter(isProjectsViewPinnedThread);
+  const pinnedKeys = new Set(pinnedRoots.map(keyOfThread));
   const launchFold = foldLaunchedThreads({
-    visible: listedThreads,
+    visible: [...listedInProjects, ...pinnedRoots],
     all: sidebarThreads,
     now: `${nowMinute}:00.000Z`,
+    delegatedAttentionByKey: childAttentionByKey,
   });
-  const visibleProjectThreads = launchFold.roots;
+  const visibleProjectThreads = (pinnedThreads ?? launchFold.roots).filter(
+    (thread) =>
+      pinnedKeys.has(keyOfThread(thread)) === (pinnedThreads !== undefined) &&
+      !launchFold.parentKeyByKey.has(keyOfThread(thread)),
+  );
   const projectStatus = resolveProjectStatusIndicator(
     listedThreads.map((thread) =>
       resolveProjectThreadStatus(thread, lastVisitedAtByThreadKey, childAttentionByKey),

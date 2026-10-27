@@ -147,6 +147,8 @@ import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
 import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import {
   foldLaunchedThreads,
+  foldedKeysIn,
+  foldedSections,
   liftedChildAttention,
   liftedPriorityRank,
 } from "./sidebar/launchFold";
@@ -527,7 +529,15 @@ function useSidebarThreads(input: {
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
-  useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
+  // Settled threads folded under a launcher consumed their page rows too.
+  useOlderSettledShelfGrowth(olderSettledShelf, [
+    ...listedSettledThreads,
+    ...partition.launchFold.folded.filter(
+      (thread) =>
+        partition.foldedSectionByKey.get(threadShellKey(thread)) === "settled" &&
+        olderSettledShelf.isListed(thread),
+    ),
+  ]);
   const settledCount =
     settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
   const visibleSettledThreads = (() => {
@@ -619,8 +629,14 @@ function useSidebarThreads(input: {
         (thread) => [threadShellKey(thread), thread] as const,
       ),
     ),
-    settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
-    snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
+    settledThreadKeys: new Set([
+      ...settledThreads.map(threadShellKey),
+      ...foldedKeysIn(partition.foldedSectionByKey, "settled"),
+    ]),
+    snoozedThreadKeys: new Set([
+      ...snoozedThreads.map(threadShellKey),
+      ...foldedKeysIn(partition.foldedSectionByKey, "snoozed"),
+    ]),
     sectionByThreadKey,
     pinnedKeys: pinnedThreads.map(threadShellKey),
     activeKeys: activeThreads.map(threadShellKey),
@@ -657,7 +673,17 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     globalAgentRef,
     goatBotRef,
   );
-  const launchFold = foldLaunchedThreads({ visible, all: threads, now: preciseNow });
+  const launchFold = foldLaunchedThreads({
+    visible,
+    all: threads,
+    now: preciseNow,
+    delegatedAttentionByKey: attentionByOwnerKey,
+  });
+  const foldedSectionByKey = foldedSections(
+    launchFold.folded,
+    (id) => serverConfigs.get(id)?.environment.capabilities,
+    preciseNow,
+  );
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const wokeAtByThreadKey = new Map<string, string | null>();
   const acknowledged = new Set(acknowledgedWakes);
@@ -790,6 +816,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     settledThreads: sortSettledThreads(settled),
     visibleThreads: visible,
     launchFold,
+    foldedSectionByKey,
     snoozeNow: preciseNow,
     wokeAtByThreadKey,
     acknowledgedWakes: acknowledged,
@@ -1315,6 +1342,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     orderedThreadKeys,
     threadByKey,
     launchFold,
+    foldedSectionByKey,
     launchGroups,
     settledThreadKeys,
     snoozedThreadKeys,
@@ -3311,6 +3339,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
                         nested = false,
+                        parentVariant?: "card" | "slim",
                       ): ReactNode => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3321,7 +3350,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         });
                         const isCard =
                           section === "priority" || section === "pinned" || section === "active";
-                        const rowVariant = isCard ? "card" : "slim";
+                        const rowVariant = parentVariant ?? (isCard ? "card" : "slim");
                         const launched = launchFold.childrenByParentKey.get(threadKey);
                         const Row = nested ? SidebarNestedThreadRow : SortableThreadRow;
                         return (
@@ -3348,11 +3377,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 <SidebarLaunchGroup
                                   parentKey={threadKey}
                                   threads={launched}
+                                  stateByKey={launchFold.stateByKey}
                                   shownChildren={launchGroups.shownChildren(threadKey)}
                                   expanded={launchGroups.isExpanded(threadKey)}
                                   onToggle={launchGroups.toggle}
                                   onShowAll={launchGroups.showAll}
-                                  renderRow={(child) => renderThreadRow(child, section, true)}
+                                  renderRow={(child) =>
+                                    renderThreadRow(
+                                      child,
+                                      foldedSectionByKey.get(threadShellKey(child)) ?? "active",
+                                      true,
+                                      rowVariant,
+                                    )
+                                  }
                                 />
                               )
                             }

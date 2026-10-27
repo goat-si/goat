@@ -152,16 +152,33 @@ describe("foldLaunchedThreads", () => {
   });
 
   it("summarizes a group as counts and per-child states", () => {
-    const summary = summarizeLaunchGroup([
-      thread("a", { status: "running" }),
-      thread("b", { input: true }),
-      thread("c"),
-    ]);
-    expect(summary).toEqual({
+    expect(summarizeLaunchGroup(["working", "attention", "finished"])).toEqual({
       count: 3,
       running: 1,
       attention: 1,
       states: ["working", "attention", "finished"],
     });
+  });
+
+  it("keeps live work deeper in a group out of a snoozed launcher", () => {
+    const result = fold([
+      thread("root", { snoozedUntil: "2026-10-28T00:00:00.000Z" }),
+      thread("middle", { launchedBy: "root" }),
+      thread("grandchild", { launchedBy: "middle", status: "running" }),
+    ]);
+    expect(ids(result.roots)).toEqual(["root", "middle"]);
+    expect(ids(result.childrenByParentKey.get(key("middle")) ?? [])).toEqual(["grandchild"]);
+    expect(result.stateByKey.get(key("middle"))).toBe("working");
+  });
+
+  it("carries a launched thread's subagent request to its launcher", () => {
+    const result = foldLaunchedThreads({
+      visible: [thread("root"), thread("lane", { launchedBy: "root" })],
+      all: [],
+      now: NOW,
+      delegatedAttentionByKey: new Map([[key("lane"), "approval"]]),
+    });
+    expect(result.liftByKey.get(key("root"))).toBe("approval");
+    expect(result.stateByKey.get(key("lane"))).toBe("attention");
   });
 });
