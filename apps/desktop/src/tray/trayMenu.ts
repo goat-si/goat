@@ -26,6 +26,8 @@ export interface TrayMenuInput {
   /** macOS 14+ draws NSMenu section headers; elsewhere a section title is a disabled row. */
   readonly nativeHeaders: boolean;
   readonly actions: TrayMenuActions;
+  /** Electron menu icon for a PNG data URL; absent in tests and when icons are unavailable. */
+  readonly icon?: (dataUrl: string) => Electron.NativeImage | undefined;
 }
 
 // Electron reads "&" as a mnemonic marker on every platform (macOS drops it); "&&" draws one.
@@ -74,25 +76,34 @@ function section(
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
-function computerUseItems({ menu, actions }: TrayMenuInput): Electron.MenuItemConstructorOptions[] {
+function computerUseItems(input: TrayMenuInput): Electron.MenuItemConstructorOptions[] {
+  const { menu, actions } = input;
   const use = menu.computerUse;
   if (use == null || use.threadCount === 0) return [];
   const screen = use.targets.some((target) => target.appId === null);
   const parts = ["Computer Use", count(use.threadCount, "thread")];
   if (use.appCount > 0) parts.push(count(use.appCount, "app"));
   else if (screen) parts.push("whole screen");
-  const rows = use.targets.map((target) => ({
-    label:
-      `Stop Using ${target.appId === null ? "the Screen" : trayLabel(target.name, 24, target.appId)}` +
-      (target.threadCount > 1 ? ` (${target.threadCount} threads)` : ""),
-    click: () => actions.stopComputerUse(target.appId),
-  }));
+  const iconOf = (dataUrl: string | null) => (dataUrl === null ? undefined : input.icon?.(dataUrl));
+  const first = use.targets.find((target) => target.appId !== null && target.icon !== null);
+  const headerIcon = first === undefined ? undefined : iconOf(first.icon);
+  const rows = use.targets.map((target) => {
+    const rowIcon = iconOf(target.icon);
+    return {
+      label:
+        `Stop Using ${target.appId === null ? "the Screen" : trayLabel(target.name, 24, target.appId)}` +
+        (target.threadCount > 1 ? ` (${target.threadCount} threads)` : ""),
+      ...(rowIcon === undefined ? {} : { icon: rowIcon }),
+      click: () => actions.stopComputerUse(target.appId),
+    };
+  });
   const hidden = use.appCount - use.targets.filter((target) => target.appId !== null).length;
   const more =
     hidden > 0 ? [{ label: `${count(hidden, "more app")}, use Stop All`, enabled: false }] : [];
   return [
     {
       label: parts.join(" · "),
+      ...(headerIcon === undefined ? {} : { icon: headerIcon }),
       submenu: [
         ...rows,
         ...more,

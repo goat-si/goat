@@ -12,6 +12,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import { SET_TRAY_MENU_CHANNEL, TRAY_ACTION_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import { menuIcon, withActivityDot, type DotColor } from "./trayIcons.ts";
 import { createTrayMenuGate, menuUpdatesWhileOpen } from "./trayMenuGate.ts";
 import { TrayMenuPayload } from "./trayMenuPayload.ts";
 import {
@@ -101,14 +102,34 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   };
 
   let tray: Electron.Tray | null = null;
+  let baseImage: Electron.NativeImage | null = null;
+  let dottedImage: Electron.NativeImage | null = null;
+  let dotShown = false;
+  let dotWarned = false;
+  const dotColor: DotColor = platform === "darwin" ? [0, 0, 0] : [0x0a, 0x9f, 0xff];
+  const dotTemplate = platform === "darwin";
+  const icons = new Map<string, Electron.NativeImage | undefined>();
+  const icon = (dataUrl: string) => {
+    if (icons.has(dataUrl)) return icons.get(dataUrl);
+    const created = menuIcon(dataUrl);
+    icons.set(dataUrl, created);
+    return created;
+  };
   const menuLifecycle = {
     show: () => {},
     hide: () => {},
   };
   const build = (menu: DesktopTrayMenu) => {
     if (tray === null || tray.isDestroyed()) return;
+    const keep = new Set<string>();
+    for (const target of menu.computerUse?.targets ?? []) {
+      if (target.icon !== null) keep.add(target.icon);
+    }
+    for (const dataUrl of icons.keys()) {
+      if (!keep.has(dataUrl)) icons.delete(dataUrl);
+    }
     const built = Electron.Menu.buildFromTemplate(
-      trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions }),
+      trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions, icon }),
     );
     if (!menuUpdatesWhileOpen(platform)) {
       built.on("menu-will-show", () => {
@@ -127,11 +148,40 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   menuLifecycle.hide = () => {
     gate.closed();
   };
+  const dotted = () => {
+    if (dottedImage !== null) return dottedImage;
+    const base = baseImage;
+    if (base === null) throw new Error("tray icon missing");
+    dottedImage = withActivityDot(base, dotColor, dotTemplate);
+    return dottedImage;
+  };
+  // setImage leaves an open menu up, so the dot follows state while the gate is holding the menu.
+  const syncDot = (menu: DesktopTrayMenu) => {
+    const active = (menu.computerUse?.threadCount ?? 0) > 0;
+    if (tray === null || tray.isDestroyed() || active === dotShown) return;
+    if (active) {
+      if (dotWarned) return;
+      try {
+        tray.setImage(dotted());
+      } catch (cause) {
+        dotWarned = true;
+        warn("could not draw the activity dot; keeping the plain icon", { cause: String(cause) });
+        return;
+      }
+    } else if (baseImage !== null) {
+      tray.setImage(baseImage);
+    }
+    dotShown = active;
+  };
   const showIcon = () => {
     if (tray !== null || Option.isNone(iconPath)) return;
     try {
       const image = Electron.nativeImage.createFromPath(iconPath.value);
       if (platform === "darwin") image.setTemplateImage(true);
+      baseImage = image;
+      dottedImage = null;
+      dotShown = false;
+      dotWarned = false;
       const created = new Electron.Tray(image);
       created.setToolTip(displayName);
       // A left click on a Windows notification-area icon opens nothing by default.
@@ -184,6 +234,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       contents.removeListener("destroyed", forget);
       if (!picks.gone(contents)) return;
       gate.update(EMPTY_MENU);
+      syncDot(EMPTY_MENU);
     };
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", forget);
@@ -198,6 +249,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       handler: (next, event) =>
         Effect.sync(() => {
           gate.update(next);
+          syncDot(next);
           const sender =
             event === undefined ? undefined : Electron.webContents.fromId(event.sender.id);
           if (sender === undefined || sender.isDestroyed()) return;
