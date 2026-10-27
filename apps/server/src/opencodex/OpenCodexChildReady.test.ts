@@ -67,6 +67,8 @@ interface ChildState {
   installResult: "succeeded" | "failed";
   installFailure: Installation.OpenCodexInstallationError["reason"] | undefined;
   revoked: boolean;
+  /** The Home the caller's signed purpose names; another address is refused. */
+  purposeHome: EnvironmentId;
 }
 const snapshotOf = (state: ChildState): OpenCodexInventorySnapshot => ({
   installed: state.binary !== undefined,
@@ -110,6 +112,7 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
     installResult: "succeeded",
     installFailure: undefined,
     revoked: false,
+    purposeHome: home,
     ...overrides,
   };
   const probes = yield* Ref.make(0);
@@ -136,16 +139,24 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
       getEnvironmentId: Effect.succeed(child),
     }),
     Layer.succeed(Authority.ChildSetupAuthority, {
-      authorize: () =>
-        state.revoked
+      authorize: (input) =>
+        input.homeEnvironmentId !== state.purposeHome
           ? Effect.fail(
               new OrchestratorMcpFailure({
                 code: "orchestration_error",
-                reason: "setup_approval_revoked",
-                message: "revoked",
+                reason: "destination_changed",
+                message: "another Home",
               }),
             )
-          : Effect.succeed({ purpose: undefined as never, instanceId }),
+          : state.revoked
+            ? Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  reason: "setup_approval_revoked",
+                  message: "revoked",
+                }),
+              )
+            : Effect.succeed({ purpose: undefined as never, instanceId }),
     }),
     Layer.mock(Startup.ChildOpenCodexStartup)({ start: () => Effect.void }),
     Layer.mock(Inventory.OpenCodexInventory)({
@@ -241,6 +252,7 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
   const call = (
     action: ChildReadyPrepareInput["action"],
     expectedRevision = state.revision,
+    operationId = "op-1",
   ): Effect.Effect<ChildReadyResult, OrchestratorMcpFailure> =>
     run(
       Effect.flatMap(ChildReady.OpenCodexChildReady, (service) =>
@@ -248,7 +260,7 @@ const fixture = Effect.fn("OpenCodexChildReady.test.fixture")(function* (
           {
             destinationEnvironmentId: child,
             homeEnvironmentId: home,
-            operationId: "op-1",
+            operationId,
             action,
             expectedRevision,
           },
@@ -469,6 +481,22 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
       const f = yield* fixture({ revoked: true });
       expect(failureCode(yield* f.call("installCodex"))).toBe("setup_approval_revoked");
       expect(yield* f.storedInstance).toBeUndefined();
+    }),
+  );
+
+  it.effect("a refused address or a stale operation leaves the recorded proof untouched", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.routed;
+      expect(yield* f.call("probe")).toMatchObject({ kind: "ok", setup: { readiness: "ready" } });
+      // A purpose for another Home naming this Home's address is refused and writes nothing.
+      f.state.purposeHome = EnvironmentId.make("home-b");
+      expect(failureCode(yield* f.call("configure"))).toBe("destination_changed");
+      f.state.purposeHome = home;
+      // An older operation's failing request cannot invalidate the current one.
+      const stale = { ...f.state.revision, sequence: f.state.revision.sequence - 1 };
+      expect(failureCode(yield* f.call("configure", stale, "op-old"))).toBe("stale_configuration");
+      expect(yield* f.status).toMatchObject({ setup: { readiness: "ready" } });
     }),
   );
 });

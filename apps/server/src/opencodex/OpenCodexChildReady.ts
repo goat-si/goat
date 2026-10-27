@@ -9,7 +9,6 @@ import {
   type ChildReadyResult,
   type ChildReadyRevision,
   type ChildReadyStep,
-  type EnvironmentId,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -148,36 +147,41 @@ const make = Effect.gen(function* () {
 
   /** Records a stage's failure on the operation; the proof never survives it. */
   const recordFailure = Effect.fn("OpenCodexChildReady.recordFailure")(function* (
-    home: EnvironmentId,
+    input: ChildReadyPrepareInput,
     failure: ChildReadyFailure,
   ) {
-    const operation = yield* journal.read(home);
-    if (operation === undefined) return;
+    const operation = yield* journal.read(input.homeEnvironmentId);
+    // Only the authorized Home's current operation; another Home's or a newer one stays as is.
+    if (operation === undefined || operation.operationId !== input.operationId) return;
     const { running: _running, ...rest } = operation;
-    yield* journal.put(home, {
+    yield* journal.put(input.homeEnvironmentId, {
       ...rest,
       ...(rest.setup === undefined ? {} : { setup: withFailure(rest.setup, failure) }),
     });
   });
 
+  const failureOf = (
+    error: ChildStepError | OrchestratorMcpFailure | Journal.ChildReadyJournalError,
+    step: ChildReadyStep,
+  ): ChildReadyFailure | undefined =>
+    error._tag === "ChildStepError"
+      ? failureFor(error.code, isStep(error.step) ? error.step : step)
+      : error._tag === "ChildReadyJournalError"
+        ? failureFor("storage_failed", step)
+        : isFailureCode(error.reason)
+          ? { ...failureFor(error.reason, step), message: error.message }
+          : undefined;
   /** Every expected refusal becomes `{kind: "error"}` data at the action's step. */
-  const asResult = (input: ChildReadyPrepareInput, step: ChildReadyStep) =>
+  const asResult = (input: ChildReadyPrepareInput, step: ChildReadyStep, persist: boolean) =>
     Effect.catch(
       (error: ChildStepError | OrchestratorMcpFailure | Journal.ChildReadyJournalError) => {
-        const failure =
-          error._tag === "ChildStepError"
-            ? failureFor(error.code, isStep(error.step) ? error.step : step)
-            : error._tag === "ChildReadyJournalError"
-              ? failureFor("storage_failed", step)
-              : isFailureCode(error.reason)
-                ? { ...failureFor(error.reason, step), message: error.message }
-                : undefined;
+        const failure = failureOf(error, step);
         if (failure === undefined)
           return error._tag === "OrchestratorMcpFailure" ? Effect.fail(error) : Effect.die(error);
-        return recordFailure(input.homeEnvironmentId, failure).pipe(
-          Effect.ignore,
-          Effect.as({ kind: "error" as const, failure } satisfies ChildReadyResult),
-        );
+        const answer = { kind: "error" as const, failure } satisfies ChildReadyResult;
+        return persist
+          ? recordFailure(input, failure).pipe(Effect.ignore, Effect.as(answer))
+          : Effect.succeed(answer);
       },
     );
 
@@ -288,7 +292,14 @@ const make = Effect.gen(function* () {
           : input.action === "opencodexHealth"
             ? opencodexHealth(input, scope)
             : linked[input.action](input, scope);
-    return yield* run.pipe(asResult(input, step));
+    // The address, purpose and operation are authorized before anything may write: a refused
+    // request is answered and leaves every journal untouched.
+    const refused = yield* authorize(input, scope).pipe(
+      Effect.as(undefined),
+      asResult(input, step, false),
+    );
+    if (refused !== undefined) return refused;
+    return yield* run.pipe(asResult(input, step, true));
   });
 
   const status: OpenCodexChildReady["Service"]["status"] = Effect.fn("OpenCodexChildReady.status")(
