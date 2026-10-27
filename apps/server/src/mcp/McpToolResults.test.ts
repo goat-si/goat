@@ -7,6 +7,8 @@ import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -47,6 +49,9 @@ const expiresAt = DateTime.makeUnsafe("2030-01-01T00:05:00.000Z");
 const layer = McpHttpServer.toolkitRegistration(
   ComputerUseToolkit,
   McpToolAccess.toLayer(ComputerUseToolkit, {
+    goat_computer_use_update: McpToolAccess.writesWithCapability(({ enabled }) =>
+      Effect.succeed({ enabled }),
+    ),
     goat_computer_use_request: McpToolAccess.reads(() =>
       Effect.succeed({
         kind: "needs_human" as const,
@@ -73,6 +78,10 @@ const layer = McpHttpServer.toolkitRegistration(
       }),
       Layer.mock(Handoffs.Handoffs)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      ServerConfig.layerTest("/tmp/tool-results", "/tmp/tool-results").pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+      Layer.mock(ServerSettings.ServerSettingsService)({}),
     ),
   ),
   Layer.provideMerge(McpServer.McpServer.layer),

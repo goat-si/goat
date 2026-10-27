@@ -19,6 +19,13 @@ You can turn it on or off at any time in **Settings → Integrations → Compute
 use**. Pick the environment whose computer agents should use, then turn on
 **Computer use**. On mobile, use **Settings → Agent behavior → Computer use**.
 
+An outside MCP client with `settings:write` can turn it on or off with
+`computer_use.update`; check the result with `host.status`. Create a scoped
+client token with `goat auth client create --scope orchestration:operate
+--scope settings:write` or approve
+full access in OAuth. Someone at the machine still needs to grant any required
+operating system permissions. Agents running inside GOAT cannot change this setting.
+
 Agents get the computer use tools from their next turn, including sessions that
 are already open; Pi picks them up the next time it starts. Once an agent has
 the tools, approving an app request lets it continue in the same turn. Plan

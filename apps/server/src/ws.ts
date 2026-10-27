@@ -6,7 +6,6 @@ import {
   HubProxyRpcError,
   OrchestrationDispatchCommandError,
   SLACK_CHANNEL_WS_METHODS,
-  ServerSettingsError,
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
@@ -180,7 +179,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerConfig from "./config.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
-import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as ComputerUseSettings from "./cua/ComputerUseSettings.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -1389,28 +1388,6 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (driver) =>
-              driver.admitEnable.pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ServerSettingsError({
-                      settingsPath: config.settingsPath,
-                      operation: "enable-computer-use",
-                      code:
-                        error.operation === "install"
-                          ? "computer_use_install_failed"
-                          : "computer_use_unavailable",
-                      reason: error.message,
-                    }),
-                ),
-              ),
-          }),
-        ),
-      );
       const memory = yield* MemoryService.MemoryService;
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
@@ -2904,7 +2881,7 @@ export const layerWsRpc = (
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation }) {
             yield* ServerSettings.rejectMemoryHubSettingsPatch(patch, config.settingsPath);
-            if (patch.enableCua === true) yield* requireComputerUseDisplay;
+            if (patch.enableCua === true) yield* ComputerUseSettings.admitEnable();
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),

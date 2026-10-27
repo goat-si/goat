@@ -2,6 +2,7 @@ import {
   AuthOrchestrationApproveScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthSettingsWriteScope,
   AuthSessionId,
   AuthStandardClientScopes,
   RuntimeMode,
@@ -279,9 +280,10 @@ const clientCreateCommand = Command.make("create", {
     AuthOrchestrationReadScope,
     AuthOrchestrationOperateScope,
     AuthOrchestrationApproveScope,
+    AuthSettingsWriteScope,
   ]).pipe(
     Flag.withDescription(
-      `Repeat for multiple scopes; replaces the default ${AuthOrchestrationReadScope}, ${AuthOrchestrationOperateScope}. ${AuthOrchestrationApproveScope} lets the client accept or decline approvals and needs ${AuthOrchestrationOperateScope}.`,
+      `Repeat for multiple scopes; replaces the default ${AuthOrchestrationReadScope}, ${AuthOrchestrationOperateScope}. ${AuthOrchestrationApproveScope} lets the client accept or decline approvals and needs ${AuthOrchestrationOperateScope}. ${AuthSettingsWriteScope} permits host settings changes.`,
     ),
     Flag.atLeast(0),
     Flag.map((scopes) => [

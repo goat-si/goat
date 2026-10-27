@@ -38,7 +38,12 @@ it.effect(
     const registered = Layer.mergeAll(
       McpHttpServer.toolkitRegistration(
         ComputerUseToolkit,
-        McpToolAccess.toLayer(ComputerUseToolkit, { goat_computer_use_request: record }),
+        McpToolAccess.toLayer(ComputerUseToolkit, {
+          goat_computer_use_request: record,
+          goat_computer_use_update: McpToolAccess.writesWithCapability(({ enabled }) =>
+            Effect.succeed({ enabled }),
+          ),
+        }),
       ),
       McpHttpServer.catalogRegistrations.agentSurface,
     ).pipe(Layer.provide(dependencies));

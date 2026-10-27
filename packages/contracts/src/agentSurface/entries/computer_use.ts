@@ -1,6 +1,24 @@
 import { entry } from "../entry.ts";
 
 export const computerUseEntries = {
+  "computer_use.update": entry({
+    resource: "computer_use",
+    verb: "update",
+    name: "goat_computer_use_update",
+    toolkit: "computerUse",
+    summary: "Turn computer use on or off for this environment.",
+    description:
+      "Turn computer use on or off on this environment for an outside MCP client with settings:write. Enabling installs and checks Cua Driver and needs a usable display. macOS Accessibility and Screen Recording permissions still need a person at that Mac. GOAT threads cannot call this; ask a person. Read the state with host.status.",
+    effect: "write",
+    capability: "none",
+    capabilityReason: "A live settings:write client session authorizes this host setting.",
+    requires: "client",
+    hostRoutable: false,
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: "Setting the same boolean again leaves the setting in the same state.",
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "computer_use.request": entry({
     resource: "computer_use",
     verb: "request",

@@ -461,6 +461,11 @@ export const serveCatalogOverHttp = (
 ) =>
   serveWith(scopes, servicesOff, headersOf).pipe(Effect.provide(settingsListing(agentToolListing)));
 
+export const serveCatalogOverHttpWithSettings = (
+  scopes: Readonly<Record<string, McpInvocationScope>>,
+  settings: Layer.Layer<Settings.ServerSettingsService>,
+) => serveWith(scopes, servicesOff).pipe(Effect.provide(settings));
+
 /**
  * serveCatalogOverHttp with goatclaw enforcing, in tools/list as in calls; see
  * enforcingDependencies for what it needs.

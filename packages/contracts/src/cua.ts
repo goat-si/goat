@@ -823,6 +823,9 @@ const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLen
   Schema.isMaxLength(20),
 );
 
+export const ComputerUseUpdateInput = Schema.Struct({ enabled: Schema.Boolean });
+export const ComputerUseUpdateResult = Schema.Struct({ enabled: Schema.Boolean });
+
 export const ComputerUseRequestInput = Schema.Struct({
   foreground: Schema.optional(
     Schema.Boolean.annotate({
