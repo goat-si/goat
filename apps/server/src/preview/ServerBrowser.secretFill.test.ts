@@ -70,6 +70,10 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
     async close() {
       for (const context of contexts.splice(0)) await context.close().catch(() => {});
+      // An open Chromium keeps the test worker alive, so each layer's close ends it.
+      const launched = browser;
+      browser = undefined;
+      await (await launched)?.close().catch(() => {});
     }
   },
 }));
