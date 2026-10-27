@@ -109,6 +109,23 @@ const DROPPED = /[\s[\]]/u;
  * Decoded, a percent-escape run counts as what it encodes; raw, as written, since dropping a
  * bracket can join a value's own "%" and digits into what looks like an escape.
  */
+/**
+ * The character the escapes at `at` encode, one to four of them as UTF-8 needs; undefined when
+ * none decode, so one bad escape in a run leaves the others decoded.
+ */
+const decodedAt = (run: string, at: number) => {
+  for (let escapes = 1; escapes <= 4; escapes++) {
+    const part = run.slice(at, at + escapes * 3);
+    if (part.length < escapes * 3) return undefined;
+    try {
+      return { text: decodeURIComponent(part), length: part.length };
+    } catch {
+      // A multi-byte character needs more escapes; try the next length.
+    }
+  }
+  return undefined;
+};
+
 const skeleton = (text: string, decode: boolean) => {
   let kept = "";
   const from: Array<number> = [];
@@ -124,20 +141,19 @@ const skeleton = (text: string, decode: boolean) => {
   for (const { 0: token, index } of text.matchAll(
     decode ? /(?:%[0-9a-f]{2})+|[\s\S]/giu : /[\s\S]/gu,
   )) {
-    let decoded: string | undefined;
-    if (decode && token.length > 1 && token.startsWith("%")) {
-      try {
-        decoded = decodeURIComponent(token);
-      } catch {
-        decoded = undefined;
+    const escapes = decode && token.length > 1 && token.startsWith("%");
+    for (let at = 0; at < token.length;) {
+      const decoded = escapes && token[at] === "%" ? decodedAt(token, at) : undefined;
+      if (decoded === undefined) {
+        keep(token[at] ?? "", index + at, index + at + 1);
+        at += 1;
+        continue;
       }
+      for (const char of decoded.text) keep(char, index + at, index + at + decoded.length);
+      at += decoded.length;
     }
-    // A decoded run maps as a whole; anything else character by character, as written.
-    if (decoded !== undefined) for (const char of decoded) keep(char, index, index + token.length);
-    else
-      for (let at = 0; at < token.length; at++) keep(token[at] ?? "", index + at, index + at + 1);
   }
-  return { kept: decode ? kept : foldHex(kept), from, to };
+  return { kept: foldHex(kept), from, to };
 };
 
 export interface SkeletonForms {
