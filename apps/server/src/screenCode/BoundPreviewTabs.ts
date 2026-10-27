@@ -51,7 +51,7 @@ type Supports<Host> = (host: Host, operation: PreviewAutomationOperation) => boo
 export const screenConnection = <Host extends ScreenHost>(
   clients: ReadonlyMap<string, Host>,
   input: Pick<PreviewAutomationInvokeInput, "scope" | "operation" | "exact" | "serverHostOnly">,
-  supports: Supports<Host>,
+  supports: (host: Host) => boolean,
 ): { readonly connection: Host | undefined } | undefined => {
   const exact = input.exact;
   if (exact) {
@@ -61,7 +61,7 @@ export const screenConnection = <Host extends ScreenHost>(
         host?.connectionId === exact.connectionId &&
         host.environmentId === input.scope.environmentId &&
         host.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID &&
-        supports(host, input.operation) &&
+        supports(host) &&
         host.liveTabs.some(
           (tab) => tab.threadId === input.scope.thread.threadId && tab.tabId === exact.tabId,
         )
@@ -73,9 +73,7 @@ export const screenConnection = <Host extends ScreenHost>(
   const host = clients.get(SERVER_BROWSER_AUTOMATION_CLIENT_ID);
   return {
     connection:
-      host?.environmentId === input.scope.environmentId && supports(host, input.operation)
-        ? host
-        : undefined,
+      host?.environmentId === input.scope.environmentId && supports(host) ? host : undefined,
   };
 };
 
