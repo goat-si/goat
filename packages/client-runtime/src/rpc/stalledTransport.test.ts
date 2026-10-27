@@ -150,6 +150,7 @@ it.effect.each([
               Effect.andThen(session.ready),
               Effect.as({ prepared, session }),
             ),
+          checkHost: () => Effect.succeed("unchecked"),
           checkRoute: () => Effect.succeed("unchecked"),
           preflight: () => Effect.succeed(false),
         }),

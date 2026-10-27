@@ -223,6 +223,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
             },
             ready: Effect.void,
             probe: Effect.void,
+            inboundFrames: Effect.succeed(0),
             closed: Effect.never,
           };
         }),

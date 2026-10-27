@@ -29,6 +29,7 @@ import {
 import type {
   ConnectionAttemptError,
   ConnectionCatalogEntry,
+  ConnectionDriver,
   EnvironmentConnectionLease,
   RouteCheck,
 } from "@goat/client-runtime/connection";
@@ -377,6 +378,7 @@ const session: EnvironmentConnectionLease["session"] = {
     subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig }]),
   ready: Effect.void,
   probe: Effect.void,
+  inboundFrames: Effect.succeed(0),
   closed: Effect.never,
 };
 
@@ -397,8 +399,9 @@ export const fakeDriver = {
       session,
     }),
   checkRoute: () => Effect.succeed<RouteCheck>("answered"),
+  checkHost: () => Effect.succeed<RouteCheck>("unchecked"),
   preflight: () => Effect.succeed(true),
-};
+} satisfies ConnectionDriver["Service"];
 export type FakeDriver = typeof fakeDriver;
 
 const realFetch = globalThis.fetch;

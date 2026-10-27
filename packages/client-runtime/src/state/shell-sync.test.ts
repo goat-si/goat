@@ -19,7 +19,6 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
-
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import {
@@ -65,6 +64,7 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
 }
