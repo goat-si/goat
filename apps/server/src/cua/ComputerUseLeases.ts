@@ -15,7 +15,6 @@
  * @module ComputerUseLeases
  */
 import {
-  COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
   type ComputerUseControlEnd,
@@ -37,7 +36,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -63,20 +61,13 @@ import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseF
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
 import { IMPLIED_RECHECK_MS, makeRunEnd } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
+import { ComputerUseLeaseError, makeLeaseQueries } from "./ComputerUseLeaseQueries.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import { makeLeaseSafety } from "./ComputerUseLeaseSafety.ts";
 
-export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
-  "ComputerUseLeaseError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not read computer use admissions.";
-  }
-}
+export { ComputerUseLeaseError } from "./ComputerUseLeaseQueries.ts";
 
 export interface ComputerUseLease {
   readonly threadId: ThreadId;
@@ -355,58 +346,7 @@ const make = Effect.gen(function* () {
     error: (cause) => new ComputerUseLeaseError({ cause }),
   });
 
-  const live = Effect.fn("ComputerUseLeases.live")(function* (
-    threadId?: ThreadId,
-    withReleased = false,
-  ) {
-    // SQLite uses a partial index only when the query repeats its predicate. Without the IN
-    // clause this read scans every turn item on the writer, and it runs on every lease check.
-    const rows = yield* sql<{ handoff_json: string | null }>`
-      SELECT json_extract(payload_json, '$.handoff') AS handoff_json
-      FROM orchestration_v2_projection_turn_items
-      WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff'
-        AND status = 'completed'
-        AND json_extract(payload_json, '$.handoff.target.path') = ${COMPUTER_USE_GRANT_HANDOFF_PATH}
-        ${threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`}
-    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    const now = yield* DateTime.now;
-    const leases: Array<ComputerUseLease> = [];
-    for (const row of rows) {
-      if (row.handoff_json === null) continue;
-      const handoff = yield* decodeHandoff(row.handoff_json).pipe(
-        Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
-      );
-      const lease = leaseOf(handoff, now);
-      if (Option.isSome(lease) && (withReleased || !stoppedCards.isReleased(lease.value.handoffId)))
-        leases.push(lease.value);
-    }
-    return [...leases].sort(
-      (a, b) => DateTime.toEpochMillis(b.expiresAt) - DateTime.toEpochMillis(a.expiresAt),
-    );
-  });
-
-  const state = Effect.fn("ComputerUseLeases.state")(function* (
-    threadId: ThreadId,
-    handoffId: string,
-  ) {
-    const rows = yield* sql<{ handoff_json: string | null }>`
-      SELECT json_extract(payload_json, '$.handoff') AS handoff_json
-      FROM orchestration_v2_projection_turn_items
-      WHERE thread_id = ${threadId} AND turn_item_id = ${handoffId} AND type = 'human_handoff'
-    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    const json = rows[0]?.handoff_json;
-    if (json == null || stoppedCards.isReleased(handoffId))
-      return { _tag: "ended", reason: "revoked" } as const;
-    const handoff = yield* decodeHandoff(json).pipe(
-      Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
-    );
-    const lease = leaseOf(handoff, yield* DateTime.now);
-    if (Option.isSome(lease)) return { _tag: "active", lease: lease.value } as const;
-    return {
-      _tag: "ended",
-      reason: handoff.state === "completed" || handoff.state === "expired" ? "expired" : "revoked",
-    } as const;
-  });
+  const { live, state } = makeLeaseQueries(sql, stoppedCards.isReleased);
 
   /** Another thread acting on the screen for unattended work admitted by full access. */
   const unattendedEveryApp = (except: ThreadId | undefined, now: DateTime.Utc) =>
