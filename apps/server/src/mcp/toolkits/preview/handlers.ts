@@ -1,3 +1,4 @@
+import { classifyBrowserActionOutcome } from "../../../preview/actionOutcomeSafety.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -7,6 +8,7 @@ import {
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingArtifact,
+  type ActionOutcomeSafety,
   type ToolActivityIcon,
   type ThreadId,
   type PreviewAutomationOperation,
@@ -57,23 +59,41 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   timeoutMs?: number,
   tabId?: PreviewTabId,
 ): Effect.fn.Return<
-  { result: A; toolIcon?: ToolActivityIcon },
+  { result: A; safety?: ActionOutcomeSafety; toolIcon?: ToolActivityIcon },
   import("@goat/contracts").PreviewAutomationError,
   McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
   const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   let targetTabId = tabId;
-  const result = yield* broker.invoke<A>({
-    onTargetTab: (resolvedTabId) => {
-      targetTabId = resolvedTabId;
-    },
-    scope,
-    operation,
-    input,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    ...(tabId === undefined ? {} : { tabId }),
-  });
+  const result = yield* broker
+    .invoke<A>({
+      onTargetTab: (resolvedTabId) => {
+        targetTabId = resolvedTabId;
+      },
+      scope,
+      operation,
+      input,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(tabId === undefined ? {} : { tabId }),
+    })
+    .pipe(
+      Effect.mapError((error) =>
+        Object.assign(error, {
+          safety: classifyBrowserActionOutcome({
+            operation,
+            status: "failed",
+            errorTag: error._tag,
+            ...(error._tag === "PreviewAutomationControlInterruptedError"
+              ? { controlReason: error.reason, dispatched: error.dispatched }
+              : {}),
+          }),
+        }),
+      ),
+    );
+  const completed = classifyBrowserActionOutcome({ operation, status: "completed" });
+  // A finished read says nothing an agent can act on, so only writes carry their safety.
+  const safety = completed.writeStatus === "not_applicable" ? {} : { safety: completed };
   if (
     [
       "status",
@@ -88,7 +108,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "fillSecret",
     ].includes(operation)
   )
-    return { result };
+    return { result, ...safety };
   const statusTabId =
     (operation !== "evaluate" && typeof result === "object" && result !== null
       ? (result as { tabId?: PreviewTabId }).tabId
@@ -105,6 +125,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     .pipe(Effect.orElseSucceed(() => null));
   return {
     result,
+    ...safety,
     ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096
       ? { toolIcon: { _tag: "website" as const, pageUrl: page.url } }
       : {}),
@@ -121,8 +142,9 @@ const invokeTargeted = <A extends object>(
 ) => {
   const { tabId, ...operationInput } = input;
   return invoke<A>(operation, operationInput, timeoutMs, tabId).pipe(
-    Effect.map(({ result, toolIcon }) => ({
+    Effect.map(({ result, toolIcon, safety }) => ({
       ...result,
+      ...(safety === undefined ? {} : { safety }),
       ...(toolIcon ? { toolIcon } : {}),
     })),
   );
@@ -289,8 +311,9 @@ const handlers = {
   preview_evaluate: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller(({ tabId, ...input }) =>
       invoke<unknown>("evaluate", input, undefined, tabId).pipe(
-        Effect.map(({ result, toolIcon }) => ({
+        Effect.map(({ result, toolIcon, safety }) => ({
           value: result ?? null,
+          ...(safety === undefined ? {} : { safety }),
           ...(toolIcon ? { toolIcon } : {}),
         })),
       ),
@@ -313,7 +336,11 @@ const handlers = {
         tabId,
       );
       const artifact = yield* claimPreviewRecording(scope.thread.threadId, response.result);
-      return { ...artifact, ...(response.toolIcon ? { toolIcon: response.toolIcon } : {}) };
+      return {
+        ...artifact,
+        ...(response.safety === undefined ? {} : { safety: response.safety }),
+        ...(response.toolIcon ? { toolIcon: response.toolIcon } : {}),
+      };
     }),
   ),
 } satisfies McpToolAccess.Handlers<typeof PreviewToolkit.tools>;

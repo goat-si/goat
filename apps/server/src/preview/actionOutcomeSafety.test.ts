@@ -1,11 +1,13 @@
+import { markUnverified } from "../cua/ComputerUseDriverOutcome.ts";
 import { describe, expect, it } from "@effect/vitest";
+import type { PreviewAutomationControlReason } from "@goat/contracts";
 
 import {
   classifyActionOutcome,
-  classifyBrowserActionOutcome,
   classifyComputerUseActionOutcome,
   isSafeToAutoRetry,
-} from "./actionOutcomeSafety.ts";
+} from "@goat/shared/actionOutcomeSafety";
+import { classifyBrowserActionOutcome } from "./actionOutcomeSafety.ts";
 
 describe("actionOutcomeSafety", () => {
   it("keeps possibleCommit false across all read outcomes and allows auto-retry only on transient read failures", () => {
@@ -224,4 +226,43 @@ describe("actionOutcomeSafety", () => {
       code: "write_refused_fix_input",
     });
   });
+
+  it("an admission refusal sent nothing even without gate evidence; another interruption may have", () => {
+    const interrupted = (controlReason: PreviewAutomationControlReason) =>
+      classifyBrowserActionOutcome({
+        operation: "click",
+        status: "failed",
+        errorTag: "PreviewAutomationControlInterruptedError",
+        controlReason,
+      }).possibleCommit;
+    for (const reason of ["agentMismatch", "dialogPending", "tabRequired", "tabLimit"] as const)
+      expect(interrupted(reason)).toBe(false);
+    for (const reason of ["stopped", "humanControl", "privateMode", "interrupted"] as const)
+      expect(interrupted(reason)).toBe(true);
+  });
+});
+
+it("preview and native emitted outcomes use the same safety contract", () => {
+  const native = JSON.parse(
+    markUnverified(
+      "click",
+      JSON.stringify({ result: { structuredContent: { effect: "confirmed" } } }),
+    ),
+  );
+  expect(native.result.structuredContent.safety).toEqual(
+    classifyBrowserActionOutcome({ operation: "click", status: "completed" }),
+  );
+  const unknown = JSON.parse(
+    markUnverified(
+      "click",
+      JSON.stringify({ error: { code: -32000, data: { code: "tool_call_cancelled" } } }),
+    ),
+  );
+  expect(unknown.error.data.safety).toEqual(
+    classifyBrowserActionOutcome({
+      operation: "click",
+      status: "failed",
+      errorTag: "PreviewAutomationExecutionError",
+    }),
+  );
 });

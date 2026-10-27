@@ -157,6 +157,8 @@ class DriverError {
     this.structuredContent = structuredContent;
   }
 }
+/** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
+class NotStarted extends DriverError {}
 // The typed refusal fields the lease proxy adds to a driver reply it refused.
 const typedRefusal = {
   effect: "refused",
@@ -202,7 +204,7 @@ const fixture = (
                 ? (answer as (args: unknown) => unknown)(request.args)
                 : answer;
             return {
-              status: "settled",
+              status: value instanceof NotStarted ? "not_started" : "settled",
               connectionGeneration: connection.id,
               result:
                 value instanceof DriverError
@@ -824,6 +826,59 @@ it.live(
   },
 );
 
+const cellService = (host: ReturnType<typeof fixture>["host"]) =>
+  ScreenRunService.layerWithRuntime({
+    dispatcher: createScreenDispatchRouter({ app: host }),
+    invocation: {
+      command: process.execPath,
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+    },
+    assetResolver: () => resolveScreenRuntimeAsset("dev"),
+  }).pipe(Layer.provide(NodeServices.layer));
+
+it.live(
+  "a cell whose click committed reports possibleCommit after its receipts are cut or a script throws",
+  () => {
+    const { host } = fixture({
+      type_text: new NotStarted({ refused: "targetRefused", detail: "target_busy" }),
+    });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const run = (cellSource: string) =>
+        service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source:
+            "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.click({x: 1, y: 2}); for (let i = 0; i < 16; i++) await screen.list_apps(); " +
+            cellSource,
+        });
+      // Sixteen reads push the committed click out of the error's receipts.
+      const refused = yield* run("await app.typeText({text: 'x'});").pipe(Effect.flip);
+      expect(refused.receipts?.some((receipt) => receipt.method === "click")).toBe(false);
+      expect(refused.receipts?.at(-1)).toMatchObject({
+        method: "type_text",
+        detail: "target_busy",
+      });
+      expect(refused.safety).toMatchObject({ possibleCommit: true, retryClass: "never" });
+      const thrown = yield* run("throw new Error('boom');");
+      expect(thrown.error).toMatchObject({
+        message: expect.stringContaining("boom"),
+        safety: { possibleCommit: true, retryClass: "never" },
+      });
+      yield* service.finishTurn({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "test",
+      });
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
 it.effect("a refused status without an effect is a refusal with nothing started", () =>
   Effect.gen(function* () {
     const { effect: _effect, ...fields } = typedRefusal;
@@ -890,5 +945,25 @@ it.effect(
       // An explicit effect outranks a refused status: the input may have landed.
       const landed = yield* refuse({ ...typedRefusal, effect: "unverifiable", status: "refused" });
       expect(landed).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+    }),
+);
+
+it.effect.each(["unknown", "partial", "suspected_noop", "refused", "confirmed"])(
+  "desktop action safety preserves the driver's %s outcome",
+  (effect) =>
+    Effect.gen(function* () {
+      const { host } = fixture({ click: { effect } });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const result = yield* host
+        .invoke(call("click", { x: 10, y: 20 }, bound.value as ScreenTargetRef), context)
+        .pipe(Effect.result);
+      const safety = result._tag === "Success" ? result.success.safety : result.failure.safety;
+      expect(safety?.possibleCommit).toBe(effect !== "suspected_noop" && effect !== "refused");
+      expect(safety?.retryClass).toBe(
+        effect === "suspected_noop" || effect === "refused" ? "fix_input" : "never",
+      );
     }),
 );

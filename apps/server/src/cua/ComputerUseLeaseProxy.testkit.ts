@@ -440,12 +440,42 @@ export const harness = Effect.fn(function* (
   };
 });
 
+export const unknownWriteSafety = {
+  possibleCommit: true,
+  retryClass: "never",
+  writeStatus: "may_have_applied",
+  code: "write_indeterminate",
+} as const;
+export const terminalRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "never",
+  writeStatus: "not_started",
+  code: "write_refused_terminal",
+} as const;
+export const reobserveRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "new_key",
+  writeStatus: "not_started",
+  code: "write_refused_reobserve",
+} as const;
+export const fixInputRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "fix_input",
+  writeStatus: "rejected_before_commit",
+  code: "write_refused_fix_input",
+} as const;
+
 export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
   jsonrpc: "2.0",
   id,
   result: {
     content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
-    structuredContent: { refused: computerUseRefusalReason(reason), detail: reason },
+    structuredContent: {
+      refused: computerUseRefusalReason(reason),
+      detail: reason,
+      // Only a call on another display may be sent again, after a fresh look.
+      safety: reason === "wrong_display" ? reobserveRefusalSafety : terminalRefusalSafety,
+    },
     isError: true,
   },
 });
@@ -462,8 +492,17 @@ export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, 
       },
     ],
     structuredContent: read
-      ? { code: "interrupted", detail: reason }
-      : { effect: "unverifiable", code: "interrupted", detail: reason },
+      ? {
+          code: "interrupted",
+          detail: reason,
+          safety: {
+            possibleCommit: false,
+            retryClass: "same_key",
+            writeStatus: "not_applicable",
+            code: "read_indeterminate",
+          },
+        }
+      : { effect: "unverifiable", code: "interrupted", detail: reason, safety: unknownWriteSafety },
     isError: true,
   },
 });

@@ -1,3 +1,4 @@
+import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 import { Schema } from "effect";
 import {
   PreviewAutomationControlReason,
@@ -783,8 +784,8 @@ export class McpCapabilityUnavailableError extends Schema.TaggedError<McpCapabil
     return `MCP credential does not grant the ${this.capability} capability.`;
   }
 }
-
 const PreviewAutomationScopeErrorFields = {
+  safety: Schema.optionalKey(ActionOutcomeSafety),
   operation: PreviewAutomationOperation,
   environmentId: EnvironmentId,
   threadId: ThreadId,
@@ -793,7 +794,6 @@ const PreviewAutomationScopeErrorFields = {
 };
 
 export const SERVER_BROWSER_AUTOMATION_CLIENT_ID = "server-browser";
-
 const PreviewAutomationRequestErrorFields = {
   ...PreviewAutomationScopeErrorFields,
   clientId: TrimmedNonEmptyString,
@@ -883,6 +883,8 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
     reason: Schema.optional(PreviewAutomationControlReason),
+    // false when GOAT refused the request before any input left for the page.
+    dispatched: Schema.optional(Schema.Boolean),
   },
 ) {
   override get message(): string {

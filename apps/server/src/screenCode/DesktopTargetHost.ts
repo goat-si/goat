@@ -12,6 +12,7 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
+import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import type {
@@ -49,12 +50,21 @@ const driverValue = (reply: ComputerUsePrimitiveReply): unknown => {
   const result = object(reply.result);
   return result?.structuredContent ?? result;
 };
+const refusalOf = (structured: Record<string, unknown> | undefined) => {
+  const app = string(structured?.app);
+  return {
+    ...(isRefusalReason(structured?.refused) ? { refused: structured.refused } : {}),
+    ...(isRefusalDetail(structured?.detail) ? { detail: structured.detail } : {}),
+    ...(app !== undefined && app.length <= 200 ? { app } : {}),
+  };
+};
 const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
-  if (reply.status === "not_started") return fail("unavailable");
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
+  // GOAT refused before the driver: keep its reason so the receipt says why.
+  if (reply.status === "not_started") return { ...fail("unavailable"), ...refusalOf(structured) };
   // The lease proxy's rule: the driver's own refusal; an explicit other effect wins over a status.
   if (
     structured !== undefined &&
@@ -62,19 +72,31 @@ const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefin
       ? structured.status === "refused"
       : structured.effect === "refused")
   ) {
-    const app = string(structured.app);
-    return {
-      ...fail("permission_denied"),
-      ...(isRefusalReason(structured.refused) ? { refused: structured.refused } : {}),
-      ...(isRefusalDetail(structured.detail) ? { detail: structured.detail } : {}),
-      ...(app !== undefined && app.length <= 200 ? { app } : {}),
-    };
+    return { ...fail("permission_denied"), ...refusalOf(structured) };
   }
   if (result?.isError === true || reply.error !== undefined)
     return structured?.effect === "unverifiable"
       ? { ...fail("unknown_outcome"), effectStarted: true }
       : fail("downstream_failure");
   return undefined;
+};
+
+/** An input tool's answer as a receipt category, read the way computer use reads it. */
+const driverResult = (tool: string, reply: ComputerUsePrimitiveReply): ScreenHostDispatchResult => {
+  const value = driverValue(reply);
+  const effect = object(value)?.effect;
+  const category =
+    effect === "confirmed" || effect === "partial" || effect === "refused"
+      ? effect
+      : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
+        ? "suspected_noop"
+        : "unverifiable";
+  return {
+    value,
+    category,
+    evidence: effect === "confirmed" ? ["driver:effect=confirmed"] : [],
+    safety: driverOutcomeSafety(tool, reply),
+  };
 };
 
 interface BoundWindow {
@@ -139,15 +161,10 @@ export const createDesktopTargetHost = (deps: {
       args,
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
     });
+    const safety = driverOutcomeSafety(tool, reply);
     const error = driverError(reply);
     if (error) {
-      const readOnly =
-        tool === "list_apps" || tool === "list_windows" || tool === "get_window_state";
-      return yield* Effect.fail(
-        error.code === "downstream_failure" && !readOnly
-          ? { ...fail("unknown_outcome"), effectStarted: true }
-          : error,
-      );
+      return yield* Effect.fail({ ...error, safety, effectStarted: safety.possibleCommit });
     }
     return reply;
   });
@@ -442,21 +459,7 @@ export const createDesktopTargetHost = (deps: {
         );
         if (!current) return yield* Effect.fail(fail("unavailable"));
         const reply = yield* request("launch_app", { bundle_id: bundleId }, call, context);
-        const value = driverValue(reply);
-        const effect = object(value)?.effect;
-        const category =
-          effect === "confirmed" ||
-          effect === "partial" ||
-          effect === "unverifiable" ||
-          effect === "suspected_noop" ||
-          effect === "refused"
-            ? effect
-            : "unverifiable";
-        return {
-          value,
-          category,
-          evidence: effect === "confirmed" ? ["driver:effect=confirmed"] : [],
-        };
+        return driverResult("launch_app", reply);
       }
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
@@ -530,18 +533,7 @@ export const createDesktopTargetHost = (deps: {
       }
       const tool = call.method === "right_click" ? "right_click" : call.method;
       const reply = yield* request(tool, forwarded, call, context, bound.connectionGeneration);
-      const value = driverValue(reply);
-      const effect = object(value)?.effect;
-      const category =
-        effect === "confirmed" ||
-        effect === "partial" ||
-        effect === "unverifiable" ||
-        effect === "suspected_noop" ||
-        effect === "refused"
-          ? effect
-          : "unverifiable";
-      const evidence = effect === "confirmed" ? ["driver:effect=confirmed"] : [];
-      return { value, category, evidence };
+      return driverResult(tool, reply);
     },
   );
   return {

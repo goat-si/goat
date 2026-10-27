@@ -1,16 +1,17 @@
-/**
- * What an input tool's error from the macOS driver means to the agent. The driver forwards
- * AXUIElementPerformAction errors as plain tool failures, yet kAXErrorCannotComplete "does not
- * necessarily mean that the function has failed" (Apple, AXUIElementPerformAction): a Finder
- * AXOpen landed and still answered -25205. An agent that reads a plain failure retries and acts
- * twice, so an input error the driver raised after input may have left is marked unverifiable,
- * as Linux's action results already are (packages/shared/src/computerUseActions.ts).
- *
- * @module ComputerUseDriverOutcome
- */
-// Driver lines are forwarded as written; only an input error's result fields are read.
+// A native input error can follow an applied action (for example AX cannot-complete), so
+// transport failure never proves that input was not sent.
 // @effect-diagnostics preferSchemaOverJson:off
-import { PRE_DISPATCH_CODES } from "@goat/shared/computerUseActions";
+import {
+  type ActionOutcomeSafety,
+  ComputerUseRefusalDetail,
+  UnappliedInputDiagnostic,
+} from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import {
+  classifyActionOutcome,
+  classifyComputerUseActionOutcome,
+} from "@goat/shared/actionOutcomeSafety";
+import { actionResultFromDriver, PRE_DISPATCH_CODES } from "@goat/shared/computerUseActions";
 
 import { READ_ONLY_TOOLS } from "./ComputerUseLeaseMessages.ts";
 
@@ -34,30 +35,178 @@ const saysNotSent = (structured: Record<string, unknown>) =>
   structured.delivered === false ||
   (structured.activated === false && structured.request_accepted === false);
 
-/** The driver's reply to an input tool, with effect "unverifiable" added when it may have acted. */
+const diagnostic = Schema.decodeUnknownOption(UnappliedInputDiagnostic);
+const isRefusalDetail = Schema.is(ComputerUseRefusalDetail);
+
+/** JSON-RPC errors a server raises before it runs anything: parse, request, method, params. */
+const PRE_DISPATCH_RPC_ERRORS: ReadonlySet<unknown> = new Set([-32700, -32600, -32601, -32602]);
+const POSSIBLE_COMMIT_DRIVER_CODES: ReadonlySet<unknown> = new Set([
+  "tool_call_cancelled",
+  "tool_call_abandoned",
+  "tool_call_timeout",
+]);
+
+export function driverOutcomeSafety(
+  tool: string | undefined,
+  message: unknown,
+): ActionOutcomeSafety {
+  const envelope = isRecord(message) ? message : {};
+  const result = isRecord(envelope.result) ? envelope.result : {};
+  const error = isRecord(envelope.error) ? envelope.error : undefined;
+  const raw = error
+    ? isRecord(error.data)
+      ? error.data
+      : {}
+    : isRecord(result.structuredContent)
+      ? result.structuredContent
+      : {};
+  // The lease proxy's rule: an explicit effect outranks a refused status.
+  const { status: _status, ...withoutStatus } = raw;
+  const structured = raw.effect !== undefined && raw.status === "refused" ? withoutStatus : raw;
+  const effect = tool !== undefined && READ_ONLY_TOOLS.has(tool) ? "read" : "write";
+  // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
+  if (
+    isRefusalDetail(structured.detail) &&
+    structured.refused !== undefined &&
+    (structured.effect === undefined || structured.effect === "refused") &&
+    (envelope.status === "not_started" || error !== undefined || result.isError === true)
+  )
+    return refusalSafety(structured.detail, tool);
+  if (envelope.status === "not_started")
+    return classifyActionOutcome({ effect, status: "refused", dispatched: false });
+  const failed =
+    error !== undefined || result.isError === true || envelope.status === "unknown_outcome";
+  if (effect === "read" && !failed) return classifyActionOutcome({ effect, status: "completed" });
+  const code = structured.code;
+  if (structured.effect === "unknown" || POSSIBLE_COMMIT_DRIVER_CODES.has(code))
+    return classifyActionOutcome({
+      effect,
+      status: code === "tool_call_timeout" ? "timed_out" : "indeterminate",
+      dispatched: true,
+    });
+  // The driver's own word that nothing went out, without an effect to outrank it.
+  if (structured.effect === undefined && saysNotSent(structured))
+    return classifyActionOutcome({
+      effect,
+      status: "refused",
+      dispatched: false,
+      refusalCategory: "reobserve",
+    });
+  if (
+    error !== undefined &&
+    structured.effect === undefined &&
+    PRE_DISPATCH_RPC_ERRORS.has(error.code)
+  )
+    return classifyActionOutcome({
+      effect,
+      status: "refused",
+      dispatched: false,
+      refusalCategory: "fix_input",
+    });
+  const unapplied = diagnostic(structured.unappliedInput);
+  return classifyComputerUseActionOutcome(
+    actionResultFromDriver(
+      { delivery: "background" },
+      {
+        isError: failed,
+        text: "",
+        structured,
+      },
+    ),
+    { effect, ...(unapplied._tag === "Some" ? { unappliedInput: unapplied.value } : {}) },
+  );
+}
+
+/**
+ * The driver's reply with GOAT's outcome safety, and with effect "unverifiable" added when an
+ * input error may have acted. A success without structuredContent gets the safety as a text block:
+ * Codex shows the model a non-null structuredContent in place of every content block
+ * (ComputerUseDriverReply.ts), so adding one would hide the driver's text.
+ */
 export function markUnverified(tool: string | undefined, line: string): string {
-  if (tool === undefined || READ_ONLY_TOOLS.has(tool)) return line;
+  if (tool === undefined) return line;
   let message: unknown;
   try {
     message = JSON.parse(line);
   } catch {
     return line;
   }
-  if (!isRecord(message) || !isRecord(message.result) || message.result.isError !== true)
-    return line;
+  if (!isRecord(message)) return line;
+  const safety = driverOutcomeSafety(tool, message);
+  const read = READ_ONLY_TOOLS.has(tool);
+  if (isRecord(message.error)) {
+    const raw = message.error.data;
+    const data = raw === undefined ? {} : isRecord(raw) ? raw : { driverData: raw };
+    const note = !read && safety.possibleCommit && typeof message.error.message === "string";
+    return JSON.stringify({
+      ...message,
+      error: {
+        ...message.error,
+        ...(note ? { message: message.error.message + " " + UNVERIFIED_INPUT_NOTE } : {}),
+        data: { ...data, safety },
+      },
+    });
+  }
+  if (!isRecord(message.result)) return line;
   const result = message.result;
+  const content = Array.isArray(result.content) ? result.content : [];
+  const isError = result.isError === true;
+  if (!isRecord(result.structuredContent) && (read || !isError)) {
+    if (read) return line;
+    return JSON.stringify({
+      ...message,
+      result: {
+        ...result,
+        content: [
+          ...content,
+          { type: "text", text: "GOAT outcome: " + JSON.stringify({ safety }) },
+        ],
+      },
+    });
+  }
   const structured = isRecord(result.structuredContent) ? result.structuredContent : {};
   const code = structured.code;
-  if (structured.effect !== undefined || structured.status === "refused") return line;
-  if ((typeof code === "string" && PRE_DISPATCH_CODES.has(code)) || saysNotSent(structured))
-    return line;
-  const content = Array.isArray(result.content) ? result.content : [];
+  const warn = !read && isError && safety.possibleCommit;
+  const mark =
+    warn &&
+    structured.effect === undefined &&
+    structured.status !== "refused" &&
+    !(typeof code === "string" && PRE_DISPATCH_CODES.has(code));
   return JSON.stringify({
     ...message,
     result: {
       ...result,
-      content: [...content, { type: "text", text: UNVERIFIED_INPUT_NOTE }],
-      structuredContent: { ...structured, effect: "unverifiable" },
+      ...(warn ? { content: [...content, { type: "text", text: UNVERIFIED_INPUT_NOTE }] } : {}),
+      structuredContent: { ...structured, ...(mark ? { effect: "unverifiable" } : {}), safety },
     },
   });
 }
+
+type RefusalCategory = "transient" | "reobserve" | "fix_input" | "terminal";
+
+/** What a GOAT refusal asks the agent to do next; unlisted details wait for a person or GOAT. */
+const REFUSAL_CATEGORY: Partial<Record<ComputerUseRefusalDetail, RefusalCategory>> = {
+  target_busy: "reobserve",
+  app_busy: "reobserve",
+  invalid_target: "reobserve",
+  wrong_display: "reobserve",
+  app_not_approved: "reobserve",
+  capture_hide_unconfirmed: "transient",
+  foreground_not_approved: "fix_input",
+  desktop_capture_off: "fix_input",
+  screen_shared: "fix_input",
+  token_first: "fix_input",
+  pointer_locked: "fix_input",
+};
+
+/** A call GOAT refused before it reached the driver: nothing was sent. */
+export const refusalSafety = (
+  detail: ComputerUseRefusalDetail,
+  tool?: string,
+): ActionOutcomeSafety =>
+  classifyActionOutcome({
+    effect: tool !== undefined && READ_ONLY_TOOLS.has(tool) ? "read" : "write",
+    status: "refused",
+    dispatched: false,
+    refusalCategory: REFUSAL_CATEGORY[detail] ?? "terminal",
+  });
