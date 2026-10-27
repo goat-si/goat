@@ -31,7 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
-import { maskSecrets, tabCookies } from "./pageSecrets.ts";
+import { maskRecords, maskSecrets, tabCookies } from "./pageSecrets.ts";
 import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
@@ -290,33 +290,11 @@ export class ServerBrowserDiagnostics {
    */
   async readMasked(input: PreviewAutomationLogsInput): Promise<PreviewAutomationLogs> {
     const { console, errors, network } = this.read(input);
-    const mask = maskSecrets(undefined, await tabCookies(this.page));
-    const optional = (text: string | undefined) => (text === undefined ? text : mask(text));
+    const records = maskRecords(maskSecrets(undefined, await tabCookies(this.page)));
     return {
-      console: {
-        ...console,
-        entries: console.entries.map((entry) => ({
-          ...entry,
-          text: mask(entry.text),
-          source: optional(entry.source),
-        })),
-      },
-      errors: {
-        ...errors,
-        entries: errors.entries.map((entry) => ({
-          ...entry,
-          message: mask(entry.message),
-          stack: optional(entry.stack),
-        })),
-      },
-      network: {
-        ...network,
-        entries: network.entries.map((entry) => ({
-          ...entry,
-          url: mask(entry.url),
-          errorText: optional(entry.errorText),
-        })),
-      },
+      console: { ...console, entries: console.entries.map(records.console) },
+      errors: { ...errors, entries: errors.entries.map(records.error) },
+      network: { ...network, entries: network.entries.map(records.network) },
     };
   }
 

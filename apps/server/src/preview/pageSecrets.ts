@@ -4,6 +4,12 @@
  *
  * @module pageSecrets
  */
+import type {
+  PreviewAutomationActionEvent,
+  PreviewAutomationConsoleEntry,
+  PreviewAutomationNetworkEntry,
+  PreviewAutomationPageError,
+} from "@goat/contracts";
 import type { Page } from "playwright-core";
 
 import { MIN_SECRET_LENGTH, redactCookieValues } from "./cookieValues.ts";
@@ -42,24 +48,43 @@ export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(dotted ? text.replace(dotted, MASKED_VALUE) : text, cookies);
 
-/**
- * Masks every string in a value. An evaluation result's keys are the page's own text and are
- * masked too; GOAT's own records keep their field names.
- */
-export const redactValue = (
-  value: unknown,
-  mask: (text: string) => string,
-  options: { readonly keys: boolean } = { keys: true },
-): unknown => {
+/** Masks every string in an evaluation result, object keys included: all of it is the page's. */
+export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
   if (typeof value === "string") return mask(value);
-  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, options));
+  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [
-      options.keys ? mask(key) : key,
-      redactValue(each, mask, options),
-    ]),
+    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask)]),
   );
+};
+
+/**
+ * Maskers for GOAT's own records of a tab: only the text the page wrote into them is masked, so
+ * field names, levels, phases and statuses keep the values their contracts allow.
+ */
+export const maskRecords = (mask: (text: string) => string) => {
+  const optional = (text: string | undefined) => (text === undefined ? text : mask(text));
+  return {
+    console: (entry: PreviewAutomationConsoleEntry): PreviewAutomationConsoleEntry => ({
+      ...entry,
+      text: mask(entry.text),
+      source: optional(entry.source),
+    }),
+    error: (entry: PreviewAutomationPageError): PreviewAutomationPageError => ({
+      ...entry,
+      message: mask(entry.message),
+      stack: optional(entry.stack),
+    }),
+    network: (entry: PreviewAutomationNetworkEntry): PreviewAutomationNetworkEntry => ({
+      ...entry,
+      url: mask(entry.url),
+      errorText: optional(entry.errorText),
+    }),
+    action: (entry: PreviewAutomationActionEvent): PreviewAutomationActionEvent => ({
+      ...entry,
+      error: optional(entry.error),
+    }),
+  };
 };
 
 // Playwright single-quotes keys containing ': ' and leaves /.../ names unquoted. Recognize only its attributes so name text cannot spoof them.
