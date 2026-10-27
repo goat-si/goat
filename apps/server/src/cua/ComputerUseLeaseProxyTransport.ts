@@ -1,5 +1,7 @@
 /** How a lease proxy holds calls while its lease stream reconnects (ComputerUseLeaseStreamFollower). */
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import {
   type Interruption,
   RECONNECT_CUT_OFF,
@@ -35,3 +37,20 @@ export const dropTransport = Effect.fn("ComputerUseLeaseProxy.dropTransport")(fu
   });
   yield* input.start(token);
 });
+
+/**
+ * The drop hook: ends the waits of the proxy's own window, app and read-back probes as
+ * unanswered, then runs `dropped`. A call waiting on a probe reaches the transport hold at once,
+ * which also answers it before any probe result can shape a refusal; probes themselves go out
+ * only through the same hold. A late driver answer then finds no waiter.
+ */
+export const settlingProbes =
+  <A>(answers: Map<string, Deferred.Deferred<A | undefined>>, ownId: string, dropped: () => void) =>
+  () => {
+    for (const [id, answered] of answers)
+      if (["apps:", "windows:", "verify:"].some((kind) => id.startsWith(ownId + kind))) {
+        answers.delete(id);
+        Deferred.doneUnsafe(answered, Exit.succeed(undefined));
+      }
+    dropped();
+  };
