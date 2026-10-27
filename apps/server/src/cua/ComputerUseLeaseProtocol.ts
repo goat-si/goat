@@ -20,10 +20,10 @@ const windowPid = (name: unknown, args: unknown) => {
   return typeof resource === "object" ? resource.pid : undefined;
 };
 
-/** The app a window call acts on, by the id its scope check uses, for its app lease (D17). */
+/** The app a window call acts on, as its scope check knows it, for its app lease (D17). */
 export const callApp = (name: unknown, args: unknown, listed: ReadonlyMap<number, ListedApp>) => {
   const pid = windowPid(name, args);
-  return pid === undefined ? undefined : listed.get(pid)?.id;
+  return pid === undefined ? undefined : listed.get(pid);
 };
 
 /** Ids of the lease proxy's own requests to the driver; their answers never reach the provider. */

@@ -10,6 +10,8 @@ import * as NodeChildProcess from "node:child_process";
 
 import {
   CUA_DRIVER_PROBED_SESSION_NAMES,
+  DESKTOP_CHANNEL_APP_IDS,
+  computerUseHelperBundleId,
   cuaDriverListingEnvironment,
 } from "./cuaDriverRelease.ts";
 
@@ -92,11 +94,14 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
 
 /**
  * Apps the driver never touches whatever the request: GOAT itself, where a person approves
- * computer use, the driver's own app, and credential stores. Matched against the bundle id
+ * computer use, in every released channel (a dev checkout's own app id stays controllable for
+ * testing it), the driver's own app, and credential stores. Matched against the bundle id
  * (case-insensitive) and the app name.
  */
 const EXCLUDED_BUNDLE_IDS = new Set([
   "com.trycua.driver",
+  // Every released GOAT channel and its helper: any of them can show this host's approval cards.
+  ...Object.values(DESKTOP_CHANNEL_APP_IDS).flatMap((id) => [id, computerUseHelperBundleId(id)]),
   "com.apple.keychainaccess",
   "com.apple.passwords",
   "com.1password.1password",

@@ -195,12 +195,25 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         wanted.every((app) => granted.some((name) => name.toLowerCase() === app.toLowerCase()))));
   const foregroundCovered =
     foreground && (yield* leases.foregroundAvailable(input.threadId, input.request.purpose));
+  // A whole-screen approval covers an app opened after the driver started, once the manifest
+  // names it too.
+  const named =
+    !foreground &&
+    covered &&
+    granted === undefined &&
+    wanted !== undefined &&
+    Option.isSome(current);
+  if (named) yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
   if (Option.isSome(own) && (foreground ? foregroundCovered : covered))
     return {
       kind: "available",
       message: foreground
         ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop, control replacement or turn end requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
-        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
+        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. ${
+            named
+              ? "An app opened after computer use started is added in a moment; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again."
+              : "The cua-driver tools are attached from your next turn if they are not already."
+          }`,
     } satisfies ComputerUseRequestResult;
 
   if (!run || run.rootNodeId === null)

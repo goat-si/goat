@@ -43,6 +43,11 @@ export interface ListedApp {
   readonly name: string | undefined;
   /** The bundle id list_apps reported, apart from an id that is only the app's name. */
   readonly bundleId?: string;
+  /**
+   * The executable an app without a bundle id runs, which a request may name it by instead: the
+   * Windows helper's listing gives it, a Linux proxy reads it from /proc.
+   */
+  readonly executable?: string;
 }
 
 export type ScopeVerdict =
@@ -126,12 +131,18 @@ export function scopeVerdict(input: {
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
-  // Only the id list_apps reports counts: a display name would let two grants that name the
-  // same app differently both reach it, and grants are told apart by these strings alone.
-  return approves(input.apps, app.id)
+  // Only the id list_apps reports counts, or the exact executable it runs: a display name would
+  // let two grants that name the same app differently both reach it.
+  return approves(input.apps, app.id, app.executable)
     ? { _tag: "allow" }
     : { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
+
+/** The spelling of an app a control's grant names it by, for the app lease its calls hold. */
+export const grantedAppId = (app: ListedApp, apps: ReadonlySet<string> | undefined) =>
+  apps !== undefined && !approves(apps, app.id) && approves(apps, app.executable)
+    ? (app.executable ?? app.id)
+    : app.id;
 
 /**
  * Keeps the pid-to-app map in step with a driver answer. Only a list_apps answer (`listing`)
@@ -143,15 +154,23 @@ export function scopeVerdict(input: {
  * id, so outside a listing an answer can only drop a pid whose app it names differently, which
  * also catches a pid reused by another app; the pid is listed again before it is judged.
  */
-export function learnApps(value: unknown, into: Map<number, ListedApp>, listing: boolean): void {
+export function learnApps(
+  value: unknown,
+  into: Map<number, ListedApp>,
+  listing: boolean,
+  executableOf?: (pid: number) => string | undefined,
+): void {
   for (const entry of listing ? listedApps(value) : namedApps(value)) {
-    if (listing)
+    if (listing) {
+      const executable =
+        entry.executable ?? (entry.bundleId === undefined ? executableOf?.(entry.pid) : undefined);
       into.set(entry.pid, {
         id: entry.id,
         name: entry.name,
         ...(entry.bundleId === undefined ? {} : { bundleId: entry.bundleId }),
+        ...(executable === undefined ? {} : { executable }),
       });
-    else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
+    } else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
   }
 }
 
@@ -164,9 +183,16 @@ const namedApp = (value: unknown): NamedApp | undefined => {
   const pid = object?.pid;
   const name = text(object?.app_name) ?? text(object?.name);
   const bundleId = text(object?.bundle_id);
+  const executable = text(object?.executable);
   const id = bundleId ?? name;
   return typeof pid === "number" && Number.isInteger(pid) && id !== undefined
-    ? { pid, id, name, ...(bundleId === undefined ? {} : { bundleId }) }
+    ? {
+        pid,
+        id,
+        name,
+        ...(bundleId === undefined ? {} : { bundleId }),
+        ...(executable === undefined ? {} : { executable }),
+      }
     : undefined;
 };
 
