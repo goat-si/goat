@@ -11,7 +11,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const NOTE =
-  "GOAT: this is outside what GOAT lets agents do with computer use on this host, not a missing macOS permission. Do not ask the person to change Privacy & Security for it, and do not retry it; use another route or tell the person.";
+  "GOAT: this is outside what GOAT lets agents do with computer use on this host, not a missing macOS permission. Do not ask the person to change Privacy & Security for it. If the app opened after computer use started, ask for it with goat_computer_use_request; once it is available, observe it again before acting on it. Otherwise use another route or tell the person.";
 
 const texts = (value: unknown): ReadonlyArray<string> =>
   Array.isArray(value)

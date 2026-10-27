@@ -621,21 +621,6 @@ export function isPullRequestCommentFinished(
   );
 }
 
-export function filterPullRequestConversationItems(
-  items: ReadonlyArray<PullRequestConversationItem>,
-  filter: { readonly bots: boolean; readonly resolved: boolean },
-): ReadonlyArray<PullRequestConversationItem> {
-  return items.filter((item) =>
-    // Matching any member keeps the finding beside a human reply to a bot.
-    pullRequestConversationItemComments(item).some(
-      (comment) =>
-        (filter.bots || comment.author?.isBot !== true) &&
-        (filter.resolved ||
-          !isPullRequestCommentFinished(comment, item.kind === "thread" ? item.thread : undefined)),
-    ),
-  );
-}
-
 export function pagePullRequestConversationItems(
   items: ReadonlyArray<PullRequestConversationItem>,
   count: number,
