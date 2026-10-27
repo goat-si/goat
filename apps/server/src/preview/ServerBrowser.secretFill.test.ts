@@ -49,6 +49,8 @@ const PAGES: Record<string, string> = {
   "https://auth.test/frame": '<input id="pw" type="password" aria-label="Password">',
   "https://other.test/": '<title>Other</title><input id="pw" type="password">',
   "https://login.test/next": "<title>Next</title><p>Signed in</p>",
+  "https://login.test/two":
+    '<title>Two</title><input id="pw" type="password"><input id="pw2" type="password">',
 };
 
 let browser: Promise<Browser> | undefined;
@@ -302,6 +304,33 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
     },
   );
 
+  it.live("stays fenced until every field GOAT filled has let go of its password", () => {
+    const secrets = makeSecrets();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const { open, call, fill } = yield* harness;
+        const { tabId, page } = yield* open("https://login.test/two");
+        const first = secrets.save("https://login.test");
+        const second = secrets.save("https://login.test");
+        yield* fill(tabId, { secretRef: first.ref, selector: "#pw" });
+        yield* fill(tabId, { secretRef: second.ref, selector: "#pw2" });
+        const evaluate = call<unknown>(tabId, "evaluate", { expression: "1 + 1" });
+
+        // Cleared by page script, so no field takes focus and makes the tab private.
+        const clear = (id: string) =>
+          Effect.promise(() =>
+            page.evaluate((selector) => {
+              document.querySelector<HTMLInputElement>(selector)!.value = "";
+            }, id),
+          );
+        yield* clear("#pw2");
+        expect(JSON.stringify(yield* Effect.flip(evaluate))).toContain("holds a password");
+        yield* clear("#pw");
+        expect(yield* evaluate).toBe(2);
+      }).pipe(Effect.provide(layerFor(secrets))),
+    );
+  });
+
   it.live("refuses a tab a person stopped, keeping the ref", () => {
     const secrets = makeSecrets();
     return Effect.scoped(
@@ -321,7 +350,7 @@ describe.skipIf(!chromiumInstalled)("goat_preview_fill_secret in a real server b
 
 describe("playwrightDebugLogging", () => {
   it("refuses every DEBUG pattern that could turn on Playwright's protocol log", () => {
-    for (const debug of ["pw:protocol", "pw*", "p*", "*", "*protocol*", "goat:*,pw:api"])
+    for (const debug of ["pw:protocol", "pw*", "p*", "*", "*protocol*", "*pw*", "goat:*,pw:api"])
       expect(playwrightDebugLogging(debug)).toBe(true);
     for (const debug of [undefined, "", "goat:server", "-pw:*"])
       expect(playwrightDebugLogging(debug)).toBe(false);

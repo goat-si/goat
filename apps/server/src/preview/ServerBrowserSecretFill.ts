@@ -38,6 +38,8 @@ const SETTLE_MS = 1_000;
 const REFUSED = "PreviewAutomationSecretFillRefusedError";
 const USED_UP =
   "Nothing was filled and the secretRef is used up. Ask the person again with request_secret.";
+const UNCERTAIN =
+  "GOAT could not confirm whether the password was typed, and the secretRef is used up. Take a text snapshot before asking the person again.";
 const FENCED =
   "This tab holds a password GOAT filled. goat_preview_evaluate, image snapshots and recordings stay off until the page submits or navigates.";
 const UNCONFIRMED =
@@ -307,20 +309,34 @@ export const make = Effect.gen(function* () {
             filledValues.set(request.threadId, values);
             fence.assertMayDispatch();
             assertBefore(deadlineMs);
-            const typed = await target.session.send("Runtime.callFunctionOn", {
-              objectId: target.objectId,
-              functionDeclaration: FILL,
-              arguments: [{ value }, { value: destination }],
-              returnByValue: true,
-            });
-            if (typed.exceptionDetails || typed.result.value !== true) throw refused(USED_UP);
+            // Fenced before dispatch: a lost reply may still have typed the value.
+            const entry: Fence = { ...target, value };
             const outstanding = fences.get(tab.page) ?? [];
-            outstanding.push({ ...target, value });
+            outstanding.push(entry);
             fences.set(tab.page, outstanding);
             kept = true;
+            const typed = await target.session
+              .send("Runtime.callFunctionOn", {
+                objectId: target.objectId,
+                functionDeclaration: FILL,
+                arguments: [{ value }, { value: destination }],
+                returnByValue: true,
+              })
+              .catch(() => {
+                throw refused(UNCERTAIN);
+              });
+            if (typed.exceptionDetails || typed.result.value !== true) {
+              fences.set(
+                tab.page,
+                (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+              );
+              kept = false;
+              throw refused(USED_UP);
+            }
             return destination;
           } catch (cause) {
-            if (!used) throw cause;
+            if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
+              throw cause;
             throw refused(
               cause instanceof BrowserControlInterrupted ? `${cause.message} ${USED_UP}` : USED_UP,
             );
