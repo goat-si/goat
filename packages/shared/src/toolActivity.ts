@@ -94,19 +94,93 @@ export function computerUseTypedTextLength(
   return redactedMarker(slot.value)?.redactedCharacters ?? rawLength(slot.value);
 }
 
-/** The input with its typed text, raw or redacted, replaced by what `replace` makes of its length. */
+const typedLength = (value: unknown) =>
+  redactedMarker(value)?.redactedCharacters ?? rawLength(value);
+
+/** A run_steps step's own fields; any other key names its tool and holds its arguments. */
+const STEP_KEYS: ReadonlySet<string> = new Set([
+  "tool",
+  "args",
+  "wait_for",
+  "expect",
+  "timeout_ms",
+]);
+/** Step tool names the driver reads as type_text and set_value. */
+const STEP_ALIASES: Readonly<Record<string, string>> = { type: "type_text", set: "set_value" };
+/** A wait_for or expect check names a field's value, which can be what a step typed into it. */
+const CHECK_VALUE_FIELDS = ["value", "value_contains"] as const;
+
+type Replace = (length: number) => unknown;
+
+/** A copy of `record` with `fields` replaced, or undefined when it has none of them. */
+function replaceFields(record: unknown, fields: ReadonlyArray<string>, replace: Replace) {
+  const object = asRecord(record);
+  const present = fields.filter((field) => object?.[field] !== undefined);
+  if (object === undefined || present.length === 0) return undefined;
+  return {
+    ...object,
+    ...Object.fromEntries(present.map((field) => [field, replace(typedLength(object[field]))])),
+  };
+}
+
+/**
+ * One run_steps step, `{tool, args}` or `{<tool>: args}` as the driver reads it, with its typed
+ * text and the field values its checks name replaced.
+ */
+function replaceStep(step: unknown, replace: Replace): unknown {
+  const object = asRecord(step);
+  if (object === undefined) return step;
+  const named = typeof object.tool === "string" ? object.tool : undefined;
+  const key =
+    named === undefined ? Object.keys(object).find((each) => !STEP_KEYS.has(each)) : "args";
+  const tool = named ?? key;
+  const field = tool === undefined ? undefined : TYPED_TEXT_FIELDS[STEP_ALIASES[tool] ?? tool];
+  const args =
+    key === undefined || field === undefined
+      ? undefined
+      : replaceFields(object[key], [field], replace);
+  const waitFor = replaceFields(object.wait_for, CHECK_VALUE_FIELDS, replace);
+  const expect = Array.isArray(object.expect)
+    ? object.expect.map((check) => replaceFields(check, CHECK_VALUE_FIELDS, replace) ?? check)
+    : undefined;
+  return {
+    ...object,
+    ...(args === undefined || key === undefined ? {} : { [key]: args }),
+    ...(waitFor === undefined ? {} : { wait_for: waitFor }),
+    ...(expect === undefined ? {} : { expect }),
+  };
+}
+
+/** A call's arguments with what it types replaced, or undefined when it types nothing. */
+function replaceArguments(tool: string, args: unknown, replace: Replace): unknown {
+  const field = TYPED_TEXT_FIELDS[tool];
+  if (field !== undefined) return replaceFields(args, [field], replace);
+  // A script's literals can hold what it types, and no parse can tell which; it shows as a length.
+  if (tool === "run_script") return replaceFields(args, ["script"], replace);
+  const steps = asRecord(args)?.steps;
+  if (tool !== "run_steps" || !Array.isArray(steps)) return undefined;
+  return { ...asRecord(args), steps: steps.map((step) => replaceStep(step, replace)) };
+}
+
+/**
+ * The input with its typed text, raw or redacted, replaced by what `replace` makes of its length:
+ * a type_text or set_value call's own, every one inside a run_steps batch, and a run_script source.
+ */
 export function replaceComputerUseTypedText(
   toolName: string | null | undefined,
   input: unknown,
-  replace: (length: number) => unknown,
+  replace: Replace,
 ): unknown {
-  const slot = typedTextSlot(toolName, input);
-  const length = computerUseTypedTextLength(toolName, input);
-  if (slot === undefined || length === undefined) return input;
-  const value = replace(length);
-  return slot.nested
-    ? { ...slot.record, arguments: { ...asRecord(slot.record.arguments), [slot.field]: value } }
-    : { ...slot.record, [slot.field]: value };
+  const record = asRecord(input);
+  if (record === undefined) return input;
+  const tool =
+    cuaDriverToolName(toolName) ??
+    (record.server === "cua-driver" && typeof record.tool === "string" ? record.tool : undefined);
+  if (tool === undefined) return input;
+  const own = replaceArguments(tool, record, replace);
+  if (own !== undefined) return own;
+  const nested = replaceArguments(tool, record.arguments, replace);
+  return nested === undefined ? input : { ...record, arguments: nested };
 }
 
 /**
@@ -117,8 +191,6 @@ export function redactComputerUseTypedText(
   toolName: string | null | undefined,
   input: unknown,
 ): unknown {
-  const slot = typedTextSlot(toolName, input);
-  if (slot !== undefined && redactedMarker(slot.value) !== undefined) return input;
   return replaceComputerUseTypedText(toolName, input, (redactedCharacters) => ({
     redactedCharacters,
   }));

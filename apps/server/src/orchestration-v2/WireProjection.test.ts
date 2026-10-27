@@ -95,6 +95,59 @@ describe("orchestration V2 wire projection", () => {
     });
   });
 
+  it("never sends a client text typed inside a run_steps batch or a run_script source", () => {
+    const steps = [
+      { tool: "type_text", args: { pid: 1, text: "hunter2" } },
+      { set: { role: "textfield", name: "Password", value: "hunter2" } },
+      { click: { role: "button", name: "Sign in" }, expect: [{ value: "hunter2" }] },
+      { type: { text: "hunter2" }, wait_for: { value_contains: "hunter2", name: "Password" } },
+    ];
+    const batch = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: { pid: 1, steps },
+    } as OrchestrationV2TurnItem;
+    const script = {
+      ...base,
+      toolName: "mcp__cua-driver__run_script",
+      input: { script: 'await type_text({ text: "hunter2" }); return "done";', timeout_ms: 500 },
+    } as OrchestrationV2TurnItem;
+    const child = {
+      ...batch,
+      toolName: "cua-driver.run_steps",
+      input: { server: "cua-driver", tool: "run_steps", arguments: { steps } },
+    } as OrchestrationV2TurnItem;
+    for (const item of [batch, script, child]) {
+      const event = projectDomainEventForWire({
+        id: EventId.make("typed"),
+        type: "turn-item.updated",
+        threadId: item.threadId,
+        occurredAt: item.updatedAt,
+        payload: item,
+      } as OrchestrationV2DomainEvent);
+      const row = projectTranscriptRowForClient({ position: 0, item });
+      for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), event, row])
+        expect(JSON.stringify(sent)).not.toContain("hunter2");
+    }
+    // What the steps do stays readable: only the typed values become their lengths.
+    const sent = projectTurnItemForWire(batch);
+    expect(sent.type === "dynamic_tool" ? sent.input : undefined).toEqual({
+      pid: 1,
+      steps: [
+        { tool: "type_text", args: { pid: 1, text: { redactedCharacters: 7 } } },
+        { set: { role: "textfield", name: "Password", value: { redactedCharacters: 7 } } },
+        {
+          click: { role: "button", name: "Sign in" },
+          expect: [{ value: { redactedCharacters: 7 } }],
+        },
+        {
+          type: { text: { redactedCharacters: 7 } },
+          wait_for: { value_contains: { redactedCharacters: 7 }, name: "Password" },
+        },
+      ],
+    });
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,
