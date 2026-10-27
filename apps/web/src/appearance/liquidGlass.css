@@ -42,11 +42,15 @@
       background-color: var(--lg-rail);
     }
 
-    /* The content frame's corner cover paints the opaque page colour outside its curve to hide
-       square fills beneath; on glass every fill there is already clear, and the opaque wedge broke
-       the line where the frame's top and left edges meet. */
+    /* The content frame's corner cover fills the wedge outside its curve. With the opaque page
+       colour it read as a dark notch; on glass the wedge belongs to the frame, so it takes the
+       frame's tint and the curve joins the rail and titlebar strip without a seam. */
     .workspace-content-frame::before {
-      background: none;
+      background: radial-gradient(
+        circle at 100% 100%,
+        transparent var(--radius-xl),
+        var(--lg-pane) calc(var(--radius-xl) + 1px)
+      );
     }
     [data-slot="sidebar-inset"][data-glass-pane="pane"] {
       box-shadow: none;
