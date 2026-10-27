@@ -324,6 +324,19 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const manifestFlag = descriptor.args.indexOf("--capability-manifest");
   const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
 
+  // Fire and forget: a lost report only delays the host's record, never this connection. One
+  // queue for every driver this proxy starts, so no working report, of this driver or a later
+  // one, can land before a crash reported ahead of it.
+  let reported = Promise.resolve();
+  const send = (body: DriverWatchReport | undefined) => {
+    if (body === undefined) return;
+    reported = reported
+      .then(() => report(url, authorization, body))
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  };
   const startDriver = (overlay: boolean) =>
     Effect.acquireRelease(
       Effect.sync(() => {
@@ -336,18 +349,6 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         );
         drivers.add(child);
         const watch = makeDriverWatch();
-        // Fire and forget: a lost report only delays the host's record, never this connection.
-        // One at a time, so a working report still in flight cannot clear the crash after it.
-        let reported = Promise.resolve();
-        const send = (body: DriverWatchReport | undefined) => {
-          if (body === undefined) return;
-          reported = reported
-            .then(() => report(url, authorization, body))
-            .then(
-              () => undefined,
-              () => undefined,
-            );
-        };
         child.once("exit", (code) => {
           drivers.delete(child);
           send(watch.exited(code ?? undefined));

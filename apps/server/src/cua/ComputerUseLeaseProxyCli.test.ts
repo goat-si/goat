@@ -209,6 +209,113 @@ describe("driver readiness (#1699)", () => {
   });
 });
 
+it.effect("a later driver's working report waits behind an earlier driver's crash", () =>
+  Effect.gen(function* () {
+    const reports = yield* Queue.unbounded<DriverWatchReport>();
+    const collected: Array<DriverWatchReport> = [];
+    let releaseFirst = () => {};
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const fake = () => {
+      const stdin = new NodeStream.PassThrough();
+      const stdout = new NodeStream.PassThrough();
+      const child = Object.assign(new NodeChildProcess.ChildProcess(), {
+        stdin,
+        stdout,
+        stdio: [stdin, stdout, null],
+      });
+      return { child, stdout };
+    };
+    const first = fake();
+    const second = fake();
+    using _spawn = vi
+      .spyOn(DriverProcess, "spawnDriverProcess")
+      .mockReturnValueOnce(first.child as ReturnType<typeof DriverProcess.spawnDriverProcess>)
+      .mockReturnValueOnce(second.child as ReturnType<typeof DriverProcess.spawnDriverProcess>);
+    using _end = vi.spyOn(DriverProcess, "endDriversWithProxy").mockImplementation(() => undefined);
+    using _kill = vi.spyOn(DriverProcess, "killDriverGroup").mockImplementation(() => undefined);
+    using _exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const providerInput = new NodeStream.PassThrough();
+    using _stdin = vi
+      .spyOn(process, "stdin", "get")
+      .mockReturnValue(providerInput as unknown as typeof process.stdin);
+    using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if (init?.method !== "POST") return new Response("");
+      const body = JSON.parse(String(init.body)) as DriverWatchReport;
+      collected.push(body);
+      Queue.offerUnsafe(reports, body);
+      if (collected.length === 1) await firstHeld;
+      return new Response(null, { status: 204 });
+    });
+    using _proxy = vi
+      .spyOn(LeaseProxy, "runLeaseProxy")
+      .mockImplementation(<EU, ED>(options: LeaseProxyOptions<EU, ED>) =>
+        Effect.gen(function* () {
+          /** Starts a driver that answers its handshake and one tool call. */
+          const working = Effect.fn("testDriver.working")(function* (
+            stdout: NodeStream.PassThrough,
+            id: string,
+          ) {
+            const driver = yield* options.startDriver;
+            const forwarded = yield* Queue.unbounded<string>();
+            yield* driver.lines.pipe(
+              Stream.runForEach((line) => Queue.offer(forwarded, line)),
+              Effect.forkScoped,
+            );
+            yield* driver.send(initializeRequest(id));
+            stdout.write(initializeReply(id) + "\n");
+            yield* Queue.take(forwarded);
+            yield* driver.send(
+              JSON.stringify({ jsonrpc: "2.0", id: "call:" + id, method: "tools/call" }),
+            );
+            const answer = JSON.stringify({
+              jsonrpc: "2.0",
+              id: "call:" + id,
+              result: { content: [] },
+            });
+            stdout.write(answer + "\n");
+            assert.equal(yield* Queue.take(forwarded), answer);
+          });
+          yield* working(first.stdout, "first");
+          yield* Queue.take(reports);
+          first.child.emit("exit", 134, null);
+          yield* working(second.stdout, "second");
+          // The first driver's working report is still in flight: nothing after it has gone out.
+          assert.equal(collected.length, 1);
+          releaseFirst();
+          yield* Queue.take(reports);
+          yield* Queue.take(reports);
+          assert.deepEqual(collected, [
+            { driverEnded: false },
+            { driverEnded: { reason: "helper_restarted", exitCode: 134 } },
+            { driverEnded: false },
+          ]);
+          return undefined;
+        }),
+      );
+    vi.stubEnv(LEASE_PROXY_ENV.url, "http://goat.test/api/computer-use/lease");
+    vi.stubEnv(LEASE_PROXY_ENV.authorization, "Bearer fixture");
+    vi.stubEnv(
+      LEASE_PROXY_ENV.driver,
+      JSON.stringify({ command: "/fixture-driver", args: [], environment: [] }),
+    );
+    vi.stubEnv(LEASE_PROXY_ENV.proxyChannelToken, undefined);
+    try {
+      yield* Effect.promise(() =>
+        runLeaseProxyCli(["--control", "control:fixture", "--expires", "2030-01-01T00:00:00Z"]),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      for (const { child } of [first, second]) {
+        child.stdin.destroy();
+        child.stdout.destroy();
+      }
+      providerInput.destroy();
+    }
+  }),
+);
+
 describe("primitive report sequencer", () => {
   it.effect("a failed primitive reply POST returns zero and a later POST still succeeds", () =>
     Effect.gen(function* () {
