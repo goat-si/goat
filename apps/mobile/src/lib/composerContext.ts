@@ -25,6 +25,7 @@ import {
   sanitizeComposerContextLabel,
   toKindScopedComposerContextId,
 } from "@goat/shared/composerContextReferences";
+import { capabilityRecordApp } from "@goat/shared/turnCapabilities";
 import {
   collectComposerInlineTokens,
   type ComposerInlineToken,
@@ -222,14 +223,22 @@ export function uploadedComposerContext(
   };
 }
 
-/** Imports with fresh identities so a pasted record cannot overwrite an existing snapshot. */
+/**
+ * Imports with fresh identities so a pasted record cannot overwrite an existing snapshot. An app
+ * chip keeps its id: the id carries the app, and the same id always means the same record.
+ */
 export function reidentifyComposerContext(
   text: string,
   records: readonly ComposerContextRecord[],
   createId: () => string,
 ) {
   const ids = new Map(
-    records.map((record) => [record.contextId, ComposerContextId.make(createId())]),
+    records.map((record) => [
+      record.contextId,
+      record.kind === "capability" && "capability" in record && capabilityRecordApp(record)
+        ? record.contextId
+        : ComposerContextId.make(createId()),
+    ]),
   );
   return {
     text: replaceComposerContextReferences(text, (ref) =>

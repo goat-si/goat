@@ -15,7 +15,12 @@ import {
 } from "./composerContextReferences.ts";
 import { appContextId, appIdForContextId, capabilityRecordApp } from "./appContextId.ts";
 
-export { APP_CONTEXT_ID_MAX_BYTES, appIdFitsContextId, appIdForContextId } from "./appContextId.ts";
+export {
+  APP_CONTEXT_ID_MAX_BYTES,
+  appIdFitsContextId,
+  appIdForContextId,
+  capabilityRecordApp,
+} from "./appContextId.ts";
 
 /** The chip text for `@computer` and `@browser`, the same on every client. */
 export const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
