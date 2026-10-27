@@ -114,6 +114,14 @@ export const layer = PolicyWorker.make(
   Effect.gen(function* () {
     const rates = yield* RestartableRate;
     const inboxes = yield* RestartableInbox;
+    const mobileRate = yield* Cloudflare.RateLimit("FIXTURE_MOBILE_RATE", {
+      namespaceId: 1003,
+      simple: { limit: 1, period: 60 },
+    });
+    const publishRate = yield* Cloudflare.RateLimit("FIXTURE_PUBLISH_RATE", {
+      namespaceId: 1004,
+      simple: { limit: 1, period: 60 },
+    });
     return {
       fetch: Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
@@ -122,6 +130,10 @@ export const layer = PolicyWorker.make(
         const rate = rates.getByName(account);
         const inbox = inboxes.getByName(account);
         switch (url.pathname) {
+          case "/mobile-rate":
+            return HttpServerResponse.jsonUnsafe(yield* mobileRate.limit({ key: account }));
+          case "/publish-rate":
+            return HttpServerResponse.jsonUnsafe(yield* publishRate.limit({ key: account }));
           case "/rate":
             return HttpServerResponse.jsonUnsafe(
               yield* rate.consume(
@@ -176,5 +188,7 @@ export const layer = PolicyWorker.make(
         }
       }),
     };
-  }).pipe(Effect.provide(Layer.mergeAll(rateLayer, inboxLayer))),
+  }).pipe(
+    Effect.provide(Layer.mergeAll(rateLayer, inboxLayer, Cloudflare.Workers.RateLimitBinding)),
+  ),
 );

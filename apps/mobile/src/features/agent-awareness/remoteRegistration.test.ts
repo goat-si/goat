@@ -605,8 +605,8 @@ describe("makeRelayDeviceRegistrationRequest", () => {
   it.effect.each(["ios", "android"] as const)(
     "invalidates %s registration after suspension and repairs the same device and token after allow",
     (platform) => {
-      Platform.OS = platform;
-      Platform.Version = platform === "ios" ? "18.0" : 35;
+      vi.spyOn(Platform, "OS", "get").mockReturnValue(platform);
+      vi.spyOn(Platform, "Version", "get").mockReturnValue(platform === "ios" ? "18.0" : 35);
       vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
         type: platform,
         data: "same-token",

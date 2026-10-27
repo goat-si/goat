@@ -35,7 +35,6 @@ import {
   RelayAgentActivitySnapshotEndpoint,
   RelayDpopClientAuth,
   RelayMobileClientId,
-  RelayRateLimitExceededError,
   RelayProtectedError,
 } from "@goat/contracts/relay";
 import { ACCOUNT_ENDPOINT_POLICY } from "./AccountPolicy.ts";

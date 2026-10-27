@@ -40,6 +40,7 @@ export const testConfig: RelayConfiguration.RelayConfiguration["Service"] = {
 export function postgresPolicyLayer(
   pg: ReturnType<typeof createPostgresFixture>,
   options?: {
+    readonly config?: RelayConfiguration.RelayConfiguration["Service"];
     readonly limits?: Partial<AccountLimits.Limits>;
     readonly clear?: HookInbox.HookInbox["Service"]["clear"];
   },
@@ -83,7 +84,7 @@ export function postgresPolicyLayer(
         ...options?.limits,
       }),
     ),
-    Layer.provideMerge(RelayConfiguration.layer(testConfig)),
+    Layer.provideMerge(RelayConfiguration.layer(options?.config ?? testConfig)),
     Layer.provideMerge(database),
     Layer.provideMerge(NodeCrypto.layer),
   );
