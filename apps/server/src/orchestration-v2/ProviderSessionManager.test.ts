@@ -54,7 +54,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ProviderSessionId,
+  ProviderSessionId,
   ThreadId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -70,6 +70,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Random from "effect/Random";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
@@ -3370,46 +3371,44 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
   }),
 );
-it.effect("ProviderSessionManagerV2 retries release records that failed to persist", () =>
+it.effect("ProviderSessionManagerV2 retries failed release records with bounded jitter", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
+    const random = yield* Random.Random.pipe(Random.withSeed("release-jitter"));
     const flaky: FlakyReleaseWrites = {
       failing: yield* Ref.make<"none" | "session" | "session-and-requests">("session"),
       failures: yield* Queue.unbounded<void>(),
     };
-    const effect = Effect.gen(function* () {
+    yield* Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("thread-provider-session-manager-release-retry");
-      const providerSessionId = yield* idAllocator.allocate.providerSession({
-        providerInstanceId: modelSelection.instanceId,
-        threadId,
-      });
-      const providerThread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
-      yield* eventSink.write({
-        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-      });
+      const providerSessionId = ProviderSessionId.make("release-jitter");
+      const created = yield* makeThreadCreatedEvent({ idAllocator, threadId, now });
+      yield* eventSink.write({ events: [created] });
       const pendingRequest = yield* makePendingRuntimeRequestEvents({
         idAllocator,
         threadId,
         providerSessionId,
-        providerThread,
+        providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
         now,
       });
       yield* eventSink.write({ events: pendingRequest.events });
       yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
-
       assert.isTrue(Exit.isFailure(yield* Effect.exit(manager.close(providerSessionId))));
       yield* Queue.take(flaky.failures);
       const afterClose = yield* projectionStore.getThreadProjection(threadId);
       assert.equal(afterClose.runtimeRequests.at(-1)?.responseCapability.type, "not_resumable");
       assert.equal(afterClose.providerSessions.at(-1)?.status, "ready");
-
       yield* TestClock.adjust("1 second");
       yield* Queue.take(flaky.failures);
+      yield* TestClock.adjust("499 millis");
+      assert.equal(yield* Queue.size(flaky.failures), 0);
+      yield* TestClock.adjust("251 millis");
+      assert.equal((yield* Queue.takeAll(flaky.failures)).length, 1);
       yield* Ref.set(flaky.failing, "none");
       const stopped = yield* eventSink
         .stream({
@@ -3418,15 +3417,16 @@ it.effect("ProviderSessionManagerV2 retries release records that failed to persi
           eventType: "provider-session.updated",
         })
         .pipe(Stream.runHead, Effect.forkScoped);
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("2 seconds");
       yield* Fiber.join(stopped);
-
       const afterRetry = yield* projectionStore.getThreadProjection(threadId);
       assert.equal(afterRetry.providerSessions.at(-1)?.status, "stopped");
-    });
-
-    yield* effect.pipe(
+    }).pipe(
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, flakyReleaseWrites: flaky })),
+      Effect.provideService(Random.Random, {
+        ...random,
+        nextDoubleUnsafe: () => random.nextDoubleUnsafe() / 2,
+      }),
     );
   }),
 );

@@ -428,7 +428,7 @@
   "apps/server/src/pullRequest/PullRequestService.test.ts": { "lines": 4864 },
   "apps/server/src/pullRequest/PullRequestService.ts": { "lines": 3853, "nonNull": 7 },
   "apps/server/src/pullRequest/pullRequestReviewGuideNormalize.ts": { "nonNull": 2 },
-  "apps/server/src/remoteReports/RemoteDispatchCoordinator.test.ts": { "lines": 1879 },
+  "apps/server/src/remoteReports/RemoteDispatchCoordinator.test.ts": { "lines": 1853 },
   "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts": { "lines": 1263 },
   "apps/server/src/remoteReports/RemoteReportService.test.ts": { "lines": 1117 },
   "apps/server/src/resourceTelemetry/NativeTelemetryClient.ts": { "lines": 1127, "nonNull": 2 },
