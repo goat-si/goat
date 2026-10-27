@@ -29,6 +29,17 @@ const rule = (
 const GOAT_IDEAS = "https://github.com/goat-si/goat/discussions/categories/ideas";
 
 export const META_TEXT_RULES: readonly TextRule[] = [
+  rule(
+    "fx-provider-copy",
+    (path) =>
+      path.startsWith("packages/provider-fx/") ||
+      path === "apps/server/scripts/record-fx-acp-replay-fixture.ts" ||
+      path === "apps/server/src/orchestration-v2/Adapters/FxAdapterV2.test.ts" ||
+      path ===
+        "apps/server/src/orchestration-v2/testkit/fixtures/tool_call_read_only_on_request/fx_output.ts",
+    /\bT3(?='s\b|-owned\b| reads\b| cannot read\b| before its own write\b|$)/g,
+    "GOAT",
+  ),
   // The dev container: product name, port labels and cache volumes. Its GOAT_HOME stays on the
   // workspace .t3, which holds an existing container's state; an explicit home skips the legacy fallback.
   rule("devcontainer-product", inDevcontainer, /\bT3 Code\b/g, "GOAT"),

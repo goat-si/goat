@@ -1137,13 +1137,19 @@ describe("AcpSessionRuntime", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("rejects invalid config option values before sending session/set_config_option", () => {
-    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "acp-runtime-"));
-    const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+  it.effect("rejects invalid config option values before sending session/set_config_option", () =>
+    Effect.gen(function* () {
+      const sent: Array<unknown> = [];
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        requestLogger: (event) =>
+          Effect.sync(() => {
+            if (event.method === "session/set_config_option" && event.status === "started") {
+              sent.push(event.payload);
+            }
+          }),
+      });
       yield* runtime.start();
-
       const error = yield* runtime.setModel("composer-2[fast=false]").pipe(Effect.flip);
       expect(error._tag).toBe("AcpRequestError");
       if (error._tag === "AcpRequestError") {
@@ -1153,74 +1159,44 @@ describe("AcpSessionRuntime", () => {
         );
         expect(error.message).toContain("composer-2[fast=true]");
       }
+      const modeError = yield* runtime.setConfigOption("mode", "unknown-mode").pipe(Effect.flip);
+      expect(modeError).toMatchObject({ _tag: "AcpRequestError", code: -32602 });
+      const typeError = yield* runtime
+        .setConfigOption("model", true, {
+          allowUnlistedValue: true,
+        })
+        .pipe(Effect.flip);
+      expect(typeError).toMatchObject({ _tag: "AcpRequestError", code: -32602 });
+      expect(sent).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
-      const recordedRequests = NodeFS.readFileSync(requestLogPath, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as { method?: string; params?: { value?: unknown } });
-      expect(
-        recordedRequests.some(
-          (message) =>
-            message.method === "session/set_config_option" &&
-            message.params?.value === "composer-2[fast=false]",
-        ),
-      ).toBe(false);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
-          authMethodId: "test",
-          spawn: {
-            command: mockAgentCommand,
-            args: mockAgentArgs,
-            env: {
-              GOAT_ACP_REQUEST_LOG_PATH: requestLogPath,
-            },
-          },
-          cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
-    );
-  });
-
-  it.effect("sends configured custom models the agent does not advertise", () => {
-    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "acp-runtime-"));
-    const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
-    return Effect.gen(function* () {
-      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      yield* runtime.start();
-
-      yield* runtime.setModel("cline-free/custom-model");
-      const error = yield* runtime.setModel("unconfigured/model").pipe(Effect.flip);
-      expect(error._tag).toBe("AcpRequestError");
-
-      const sentModels = NodeFS.readFileSync(requestLogPath, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as { method?: string; params?: { value?: unknown } })
-        .filter((message) => message.method === "session/set_config_option")
-        .map((message) => message.params?.value);
-      expect(sentModels).toEqual(["cline-free/custom-model"]);
-    }).pipe(
-      Effect.provide(
-        AcpSessionRuntime.layer({
+  it.effect(
+    "sends configured custom models and explicit unlisted choices without relaxing other validation",
+    () =>
+      Effect.gen(function* () {
+        const sent: Array<unknown> = [];
+        const runtime = yield* AcpSessionRuntime.make({
           ...mockRuntimeOptions,
-          spawn: {
-            command: mockAgentCommand,
-            args: mockAgentArgs,
-            env: { GOAT_ACP_REQUEST_LOG_PATH: requestLogPath },
-          },
           customModels: ["cline-free/custom-model"],
-        }),
-      ),
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
-      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
-    );
-  });
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              if (event.method === "session/set_config_option" && event.status === "started") {
+                sent.push(event.payload);
+              }
+            }),
+        });
+        yield* runtime.start();
+        yield* runtime.setModel("cline-free/custom-model");
+        const error = yield* runtime.setModel("unconfigured/model").pipe(Effect.flip);
+        expect(error._tag).toBe("AcpRequestError");
+        yield* runtime.setConfigOption("model", "unlisted/model", { allowUnlistedValue: true });
+        const modeError = yield* runtime.setConfigOption("mode", "unknown-mode").pipe(Effect.flip);
+        expect(modeError._tag).toBe("AcpRequestError");
+        expect(sent).toEqual([
+          expect.objectContaining({ configId: "model", value: "cline-free/custom-model" }),
+          expect.objectContaining({ configId: "model", value: "unlisted/model" }),
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });

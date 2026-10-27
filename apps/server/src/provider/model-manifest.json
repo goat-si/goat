@@ -111,6 +111,15 @@
       ]
     },
     {
+      "driver": "fx",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=0.0.13",
+      "ranges": [
+        { "range": ">=0.0.13", "status": "supported" },
+        { "range": "<0.0.13", "status": "unsupported" }
+      ]
+    },
+    {
       "driver": "devinCloud",
       "t3CodeRange": ">=0.0.46",
       "recommendedRange": ">=3000.11.1",

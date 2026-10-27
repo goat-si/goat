@@ -348,7 +348,7 @@
   "apps/server/src/orchestration-v2/testkit/fixtures/grok_auto_blocked_command/output.ts": {
     "nonNull": 1
   },
-  "apps/server/src/orchestration-v2/testkit/fixtures/index.ts": { "lines": 1750 },
+  "apps/server/src/orchestration-v2/testkit/fixtures/index.ts": { "lines": 1831 },
   "apps/server/src/orchestration-v2/testkit/fixtures/muse_subagent_approval/output.ts": {
     "nonNull": 1
   },
@@ -367,7 +367,7 @@
   "apps/server/src/orchestration-v2/testkit/fixtures/opencode_running_child_approval/output.ts": {
     "nonNull": 5
   },
-  "apps/server/src/orchestration-v2/testkit/fixtures/shared.ts": { "lines": 1440, "nonNull": 2 },
+  "apps/server/src/orchestration-v2/testkit/fixtures/shared.ts": { "lines": 1446, "nonNull": 2 },
   "apps/server/src/orchestration-v2/testkit/fixtures/subagent_continue/codex_output.ts": {
     "nonNull": 2
   },
@@ -751,7 +751,7 @@
     "nonNull": 10
   },
   "packages/provider-acp-registry/src/server/driver.ts": { "nonNull": 1 },
-  "packages/provider-acp/src/server/AcpSessionRuntime.ts": { "lines": 2894, "nonNull": 5 },
+  "packages/provider-acp/src/server/AcpSessionRuntime.ts": { "lines": 2903, "nonNull": 5 },
   "packages/provider-acp/src/server/adapter.ts": { "lines": 8632, "nonNull": 7 },
   "packages/provider-acp/src/server/clientTerminals.ts": { "nonNull": 2 },
   "packages/provider-acp/src/server/runtimeModel.test.ts": { "lines": 1530 },
