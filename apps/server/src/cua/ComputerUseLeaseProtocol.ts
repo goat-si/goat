@@ -102,15 +102,67 @@ export interface Envelope {
   readonly error?: unknown;
 }
 
-export const parse = (line: string): Envelope | undefined => {
+const decodeJson = (line: string): { value: unknown } | undefined => {
   try {
-    const value: unknown = JSON.parse(line);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Envelope)
-      : undefined;
+    return { value: JSON.parse(line) };
   } catch {
     return undefined;
   }
+};
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+export const parse = (line: string): Envelope | undefined => {
+  const value = decodeJson(line)?.value;
+  return isRecord(value) ? (value as Envelope) : undefined;
+};
+
+const isId = (value: unknown) =>
+  value === null ||
+  typeof value === "string" ||
+  (typeof value === "number" && Number.isFinite(value));
+const validEnvelope = (value: Record<string, unknown>) => {
+  if (value.jsonrpc !== "2.0" || ("id" in value && !isId(value.id))) return false;
+  if ("method" in value)
+    return (
+      typeof value.method === "string" &&
+      !("result" in value) &&
+      !("error" in value) &&
+      (!("params" in value) || isRecord(value.params) || Array.isArray(value.params))
+    );
+  if ("params" in value || "result" in value === "error" in value) return false;
+  // MCP lets an error response omit an id it could not read; a result always names its request.
+  if ("result" in value) return "id" in value;
+  return (
+    isRecord(value.error) &&
+    Number.isInteger(value.error.code) &&
+    typeof value.error.message === "string"
+  );
+};
+
+export const decodeProviderIngress = (
+  line: string,
+):
+  | { readonly kind: "message"; readonly message: Envelope }
+  | { readonly kind: "invalid"; readonly response: string } => {
+  const decoded = decodeJson(line);
+  if (decoded !== undefined && isRecord(decoded.value) && validEnvelope(decoded.value))
+    return { kind: "message", message: decoded.value as Envelope };
+  return {
+    kind: "invalid",
+    response: JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error:
+        decoded === undefined
+          ? { code: -32700, message: "Parse error" }
+          : {
+              code: -32600,
+              message:
+                "Invalid Request: computer use accepts one JSON-RPC object per line; batches are not supported.",
+            },
+    }),
+  };
 };
 
 /**

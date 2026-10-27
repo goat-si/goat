@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
@@ -27,7 +28,10 @@ interface Waiting {
 }
 
 /** The request path over a running turn, with a hook for each card it creates. */
-const withWaiting = <E, R>(body: (input: Waiting) => Effect.Effect<void, E, R>) =>
+const withWaiting = <E, R>(
+  body: (input: Waiting) => Effect.Effect<void, E, R>,
+  setCuaWatch?: Parameters<typeof withRequests>[9],
+) =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
       const cards: Array<Deferred.Deferred<TurnItemId>> = [];
@@ -61,6 +65,8 @@ const withWaiting = <E, R>(body: (input: Waiting) => Effect.Effect<void, E, R>) 
                 yield* Deferred.succeed(yield* slot(index), command.handoff.handoffId);
               })
             : Effect.void,
+        false,
+        setCuaWatch,
       );
     }),
   );
@@ -233,6 +239,25 @@ it.effect(
         assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
       }),
     ),
+);
+
+it.effect(
+  "a full access request naming an app opened after computer use started asks the desktop to admit it",
+  () =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+      const devBuild = "com.t3tools.t3code.dev.worktree";
+      yield* withWaiting(
+        ({ request, leases, runId }) =>
+          Effect.gen(function* () {
+            yield* leases.everyAppControl(threadId, false, { person: true, runId });
+            assert.deepEqual(yield* Queue.take(watched), []);
+            assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+          }),
+        (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
+      );
+    }),
 );
 
 it.effect("a request is judged by the running turn, not a scheduled one queued behind it", () =>
