@@ -34,6 +34,10 @@ function Shell() {
   return (
     <>
       <div data-destination-rail data-glass-pane="rail" className="bg-sidebar" />
+      <div data-app-sidebar>
+        <div data-slot="sidebar-inner" data-glass-pane="rail" className="before:bg-sidebar" />
+      </div>
+      <div className="workspace-content-frame" />
       <div data-glass-pane="pane" data-native-material-band className="bg-background">
         <div data-glass-layer className="bg-background" />
         <input type="checkbox" defaultChecked className="checked:bg-primary" />
@@ -88,6 +92,14 @@ it("lets native material show through the root and rail while restoring floating
   await vi.waitFor(() => {
     expect(alpha(document.documentElement)).toBe(0);
     expect(alpha(element(screen.container, '[data-glass-pane="rail"]'))).toBe(0);
+    // The framed sidebar's titlebar strip read as a dark box beside the clear rail and header.
+    expect(
+      getComputedStyle(element(screen.container, '[data-slot="sidebar-inner"]')).backgroundImage,
+    ).toBe("none");
+    expect(
+      getComputedStyle(element(screen.container, ".workspace-content-frame"), "::before")
+        .backgroundImage,
+    ).toBe("none");
     expect(
       getComputedStyle(element(screen.container, '[data-glass-pane="pane"]')).backgroundImage,
     ).toContain("linear-gradient");
