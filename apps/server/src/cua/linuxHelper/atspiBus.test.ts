@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A fake accessibility bus on a unix socket.
 import * as NodeNet from "node:net";
-import * as NodeOs from "node:os";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
@@ -92,7 +92,7 @@ describe("accessibility bus calls", () => {
   });
 
   it("answers calls over one connection, names error replies, and connects again after the bus drops it", async () => {
-    const socketPath = NodePath.join(NodeOs.tmpdir(), "goat-atspi-bus-" + process.pid + ".sock");
+    const socketPath = NodePath.join(NodeOS.tmpdir(), "goat-atspi-bus-" + process.pid + ".sock");
     const clients: NodeNet.Socket[] = [];
     const server = NodeNet.createServer((client) => {
       clients.push(client);

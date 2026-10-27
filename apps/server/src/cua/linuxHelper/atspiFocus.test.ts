@@ -388,7 +388,8 @@ describe("makeSecureFocusProbe", () => {
     const atspi: AtspiCall = async (call) => {
       inFlight++;
       most = Math.max(most, inFlight);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // Answered a turn later, so the calls the probe starts together overlap.
+      await Promise.resolve();
       inFlight--;
       const name = method(call);
       if (name === "org.freedesktop.DBus.GetConnectionUnixProcessID") return u32(10);

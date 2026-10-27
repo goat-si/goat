@@ -5,11 +5,10 @@ import * as NodeNet from "node:net";
 import { busSocketPath } from "./atspiFocusEvents.ts";
 
 /**
- * Method calls on the accessibility bus over one connection. gdbus is a process and a bus
- * connection for every call, and reading a GTK4 window takes hundreds of calls; in the server each
- * spawn forks the whole server, so one focus probe of Nautilus took 2 s. The connection opens on
- * the first call and closes once idle. Only the types the focus probe sends and reads are
- * marshalled; a reply holding any other type fails its call.
+ * Method calls on the accessibility bus over one connection, opened at the first call and closed
+ * once idle. A gdbus process per call forks the whole server, and a GTK4 window takes hundreds of
+ * calls. Only the types the focus probe sends and reads are marshalled; a reply holding any other
+ * type fails its call.
  */
 
 export type DbusValue = string | number | boolean | ReadonlyArray<DbusValue>;
@@ -329,7 +328,7 @@ function connect(path: string, uid: number): Promise<Connection> {
     setup.unref();
     const fail = (error: Error) => {
       clearTimeout(setup);
-      for (const waiter of [...replies.values()]) waiter.reject(error);
+      for (const waiter of replies.values()) waiter.reject(error);
       socket.destroy();
       reject(error);
     };
