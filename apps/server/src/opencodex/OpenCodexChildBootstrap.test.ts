@@ -226,7 +226,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     () =>
       Effect.gen(function* () {
         const windows = yield* setup({ platform: "windows", releases: windowsPins });
-        expect((yield* windows.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+        expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({ state: "child" });
         expect(windows.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
       }),
   );

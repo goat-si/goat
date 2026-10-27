@@ -174,7 +174,12 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
                     ? extract
                     : realRunner.run(
                         input.command.endsWith("\\System32\\tar.exe")
-                          ? { ...input, command: "tar" }
+                          ? // A win32 PATH holds only the user bin; the host tar lives in the system one.
+                            {
+                              ...input,
+                              command: "tar",
+                              env: { ...input.env, PATH: "/usr/bin:/bin" },
+                            }
                           : input,
                       ),
               }),

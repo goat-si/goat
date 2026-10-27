@@ -309,6 +309,7 @@ it.effect("applies the host allowlist to every argument a write declares names a
       "hub.device_join",
       "hub.device_leave",
       "hub.device_repair",
+      "hub.device_setup",
       "ssh.host_forget",
       "ssh.host_prepare",
       "ssh.runtime_update",

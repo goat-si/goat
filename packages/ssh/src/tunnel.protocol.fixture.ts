@@ -649,6 +649,8 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
           makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n"),
         );
       if (command.args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+      // A failed POSIX command asks whether the host is native Windows; this host is not.
+      if (command.args.includes("powershell.exe")) return Effect.succeed(makeSuccessfulProcess(""));
       return Effect.die("Unexpected test transport command; real SSH is prohibited");
     }
     remoteCommands.push(command);
