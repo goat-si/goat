@@ -131,6 +131,7 @@ vi.mock("./chat/ChatComposer", async () => {
             }),
             validateProviderInput: () => true,
             resetCursorState: () => {},
+            isModelPickerOpen: () => false,
             focus: () => {},
             focusAtEnd: () => {},
             restoreAfterTimelineReachedEnd: () => {},
@@ -636,9 +637,8 @@ describe("right panel in narrow windows", () => {
     if (options.maximized) useRightPanelStore.getState().setMaximized(ref, true);
     if (options.requestMaximize) useRightPanelStore.getState().requestMaximize(ref);
     await fixture.mount();
-    const chatColumn = page.elementLocator(
-      fixture.container.querySelector<HTMLElement>("[data-chat-column-maximized-away]")!,
-    );
+    const chatColumn = () =>
+      fixture.container.querySelector<HTMLElement>("[data-chat-column-maximized-away]");
     const owned = stack.move();
     return { chatColumn, [Symbol.asyncDispose]: () => owned.disposeAsync() };
   }
@@ -650,15 +650,15 @@ describe("right panel in narrow windows", () => {
       .getByRole("dialog")
       .getByRole("button", { name: "Maximize panel", exact: true })
       .click();
-    await expect
-      .element(panel.chatColumn)
-      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    await vi.waitFor(() =>
+      expect(panel.chatColumn()).toHaveAttribute("data-chat-column-maximized-away", "true"),
+    );
     await expect.element(page.getByRole("button", { name: "Restore panel size" })).toBeVisible();
 
     await userEvent.keyboard("{Control>}{Shift>}m{/Shift}{/Control}");
-    await expect
-      .element(panel.chatColumn)
-      .toHaveAttribute("data-chat-column-maximized-away", "false");
+    await vi.waitFor(() =>
+      expect(panel.chatColumn()).toHaveAttribute("data-chat-column-maximized-away", "false"),
+    );
     await expect.element(page.getByRole("dialog")).toBeVisible();
     await expect
       .element(page.getByRole("button", { name: "Maximize panel", exact: true }))
@@ -667,18 +667,18 @@ describe("right panel in narrow windows", () => {
 
   it("honors a saved maximized panel despite the narrow viewport", async () => {
     await using panel = await setupPanel({ maximized: true });
-    await expect
-      .element(panel.chatColumn)
-      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    await vi.waitFor(() =>
+      expect(panel.chatColumn()).toHaveAttribute("data-chat-column-maximized-away", "true"),
+    );
     await page.getByRole("button", { name: "Restore panel size" }).click();
     await expect.element(page.getByRole("dialog")).toBeVisible();
   });
 
   it("consumes a linked-thread maximize request in a narrow viewport", async () => {
     await using panel = await setupPanel({ requestMaximize: true });
-    await expect
-      .element(panel.chatColumn)
-      .toHaveAttribute("data-chat-column-maximized-away", "true");
+    await vi.waitFor(() =>
+      expect(panel.chatColumn()).toHaveAttribute("data-chat-column-maximized-away", "true"),
+    );
     expect(useRightPanelStore.getState().pendingMaximizeThreadKey).toBeNull();
   });
 });
