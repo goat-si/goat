@@ -11,12 +11,11 @@ import * as Layer from "effect/Layer";
 import * as Statement from "effect/sql/Statement";
 import * as RelayDb from "../db.ts";
 import * as Configuration from "../Config.ts";
-import * as Accounts from "../auth/ConnectAccounts.ts";
 import * as Dpop from "../auth/DpopProofs.ts";
 import * as Tokens from "../auth/RelayTokens.ts";
 import { unlinkEnvironmentRecord } from "../http/Api.ts";
 import * as HookInbox from "../hooks/HookInbox.ts";
-import { postgresFixture } from "../auth/connectPostgres.testkit.ts";
+import { awaitPostgresMilestone, postgresFixture } from "../auth/connectPostgres.testkit.ts";
 import * as Allocations from "./ManagedEndpointAllocations.ts";
 import * as Limits from "./ManagedTunnelLimits.ts";
 import * as Provider from "./ManagedEndpointProvider.ts";
@@ -121,9 +120,7 @@ function fixture(gate?: {
         Credentials.layer,
         Tokens.layer,
         Dpop.layer,
-        Accounts.layer,
         Allocations.layer,
-        RelayDb.RelayTransactions.layer,
       ),
     ),
     Layer.provideMerge(postgresFixture),
@@ -268,7 +265,7 @@ it.effect("an obsolete checkpoint cannot adopt a replacement allocation at gener
       const { request } = yield* setup;
       const linker = yield* Linker.EnvironmentLinker;
       const old = yield* linker.link({ userId: "user_123", request }).pipe(Effect.forkChild);
-      yield* Deferred.await(oldCreated);
+      yield* awaitPostgresMilestone(oldCreated, old);
       const allocations = yield* Allocations.ManagedEndpointAllocations;
       const key = { userId: "user_123", environmentId: intent.environmentId };
       const oldAllocation = yield* allocations.get(key);
@@ -277,7 +274,7 @@ it.effect("an obsolete checkpoint cannot adopt a replacement allocation at gener
       const current = yield* linker
         .link({ userId: "user_123", request: replacement })
         .pipe(Effect.forkChild);
-      yield* Deferred.await(replacementCreated);
+      yield* awaitPostgresMilestone(replacementCreated, current);
       const before = yield* allocations.get(key);
       expect(before?.generation).toBe(0);
       expect(before?.incarnationId).not.toBe(oldAllocation?.incarnationId);
@@ -332,12 +329,12 @@ it.effect("an obsolete recovery cannot fence a replacement attempt using the sam
         }),
         Effect.forkChild,
       );
-      yield* Deferred.await(recoveryPaused);
+      yield* awaitPostgresMilestone(recoveryPaused, obsolete);
       yield* loseExecution;
       const replacement = yield* linker
         .link({ userId: "user_123", request })
         .pipe(Effect.forkChild);
-      yield* Deferred.await(replacementCreated);
+      yield* awaitPostgresMilestone(replacementCreated, replacement);
       const before =
         yield* db.$client`SELECT status, attempt_id FROM relay_connect_link_reservations`;
       expect(before).toHaveLength(1);
@@ -390,7 +387,7 @@ it.effect(
           ),
         )
         .pipe(Effect.forkChild);
-      yield* Deferred.await(cleanupEntered);
+      yield* awaitPostgresMilestone(cleanupEntered, recovery);
       const db = yield* RelayDb.RelayDb;
       expect(
         (yield* reservations.complete(reservation, commitOutcome(provisioned)).pipe(Effect.result))
@@ -454,7 +451,7 @@ it.effect(
           ),
         )
         .pipe(Effect.forkChild);
-      yield* Deferred.await(entered);
+      yield* awaitPostgresMilestone(entered, complete);
       // The execution owner can disappear while completion owns a different connection.
       expect(
         (yield* reservations
@@ -490,7 +487,7 @@ it.effect(
               ),
               Effect.forkChild,
             );
-          yield* Deferred.await(recoveryEntered);
+          yield* awaitPostgresMilestone(recoveryEntered, recovery);
           yield* Deferred.succeed(release, undefined);
           const committed = yield* Fiber.join(complete);
           yield* Deferred.succeed(releaseCleanup, undefined);
@@ -531,7 +528,7 @@ it.effect.each([false, true])(
         const worker = yield* linker
           .link({ userId: "user_123", request: pending })
           .pipe(Effect.forkChild);
-        yield* Deferred.await(entered);
+        yield* awaitPostgresMilestone(entered, worker);
         const withdrawal = yield* unlinkEnvironmentRecord({
           userId: "user_123",
           environmentId: intent.environmentId,
@@ -688,7 +685,7 @@ it.effect(
           }),
         )
         .pipe(Effect.forkChild);
-      yield* Deferred.await(entered);
+      yield* awaitPostgresMilestone(entered, owner);
       const request = yield* replacementRequest("replacement");
       expect(
         (yield* (yield* Linker.EnvironmentLinker)
@@ -724,7 +721,7 @@ it.effect.each(["create", "token"] as const)(
         const oldWorker = yield* linker
           .link({ userId: "user_123", request })
           .pipe(Effect.forkChild);
-        yield* Deferred.await(provisioned);
+        yield* awaitPostgresMilestone(provisioned, oldWorker);
         const db = yield* RelayDb.RelayDb;
         const owners = yield* db.$client<{ pid: number }>`SELECT pid FROM pg_locks
         WHERE locktype = 'advisory' AND granted AND objsubid = 1
@@ -790,7 +787,7 @@ it.effect(
         const { request, reservation } = yield* abandoned;
         const linker = yield* Linker.EnvironmentLinker;
         const retry = yield* linker.link({ userId: "user_123", request }).pipe(Effect.forkChild);
-        yield* Deferred.await(entered);
+        yield* awaitPostgresMilestone(entered, retry);
         const db = yield* RelayDb.RelayDb;
         const row =
           (yield* db.$client`SELECT status, attempt_id FROM relay_connect_link_reservations`)[0];

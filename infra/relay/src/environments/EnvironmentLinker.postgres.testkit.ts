@@ -26,13 +26,7 @@ export function layer(calls: string[], failProvision = false, expireDuringProvis
   return Linker.layer.pipe(
     Layer.provideMerge(Reservations.layer),
     Layer.provideMerge(
-      Layer.mergeAll(
-        Links.layer,
-        Credentials.layer,
-        RelayTokens.layer,
-        DpopProofs.layer,
-        ConnectAccounts.layer,
-      ),
+      Layer.mergeAll(Links.layer, Credentials.layer, RelayTokens.layer, DpopProofs.layer),
     ),
     Layer.provideMerge(postgresFixture),
     Layer.provide(RelayConfiguration.layer(config)),

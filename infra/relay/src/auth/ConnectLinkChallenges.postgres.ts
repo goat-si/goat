@@ -1,7 +1,9 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -14,16 +16,34 @@ import * as Approvals from "./CliLinkApprovals.ts";
 import * as Replay from "./DpopProofs.ts";
 import * as Tokens from "./RelayTokens.ts";
 import { createLinkChallenge } from "./ConnectLinkChallenges.ts";
-import { postgresFixture } from "./connectPostgres.testkit.ts";
+import { awaitPostgresMilestone, postgresFixture } from "./connectPostgres.testkit.ts";
 import { config, intent, makeAssurance } from "../environments/EnvironmentLinker.testkit.ts";
 
-const layer = Layer.mergeAll(Approvals.layer, Tokens.layer, RelayDb.RelayTransactions.layer).pipe(
+const layer = Layer.mergeAll(Approvals.layer, Tokens.layer).pipe(
   Layer.provideMerge(Replay.layer),
-  Layer.provideMerge(ConnectAccounts.layer),
   Layer.provideMerge(postgresFixture),
   Layer.provideMerge(Config.layer(config)),
   Layer.provideMerge(NodeCrypto.layer),
 );
+
+it.effect(
+  "a missing worker service fails a PostgreSQL milestone wait with the original defect",
+  () =>
+    Effect.gen(function* () {
+      const milestone = yield* Deferred.make<void>();
+      const worker = yield* Effect.sync(() =>
+        Context.getUnsafe(Context.empty(), ConnectAccounts.ConnectAccounts),
+      ).pipe(Effect.forkChild);
+      const outcome = yield* awaitPostgresMilestone(milestone, worker).pipe(Effect.exit);
+      expect(outcome._tag).toBe("Failure");
+      if (outcome._tag === "Failure") {
+        expect(Cause.squash(outcome.cause)).toMatchObject({
+          message: "Service not found: goat-relay/auth/ConnectAccounts",
+        });
+      }
+    }),
+);
+
 it.effect(
   "challenge signing failure rolls back approval consumption and the same approval can retry",
   () =>

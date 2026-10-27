@@ -18,7 +18,6 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as RelayDb from "../db.ts";
 import * as Config from "../Config.ts";
 import * as Api from "./Api.ts";
-import * as ConnectAccounts from "../auth/ConnectAccounts.ts";
 import * as ClientKeys from "../auth/ClientKeys.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
@@ -93,8 +92,6 @@ it.effect(
           ),
         ),
         Layer.provideMerge(DpopProofs.layer),
-        Layer.provideMerge(ConnectAccounts.layer),
-        Layer.provideMerge(RelayDb.RelayTransactions.layer),
         Layer.provideMerge(postgresFixture),
         Layer.provideMerge(
           Config.layer({
@@ -172,6 +169,7 @@ it.effect(
       let nonce = 0;
       const request = (path: string, body?: unknown, token = "oauth", method = "POST") => {
         const url = `${config.relayIssuer}${path}`;
+        const origin = new URL(url);
         const header = Buffer.from(JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk })).toString(
           "base64url",
         );
@@ -187,6 +185,9 @@ it.effect(
             new Request(url, {
               method,
               headers: {
+                // Effect reconstructs the public URL from these proxy headers.
+                host: origin.host,
+                "x-forwarded-proto": origin.protocol.slice(0, -1),
                 authorization: `Bearer ${token}`,
                 dpop: `${header}.${claims}.${signature}`,
                 "content-type": "application/json",

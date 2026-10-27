@@ -4,14 +4,18 @@ import * as PgClient from "@effect/sql-pg/PgClient";
 import * as PgDrizzle from "drizzle-orm/effect-postgres";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Crypto from "effect/Crypto";
 import * as Redacted from "effect/Redacted";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as TestClock from "effect/testing/TestClock";
+import * as ConnectAccounts from "./ConnectAccounts.ts";
 import * as WebCrypto from "../WebCrypto.ts";
 import * as RelayDb from "../db.ts";
 
-export const postgresFixture = Layer.effect(
+const databaseFixture = Layer.effect(
   RelayDb.RelayDb,
   Effect.gen(function* () {
     const url = process.env.CONNECT_TEST_DATABASE_URL;
@@ -29,7 +33,7 @@ export const postgresFixture = Layer.effect(
     const scoped = yield* PgClient.make({
       url: Redacted.make(url),
       startupOptions: `-c search_path=${schema}`,
-    });
+    }).pipe(TestClock.withLive);
     const migrationsRoot = new URL("../../migrations/postgres/", import.meta.url);
     const migrations = (yield* Effect.promise(() => NodeFSP.readdir(migrationsRoot))).sort();
     for (const name of migrations) {
@@ -51,10 +55,31 @@ export const postgresFixture = Layer.effect(
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle })),
   Layer.provide(
-    PgClient.layer({
-      url: Redacted.make(
-        process.env.CONNECT_TEST_DATABASE_URL ?? "postgres://localhost/connect_test",
-      ),
-    }),
+    // Pool idle timers must not replay decades when auth tests advance their TestClock.
+    Layer.effect(
+      PgClient.PgClient,
+      PgClient.make({
+        url: Redacted.make(
+          process.env.CONNECT_TEST_DATABASE_URL ?? "postgres://localhost/connect_test",
+        ),
+      }).pipe(TestClock.withLive),
+    ).pipe(Layer.provide(Reactivity.layer)),
   ),
 );
+
+export const postgresFixture = Layer.mergeAll(
+  ConnectAccounts.layer,
+  RelayDb.RelayTransactions.layer,
+).pipe(Layer.provideMerge(databaseFixture));
+
+export const awaitPostgresMilestone = Effect.fn("test.awaitPostgresMilestone")(function* <A, E>(
+  milestone: Deferred.Deferred<void>,
+  worker: Fiber.Fiber<A, E>,
+) {
+  return yield* Effect.raceFirst(
+    Deferred.await(milestone),
+    Fiber.join(worker).pipe(
+      Effect.andThen(Effect.die("PostgreSQL worker exited before reaching its milestone")),
+    ),
+  );
+});

@@ -27,7 +27,6 @@ const request = {
   now,
 };
 const layer = ClientKeys.layer.pipe(
-  Layer.provideMerge(ConnectAccounts.layer),
   Layer.provideMerge(postgresFixture),
   Layer.provide(NodeCrypto.layer),
 );
