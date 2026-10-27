@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 const ps = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+const installer = NodePath.join(import.meta.dirname, "install.ps1");
 const powershell = (command: string, env: NodeJS.ProcessEnv = process.env) =>
   execFile(
     "powershell.exe",
@@ -22,8 +23,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
   "Windows archive installer",
   () => {
     // oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Windows-only integration launches real PowerShell and native archive executables; its process watchdog is 90 seconds.
-    it("repairs marker-only/broken entries, reuses a runnable cache and preserves upstream t3", async () => {
+    it("repairs marker-only/broken entries, reuses a runnable cache, preserves upstream t3 and runs goat opencodex install only when opted in", async () => {
       const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-install-"));
+      // The copied node.exe stands in for goat.exe, so "goat opencodex install" runs this script.
+      const commandDir = NodePath.join(root, "command");
+      await NodeFSP.mkdir(commandDir);
+      await NodeFSP.writeFile(
+        NodePath.join(commandDir, "opencodex"),
+        'if (process.argv[2] !== "install") process.exit(29); console.error("OCX_INSTALL_CALLED"); process.exit(Number(process.env.FAKE_OCX_EXIT || 0));',
+      );
       let server: NodeHttp.Server | undefined;
       try {
         const version = "1.2.3";
@@ -64,7 +72,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
           if (cache === "ready")
             await NodeFSP.copyFile(process.execPath, NodePath.join(target, "goat.exe"));
           const before = archiveRequests;
-          await powershell(`& ${ps(NodePath.join(import.meta.dirname, "install.ps1"))}`, {
+          await powershell(`& ${ps(installer)}`, {
             ...process.env,
             GOAT_VERSION: version,
             GOAT_CHANNEL: "stable",
@@ -90,6 +98,35 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
             "upstream launcher",
           );
         }
+        for (const [option, exitCode] of [
+          ["", "0"],
+          ["--opencodex", "0"],
+          ["--opencodex", "17"],
+        ] as const) {
+          const execution = powershell(
+            `Set-Location ${ps(commandDir)}; & ${ps(installer)} ${option}`,
+            {
+              ...process.env,
+              GOAT_VERSION: version,
+              GOAT_CHANNEL: "stable",
+              GOAT_HOME: NodePath.join(root, "home opencodex"),
+              GOAT_INSTALL_BIN_DIR: NodePath.join(root, "bin opencodex"),
+              GOAT_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+              FAKE_OCX_EXIT: exitCode,
+            },
+          );
+          if (exitCode === "17") {
+            await expect(execution).rejects.toMatchObject({
+              code: 1,
+              stderr: expect.stringContaining("OpenCodex installation failed; GOAT is installed"),
+            });
+          } else {
+            const result = await execution;
+            expect(result.stderr.includes("OCX_INSTALL_CALLED")).toBe(option === "--opencodex");
+            if (option === "--opencodex")
+              expect(result.stderr).toContain("installation alone does not make it Ready");
+          }
+        }
       } finally {
         if (server) {
           server.closeAllConnections();
@@ -98,5 +135,41 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
         await NodeFSP.rm(root, { recursive: true, force: true });
       }
     }, 120_000);
+
+    it("prints installer help listing --opencodex before downloading or changing state", async () => {
+      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-install-help-"));
+      try {
+        const result = await powershell(`& ${ps(installer)} --help`, {
+          ...process.env,
+          GOAT_HOME: NodePath.join(root, "home"),
+          GOAT_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
+          GOAT_RELEASE_BASE_URL: "http://127.0.0.1:9",
+        });
+        expect(result.stdout).toContain("--opencodex");
+        expect(await NodeFSP.readdir(root)).toEqual([]);
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a misspelled installer option before downloading or changing state", async () => {
+      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-install-typo-"));
+      try {
+        await expect(
+          powershell(`& ${ps(installer)} --opencodxe`, {
+            ...process.env,
+            GOAT_HOME: NodePath.join(root, "home"),
+            GOAT_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
+            GOAT_RELEASE_BASE_URL: "http://127.0.0.1:9",
+          }),
+        ).rejects.toMatchObject({
+          code: 1,
+          stderr: expect.stringContaining("unknown option --opencodxe"),
+        });
+        expect(await NodeFSP.readdir(root)).toEqual([]);
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    });
   },
 );

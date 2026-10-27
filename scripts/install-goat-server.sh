@@ -11,6 +11,7 @@
 #                   instead of downloading a published release
 #   --tailscale     publish the server on your tailnet (Tailscale Serve HTTPS)
 #                   and print pairing links for that address
+#   --opencodex     also install OpenCodex; joining a Home is a separate step
 #   --no-service    skip the background service; run goat serve yourself
 #   --no-pair       skip the pairing links
 #
@@ -32,6 +33,7 @@ archive=
 tailscale=false
 service=true
 pair=true
+opencodex=false
 
 fail() {
   printf '\ngoat server install: %s\n' "$1" >&2
@@ -48,10 +50,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --archive=*) archive="${1#--archive=}"; shift ;;
     --tailscale) tailscale=true; shift ;;
+    --opencodex) opencodex=true; shift ;;
     --no-service) service=false; shift ;;
     --no-pair) pair=false; shift ;;
     -h | --help)
-      sed -n '2,19p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' >&2 || true
+      sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' >&2 || true
       exit 0
       ;;
     *) fail "unknown option $1 (see --help)" ;;
@@ -132,6 +135,12 @@ fi
 if [ -x "${bin_dir}/goat" ]; then goat="${bin_dir}/goat"
 elif command -v goat >/dev/null 2>&1; then goat="$(command -v goat)"
 else fail "the goat command was not installed"; fi
+
+if "$opencodex"; then
+  say "Installing OpenCodex..."
+  "$goat" opencodex install || fail "OpenCodex installation failed; GOAT is installed. Run: $goat opencodex install"
+  say "OpenCodex is installed. Join this machine to your Home from Hub devices on the Home; installation alone does not make it Ready."
+fi
 
 if "$service"; then
   say "Starting GOAT as a background service..."

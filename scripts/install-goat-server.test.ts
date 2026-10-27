@@ -14,6 +14,7 @@ const FAKE_GOAT = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_GOAT_LOG"
 case "$1" in
   --version) echo "goat v1.2.3" ;;
+  opencodex) [ -z "$FAKE_OCX_FAIL" ] || exit 17 ;;
   service) ;;
   pair)
     if [ -n "$FAKE_NO_SERVER" ]; then echo "No running GOAT server found." >&2; exit 1; fi
@@ -55,6 +56,8 @@ const run = async (
     readonly sums?: (archive: string) => string;
     /** goat pair fails as it does when no server is running. */
     readonly noServer?: boolean;
+    /** goat opencodex install exits nonzero. */
+    readonly opencodexFails?: boolean;
   } = {},
 ) => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-server-install-"));
@@ -75,6 +78,7 @@ const run = async (
     GOAT_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
     FAKE_GOAT_LOG: log,
     FAKE_NO_SERVER: options.noServer === true ? "1" : "",
+    FAKE_OCX_FAIL: options.opencodexFails === true ? "1" : "",
     // Never reach a real installer from a test.
     GOAT_INSTALLER_URL: "http://127.0.0.1:9/install.sh",
   };
@@ -171,5 +175,52 @@ describe("install-goat-server.sh", () => {
     await NodeFSP.access(
       NodePath.join(result.root, "user/.t3/runtime/goat/versions/1.2.3-nightly.20261019.1/goat"),
     );
+  });
+
+  it("installs OpenCodex through the installed goat before starting the service when opted in", async () => {
+    const result = await run([`archive:${platformKey}`, "--opencodex"]);
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual([
+      "--version",
+      "opencodex install",
+      "service install",
+      "pair --label GOAT app",
+      "pair --label Agent link --scope orchestration:read --scope orchestration:operate",
+    ]);
+    expect(result.stderr).toContain("installation alone does not make it Ready");
+  });
+
+  it("installs OpenCodex even when the service and pairing links are skipped", async () => {
+    const result = await run([
+      `archive:${platformKey}`,
+      "--opencodex",
+      "--no-service",
+      "--no-pair",
+    ]);
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual(["--version", "opencodex install"]);
+  });
+
+  it("stops before the service and pairing links when OpenCodex installation fails", async () => {
+    const result = await run([`archive:${platformKey}`, "--opencodex"], {
+      opencodexFails: true,
+    });
+    expect(result.status).toBe(1);
+    expect(result.calls).toEqual(["--version", "opencodex install"]);
+    expect(result.stderr).toContain("OpenCodex installation failed; GOAT is installed");
+  });
+
+  it("prints help listing --opencodex without installing anything", async () => {
+    const result = await run(["--help"]);
+    expect(result.status).toBe(0);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("--opencodex");
+  });
+
+  it("rejects a misspelled option before installing anything", async () => {
+    const result = await run(["--opencodxe"]);
+    expect(result.status).toBe(1);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("unknown option --opencodxe");
   });
 });
