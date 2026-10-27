@@ -214,12 +214,22 @@ export function redactComputerUseTypedText(
 
 /** What a call's output shows in place of a value its input typed. */
 const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
-/** Shorter typed values are masked only as a whole output string, so "a" leaves other text alone. */
+/** Shorter typed values are masked only as whole tokens, so "123" never eats into "1234". */
 const MIN_EMBEDDED_TYPED_LENGTH = 4;
+
+const regexLiteral = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Whether a key of this output object carries protocol structure or binary data, never text. */
+const structuralKey = (object: Record<string, unknown>, key: string) =>
+  key === "type" ||
+  key === "mimeType" ||
+  (key === "data" && (object.type === "image" || typeof object.mimeType === "string"));
 
 /**
  * A computer-use call's output with every value its input typed masked, since a batch report can
- * echo a checked value. A script's own results are page reads, which private mode governs.
+ * echo a checked value. Each value goes as typed and as JSON escapes it, for a result kept as a
+ * JSON text block; content types, MIME types and image data stay as they are. A script's own
+ * results are page reads, which private mode governs.
  */
 export function redactComputerUseTypedOutput(
   toolName: string | null | undefined,
@@ -232,20 +242,34 @@ export function redactComputerUseTypedOutput(
     return value;
   });
   if (typed.size === 0 || output === undefined) return output;
-  const embedded = [...typed]
-    .filter((value) => value.length >= MIN_EMBEDDED_TYPED_LENGTH)
-    .sort((a, b) => b.length - a.length);
-  const mask = (text: string) =>
-    typed.has(text)
-      ? COMPUTER_USE_TYPED_OUTPUT
-      : embedded.reduce((each, value) => each.split(value).join(COMPUTER_USE_TYPED_OUTPUT), text);
+  const forms = [
+    ...new Set([...typed].flatMap((value) => [value, JSON.stringify(value).slice(1, -1)])),
+  ]
+    .sort((left, right) => right.length - left.length)
+    .map((form) => ({ form, literal: regexLiteral(form) }));
+  const long = forms.filter(({ form }) => form.length >= MIN_EMBEDDED_TYPED_LENGTH);
+  const short = forms.filter(({ form }) => form.length < MIN_EMBEDDED_TYPED_LENGTH);
+  const pattern = new RegExp(
+    [
+      ...long.map(({ literal }) => literal),
+      ...(short.length === 0
+        ? []
+        : [`(?<![A-Za-z0-9])(?:${short.map(({ literal }) => literal).join("|")})(?![A-Za-z0-9])`]),
+    ].join("|"),
+    "g",
+  );
   const walk = (value: unknown): unknown => {
-    if (typeof value === "string") return mask(value);
+    if (typeof value === "string") return value.replace(pattern, COMPUTER_USE_TYPED_OUTPUT);
     if (Array.isArray(value)) return value.map(walk);
     const object = asRecord(value);
     return object === undefined
       ? value
-      : Object.fromEntries(Object.entries(object).map(([key, each]) => [key, walk(each)]));
+      : Object.fromEntries(
+          Object.entries(object).map(([key, each]) => [
+            key,
+            structuralKey(object, key) ? each : walk(each),
+          ]),
+        );
   };
   return walk(output);
 }

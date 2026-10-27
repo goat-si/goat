@@ -1,3 +1,4 @@
+import { redactComputerUseTypedOutput } from "@goat/shared/toolActivity";
 import {
   MessageId,
   ContextHandoffId,
@@ -171,6 +172,45 @@ describe("orchestration V2 wire projection", () => {
     const detail = projectTurnItemForDetail(item);
     expect(JSON.stringify(detail.type === "dynamic_tool" ? detail.output : null)).toContain(
       'expected value \\"[typed text]\\" but saw',
+    );
+  });
+
+  it("masks short and JSON-escaped typed values in a batch's result, and keeps its image blocks intact", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { set_value: { name: "PIN", value: "123" }, expect: [{ value: "123" }] },
+          { type_text: { text: 'a"b\\c\nd' } },
+          { type_text: { text: "image" } },
+        ],
+      },
+      output: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ message: 'value "123" expected', typed: 'a"b\\c\nd' }),
+          },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+      },
+    } as OrchestrationV2TurnItem;
+    const row = projectTranscriptRowForClient({ position: 0, item });
+    const output =
+      row.item.type === "dynamic_tool"
+        ? (row.item.output as { content: Array<Record<string, string>> })
+        : undefined;
+    const text = JSON.parse(output!.content[0]!.text!) as Record<string, string>;
+    expect(text).toEqual({ message: 'value "[typed text]" expected', typed: "[typed text]" });
+    expect(output!.content[1]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: "iVBORw0KGgo=",
+    });
+    // A short value is masked as a whole token, never inside a longer one.
+    expect(redactComputerUseTypedOutput(item.toolName, item.input, "code 1234 and 123")).toBe(
+      "code 1234 and [typed text]",
     );
   });
 
