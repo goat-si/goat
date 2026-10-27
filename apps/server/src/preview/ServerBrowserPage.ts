@@ -21,7 +21,7 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
-import { maskSnapshotRecords } from "./pageSecrets.ts";
+import { maskSnapshotRecords, playwrightQuoted } from "./pageSecrets.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
@@ -446,14 +446,6 @@ const openReaders = async (page: Page, cdp: CDPSession) => {
     },
   };
 };
-
-/** How Playwright's snapshot quotes text: JSON's escapes, and \xNN for the unnamed controls. */
-export const playwrightQuoted = (value: string) =>
-  value.replace(/[\\"\p{Cc}]/gu, (char) =>
-    '\\"\b\f\n\r\t'.includes(char)
-      ? JSON.stringify(char).slice(1, -1)
-      : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-  );
 
 /** Short values need word boundaries to avoid masking unrelated text. */
 const dottedPattern = (values: ReadonlyArray<string>) => {

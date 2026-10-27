@@ -16,7 +16,8 @@ import * as Schema from "effect/Schema";
 import type { CDPSession, Frame, Page } from "playwright-core";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import { playwrightQuoted, ServerBrowserOperationError } from "./ServerBrowserPage.ts";
+import { playwrightQuoted } from "./pageSecrets.ts";
+import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 /** The part of a server browser tab this module reads. */

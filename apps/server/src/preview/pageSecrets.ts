@@ -16,6 +16,14 @@ import { MIN_SECRET_LENGTH, redactCookieValues } from "./cookieValues.ts";
 
 const MASKED_VALUE = "••••••••";
 
+/** How Playwright's snapshot quotes text: JSON's escapes, and \xNN for the unnamed controls. */
+export const playwrightQuoted = (value: string) =>
+  value.replace(/[\\"\p{Cc}]/gu, (char) =>
+    '\\"\b\f\n\r\t'.includes(char)
+      ? JSON.stringify(char).slice(1, -1)
+      : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
+
 type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
 
 type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
