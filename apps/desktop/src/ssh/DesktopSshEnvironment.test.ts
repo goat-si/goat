@@ -38,7 +38,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import * as Sink from "effect/Sink";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -47,15 +46,18 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
-
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
+import {
+  probeCapableConfig,
+  successfulProcess,
+  unusedManager,
+} from "./DesktopSshEnvironment.fixture.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 import { makeEnsureFlightFixture } from "../../../../packages/ssh/src/tunnel.ensure-flight.fixture.ts";
 import { uploadTarget } from "../../../../packages/ssh/src/tunnel.fixture.ts";
 import { bootstrapSshBearerSession, ensureSshEnvironment } from "../ipc/methods/sshEnvironment.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as IpcChannels from "../ipc/channels.ts";
-
 vi.mock("electron", () => ({}));
 
 const decodeBootstrap = Schema.decodeUnknownEffect(DesktopSshEnvironmentBootstrapSchema);
@@ -87,21 +89,6 @@ const waitingStatus = {
   },
 } as const;
 
-const unusedManager = {
-  status: () => Effect.die("unexpected status"),
-  ensureEnvironment: () => Effect.die("unexpected ensure"),
-  readyEnvironment: () => Effect.die("Unexpected ready environment"),
-  beginSetupOperation: () => Effect.die("Unexpected setup operation"),
-  publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
-  publishSetupOutcome: () => Effect.die("Unexpected setup outcome"),
-  forgetEnvironment: () => Effect.die("Unexpected forget"),
-  disconnectEnvironment: () => Effect.void,
-  revalidateTunnels: () => Effect.void,
-  issueMcpClientSession: () => Effect.die("unexpected session"),
-  issueClientSession: () => Effect.die("unexpected client session"),
-  runRemoteScript: () => Effect.die("unexpected remote script"),
-} satisfies SshTunnel.SshEnvironmentManagerShape;
-
 const desktopRuntimeLayer = Layer.mergeAll(
   NodeServices.layer,
   NodeHttpClient.layerUndici,
@@ -114,21 +101,6 @@ const desktopRuntimeLayer = Layer.mergeAll(
 
 const withManager = (manager: SshTunnel.SshEnvironmentManagerShape) =>
   Layer.mergeAll(desktopRuntimeLayer, Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
-
-const successfulProcess = (stdout: string) =>
-  ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(123),
-    stdout: Stream.make(new TextEncoder().encode(stdout)),
-    stderr: Stream.empty,
-    all: Stream.empty,
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    stdin: Sink.drain,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-    unref: Effect.succeed(Effect.void),
-  });
 
 describe("desktop SSH runtime status", () => {
   it.effect("uses the existing desktop manager for status when_idle and now", () => {
@@ -397,10 +369,11 @@ describe("desktop SSH runtime status", () => {
 
 describe("sshEnvironment", () => {
   it.effect(
-    "shares one real manager preparation across two window gateways and independent supervisors",
+    "shares SSH preparation across windows and preserves a delayed health probe (#1922)",
     () =>
       Effect.gen(function* () {
         const fixture = yield* makeEnsureFlightFixture;
+        const probeAnswered = yield* Deferred.make<void>();
         yield* Effect.gen(function* () {
           const scope = yield* Scope.Scope;
           const service = yield* DesktopSshEnvironment.make;
@@ -440,6 +413,7 @@ describe("sshEnvironment", () => {
                 Effect.provideService(Wakeups.ConnectionWakeups, { changes: Stream.never }),
                 Effect.provideService(ConnectionDriver, {
                   checkRoute: () => Effect.succeed("unchecked"),
+                  checkHost: () => Effect.succeed("unchecked"),
                   preflight: () => Effect.succeed(false),
                   connect: (_entry, report, context) =>
                     Effect.gen(function* () {
@@ -591,10 +565,11 @@ describe("sshEnvironment", () => {
                           prepared,
                           session: {
                             client: {} as WsRpcProtocolClient,
-                            initialConfig: Effect.die("unused config"),
+                            initialConfig: Effect.succeed(probeCapableConfig),
                             subscribeServerConfig: () => Stream.never,
                             ready: Effect.void,
-                            probe: Effect.void,
+                            probe: Deferred.await(probeAnswered),
+                            inboundFrames: Effect.succeed(0),
                             closed: Effect.never,
                           },
                         };
@@ -658,6 +633,11 @@ describe("sshEnvironment", () => {
             new Set(sent.filter((event) => event.terminal).map((event) => event.requestId)).size,
             3,
           );
+          const session = Option.getOrThrow(yield* SubscriptionRef.get(first.session));
+          yield* first.retryNow;
+          yield* TestClock.adjust("2500 millis");
+          assert.equal(Option.getOrThrow(yield* SubscriptionRef.get(first.session)), session);
+          yield* Deferred.succeed(probeAnswered, undefined);
           yield* TestClock.adjust("200 seconds");
           assert.equal(requestIds.length, 3);
           assert.equal(fixture.count.acquisitions, 1);
@@ -910,10 +890,11 @@ describe("sshEnvironment", () => {
       }).pipe(Effect.provide(desktopRuntimeLayer)),
   );
 
-  it.effect("learns 42 seconds when only the original SSH request authenticates", () =>
+  it.effect("learns 42-second SSH setup and preserves a delayed health probe (#1922)", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.Scope;
       const finishSetup = yield* Deferred.make<void>();
+      const probeAnswered = yield* Deferred.make<void>();
       const lock = yield* Semaphore.make(1);
       let requests = 0;
       let authentications = 0;
@@ -967,6 +948,7 @@ describe("sshEnvironment", () => {
         Effect.provideService(Wakeups.ConnectionWakeups, { changes: Stream.never }),
         Effect.provideService(ConnectionDriver, {
           checkRoute: () => Effect.succeed("unchecked"),
+          checkHost: () => Effect.succeed("unchecked"),
           preflight: () => Effect.succeed(false),
           connect: (_entry, progress) =>
             Effect.gen(function* () {
@@ -989,10 +971,11 @@ describe("sshEnvironment", () => {
                 prepared,
                 session: {
                   client: {} as WsRpcProtocolClient,
-                  initialConfig: Effect.die("unused config"),
+                  initialConfig: Effect.succeed(probeCapableConfig),
                   subscribeServerConfig: () => Stream.never,
                   ready: Effect.void,
-                  probe: Effect.void,
+                  probe: Deferred.await(probeAnswered),
+                  inboundFrames: Effect.succeed(0),
                   closed: Effect.never,
                 },
               };
@@ -1016,6 +999,11 @@ describe("sshEnvironment", () => {
       yield* Deferred.succeed(finishSetup, undefined);
       yield* awaitPhase("connected");
       assert.equal(authentications, 1);
+      const session = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      yield* supervisor.retryNow;
+      yield* TestClock.adjust("2500 millis");
+      assert.equal(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session)), session);
+      yield* Deferred.succeed(probeAnswered, undefined);
       yield* supervisor.disconnect;
       yield* awaitPhase("available");
       yield* supervisor.connect;

@@ -1,10 +1,11 @@
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomMount, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { executeAtomQuery, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestDiffStat, PullRequestListInput } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { use, useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+import { environmentCatalog } from "../../connection/catalog";
 import { composerPullRequests } from "../../state/pull-requests";
 import {
   appendPullRequestListPage,
@@ -44,11 +45,20 @@ const sourcesFamily = Atom.family((key: string) => {
   );
 });
 
+const sessionsFamily = Atom.family((scopeKey: string) =>
+  Atom.make((get) =>
+    (JSON.parse(scopeKey) as readonly ListTarget[])
+      .map(({ environmentId }) => get(environmentCatalog.sessionGenerationAtom(environmentId)))
+      .join(),
+  ),
+);
+
 export function usePullRequestList(targets: readonly ListTarget[]) {
   const registry = use(RegistryContext);
   const scopeKey = JSON.stringify(targets);
   const activeScope = useRef(scopeKey);
   const sources = useAtomValue(sourcesFamily(scopeKey));
+  const failedRequest = useRef<"page" | "refresh" | null>(null);
   const requests = useRef<{ page?: AbortController; refresh?: AbortController }>({});
   const [loading, setLoading] = useState({
     key: scopeKey,
@@ -59,6 +69,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   const state = loading.key === scopeKey ? loading : { page: false, refresh: false, error: null };
   useLayoutEffect(() => {
     activeScope.current = scopeKey;
+    failedRequest.current = null;
     return () => {
       requests.current.page?.abort();
       requests.current.refresh?.abort();
@@ -82,6 +93,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       if (!continuations.length) return;
       const controller = new AbortController();
       requests.current.page = controller;
+      failedRequest.current = null;
       setLoading({ key: scopeKey, page: true, refresh: false, error: null });
       const responses = await Promise.allSettled(
         continuations.map(async ({ target, pagesAtom, pages, input }) => {
@@ -114,8 +126,11 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
         }),
       );
       if (requests.current.page === controller) delete requests.current.page;
-      if (!controller.signal.aborted && activeScope.current === scopeKey)
-        setLoading({ key: scopeKey, page: false, refresh: false, error: requestErrors(responses) });
+      if (!controller.signal.aborted && activeScope.current === scopeKey) {
+        const error = requestErrors(responses);
+        failedRequest.current = error === null ? null : "page";
+        setLoading({ key: scopeKey, page: false, refresh: false, error });
+      }
     },
     [targets, registry, scopeKey, state.error, activeScope],
   );
@@ -126,6 +141,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     delete requests.current.page;
     const controller = new AbortController();
     requests.current.refresh = controller;
+    failedRequest.current = null;
     setLoading({ key: scopeKey, page: false, refresh: true, error: null });
     const responses = await Promise.allSettled(
       targets.map(async (target) => {
@@ -148,9 +164,24 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       }),
     );
     if (requests.current.refresh === controller) delete requests.current.refresh;
-    if (!controller.signal.aborted && activeScope.current === scopeKey)
-      setLoading({ key: scopeKey, page: false, refresh: false, error: requestErrors(responses) });
+    if (!controller.signal.aborted && activeScope.current === scopeKey) {
+      const error = requestErrors(responses);
+      failedRequest.current = error === null ? null : "refresh";
+      setLoading({ key: scopeKey, page: false, refresh: false, error });
+    }
   };
+
+  // A listener needs a mounted atom to follow newly established sessions.
+  useAtomMount(sessionsFamily(scopeKey));
+  useAtomSubscribe(sessionsFamily(scopeKey), () => {
+    if (activeScope.current !== scopeKey || requests.current.refresh || requests.current.page)
+      return;
+    if (failedRequest.current === "page") void loadMore(true);
+    else if (failedRequest.current === "refresh") {
+      failedRequest.current = null;
+      setLoading({ key: scopeKey, page: false, refresh: false, error: null });
+    }
+  });
 
   const data = useMemo(
     () =>
