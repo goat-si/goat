@@ -2,8 +2,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation/types.js";
+import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
+import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { CURSOR_OUTPUT_SCHEMA, helperCursorListing } from "./ComputerUseCursorTools.ts";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
@@ -168,6 +170,47 @@ describe("agent cursor tools on a helper that draws the cursor", () => {
       assert.isTrue((answer.result as { isError?: boolean }).isError);
       assert.equal(yield* h.driverQueued, 0);
     }),
+  );
+
+  it.effect(
+    "a cursor move GOAT answers itself leaves earlier unanswered input holding its window",
+    () =>
+      Effect.gen(function* () {
+        const reservations = makeCallReservations();
+        const thread = ThreadId.make("thread:cursor");
+        const h = yield* harness({
+          answersCursorTools: true,
+          reservation: (request) =>
+            Effect.sync(() =>
+              request.action === "reserve"
+                ? reservations.reserve(thread, request)
+                : request.action === "validate"
+                  ? {
+                      status: "admitted" as const,
+                      reservationId: request.reservationId,
+                      permissions: { validUntilMillis: 1_800_000 },
+                    }
+                  : reservations.release(thread, request, false),
+            ),
+        });
+        yield* h.push(active());
+        yield* h.applied;
+        yield* h.send(call(1, "type_text", { ...window, text: "still typing" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.send(call(2, "move_cursor", { ...window, x: 40, y: 20 }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        const other = {
+          action: "reserve",
+          controlId: "control:other",
+          connectionId: "proxy:other",
+          callId: "0",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: window,
+        } as const;
+        assert.isTrue(reservations.targetBusy(ThreadId.make("thread:other"), other));
+      }),
   );
 });
 

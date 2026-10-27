@@ -113,6 +113,21 @@ describe("read-back confirms only a change around the element the input aimed at
     }),
   );
 
+  it.effect("rows inserted before the target shift numbers into its range without confirming", () =>
+    Effect.gen(function* () {
+      const answer = yield* clickDarkThenDiff(
+        { since_status: "diff", snapshot_id: "s2" },
+        ['+ [1] AXToolbar "Tools"', '+ [2] AXButton "Back"', "reindexed: [1-4] -> [3-6]"].join(
+          "\n",
+        ),
+      );
+      assert.equal(answer.structuredContent.effect, "unverifiable");
+      assert.isTrue(
+        (answer.structuredContent.safety as { possibleCommit: boolean }).possibleCommit,
+      );
+    }),
+  );
+
   it.effect("a sibling the click switched off confirms it", () =>
     Effect.gen(function* () {
       const answer = yield* clickDarkThenDiff(
