@@ -1,4 +1,4 @@
-import { RunAttemptId, RunId } from "@goat/contracts";
+import { NodeId, RunAttemptId, RunId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { goatThreadCallOf } from "./goatThreadCalls";
@@ -113,15 +113,15 @@ describe("findSendingCall", () => {
   const entries = [launch, firstSend, secondSend];
 
   it("finds the send that delivered the message, not an earlier send to the same thread", () => {
-    expect(findSendingCall(entries, { threadId: "thread-lane", messageId: "message-2" })?.id).toBe(
-      secondSend.entry.id,
+    expect(findSendingCall(entries, { threadId: "thread-lane", messageId: "message-2" })).toBe(
+      secondSend,
     );
   });
 
   it("matches the launch only for the opening prompt, whose id is the thread's", () => {
-    expect(
-      findSendingCall(entries, { threadId: "thread-lane", messageId: "thread-lane" })?.id,
-    ).toBe(launch.entry.id);
+    expect(findSendingCall(entries, { threadId: "thread-lane", messageId: "thread-lane" })).toBe(
+      launch,
+    );
     // A later message whose send is still running or unreadable is not the launch.
     expect(
       findSendingCall(entries, { threadId: "thread-lane", messageId: "message-9" }),
@@ -148,23 +148,33 @@ describe("findSendingCall", () => {
         isExpandedToolGroup: true,
       },
     ];
-    expect(sendingCallRowIndex(rows, secondSend.entry, () => undefined)).toBe(1);
+    expect(sendingCallRowIndex(rows, secondSend, () => undefined)).toBe(1);
   });
 
-  it("points a call in a superseded attempt at that attempt's fold", () => {
+  it("points a call in a superseded attempt at that attempt's own fold", () => {
     const runId = RunId.make("run-1");
-    const rows: MessagesTimelineRow[] = [
-      {
-        kind: "attempt-fold",
-        id: "fold-attempt",
-        createdAt: "",
+    const attemptFold = (id: string) => ({
+      kind: "attempt-fold" as const,
+      id: "fold-" + id,
+      createdAt: "",
+      runId,
+      attemptId: RunAttemptId.make(id),
+      label: "Superseded attempt",
+      expanded: false,
+    });
+    const rows: MessagesTimelineRow[] = [attemptFold("attempt-1"), attemptFold("attempt-2")];
+    const inSecond = {
+      ...secondSend,
+      attempt: {
+        id: RunAttemptId.make("attempt-2"),
         runId,
-        attemptId: RunAttemptId.make("attempt-1"),
-        label: "Superseded attempt",
-        expanded: false,
+        attemptOrdinal: 2,
+        rootNodeId: NodeId.make("node-2"),
+        status: "interrupted",
+        completedAt: null,
       },
-    ];
-    expect(sendingCallRowIndex(rows, { ...secondSend.entry, runId }, () => undefined)).toBe(0);
+    } satisfies typeof secondSend;
+    expect(sendingCallRowIndex(rows, inSecond, () => undefined)).toBe(1);
   });
 
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {
@@ -180,7 +190,6 @@ describe("findSendingCall", () => {
         expanded: false,
       },
     ];
-    const folded = { ...secondSend.entry, runId };
-    expect(sendingCallRowIndex(rows, folded, () => "run-1:steer:s1")).toBe(1);
+    expect(sendingCallRowIndex(rows, secondSend, () => "run-1:steer:s1")).toBe(1);
   });
 });

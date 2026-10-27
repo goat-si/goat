@@ -8,20 +8,20 @@ import { goatThreadCallOf } from "./goatThreadCalls";
 import type { MessagesTimelineHistoryControls } from "./MessagesTimeline";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 
-type Entry = Extract<TimelineEntry, { kind: "work" }>["entry"];
+type WorkEntry = Extract<TimelineEntry, { kind: "work" }>;
 
 /** The call that delivered the message: its thread.send, or the launch that opened the thread with it. */
 export function findSendingCall(
   entries: ReadonlyArray<TimelineEntry>,
   target: { readonly threadId: string; readonly messageId: string },
-): Entry | null {
-  let launch: Entry | null = null;
+): WorkEntry | null {
+  let launch: WorkEntry | null = null;
   for (const timelineEntry of entries) {
     if (timelineEntry.kind !== "work") continue;
     const call = goatThreadCallOf(timelineEntry.entry);
     if (call === null || !call.threadIds.includes(target.threadId)) continue;
-    if (call.kind === "send" && call.messageId === target.messageId) return timelineEntry.entry;
-    if (call.kind !== "send") launch ??= timelineEntry.entry;
+    if (call.kind === "send" && call.messageId === target.messageId) return timelineEntry;
+    if (call.kind !== "send") launch ??= timelineEntry;
   }
   // A launched thread's opening prompt carries the launch's id as both thread and message id.
   return target.messageId === target.threadId ? launch : null;
@@ -29,29 +29,39 @@ export function findSendingCall(
 
 /**
  * The row showing the call, else the collapsed turn or segment that holds it (post-steer segments
- * fold under their own key, which `foldKeyOf` gives), else its superseded attempt or tool group.
+ * fold under their own key, which `foldKeyOf` gives), else its own superseded attempt, else the collapsed tool group it starts after.
  */
 export function sendingCallRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
-  entry: Entry,
+  call: WorkEntry,
   foldKeyOf: (entryId: string) => string | undefined,
 ): number {
+  const entry = call.entry;
   const shown = rows.findIndex(
     (row) =>
       (row.kind === "work" || row.kind === "work-live") &&
       row.groupedEntries.some((grouped) => grouped.id === entry.id),
   );
   if (shown >= 0) return shown;
-  const foldKey = foldKeyOf(entry.id);
-  const fold =
-    foldKey === undefined
-      ? -1
-      : rows.findIndex((row) => row.kind === "turn-fold" && row.runId === foldKey);
-  if (fold >= 0 || entry.runId == null) return fold;
+  const foldKey = foldKeyOf(call.id);
+  if (foldKey !== undefined) {
+    const fold = rows.findIndex((row) => row.kind === "turn-fold" && row.runId === foldKey);
+    if (fold >= 0) return fold;
+  }
   // A superseded attempt folds its calls under its own row while the replacement runs.
-  return rows.findIndex(
+  const attemptId = call.attempt?.id;
+  if (attemptId !== undefined) {
+    const attempt = rows.findIndex(
+      (row) => row.kind === "attempt-fold" && row.attemptId === attemptId,
+    );
+    if (attempt >= 0) return attempt;
+  }
+  // A collapsed tool group starts at its first call, so the nearest one before this call holds it.
+  return rows.findLastIndex(
     (row) =>
-      (row.kind === "attempt-fold" || row.kind === "work-toggle") && row.runId === entry.runId,
+      row.kind === "work-toggle" &&
+      row.runId === (entry.runId ?? null) &&
+      row.createdAt <= call.createdAt,
   );
 }
 
