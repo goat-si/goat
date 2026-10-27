@@ -1,4 +1,4 @@
-import type { PreviewAutomationScope } from "@goat/contracts";
+import { previewReadRefusalMessage, type PreviewAutomationScope } from "@goat/contracts";
 import type { Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { targetLocator } from "./ServerBrowserPage.ts";
@@ -12,7 +12,7 @@ export const readFailure = (
     | "pageChanged"
     | "output_limit",
 ) =>
-  new ServerBrowserOperationError("PreviewAutomationReadError", `Page read refused: ${reason}.`, {
+  new ServerBrowserOperationError("PreviewAutomationReadError", previewReadRefusalMessage(reason), {
     reason,
   });
 

@@ -146,6 +146,7 @@ it("refuses private overlap, changed secrets, missing scopes and unversioned off
     );
     await expect(read({ offset: 1 })).rejects.toMatchObject({
       detail: { reason: "revision_required" },
+      message: expect.stringContaining("pass the revision returned with the previous page"),
     });
     await expect(read({ scope: { selector: "main" } })).rejects.toMatchObject({
       detail: { reason: "scope_ambiguous" },

@@ -59,6 +59,19 @@ export class PreviewAutomationReadError extends Schema.TaggedError<PreviewAutoma
   { reason: PreviewAutomationReadFailure },
 ) {
   override get message() {
-    return `Page read refused: ${this.reason}.`;
+    return previewReadRefusalMessage(this.reason);
   }
 }
+
+const READ_REFUSAL_NEXT: Record<typeof PreviewAutomationReadFailure.Type, string> = {
+  scope_not_found: "Nothing matches the scope; take a snapshot and pick a current ref or selector.",
+  scope_ambiguous: "The selector matches several elements; narrow it or scope by ref.",
+  stale_ref: "The ref is from an older snapshot; take a new snapshot first.",
+  revision_required:
+    "To continue, pass the revision returned with the previous page together with its nextOffset.",
+  pageChanged: "The page changed during the read; read again.",
+  output_limit: "Raise maxBytes or the reply limit, or narrow the scope.",
+};
+
+export const previewReadRefusalMessage = (reason: typeof PreviewAutomationReadFailure.Type) =>
+  `Page read refused: ${reason}. ${READ_REFUSAL_NEXT[reason]}`;
