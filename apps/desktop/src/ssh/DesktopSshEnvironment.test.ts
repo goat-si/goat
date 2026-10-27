@@ -47,7 +47,6 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
-
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 import { makeEnsureFlightFixture } from "../../../../packages/ssh/src/tunnel.ensure-flight.fixture.ts";
@@ -55,7 +54,6 @@ import { uploadTarget } from "../../../../packages/ssh/src/tunnel.fixture.ts";
 import { bootstrapSshBearerSession, ensureSshEnvironment } from "../ipc/methods/sshEnvironment.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as IpcChannels from "../ipc/channels.ts";
-
 vi.mock("electron", () => ({}));
 
 const decodeBootstrap = Schema.decodeUnknownEffect(DesktopSshEnvironmentBootstrapSchema);
@@ -595,6 +593,7 @@ describe("sshEnvironment", () => {
                             subscribeServerConfig: () => Stream.never,
                             ready: Effect.void,
                             probe: Effect.void,
+                            inboundFrames: Effect.succeed(0),
                             closed: Effect.never,
                           },
                         };
@@ -993,6 +992,7 @@ describe("sshEnvironment", () => {
                   subscribeServerConfig: () => Stream.never,
                   ready: Effect.void,
                   probe: Effect.void,
+                  inboundFrames: Effect.succeed(0),
                   closed: Effect.never,
                 },
               };
