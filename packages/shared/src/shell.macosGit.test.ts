@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { describe, expect, vi } from "vite-plus/test";
+import { describe, expect, vi, type Mock } from "vite-plus/test";
 
 import * as HostProcess from "./HostProcess.ts";
 import {
@@ -25,7 +25,7 @@ const SYNC_GIT = "/fixture/sync-git";
 function setup() {
   const probes: Array<{
     readonly complete: (output: string) => void;
-    readonly kill: ReturnType<typeof vi.spyOn<NodeChildProcess.ChildProcess, "kill">>;
+    readonly kill: Mock<NodeChildProcess.ChildProcess["kill"]>;
   }> = [];
   const sync = vi.spyOn(NodeChildProcess, "execFileSync").mockReturnValue(`${SYNC_GIT}\n`);
   const asyncProbe = vi.spyOn(NodeChildProcess, "execFile").mockImplementation(((
