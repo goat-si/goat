@@ -130,6 +130,8 @@ const make = Effect.gen(function* () {
   const membership = yield* HubMembership.HubMembership;
   const inventory = yield* Inventory.OpenCodexInventory;
   const childReady = yield* ReadyDispatch.ChildReadyDispatch;
+  // Read once here: a setup job's fiber does not carry this layer's context.
+  const catalog = yield* ReleaseCatalog;
   const sshDispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const settings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -391,7 +393,7 @@ const make = Effect.gen(function* () {
         `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to prepare a Child.`,
       );
     // Windows Children turn on only with a pinned release whose Remote Link accepts them.
-    const windowsRefused = windowsRemoteLinkRelease(yield* ReleaseCatalog) === undefined;
+    const windowsRefused = windowsRemoteLinkRelease(catalog) === undefined;
     if (windowsRefused && (yield* ocx.devicePlatform(alias)) === "windows")
       return yield* blocked("platform_unsupported", WINDOWS_REMOTE_LINK_UNPINNED);
     // GOAT's own runtime installs OpenCodex there, so it is ensured first; that can wait on
