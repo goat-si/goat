@@ -4,6 +4,7 @@ import { useState } from "react";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import type { ComposerThreadTarget } from "~/composerDraftStore";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
+import { maskMarkdownFrontmatter } from "@goat/shared/markdownFrontmatter";
 import { FileMarkdownSelectionToolbar } from "./FileMarkdownSelectionToolbar";
 
 export function FileMarkdownPreview(props: {
@@ -30,7 +31,7 @@ export function FileMarkdownPreview(props: {
   return (
     <div ref={setViewport}>
       <ChatMarkdown
-        text={props.text}
+        text={maskMarkdownFrontmatter(props.text)}
         cwd={props.cwd}
         imageBaseDir={imageBaseDir}
         threadRef={props.threadRef}
