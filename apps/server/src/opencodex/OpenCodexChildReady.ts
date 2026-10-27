@@ -85,6 +85,13 @@ const INSTALL_FAILURE: Record<
   shadowed: "ocx_unusable",
   "not-managed": "ocx_unusable",
 };
+/**
+ * OpenCodex's Windows Remote Link contains the Child's ocx in a job it compiles with Add-Type,
+ * which Constrained Language Mode forbids, so every link command there would fail.
+ */
+const CONSTRAINED_POWERSHELL =
+  "Windows PowerShell on this Child does not run in Full Language mode, which OpenCodex Remote Link needs. Allow Full Language mode for this account, then retry setup.";
+const ABSOLUTE = /^(?:\/|[A-Za-z]:[\\/])/u;
 
 const make = Effect.gen(function* () {
   const destinationEnvironmentId = yield* (yield* Environment.ServerEnvironmentIdentity)
@@ -130,6 +137,32 @@ const make = Effect.gen(function* () {
   });
   const readDevice = (address: ChildReadyAddress) =>
     observe(address).pipe(Effect.map((observed) => observed.device));
+
+  /** Typed ocx_unusable before installing: a constrained PowerShell cannot carry Remote Link. */
+  const fullLanguagePowerShell = Effect.gen(function* () {
+    const output = yield* runner
+      .run({
+        command: "powershell.exe",
+        args: [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$ExecutionContext.SessionState.LanguageMode",
+        ],
+        env: environment,
+        timeout: "20 seconds",
+        maxOutputBytes: 4096,
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (output?.code === 0 && !output.timedOut && output.stdout.trim() === "FullLanguage") return;
+    return yield* new OrchestratorMcpFailure({
+      code: "orchestration_error",
+      reason: "ocx_unusable",
+      message: CONSTRAINED_POWERSHELL,
+    });
+  });
 
   const authorize = (
     input: ChildReadyPrepareInput | (ChildReadyAddress & { readonly action: "status" }),
@@ -223,6 +256,7 @@ const make = Effect.gen(function* () {
             }),
       })
       .pipe(storage("opencodex_running"));
+    if (platform === "win32") yield* fullLanguagePowerShell;
     // Keeps a compatible ocx (2.66.0 or later); installs GOAT's pinned release otherwise.
     const executable = yield* installer
       .install()
@@ -254,7 +288,7 @@ const make = Effect.gen(function* () {
       .start({
         binaryPath: before.device.ocx.path,
         platform,
-        opencodexHome: opencodexHome.startsWith("/") ? opencodexHome : `${cwd}/${opencodexHome}`,
+        opencodexHome: ABSOLUTE.test(opencodexHome) ? opencodexHome : `${cwd}/${opencodexHome}`,
         environment,
         authorize: authorize(input, scope),
       })

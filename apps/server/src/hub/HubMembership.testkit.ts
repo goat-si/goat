@@ -15,6 +15,7 @@ import {
   type HubParityCheckId,
   type HubParityResult,
 } from "@goat/contracts";
+import type { OpenCodexReleaseCatalog } from "@goat/shared/opencodexRelease";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,6 +31,7 @@ import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.test
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import * as HubMembership from "./HubMembership.ts";
@@ -90,6 +92,8 @@ export interface Fixture {
   readonly inviteExit?: number;
   readonly connectExit?: number;
   readonly addExit?: { readonly code: number; readonly phase: string };
+  /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
+  readonly releases?: OpenCodexReleaseCatalog;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -228,6 +232,16 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                 admitted ? home(args) : Effect.succeed(undefined),
               ),
             device,
+            // The double answers as the device's GOAT would, logged like the script it replaced.
+            connection: (alias, operation) =>
+              Effect.gen(function* () {
+                if (operation.kind === "connectHubClient")
+                  return yield* Effect.die("connectHubClient is the only way to redeem an invite");
+                const kind =
+                  operation.kind === "disconnect" ? ["disconnect", "--json"] : ["restart"];
+                const { code } = yield* device(alias, kind);
+                return { code, stdout: "" };
+              }),
             devicePlatform: (alias) =>
               Effect.sync(() => {
                 calls.push(`platform ${alias}`);
@@ -282,6 +296,11 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       Layer.provideMerge(Settings.layerTest({ goatclaw })),
       Layer.provideMerge(Sqlite.layerMemory),
       Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        fixture.releases === undefined
+          ? Layer.empty
+          : Layer.succeed(ReleaseCatalog, fixture.releases),
+      ),
     ),
   );
   const membership = Context.get(context, HubMembership.HubMembership);

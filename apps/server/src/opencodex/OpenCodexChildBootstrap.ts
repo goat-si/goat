@@ -13,6 +13,10 @@ import {
   type OpenCodexChildSetup,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
+import {
+  windowsRemoteLinkRelease,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
@@ -52,6 +56,7 @@ import {
 } from "./childBootstrapStatus.ts";
 import { makeReadyVerifier } from "./childReadyVerification.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
+import { ReleaseCatalog } from "./OpenCodexInstallation.ts";
 import { CHILD_MINIMUM_VERSION } from "./childPrepare.ts";
 import { makeSshChildConsent } from "./sshChildConsent.ts";
 
@@ -385,8 +390,10 @@ const make = Effect.gen(function* () {
         "home_unavailable",
         `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to prepare a Child.`,
       );
-    if ((yield* ocx.devicePlatform(alias)) === "windows")
-      return yield* blocked("platform_unsupported", "Remote Link refuses Windows Children.");
+    // Windows Children turn on only with a pinned release whose Remote Link accepts them.
+    const windowsRefused = windowsRemoteLinkRelease(yield* ReleaseCatalog) === undefined;
+    if (windowsRefused && (yield* ocx.devicePlatform(alias)) === "windows")
+      return yield* blocked("platform_unsupported", WINDOWS_REMOTE_LINK_UNPINNED);
     // GOAT's own runtime installs OpenCodex there, so it is ensured first; that can wait on
     // provisioning, and the switch or the consent may change meanwhile.
     const admitted = yield* gate.admission;
@@ -433,6 +440,11 @@ const make = Effect.gen(function* () {
       );
     }
     const version = prepared.success.device.ocx.version ?? undefined;
+    // A native Windows host answers no shell, so its platform is known only from typed status.
+    if (windowsRefused && prepared.success.device.platform === "win32") {
+      yield* releaseAdmission(setupAdmission);
+      return yield* blocked("platform_unsupported", WINDOWS_REMOTE_LINK_UNPINNED);
+    }
     // Preparing takes minutes; the switch or the consent may have changed meanwhile.
     const ready = yield* gate.admission;
     if (ready.state !== "allowed") {

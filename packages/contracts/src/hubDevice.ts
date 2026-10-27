@@ -5,8 +5,9 @@ import { HubParityResult } from "./hubParity.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /**
- * How a device reaches the hub. Remote Link refuses Windows, and a device GOAT reaches only by
- * password cannot host the Home's SSH tunnel, so those join as Hub-mode clients (design §1.5).
+ * How a device reaches the hub. A device GOAT reaches only by password cannot host the Home's SSH
+ * tunnel, and Windows needs a pinned OpenCodex with Windows Remote Link, so without one those join
+ * as Hub-mode clients (design §1.5).
  */
 export const HubDeviceTransport = Schema.Literals(["remote-link", "hub-client"]);
 export type HubDeviceTransport = typeof HubDeviceTransport.Type;
@@ -15,7 +16,7 @@ export const HubDeviceOperationInput = Schema.Struct({
   deviceAlias: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   /** An answered decision from an earlier call; it is consumed once. */
   decisionId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
-  /** Join only; omitted means hub-client on Windows and remote-link elsewhere. */
+  /** Join only; omitted means remote-link, or hub-client on Windows until a pin supports it. */
   transport: Schema.optional(HubDeviceTransport),
 });
 export type HubDeviceOperationInput = typeof HubDeviceOperationInput.Type;

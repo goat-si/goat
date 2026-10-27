@@ -8,6 +8,7 @@ import {
   type ServerSettings,
   ServerSettingsError,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -84,6 +85,10 @@ export interface ChildState {
   duringProbe: () => Effect.Effect<void>;
   /** The bootstrap instance has a hydration or session pending, so its route cannot be held. */
   routeBusy: boolean;
+  /** The Child's OS when it differs from this test host's. */
+  platform: NodeJS.Platform | undefined;
+  /** What Windows PowerShell reports as its language mode. */
+  powershellLanguage: string;
   /** Runs inside each `ocx status` read before it answers; a test may hold one there. */
   duringStatus: () => Effect.Effect<void>;
   /** Wraps each settings commit of a provider instance: hold it, or fail after it lands. */
@@ -143,6 +148,8 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     duringProbe: () => Effect.void,
     duringSync: () => Effect.void,
     routeBusy: false,
+    platform: undefined,
+    powershellLanguage: "FullLanguage",
     ...overrides,
   };
   const probes = yield* Ref.make(0);
@@ -238,6 +245,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     Layer.mock(ProcessRunner.ProcessRunner)({
       run: (input) =>
         Effect.gen(function* () {
+          if (input.command === "powershell.exe") return yield* ok(state.powershellLanguage);
           if (input.args[0] === "status") {
             yield* state.duringStatus();
             return yield* ok(
@@ -295,6 +303,11 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
   const service = ChildReady.layer.pipe(
     Layer.provideMerge(Journal.layer),
     Layer.provide(boundary),
+    Layer.provide(
+      state.platform === undefined
+        ? Layer.empty
+        : Layer.succeed(HostProcess.Platform, state.platform),
+    ),
     Layer.provideMerge(settingsLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-child-ready-" })),
     Layer.provideMerge(NodeServices.layer),

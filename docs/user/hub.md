@@ -43,11 +43,15 @@ installs both; installing does not join the hub. GOAT compares the host key
 OpenCodex is offered with the key GOAT pinned for that alias, links the device,
 and checks its parity.
 
-A Windows device cannot be a Remote Link Child, so **Join** connects it as a Hub
-client instead. That needs this hub's OpenCodex in Hub mode with addresses the
-device can reach, such as behind Tailscale Serve. GOAT creates a single-use
-invite on the hub and redeems it on the device; you never see or copy the code.
-Agents can request the same for a device GOAT reaches only by password.
+A Windows device joins as a Hub client until your GOAT includes an OpenCodex
+release with Windows Remote Link support. A Hub client needs this hub's
+OpenCodex in Hub mode with addresses the device can reach, such as behind
+Tailscale Serve. GOAT creates a single-use invite on the hub and GOAT on the
+device redeems it; you never see or copy the code. Agents can request the same
+for a device GOAT reaches only by password. With Windows Remote Link support,
+Windows x64 machines join as Remote Link Children over OpenSSH and Windows
+PowerShell, without Git Bash. PowerShell there must run in Full Language mode;
+setup stops and says so otherwise.
 
 A cloud machine this hub creates joins by itself while **Join new cloud
 machines** in **Settings → Hub** is on, as it is unless you turn it off. GOAT

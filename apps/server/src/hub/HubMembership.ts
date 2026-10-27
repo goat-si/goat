@@ -1,7 +1,6 @@
 import {
   type AuthEnvironmentScope,
   OrchestratorMcpFailure,
-  type HandoffSummary,
   type HubDeviceMcpResult,
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
@@ -11,6 +10,10 @@ import {
   type HubParityResult,
   hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
+import {
+  windowsRemoteLinkRelease,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -22,11 +25,20 @@ import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
 import { Added, Connection, decodeJson, Health, LinkStatus, Probe } from "./hubOcxJson.ts";
 import * as HubParity from "./HubParity.ts";
-import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
+import {
+  childConnectionAdmission,
+  type HubChildConnectionAdmission,
+  HubOcx,
+  HubOcxError,
+  SAFE_ALIAS,
+  type OcxOutput,
+} from "./HubOcx.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
+import { hubDeviceResult as result } from "./hubDeviceResult.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
@@ -35,8 +47,7 @@ const LINK_ADD_TIMEOUT_MS = 420_000;
 const CONNECT_TIMEOUT_MS = 300_000;
 const HOME_TIMEOUT_MS = 60_000;
 const DEVICE_TIMEOUT_MS = 120_000;
-const WINDOWS_REFUSAL =
-  "Remote Link refuses Windows (remote_platform_unsupported); join it as a Hub-mode client with transport hub-client.";
+const WINDOWS_REFUSAL = `${WINDOWS_REMOTE_LINK_UNPINNED} Join it as a Hub-mode client with transport hub-client.`;
 const PLATFORM_LABEL = { windows: "Windows", posix: "POSIX", unknown: "Platform unknown" };
 
 type Action = HubDeviceOperationResult["action"];
@@ -81,6 +92,8 @@ interface Caller {
   readonly pinnedOnly?: true;
   /** Standing permission for such a join, read under the permit and right before `ocx link add`. */
   readonly gate?: Effect.Effect<boolean, OrchestratorMcpFailure>;
+  /** This operation's authority for the device's goat_hub_child_connection. */
+  readonly connection: HubChildConnectionAdmission;
 }
 /** What the Home holds for a member: a Remote Link record, or a Hub client's data key id. */
 type Member =
@@ -94,7 +107,7 @@ export const decisionBinding = (
 ) => `goat-hub-binding: ${action} ${alias}${key === undefined ? "" : ` ${key}`}`;
 const phaseMessage = (phase: string | undefined) =>
   phase === "remote_platform_unsupported"
-    ? "Remote Link refuses this platform; it joins as a Hub-mode client instead."
+    ? "OpenCodex could not execute Remote Link on this device. Update OpenCodex on Home and check PowerShell on a Windows Child, then retry."
     : phase === undefined
       ? "OpenCodex refused the command."
       : `OpenCodex stopped at ${phase}.`;
@@ -147,6 +160,7 @@ const make = Effect.gen(function* () {
   const profiles = yield* Profiles.PermissionProfiles;
   const sql = yield* SqlClient.SqlClient;
   const provisioned = yield* makeProvisionedLinks;
+  const releases = yield* ReleaseCatalog;
   // One hub, one link store: membership changes never interleave.
   const permit = yield* Semaphore.make(1);
 
@@ -173,6 +187,7 @@ const make = Effect.gen(function* () {
       sessionId: person.sessionId,
       scopes: person.scopes,
     },
+    connection: childConnectionAdmission(scope.environmentId, Effect.succeed(true)),
   });
   const authorize = Effect.fn("HubMembership.authorize")(function* (
     scope: McpInvocationScope,
@@ -188,6 +203,10 @@ const make = Effect.gen(function* () {
       // Disabled goatclaw resolves to the default profile, so it never counts as owner.
       owner: view.enabled && view.profile.id === "owner",
       inbox: { kind: "agent", scope } satisfies DecisionInbox.DecisionCaller,
+      connection: childConnectionAdmission(
+        scope.environmentId,
+        profiles.require(scope, "hub.manage", { host: alias }).pipe(Effect.as(true)),
+      ),
     };
   });
 
@@ -215,7 +234,7 @@ const make = Effect.gen(function* () {
   /** Steps 1-3. Each executed rung re-runs the verdict; stops as soon as nothing fails. */
   const ladder = Effect.fn("HubMembership.ladder")(function* (
     scope: McpInvocationScope,
-    caller: { readonly actor: string; readonly profile: string },
+    caller: Pick<Caller, "actor" | "profile" | "connection">,
     alias: string,
     linkId: string | undefined,
     initial: HubParityResult,
@@ -245,7 +264,17 @@ const make = Effect.gen(function* () {
           detail: "A turn is running there, or its activity is unknown.",
         };
       } else {
-        ran = yield* ocx.device(alias, [rung.step], DEVICE_TIMEOUT_MS).pipe(
+        // A known membership restarts through the device's own GOAT; sync stays its script.
+        ran = yield* (
+          rung.step === "restart" && linkId !== undefined
+            ? ocx.connection(
+                alias,
+                { kind: "restart", expectedLinkId: linkId },
+                DEVICE_TIMEOUT_MS,
+                caller.connection,
+              )
+            : ocx.device(alias, [rung.step], DEVICE_TIMEOUT_MS)
+        ).pipe(
           Effect.map((output: OcxOutput) =>
             output.code === 0
               ? { outcome: "ok" as const }
@@ -261,56 +290,10 @@ const make = Effect.gen(function* () {
     return current;
   });
 
-  const result = (
-    action: Action,
-    alias: string,
-    state: HubDeviceOperationResult["state"],
-    message: string,
-    steps: ReadonlyArray<HubDeviceStep>,
-    extra: {
-      readonly parity?: HubParityResult;
-      readonly decisionId?: string;
-      readonly handoff?: HandoffSummary;
-      readonly transport?: HubDeviceTransport;
-    } = {},
-  ): HubDeviceMcpResult => {
-    const { handoff, ...rest } = extra;
-    const base = { deviceAlias: alias, action, state, message, steps, ...rest };
-    // A thread's approval is a handoff; the same tool continues once a person answers it.
-    return handoff === undefined || rest.decisionId === undefined
-      ? base
-      : action === "join"
-        ? {
-            ...base,
-            state: "needs_human",
-            decisionId: rest.decisionId,
-            kind: "needs_human",
-            handoff,
-            next: { after: "approval", call: "goat_hub_device_join" },
-          }
-        : action === "leave"
-          ? {
-              ...base,
-              state: "needs_human",
-              decisionId: rest.decisionId,
-              kind: "needs_human",
-              handoff,
-              next: { after: "approval", call: "goat_hub_device_leave" },
-            }
-          : {
-              ...base,
-              state: "needs_human",
-              decisionId: rest.decisionId,
-              kind: "needs_human",
-              handoff,
-              next: { after: "approval", call: "goat_hub_device_repair" },
-            };
-  };
-
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
   const link = Effect.fn("HubMembership.link")(function* (
     scope: McpInvocationScope,
-    caller: Pick<Caller, "actor" | "profile" | "provisioning" | "gate">,
+    caller: Pick<Caller, "actor" | "profile" | "provisioning" | "gate" | "connection">,
     action: Action,
     alias: string,
     fingerprint: string,
@@ -370,18 +353,22 @@ const make = Effect.gen(function* () {
    */
   const leaveDevice = Effect.fn("HubMembership.leaveDevice")(function* (
     alias: string,
+    member: string,
+    admission: HubChildConnectionAdmission,
     steps: HubDeviceStep[],
   ) {
-    for (const command of [["disconnect", "--json"], ["restart"]] as const) {
-      const ran = yield* ocx.device(alias, command, DEVICE_TIMEOUT_MS).pipe(
+    // The device's GOAT runs both under its idle fence, bound to the membership seen here.
+    for (const kind of ["disconnect", "restart"] as const) {
+      const operation = { kind, expectedLinkId: member };
+      const ran = yield* ocx.connection(alias, operation, DEVICE_TIMEOUT_MS, admission).pipe(
         Effect.map((output: OcxOutput) =>
           output.code === 0
             ? { outcome: "ok" as const }
-            : { outcome: "failed" as const, detail: `ocx ${command[0]} exited ${output.code}.` },
+            : { outcome: "failed" as const, detail: `ocx ${kind} exited ${output.code}.` },
         ),
         Effect.catch((error) => Effect.succeed(unreachable(error))),
       );
-      steps.push({ step: command[0], ...ran });
+      steps.push({ step: kind, ...ran });
       if (ran.outcome !== "ok") return ran.detail;
     }
     const body = yield* ocx.deviceHealth(alias);
@@ -537,7 +524,7 @@ const make = Effect.gen(function* () {
     );
     if (stopped !== undefined) return stopped;
     yield* audit(caller, "hub.join", alias, "started", decisionId);
-    const handoff = yield* ocx.connectHubClient(alias, CONNECT_TIMEOUT_MS);
+    const handoff = yield* ocx.connectHubClient(alias, CONNECT_TIMEOUT_MS, caller.connection);
     if (!handoff.minted) {
       const detail =
         handoff.phase === undefined
@@ -619,10 +606,12 @@ const make = Effect.gen(function* () {
           { parity: verified, transport: "remote-link" },
         );
       }
-      // OpenCodex refuses a Windows Child only after issuing a key and starting a tunnel (OCX-9).
+      // Remote Link to Windows exists only in a release this GOAT pins; older ones refuse it
+      // after issuing a key and starting a tunnel (OCX-9).
       const platform = yield* ocx.devicePlatform(alias);
-      const transport = input.transport ?? (platform === "windows" ? "hub-client" : "remote-link");
-      if (transport === "remote-link" && platform === "windows") {
+      const refused = platform === "windows" && windowsRemoteLinkRelease(releases) === undefined;
+      const transport = input.transport ?? (refused ? "hub-client" : "remote-link");
+      if (transport === "remote-link" && refused) {
         steps.push({ step: "preflight", outcome: "failed", detail: WINDOWS_REFUSAL });
         return result("join", alias, "failed", WINDOWS_REFUSAL, steps, { transport });
       }
@@ -774,7 +763,7 @@ const make = Effect.gen(function* () {
       if (stopped !== undefined) return stopped;
       yield* audit(caller, "hub.leave", alias, "started", input.decisionId);
       if (!forced) {
-        const failure = yield* leaveDevice(alias, steps);
+        const failure = yield* leaveDevice(alias, member.id, caller.connection, steps);
         if (failure !== undefined) {
           const requested = yield* consent.request(caller, "leave", {
             title: `Force-remove ${alias} from the hub`,
@@ -855,7 +844,7 @@ const make = Effect.gen(function* () {
           decisionBinding("relink", alias, offered.fingerprint),
         );
         yield* audit(caller, "hub.relink", alias, "started", input.decisionId);
-        const failure = yield* leaveDevice(alias, steps);
+        const failure = yield* leaveDevice(alias, record.id, caller.connection, steps);
         const clean = failure === undefined && (yield* revokeOnHome(alias, record, steps));
         if (!clean) {
           yield* audit(caller, "hub.relink", alias, "failed", input.decisionId);
@@ -956,6 +945,7 @@ const make = Effect.gen(function* () {
                 provisioning: true,
                 pinnedOnly: true,
                 gate,
+                connection: childConnectionAdmission(scope.environmentId, gate),
               },
             ),
           )
@@ -974,7 +964,12 @@ const make = Effect.gen(function* () {
               return yield* joinAs(
                 scope,
                 { deviceAlias: alias, transport: "remote-link" },
-                { ...personCaller(scope, person), pinnedOnly: true, gate },
+                {
+                  ...personCaller(scope, person),
+                  pinnedOnly: true,
+                  gate,
+                  connection: childConnectionAdmission(scope.environmentId, gate),
+                },
               );
             }),
           )

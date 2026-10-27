@@ -50,6 +50,24 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
   );
 
   it.effect(
+    "a Windows Child whose PowerShell is in Constrained Language Mode is ocx_unusable",
+    () =>
+      Effect.gen(function* () {
+        const constrained = yield* fixture({
+          role: "standalone",
+          platform: "win32",
+          powershellLanguage: "ConstrainedLanguage",
+        });
+        expect(yield* constrained.call("installOpenCodex")).toMatchObject({
+          kind: "error",
+          failure: { code: "ocx_unusable", message: expect.stringContaining("Full Language") },
+        });
+        const full = yield* fixture({ role: "standalone", platform: "win32" });
+        expect(yield* full.call("installOpenCodex")).toMatchObject({ kind: "prelink" });
+      }),
+  );
+
+  it.effect(
     "creates one managed auth-none Codex instance without reading provider credentials",
     () =>
       Effect.gen(function* () {

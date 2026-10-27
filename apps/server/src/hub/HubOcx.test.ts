@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -16,6 +17,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { fleetSnapshot } from "./parity.testkit.ts";
 import {
+  childConnectionAdmission,
   countLinkTunnels,
   deviceScript,
   guardedSyncScript,
@@ -463,5 +465,127 @@ it.live("starts an admitted ocx with nothing awaited after its permission is rea
     );
     expect(output).toMatchObject({ code: 0, stdout: "link add lidge-ts --json\n" });
     expect(checks).toBe(checksAtPermission);
+  }),
+);
+
+const inviteJson = JSON.stringify({
+  code: CODE,
+  expiresAt: "2026-10-28T00:05:00.000Z",
+  dataUrl: "https://hub.example.invalid",
+  managementUrl: "https://hub.example.invalid/manage",
+});
+
+/** The Home's OpenCodex mints invites; the device's GOAT answers goat_hub_child_connection. */
+const connectionWorld = (
+  answer: (input: Record<string, unknown>) => Record<string, unknown>,
+  started: Array<ReadonlyArray<string>>,
+  calls: Array<Dispatch.SshHostToolCall>,
+) =>
+  hubOcxLayer.pipe(
+    Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+    Layer.provide(
+      Layer.mock(ProcessRunner.ProcessRunner)({
+        run: (input) =>
+          Effect.sync(() => {
+            started.push(input.args);
+            return {
+              stdout: inviteJson,
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Inventory.OpenCodexInventory)({
+        read: Effect.succeed({
+          ...fleetSnapshot("home"),
+          binaries: [{ path: "/usr/local/bin/ocx", version: "2.91.0" }],
+        }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Dispatch.SshRemoteDispatch)({
+        identifyTarget: () => Effect.succeed(EnvironmentId.make("child-env")),
+        callHostTool: (call, authorize) =>
+          authorize.pipe(
+            Effect.map(() => {
+              calls.push(call);
+              return answer(call.arguments);
+            }),
+          ),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+it.effect(
+  "an explicit Hub client join passes its one-use code only to the authorized destination",
+  () =>
+    Effect.gen(function* () {
+      const started: Array<ReadonlyArray<string>> = [];
+      const calls: Array<Dispatch.SshHostToolCall> = [];
+      const echo = (input: Record<string, unknown>) => ({
+        destinationEnvironmentId: input.destinationEnvironmentId,
+        homeEnvironmentId: input.homeEnvironmentId,
+        operationId: input.operationId,
+        kind: "connectHubClient",
+        code: 0,
+        healthy: true,
+      });
+      const ocx = yield* HubOcx.pipe(Effect.provide(connectionWorld(echo, started, calls)));
+      const admission = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(true));
+      const handoff = yield* ocx.connectHubClient("mini", 60_000, admission);
+      expect(handoff).toMatchObject({ minted: true, connect: { code: 0 } });
+      expect(JSON.stringify(handoff)).not.toContain(CODE);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        host: "mini",
+        environmentId: "child-env",
+        tool: "goat_hub_child_connection",
+        writes: true,
+        arguments: {
+          destinationEnvironmentId: "child-env",
+          homeEnvironmentId: "hub",
+          operationId: admission.operationId,
+          opencodexConnection: { kind: "connectHubClient", pairingCode: CODE },
+        },
+      });
+      // An ordinary hub.manage session: never a setup purpose, never the prepare tool.
+      expect(calls[0]?.childSetupPurpose).toBeUndefined();
+
+      // An answer for another operation is not this connection's outcome.
+      const otherCalls: Array<Dispatch.SshHostToolCall> = [];
+      const other = yield* HubOcx.pipe(
+        Effect.provide(
+          connectionWorld(
+            (input) => ({ ...echo(input), operationId: "another-operation" }),
+            [],
+            otherCalls,
+          ),
+        ),
+      );
+      expect(
+        (yield* other.connectHubClient("mini", 60_000, admission).pipe(Effect.flip)).reason,
+      ).toBe("unreachable");
+    }),
+);
+
+it.effect("a withdrawn Hub client approval mints no invite and contacts no device", () =>
+  Effect.gen(function* () {
+    const started: Array<ReadonlyArray<string>> = [];
+    const calls: Array<Dispatch.SshHostToolCall> = [];
+    const ocx = yield* HubOcx.pipe(Effect.provide(connectionWorld(() => ({}), started, calls)));
+    const withdrawn = childConnectionAdmission(EnvironmentId.make("hub"), Effect.succeed(false));
+    expect((yield* ocx.connectHubClient("mini", 60_000, withdrawn).pipe(Effect.flip)).reason).toBe(
+      "unreachable",
+    );
+    expect(started).toEqual([]);
+    expect(calls).toEqual([]);
   }),
 );

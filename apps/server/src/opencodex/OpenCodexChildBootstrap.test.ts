@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthSessionId, EnvironmentId } from "@goat/contracts";
+import {
+  OPEN_CODEX_PINNED_VERSION,
+  WINDOWS_REMOTE_LINK_UNPINNED,
+} from "@goat/shared/opencodexRelease";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -10,6 +14,23 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as AutomationHold from "../automationHold.ts";
 import { build, type Machine, MINUTE, PERSON, setup } from "./OpenCodexChildBootstrap.testkit.ts";
+
+/** A test-only pin with Windows Remote Link support; no real GOAT pin has one yet. */
+const windowsPins = {
+  [OPEN_CODEX_PINNED_VERSION]: {
+    "win32-x64": {
+      version: OPEN_CODEX_PINNED_VERSION,
+      target: "bun-windows-x64",
+      url: "https://fixture.invalid/ocx-windows.zip",
+      sha256: "0".repeat(64),
+      archiveBytes: 1,
+      publishedAt: "2026-10-28T00:00:00Z",
+      layout: { executable: "ocx.exe", gui: "gui/dist/index.html", keyring: "keyring" },
+      remoteLinkWindows: true,
+    },
+  },
+};
+
 it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("held: dispatches no child setup; release: the queued machine joins", () =>
     Effect.gen(function* () {
@@ -184,6 +205,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({
         state: "blocked",
         reason: "platform_unsupported",
+        message: WINDOWS_REMOTE_LINK_UNPINNED,
       });
       const oldHome = yield* setup({ homeVersion: "2.60.0" });
       expect(yield* oldHome.bootstrap.ensure("boat-builder")).toMatchObject({
@@ -197,6 +219,30 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       });
       expect([...windows.calls, ...oldHome.calls]).toEqual([]);
     }),
+  );
+
+  it.effect(
+    "a consented Windows Child reaches preparation and Remote Link once GOAT pins Windows support",
+    () =>
+      Effect.gen(function* () {
+        const windows = yield* setup({ platform: "windows", releases: windowsPins });
+        expect((yield* windows.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+        expect(windows.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
+      }),
+  );
+
+  it.effect(
+    "a native Windows Child named only by its typed status stops before linking without a pin",
+    () =>
+      Effect.gen(function* () {
+        const windows = yield* setup({ nativeWindows: true });
+        expect(yield* windows.bootstrap.ensure("boat-builder")).toMatchObject({
+          state: "blocked",
+          reason: "platform_unsupported",
+          message: WINDOWS_REMOTE_LINK_UNPINNED,
+        });
+        expect(windows.calls).toEqual(["prepare boat-builder 2.91.0"]);
+      }),
   );
 
   it.effect("a stopped machine keeps its setup and link; a removed one releases its link", () =>

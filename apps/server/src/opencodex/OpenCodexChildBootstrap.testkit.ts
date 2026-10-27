@@ -13,6 +13,7 @@ import {
   type OpenCodexChildSetup,
   ProviderInstanceId,
 } from "@goat/contracts";
+import { OPEN_CODEX_RELEASES, type OpenCodexReleaseCatalog } from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -38,6 +39,7 @@ import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ReadyDispatch from "./ChildReadyDispatch.ts";
 import * as Bootstrap from "./OpenCodexChildBootstrap.ts";
+import { ReleaseCatalog } from "./OpenCodexInstallation.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
 
 export const MINUTE = 60_000;
@@ -58,6 +60,10 @@ export interface Machine {
   hub: boolean;
   homeVersion: string;
   platform: DevicePlatform;
+  /** Native Windows answers no shell, so only the Child's typed device status names it. */
+  nativeWindows: boolean;
+  /** OpenCodex pins this GOAT build carries; a test-only Windows row turns Windows on. */
+  releases: OpenCodexReleaseCatalog;
   /** The Child refuses preparing OpenCodex with this; it prepares when undefined. */
   prepareFailure: ChildReadyFailure["code"] | undefined;
   joined: HubDeviceOperationResult["state"];
@@ -190,7 +196,7 @@ const childProtocol = (
         healthy: true,
         revision: { epoch: "e", sequence: 1 },
         device: {
-          platform: "linux",
+          platform: machine.nativeWindows || machine.platform === "windows" ? "win32" : "linux",
           arch: "x64",
           ocx: { path: "/fixture/ocx", version: "2.91.0", ownership: "managed" as const },
           connection: { role: "standalone" as const },
@@ -283,7 +289,8 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(HubOcx)({
-          devicePlatform: () => Effect.sync(() => machine.platform),
+          devicePlatform: () =>
+            Effect.sync(() => (machine.nativeWindows ? undefined : machine.platform)),
           ensureDeviceRuntime: () =>
             Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
         }),
@@ -426,6 +433,7 @@ export const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
           getEnvironmentId: Effect.succeed(EnvironmentId.make("home")),
         }),
       ),
+      Layer.provide(Layer.succeed(ReleaseCatalog, machine.releases)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
     ),
   );
@@ -452,6 +460,8 @@ export const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     hub: true,
     homeVersion: "2.91.0",
     platform: "posix",
+    nativeWindows: false,
+    releases: OPEN_CODEX_RELEASES,
     prepareFailure: undefined,
     joined: "child",
     owned: new Set(["boat-builder"]),

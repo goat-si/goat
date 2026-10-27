@@ -110,6 +110,7 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
                 admitted ? home(args) : Effect.succeed(undefined),
               ),
             device: () => Effect.succeed({ code: 0, stdout: "opencodex 2.91.0" }),
+            connection: () => Effect.succeed({ code: 0, stdout: "" }),
             devicePlatform: () => Effect.succeed("posix"),
             connectHubClient: () => Effect.die("unused"),
             pinnedFingerprint: () => Effect.succeed(PINNED),
