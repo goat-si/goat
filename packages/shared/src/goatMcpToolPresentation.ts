@@ -444,6 +444,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_fill_secret: tool(
+    ["Fill", "Filling", "Filled", "a saved password"],
+    "browser",
+    "browser",
+  ),
   goat_preview_scroll_collect: tool(
     ["Collect", "Collecting", "Collected", "from the scrolling preview page"],
     "browser",

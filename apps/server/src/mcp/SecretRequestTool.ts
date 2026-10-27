@@ -9,6 +9,7 @@ import {
   OrchestratorMcpFailure,
   TurnItemId,
   handoffSummary,
+  normalizeSecretOrigin,
   type OrchestratorMcpRequestSecretInput,
   type OrchestratorMcpRequestSecretResult,
 } from "@goat/contracts";
@@ -57,6 +58,14 @@ export const makeRequestSecret = (deps: {
         "invalid_request",
         "Pass clientRequestId with wait:false; call again with the same id to collect the answer.",
       );
+    const origin = input.origin === undefined ? undefined : normalizeSecretOrigin(input.origin);
+    if (input.origin !== undefined && origin === undefined)
+      return yield* failure("invalid_request", "origin must be an http(s) URL or origin.");
+    if (origin !== undefined && input.delivery === "file")
+      return yield* failure(
+        "invalid_request",
+        "A sign-in secret goes to the browser page, not a file. Drop origin or delivery.",
+      );
     const { scope: threadScope, parent } = yield* deps.loadThreadCaller(scope, "request_secret");
     const threadId = threadScope.thread.threadId;
     const run = ThreadManagementService.latestActiveRun(parent);
@@ -94,6 +103,7 @@ export const makeRequestSecret = (deps: {
           reason: input.reason,
           ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
           ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
+          ...(origin === undefined ? {} : { siteOrigin: origin }),
           secretStatus,
         })
         .pipe(

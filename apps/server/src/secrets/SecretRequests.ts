@@ -3,6 +3,7 @@
 // A `file` request instead moves its value to an owner-only file for the agent's own shell.
 import {
   CommandId,
+  SIGN_IN_SECRET_MIN_LENGTH,
   SecretRef,
   SecretRequestError,
   type HandoffActor,
@@ -44,7 +45,12 @@ const refFor = (salt: string, threadId: ThreadId, turnItemId: string) =>
   );
 
 const StoredSecret = Schema.fromJsonString(
-  Schema.Struct({ projectId: Schema.String, value: Schema.String, savedAt: Schema.Number }),
+  Schema.Struct({
+    projectId: Schema.String,
+    value: Schema.String,
+    savedAt: Schema.Number,
+    origin: Schema.optional(Schema.String),
+  }),
 );
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
@@ -68,6 +74,12 @@ export class SecretRequests extends Context.Service<
     readonly consume: (input: {
       readonly ref: SecretRef;
       readonly projectId: ProjectId;
+    }) => Effect.Effect<string, SecretRequestError>;
+    /** A sign-in ref's value, used only when the destination's origin is the one the card showed. */
+    readonly consumeForOrigin: (input: {
+      readonly ref: SecretRef;
+      readonly threadId: ThreadId;
+      readonly origin: string;
     }) => Effect.Effect<string, SecretRequestError>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
@@ -108,6 +120,13 @@ const make = Effect.gen(function* () {
       if (item.secretStatus !== "pending") {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
+      if (
+        input.answer.type === "save" &&
+        item.siteOrigin !== undefined &&
+        input.answer.secret.length < SIGN_IN_SECRET_MIN_LENGTH
+      ) {
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
+      }
       const run = records.runs.find((candidate) => candidate.id === item.runId);
       if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
         return yield* new SecretRequestError({ reason: "agent_stopped" });
@@ -119,6 +138,7 @@ const make = Effect.gen(function* () {
           projectId: records.thread.projectId,
           value: input.answer.secret,
           savedAt: yield* Clock.currentTimeMillis,
+          ...(item.siteOrigin === undefined ? {} : { origin: item.siteOrigin }),
         }).pipe(Effect.orDie);
         yield* store
           .create(
@@ -146,6 +166,7 @@ const make = Effect.gen(function* () {
           reason: item.reason,
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
+          ...(item.siteOrigin === undefined ? {} : { siteOrigin: item.siteOrigin }),
           secretStatus,
         })
         .pipe(
@@ -205,7 +226,7 @@ const make = Effect.gen(function* () {
       Effect.withSpan("SecretRequests.consume"),
     );
 
-  /** A live ref's value, left in the store. */
+  /** A live ref's stored envelope, left in the store. */
   const readRef = Effect.fn("SecretRequests.readRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
@@ -225,20 +246,50 @@ const make = Effect.gen(function* () {
       yield* removeLogged(storeName(input.ref));
       return yield* new SecretRequestError({ reason: "ref_expired" });
     }
-    return decoded.value.value;
+    return decoded.value;
   });
 
   const consumeRef = Effect.fn("SecretRequests.consumeRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
+    readonly origin?: string;
   }) {
-    const value = yield* readRef(input);
+    const stored = yield* readRef(input);
+    // Checked before removal, so a wrong destination leaves the ref usable on its own site.
+    if (input.origin === undefined && stored.origin !== undefined) {
+      return yield* new SecretRequestError({ reason: "origin_bound" });
+    }
+    if (input.origin !== undefined && stored.origin === undefined) {
+      return yield* new SecretRequestError({ reason: "origin_required" });
+    }
+    if (input.origin !== undefined && stored.origin !== input.origin) {
+      return yield* new SecretRequestError({ reason: "origin_mismatch" });
+    }
     // One use: the value moves into whatever consumed it. If it cannot be
     // deleted, it is not handed out, so a ref is never used twice.
     if (!(yield* removeLogged(storeName(input.ref)))) {
       return yield* new SecretRequestError({ reason: "consume_failed" });
     }
-    return value;
+    return stored.value;
+  });
+
+  const consumeForOrigin: SecretRequests["Service"]["consumeForOrigin"] = Effect.fn(
+    "SecretRequests.consumeForOrigin",
+  )(function* (input) {
+    const records = yield* threadManagement
+      .getThreadRecords(input.threadId, [])
+      .pipe(Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })));
+    return yield* consumeRef({
+      ref: input.ref,
+      projectId: records.thread.projectId,
+      origin: input.origin,
+    }).pipe(
+      consumeLock.withPermits(1),
+      Effect.tap(() => Metrics.increment(Metrics.secretRefsConsumedTotal, { result: "used" })),
+      Effect.tapError(() =>
+        Metrics.increment(Metrics.secretRefsConsumedTotal, { result: "rejected" }),
+      ),
+    );
   });
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
@@ -274,7 +325,10 @@ const make = Effect.gen(function* () {
         return yield* removeStored;
       }
       // The stored value goes only after the file is complete, so a failed write can retry.
-      const value = yield* readRef({ ref, projectId: records.thread.projectId });
+      const stored = yield* readRef({ ref, projectId: records.thread.projectId });
+      if (stored.origin !== undefined)
+        return yield* new SecretRequestError({ reason: "origin_bound" });
+      const value = stored.value;
       const partial = `${file}.partial`;
       yield* fileSystem.makeDirectory(filesDir, { recursive: true, mode: 0o700 }).pipe(
         Effect.andThen(fileSystem.chmod(filesDir, 0o700)),
@@ -339,7 +393,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, saveToFile });
+  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, saveToFile });
 });
 
 export const layer = Layer.effect(SecretRequests, make);

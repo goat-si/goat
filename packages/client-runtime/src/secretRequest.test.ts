@@ -20,6 +20,12 @@ describe("secretRequestDisplay", () => {
 });
 
 describe("secretRequestPrivacyNote", () => {
+  it("names the origin where GOAT types the password while the agent gets only a reference", () => {
+    expect(secretRequestPrivacyNote({ siteOrigin: "https://example.com" })).toBe(
+      "The agent gets only a reference. GOAT types it into a password field on https://example.com",
+    );
+  });
+
   it("does not promise to hide a value that the agent's commands can read", () => {
     expect(secretRequestPrivacyNote({})).toBe("Stored securely, never shown to the agent");
     expect(secretRequestPrivacyNote({ delivery: "file" })).not.toContain("never shown");

@@ -36,6 +36,7 @@ const withService = <A, E>(
   options: {
     readonly threadId?: ThreadId;
     readonly delivery?: "file";
+    readonly siteOrigin?: string;
     readonly directory?: string;
     readonly runStatus?: string;
     readonly removeFails?: boolean;
@@ -107,6 +108,7 @@ const withService = <A, E>(
                 label: "GitHub token",
                 reason: "Used as GH_TOKEN.",
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
+                ...(options.siteOrigin === undefined ? {} : { siteOrigin: options.siteOrigin }),
                 secretStatus,
               },
             ],
@@ -455,4 +457,103 @@ it.effect("a secret the card promised to keep from the agent is never written to
       assert.isTrue(valuesOf(stored).some((value) => value.includes("ghp_secret")));
     }),
   ),
+);
+
+it.effect("a site-bound answer is re-recorded with its origin and consumed only once there", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({ threadId, turnItemId, answer: { type: "save", secret: "pass" } });
+        assert.include(dispatched[0] as object, {
+          siteOrigin: "https://example.com",
+          secretStatus: "saved",
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        assert.equal(
+          yield* service.consumeForOrigin({ ref, threadId, origin: "https://example.com" }),
+          "pass",
+        );
+        assert.deepEqual(valuesOf(stored), []);
+        const reused = yield* service
+          .consumeForOrigin({ ref, threadId, origin: "https://example.com" })
+          .pipe(Effect.flip);
+        assert.equal(reused.reason, "ref_unavailable");
+      }),
+    { siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a mismatched origin refuses a ref without consuming its value", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({ threadId, turnItemId, answer: { type: "save", secret: "pass" } });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const refused = yield* service
+          .consumeForOrigin({ ref, threadId, origin: "https://other.example.com" })
+          .pipe(Effect.flip);
+        assert.equal(refused.reason, "origin_mismatch");
+        assert.equal(
+          yield* service.consumeForOrigin({ ref, threadId, origin: "https://example.com" }),
+          "pass",
+        );
+      }),
+    { siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("browser consumption requires an origin-bound ref and preserves an unbound value", () =>
+  withService(({ service }) =>
+    Effect.gen(function* () {
+      yield* service.answer({ threadId, turnItemId, answer: { type: "save", secret: "pass" } });
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      const refused = yield* service
+        .consumeForOrigin({ ref, threadId, origin: "https://example.com" })
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "origin_required");
+      assert.equal(yield* service.consume({ ref, projectId }), "pass");
+    }),
+  ),
+);
+
+it.effect("generic consumption and file delivery refuse a bound ref without consuming it", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "secret-origin-test-" });
+    yield* withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* service.answer({ threadId, turnItemId, answer: { type: "save", secret: "pass" } });
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          const consumed = yield* service.consume({ ref, projectId }).pipe(Effect.flip);
+          assert.equal(consumed.reason, "origin_bound");
+          const written = yield* service.saveToFile({ threadId, turnItemId }).pipe(Effect.flip);
+          assert.equal(written.reason, "origin_bound");
+          assert.deepEqual(yield* fs.readDirectory(directory), []);
+          assert.equal(
+            yield* service.consumeForOrigin({ ref, threadId, origin: "https://example.com" }),
+            "pass",
+          );
+        }),
+      { siteOrigin: "https://example.com", delivery: "file", directory },
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a bound card refuses fewer than four characters without storing or recording an answer",
+  () =>
+    withService(
+      ({ service, stored, dispatched }) =>
+        Effect.gen(function* () {
+          const refused = yield* service
+            .answer({ threadId, turnItemId, answer: { type: "save", secret: "abc" } })
+            .pipe(Effect.flip);
+          assert.equal(refused.reason, "too_short_for_sign_in");
+          assert.deepEqual(valuesOf(stored), []);
+          assert.deepEqual(dispatched, []);
+          assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        }),
+      { siteOrigin: "https://example.com" },
+    ),
 );
