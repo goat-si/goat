@@ -248,6 +248,25 @@ describe("server computer-use call reservations", () => {
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
+  it.effect.each(["stop", "turn end", "replacement"] as const)(
+    "a ticket left by a control's %s is reclaimed one grace after it, with no conflicting call in between",
+    (how) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        assert.equal((yield* f.reserve()).status, "admitted");
+        if (how === "stop") yield* f.leases.stop(f.a);
+        else if (how === "turn end") assert.isTrue(yield* f.leases.turnEnded(f.a));
+        else {
+          yield* grant(f.a, "grant:replacement", ["app.a"]);
+          const lease = Option.getOrThrow(yield* f.leases.active(f.a));
+          const next = yield* f.leases.control(f.a, Option.some(lease));
+          assert.notEqual(next.controlId, f.first.controlId);
+        }
+        yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
+        assert.equal((yield* f.reserve(f.b)).status, "admitted");
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect("notification settle is an observation, so it takes no mutation reservation", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
