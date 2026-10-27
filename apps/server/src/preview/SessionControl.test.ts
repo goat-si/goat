@@ -220,6 +220,29 @@ describe("SessionControl", () => {
     expect(changes).toEqual([true, false]);
   });
 
+  it("marks a refusal raised before input, and leaves a cut after the gate unmarked", async () => {
+    const control = new SessionControl("agent");
+    control.stopAgents();
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "stopped",
+      beforeInput: true,
+    });
+    control.resumeAgents();
+    const gate = control.dispatchGate();
+    await control.take("person");
+    await control.release("person");
+    expect(() => gate()).toThrow(expect.objectContaining({ beforeInput: true }));
+    const started = Promise.withResolvers<void>();
+    const acting = control.agent("agent", () => {
+      control.dispatchGate()();
+      started.resolve();
+      return new Promise<never>(() => {});
+    });
+    await started.promise;
+    control.stopAgents();
+    await expect(acting).rejects.toMatchObject({ reason: "stopped", beforeInput: false });
+  });
+
   it("answers a stopped action at once even when its work ignores the signal, and keeps later actions behind that work", async () => {
     const control = new SessionControl("agent");
     const work = Promise.withResolvers<string>();

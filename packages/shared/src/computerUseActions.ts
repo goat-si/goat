@@ -253,6 +253,7 @@ export function driverCallFor(
  */
 export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "stale_element_token",
+  "stale_geometry",
   "screenshot_context_missing",
   "px_frame_mismatch",
   "px_window_not_found",
@@ -315,7 +316,7 @@ const field = (value: unknown, key: string): unknown =>
  * an error after input may have been sent stays unverifiable so nothing replays it.
  */
 export function actionResultFromDriver(
-  request: ComputerUseActionRequest,
+  request: Pick<ComputerUseActionRequest, "delivery">,
   result: DriverToolResult,
 ): ComputerUseActionResult {
   // Two envelopes: { effect, code } from input tools, and { status: "refused", refusal: { code } }

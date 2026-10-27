@@ -23,6 +23,12 @@ it.effect("a settle read cut off by pause carries no mutation uncertainty or fre
     assert.deepEqual(answer.result.structuredContent, {
       code: "interrupted",
       detail: "private_mode",
+      safety: {
+        possibleCommit: false,
+        retryClass: "same_key",
+        writeStatus: "not_applicable",
+        code: "read_indeterminate",
+      },
     });
     assert.notProperty(answer.result.structuredContent, "effect");
     assert.notProperty(answer.result.structuredContent, "snapshot_id");

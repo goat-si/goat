@@ -673,6 +673,7 @@ it.effect.each(["running", "completed"] as const)(
       const layer = ProviderTurnControl.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            Layer.mock(EventSink.EventSinkV2)({}),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getProviderControlContext: () => Effect.succeed(context),
             }),

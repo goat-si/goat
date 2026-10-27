@@ -53,6 +53,7 @@ vi.mock(import("../settings/AddProviderInstanceDialog"), () => ({
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { TraitsPicker } from "./TraitsPicker";
 import type { ModelEsque } from "./providerIconUtils";
 
 import { act, render } from "../../../test/render";
@@ -194,4 +195,45 @@ describe("ProviderModelPicker add provider", () => {
       .element(page.getByRole("button", { name: "Codex", exact: true }))
       .toHaveAttribute("aria-pressed", "true");
   });
+});
+
+it("announces the full current model when opening the model picker from traits", async () => {
+  const openModelPicker = vi.fn();
+  await using screen = await render(
+    <TraitsPicker
+      provider={ProviderDriverKind.make("codex")}
+      model="gpt-6.1-sol"
+      models={[
+        {
+          slug: "gpt-6.1-sol",
+          name: "GPT-6.1-Sol",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning effort",
+                type: "select",
+                options: [
+                  { id: "low", label: "Low" },
+                  { id: "high", label: "High" },
+                ],
+                currentValue: "high",
+              },
+            ],
+          },
+        },
+      ]}
+      planModeEnabled={false}
+      isComposerOwned
+      onModelOptionsChange={() => {}}
+      onOpenModelPicker={openModelPicker}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: /Reasoning:/ }));
+  const modelButton = page.getByRole("button", { name: "Change model, current GPT-6.1-Sol" });
+  await expect.element(modelButton).toHaveTextContent("6.1 Sol");
+  await userEvent.click(modelButton);
+  expect(openModelPicker).toHaveBeenCalledOnce();
+  await expect.element(modelButton).not.toBeInTheDocument();
 });
