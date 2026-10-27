@@ -1,3 +1,5 @@
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
 import {
   RelayDpopAccessTokenScope,
   RelayEnvironmentConnectScope,
@@ -33,6 +35,7 @@ const LinkChallengeClaims = Schema.Struct({
   iss: Schema.String,
   aud: Schema.String,
   sub: Schema.String,
+  account_epoch: Schema.optionalKey(Schema.Int),
   jti: Schema.String,
   iat: Schema.Int,
   exp: Schema.Int,
@@ -46,6 +49,7 @@ const RelayDpopAccessTokenClaims = Schema.Struct({
   iss: Schema.String,
   aud: Schema.String,
   sub: Schema.String,
+  account_epoch: Schema.optionalKey(Schema.Int),
   jti: Schema.String,
   iat: Schema.Int,
   exp: Schema.Int,
@@ -92,7 +96,10 @@ export class RelayTokens extends Context.Service<
       readonly jti: string;
       readonly issuedAtEpochSeconds: number;
       readonly expiresAtEpochSeconds: number;
-    }) => Effect.Effect<string, RelayJwtError>;
+    }) => Effect.Effect<
+      string,
+      RelayJwtError | AccountAccess.AccountAccessError | RelayRateLimits.RateLimitError
+    >;
     readonly verifyLinkChallenge: (input: {
       readonly token: string;
       readonly userId: string;
@@ -107,7 +114,10 @@ export class RelayTokens extends Context.Service<
       readonly expiresAtEpochSeconds: number;
       readonly clientId: RelayPublicClientId;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
-    }) => Effect.Effect<string, RelayJwtError>;
+    }) => Effect.Effect<
+      string,
+      RelayJwtError | AccountAccess.AccountAccessError | RelayRateLimits.RateLimitError
+    >;
     readonly verifyDpopAccessToken: (input: {
       readonly token: string;
       readonly nowEpochSeconds: number;
@@ -116,12 +126,17 @@ export class RelayTokens extends Context.Service<
 >()("goat-relay/auth/RelayTokens") {}
 
 const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const config = yield* RelayConfiguration.RelayConfiguration;
   const issuer = normalizeRelayIssuer(config.relayIssuer);
 
   const issueLinkChallenge: RelayTokens["Service"]["issueLinkChallenge"] = Effect.fn(
     "relay.tokens.issue_link_challenge",
   )(function* (input) {
+    const admitted = yield* access.admit(input.userId);
+    yield* rates.charge({ userId: input.userId, operation: "link_challenge" });
+    yield* access.requireAllowed(admitted);
     return yield* signRelayJwt({
       privateKey: Redacted.value(config.cloudMintPrivateKey),
       typ: LINK_CHALLENGE_TYP,
@@ -130,6 +145,7 @@ const make = Effect.gen(function* () {
         iss: issuer,
         aud: issuer,
         sub: input.userId,
+        account_epoch: admitted.accountEpoch,
         jti: input.jti,
         iat: input.issuedAtEpochSeconds,
         exp: input.expiresAtEpochSeconds,
@@ -168,6 +184,9 @@ const make = Effect.gen(function* () {
   const issueDpopAccessToken: RelayTokens["Service"]["issueDpopAccessToken"] = Effect.fn(
     "relay.tokens.issue_dpop_access_token",
   )(function* (input) {
+    const admitted = yield* access.admit(input.userId);
+    yield* rates.charge({ userId: input.userId, operation: "dpop_token" });
+    yield* access.requireAllowed(admitted);
     return yield* signRelayJwt({
       privateKey: Redacted.value(config.cloudMintPrivateKey),
       typ: ACCESS_TOKEN_TYP,
@@ -175,6 +194,7 @@ const make = Effect.gen(function* () {
         iss: issuer,
         aud: issuer,
         sub: input.userId,
+        account_epoch: admitted.accountEpoch,
         jti: input.jti,
         iat: input.issuedAtEpochSeconds,
         exp: input.expiresAtEpochSeconds,

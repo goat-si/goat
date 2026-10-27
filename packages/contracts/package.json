@@ -15,6 +15,10 @@
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
     },
+    "./relayErrors": {
+      "types": "./src/relayErrors.ts",
+      "import": "./src/relayErrors.ts"
+    },
     "./relay": {
       "types": "./src/relay.ts",
       "import": "./src/relay.ts"
