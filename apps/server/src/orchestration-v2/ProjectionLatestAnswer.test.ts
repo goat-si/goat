@@ -370,3 +370,26 @@ it.effect(
       return [idle.prompt, ...idle.before, edited];
     }, "Compacted the context"),
 );
+
+it.effect(
+  "a message reusing a completed idle run's prompt id with fresh timestamps refreshes it",
+  () =>
+    expectExcerpt((input) => {
+      const idle = idleCompaction(input);
+      if (idle.prompt.type !== "message.updated") return [];
+      const replaced: OrchestrationV2DomainEvent = {
+        ...idle.prompt,
+        id: EventId.make("prompt-replaced"),
+        occurredAt: input.at(5),
+        payload: {
+          ...idle.prompt.payload,
+          text: "Ordinary steer",
+          createdBy: "user",
+          creationSource: "web",
+          createdAt: input.at(5),
+          updatedAt: input.at(5),
+        },
+      };
+      return [idle.prompt, ...idle.before, replaced];
+    }, "Compacted the context"),
+);

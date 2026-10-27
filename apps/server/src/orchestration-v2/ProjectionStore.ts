@@ -953,7 +953,7 @@ export function applyToProjection(
     : RunNotification.notificationCompletions([event], cursorContext).get(event.threadId);
   const thread = LatestAnswer.withExcerpt(
     RunNotification.preserveThreadNotification(projection.thread, next.thread),
-    LatestAnswer.changesLatestAnswer(event)
+    LatestAnswer.changesLatestAnswer(event, LatestAnswer.promptOfCompletedRunIn(projection))
       ? LatestAnswer.latestAnswerExcerpt(next, (run) => isIdleCompactionRun(run, next))
       : projection.thread.latestAnswerExcerpt,
   );
@@ -2327,6 +2327,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event: OrchestrationV2DomainEvent,
           options?: { readonly deferNotificationCursor?: boolean },
         ) {
+          let promptOfCompletedRun = false;
           switch (event.type) {
             case "thread.pull-request-link-updated": {
               const thread = yield* getThread(event.threadId);
@@ -2892,7 +2893,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "message.updated": {
               const payloadJson = yield* encodeMessagePayload(event.payload);
               const payload = parseEncodedPayload(payloadJson);
-              yield* sql`
+              const upserted = yield* sql<{ readonly prompt_of_completed_run: number | null }>`
               INSERT INTO orchestration_v2_projection_messages (
                 message_id,
                 thread_id,
@@ -2925,7 +2926,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 payload_json = excluded.payload_json
+              RETURNING ${LatestAnswer.promptOfCompletedRunColumn(sql, event.threadId)}
             `;
+              promptOfCompletedRun = upserted[0]?.prompt_of_completed_run === 1;
               break;
             }
             case "plan.updated": {
@@ -3223,7 +3226,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           }
           if (!options?.deferNotificationCursor)
             yield* RunNotification.recordNotificationCompletions(sql, [event]);
-          yield* LatestAnswer.recordLatestAnswer(sql, event);
+          yield* LatestAnswer.recordLatestAnswer(sql, event, promptOfCompletedRun);
         },
         (effect, event) =>
           effect.pipe(

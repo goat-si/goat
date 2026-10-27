@@ -1,11 +1,11 @@
-import {
-  idleCompactionOf,
-  type OrchestrationV2AppThread,
-  type OrchestrationV2DomainEvent,
-  type OrchestrationV2Run,
-  type OrchestrationV2ThreadProjection,
-  type RunId,
-  type ThreadId,
+import type {
+  MessageId,
+  OrchestrationV2AppThread,
+  OrchestrationV2DomainEvent,
+  OrchestrationV2Run,
+  OrchestrationV2ThreadProjection,
+  RunId,
+  ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -30,7 +30,12 @@ export function answerExcerpt(text: string): string | undefined {
 
 // Events that can change which run answered last or what it answered. Anything else keeps the
 // stored excerpt, including thread payloads, which echo older values and seed nothing.
-export const changesLatestAnswer = (event: OrchestrationV2DomainEvent) =>
+export const changesLatestAnswer = (
+  event: OrchestrationV2DomainEvent,
+  // A prompt decides whether its run is an idle compaction, but only a completed run's prompt can
+  // move the excerpt, however it is replaced or rewritten; fresh prompts stay on the fast path.
+  isPromptOfCompletedRun: (messageId: MessageId) => boolean,
+) =>
   // A fork's creation payload copies its source's excerpt from beyond the fork point.
   event.type === "thread.created" ||
   event.type === "run.created" ||
@@ -42,14 +47,22 @@ export const changesLatestAnswer = (event: OrchestrationV2DomainEvent) =>
   (event.type === "message.updated" &&
     event.payload.role === "assistant" &&
     !event.payload.streaming) ||
-  // An idle compaction's prompt and its compaction item decide whether its run counts. Editing a
-  // prompt can turn an idle one ordinary; a fresh message (never edited) cannot change a run.
   (event.type === "message.updated" &&
-    (idleCompactionOf(event.payload) !== undefined ||
-      (event.payload.role === "user" &&
-        DateTime.toEpochMillis(event.payload.updatedAt) >
-          DateTime.toEpochMillis(event.payload.createdAt)))) ||
+    event.payload.role === "user" &&
+    isPromptOfCompletedRun(event.payload.id)) ||
   (event.type === "turn-item.updated" && event.payload.type === "compaction");
+
+/** The prompt check as a RETURNING column of the message upsert; evaluated for user messages only. */
+export const promptOfCompletedRunColumn = (sql: SqlClient.SqlClient, threadId: ThreadId) =>
+  sql`CASE WHEN role = 'user' THEN EXISTS (
+    SELECT 1 FROM orchestration_v2_projection_runs r
+    WHERE r.thread_id = ${threadId} AND r.status = 'completed'
+      AND json_extract(r.payload_json,'$.userMessageId') = message_id) END AS prompt_of_completed_run`;
+
+/** The in-memory form of the prompt check, for applyToProjection. */
+export const promptOfCompletedRunIn =
+  (projection: Pick<OrchestrationV2ThreadProjection, "runs">) => (messageId: MessageId) =>
+    projection.runs.some((run) => run.userMessageId === messageId && run.status === "completed");
 
 const byId = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 const at = (time: DateTime.Utc) => DateTime.toEpochMillis(time);
@@ -122,8 +135,10 @@ export const latestAnswerPayload = (sql: SqlClient.SqlClient, payload: Statement
 export const recordLatestAnswer = Effect.fn("ProjectionLatestAnswer.record")(function* (
   sql: SqlClient.SqlClient,
   event: OrchestrationV2DomainEvent,
+  // Read by the message upsert itself (promptOfCompletedRunColumn), so a new message costs nothing.
+  promptOfCompletedRun: boolean,
 ) {
-  if (!changesLatestAnswer(event)) return;
+  if (!changesLatestAnswer(event, () => promptOfCompletedRun)) return;
   const shell = makeShellThreadRows(sql);
   const runs = yield* sql<{ readonly run_id: RunId; readonly root_node_id: string | null }>`
     SELECT r.run_id, COALESCE(
