@@ -12,6 +12,7 @@ import { SET_TRAY_MENU_CHANNEL, TRAY_OPEN_THREAD_CHANNEL } from "../ipc/channels
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { trayMenuTemplate } from "./trayMenu.ts";
+import { createTrayPicks } from "./trayPicks.ts";
 
 const { logWarning } = makeComponentLogger("desktop-tray");
 
@@ -100,20 +101,21 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
     );
   // Picks wait for a renderer that has published a menu, which it does only after it listens.
   // It navigates itself, so a thread on a live remote opens while the local server is down.
-  let listener: Electron.WebContents | null = null;
-  let picked: Pick<DesktopTrayThread, "environmentId" | "threadId"> | null = null;
-  const deliver = () => {
-    if (picked === null || listener === null || listener.isDestroyed()) return;
-    listener.send(TRAY_OPEN_THREAD_CHANNEL, picked);
-    picked = null;
-  };
+  const picks = createTrayPicks<Electron.WebContents>(TRAY_OPEN_THREAD_CHANNEL);
   const actions = {
     openApp: () => run(desktopWindow.activate, "open-app"),
-    openThread: (thread: DesktopTrayThread) => {
-      picked = { environmentId: thread.environmentId, threadId: thread.threadId };
-      // activate recreates a window macOS closed; its renderer then publishes and receives this.
-      run(desktopWindow.activate.pipe(Effect.andThen(Effect.sync(deliver))), "open-thread");
-    },
+    // activate recreates a window macOS closed; its renderer receives the pick once it publishes.
+    openThread: (thread: DesktopTrayThread) =>
+      run(
+        desktopWindow.activate.pipe(
+          Effect.andThen(
+            Effect.sync(() =>
+              picks.pick({ environmentId: thread.environmentId, threadId: thread.threadId }),
+            ),
+          ),
+        ),
+        "open-thread",
+      ),
     quit: () => run(electronApp.quit, "quit"),
   };
 
@@ -138,8 +140,7 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
 
   // Rows go stale once their renderer reloads or is gone (macOS keeps running windowless).
   const listen = (contents: Electron.WebContents) => {
-    if (listener === contents) return;
-    listener = contents;
+    if (picks.isListening(contents)) return;
     const onNavigation = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
@@ -148,12 +149,11 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
     const forget = () => {
       contents.removeListener("did-start-navigation", onNavigation);
       contents.removeListener("destroyed", forget);
-      if (listener !== contents) return;
-      listener = null;
-      apply(EMPTY_MENU);
+      if (picks.gone(contents)) apply(EMPTY_MENU);
     };
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", forget);
+    picks.listening(contents);
   };
 
   yield* ipc.handle(
@@ -163,11 +163,10 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
       result: Schema.Void,
       handler: (menu, event) =>
         Effect.sync(() => {
+          apply(menu);
           const sender =
             event === undefined ? undefined : Electron.webContents.fromId(event.sender.id);
           if (sender !== undefined && !sender.isDestroyed()) listen(sender);
-          apply(menu);
-          deliver();
         }),
     }),
   );
