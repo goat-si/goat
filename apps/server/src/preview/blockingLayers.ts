@@ -316,72 +316,81 @@ type Sampled = Omit<LayersReport, "blocking">;
 const sampleIn = (target: Pick<Page, "evaluate">, grid: number) =>
   target.evaluate(`(${LAYERS_SCRIPT})(${grid})`) as Promise<Sampled>;
 
-type HitRect = {
-  readonly left: number;
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-};
 type HitNode = {
-  getBoundingClientRect(): HitRect;
   getRootNode(): { elementFromPoint(x: number, y: number): unknown };
 };
+type Point = readonly [number, number];
+
+/** Runs in the page: whether the element is what its document draws at each point. */
+const drawnAt = (element: HitNode, points: ReadonlyArray<Point>): ReadonlyArray<boolean> =>
+  points.map(([x, y]) => element.getRootNode().elementFromPoint(x, y) === element);
+
+/** Grid points per side sampled across a frame's box to see how much of it the browser draws. */
+const DRAWN_GRID = 5;
 
 /**
- * Runs in the page: the share of a frame element's part inside its document's viewport that the
- * document draws on top, by hit-testing a grid. Clipping by an overflow box, a cover over it, or
- * a fixed frame escaping its box all count as the browser paints them.
- */
-const drawnShare = (element: HitNode): number => {
-  // Inside the function: the page receives only its source.
-  const grid = 5;
-  const view = globalThis as unknown as { innerWidth: number; innerHeight: number };
-  const rect = element.getBoundingClientRect();
-  const left = Math.max(rect.left, 0);
-  const top = Math.max(rect.top, 0);
-  const right = Math.min(rect.right, view.innerWidth);
-  const bottom = Math.min(rect.bottom, view.innerHeight);
-  if (right <= left || bottom <= top) return 0;
-  const root = element.getRootNode();
-  let hits = 0;
-  for (let column = 0; column < grid; column++)
-    for (let row = 0; row < grid; row++) {
-      const x = left + ((column + 0.5) * (right - left)) / grid;
-      const y = top + ((row + 0.5) * (bottom - top)) / grid;
-      if (root.elementFromPoint(x, y) === element) hits++;
-    }
-  return hits / (grid * grid);
-};
-
-/**
- * The part of the viewport a frame shows: its box, in the top page's coordinates with transforms
- * applied, clipped by every frame around it and scaled by how much of each frame element its
- * document actually draws. Null when it cannot be measured.
+ * The part of the viewport a frame shows. A grid over its box, in the top page's coordinates and
+ * clipped by every frame around it, is carried into each document on the way down and hit-tested
+ * there, so a point counts only where every frame element on its path is what is drawn: clips,
+ * covers, transforms and fixed frames all count as the browser paints them. Null when unmeasured.
  */
 const visibleArea = async (frame: Frame, viewport: Sampled["viewport"]) => {
+  const links: Array<{
+    readonly element: Awaited<ReturnType<Frame["frameElement"]>>;
+    readonly parent: Frame;
+    readonly box: { x: number; y: number; width: number; height: number };
+  }> = [];
+  for (let current: Frame | null = frame; current !== null;) {
+    const parent = current.parentFrame();
+    if (parent === null) break;
+    const element = await current.frameElement().catch(() => null);
+    const box = element === null ? null : await element.boundingBox().catch(() => null);
+    if (element === null || box === null) return null;
+    links.push({ element, parent, box });
+    current = parent;
+  }
   let left = 0;
   let top = 0;
   let right = viewport.width;
   let bottom = viewport.height;
-  let drawn = 1;
-  for (let current: Frame | null = frame; current?.parentFrame();) {
-    const measured = await current
-      .frameElement()
-      .then(async (element) => {
-        const box = await element.boundingBox();
-        return box === null ? null : { box, share: await element.evaluate(drawnShare) };
-      })
-      .catch(() => null);
-    if (measured === null) return null;
-    const { box, share } = measured;
+  for (const { box } of links) {
     left = Math.max(left, box.x);
     top = Math.max(top, box.y);
     right = Math.min(right, box.x + box.width);
     bottom = Math.min(bottom, box.y + box.height);
-    drawn *= share;
-    current = current.parentFrame();
   }
-  return Math.max(0, right - left) * Math.max(0, bottom - top) * drawn;
+  if (right <= left || bottom <= top) return 0;
+  const points: Array<Point> = [];
+  for (let column = 0; column < DRAWN_GRID; column++)
+    for (let row = 0; row < DRAWN_GRID; row++)
+      points.push([
+        left + ((column + 0.5) * (right - left)) / DRAWN_GRID,
+        top + ((row + 0.5) * (bottom - top)) / DRAWN_GRID,
+      ]);
+  const drawn = points.map(() => true);
+  for (const [index, { element, parent }] of links.entries()) {
+    // The parent document's own frame element maps the top page's points into its viewport.
+    const holder = links[index + 1];
+    const size = holder
+      ? ((await parent.evaluate("[innerWidth, innerHeight]").catch(() => null)) as Point | null)
+      : null;
+    if (holder && size === null) return null;
+    const local = points.map(([x, y]): Point =>
+      holder && size
+        ? [
+            ((x - holder.box.x) * size[0]) / holder.box.width,
+            ((y - holder.box.y) * size[1]) / holder.box.height,
+          ]
+        : [x, y],
+    );
+    const hits = await element.evaluate(drawnAt, local).catch(() => null);
+    if (hits === null) return null;
+    hits.forEach((hit, point) => {
+      if (!hit) drawn[point] = false;
+    });
+  }
+  const share = drawn.filter(Boolean).length / points.length;
+  return (right - left) * (bottom - top) * share;
 };
 
 /**

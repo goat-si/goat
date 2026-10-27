@@ -265,6 +265,20 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     );
     expect(scaled?.coverage).toBeGreaterThan(0.1);
     expect(scaled?.coverage).toBeLessThan(0.16);
+    // The outer frame shows only its left part, and the inner frame sits on its right: nothing.
+    await page.route("https://draw.test/right", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<body style="margin:0"><iframe src="https://draw.test/inner" style="position:absolute;left:600px;top:0;border:0;width:400px;height:800px"></iframe></body>',
+      }),
+    );
+    expect(
+      await show(
+        '<div style="position:absolute;left:0;top:0;width:400px;height:800px;overflow:hidden"><iframe id="f" src="https://draw.test/right" style="border:0;width:1000px;height:800px"></iframe></div>',
+        true,
+      ),
+    ).toBeNull();
+
     // A frame under an opaque cover draws nothing.
     expect(
       await show(
