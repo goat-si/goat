@@ -31,6 +31,55 @@ const readThenClick = Effect.fn(function* () {
 
 describe("read-back after input the driver could not verify", () => {
   it.effect(
+    "drops a read-back that answers after the lease stream dropped, keeping the input's own answer",
+    () =>
+      Effect.gen(function* () {
+        let held = false;
+        const h = yield* harness({ verifyInputByTreeDiff: true, transportHeld: () => held });
+        yield* h.push(active());
+        yield* h.send(call(1, "get_window_state", { ...window, query: "Dark", session: "s" }));
+        yield* h.nextToDriver;
+        yield* h.reply(result(1, { snapshot_id: "s1" }, "- [3] AXRadioButton (Dark)"));
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "click", { ...window, element_token: "s1:3" }));
+        yield* h.nextToDriver;
+        yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
+        const reread = yield* h.nextToDriver;
+        held = true;
+        yield* h.reply(
+          result(
+            reread.id,
+            { since_status: "diff", snapshot_id: "s2" },
+            "~ [3] secret window text",
+          ),
+        );
+        const answer = (yield* h.nextToProvider) as unknown as Answer;
+        assert.equal(answer.id, 2);
+        assert.deepEqual(answer.result.structuredContent, { effect: "unverifiable" });
+        assert.notInclude(JSON.stringify(answer), "secret window text");
+      }),
+  );
+
+  it.effect("does not read the window back after input while the lease stream reconnects", () =>
+    Effect.gen(function* () {
+      let held = false;
+      const h = yield* harness({ verifyInputByTreeDiff: true, transportHeld: () => held });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", window));
+      yield* h.nextToDriver;
+      yield* h.reply(result(1, { snapshot_id: "s1" }));
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "click", { ...window, x: 3, y: 4 }));
+      yield* h.nextToDriver;
+      held = true;
+      yield* h.reply(result(2, { effect: "unverifiable" }));
+      const answer = (yield* h.nextToProvider) as unknown as Answer;
+      assert.deepEqual(answer.result.structuredContent, { effect: "unverifiable" });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
+  it.effect(
     "confirms an input after which the window's tree changed, and names the new snapshot",
     () =>
       Effect.gen(function* () {

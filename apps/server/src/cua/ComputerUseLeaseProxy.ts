@@ -127,7 +127,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ended: Deferred.await(ended),
     nextId: () => `${OWN_ID}verify:${ownRequests++}`,
     scope,
-    live: (child) => lifecycle.current === child && active(),
+    live: (child) => lifecycle.current === child && active() && !options.transportHeld?.(),
   });
   const handshakeAnswers = makeLeaseProxyHandshake({
     startDriver: options.startHandshakeDriver ?? options.startDriver,
