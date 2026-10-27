@@ -18,6 +18,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as EventSink from "./EventSink.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -346,7 +348,15 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(layerSessions),
+            Layer.provide(
+              Layer.merge(
+                layerSessions,
+                Layer.mock(EventSink.EventSinkV2)({
+                  latestSequence: () => Effect.succeed(0),
+                  stream: () => Stream.never,
+                }),
+              ),
+            ),
           ),
         ),
       );

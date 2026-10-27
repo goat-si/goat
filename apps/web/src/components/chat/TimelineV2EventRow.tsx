@@ -51,7 +51,6 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
       <V2LifecycleRow
         environmentId={ctx.activeThreadEnvironmentId}
         item={item}
-        resourceSummary={row.resourceSummary}
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}
         runs={ctx.runs}
