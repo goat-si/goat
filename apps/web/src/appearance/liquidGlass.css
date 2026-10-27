@@ -26,13 +26,31 @@
       background-color: var(--lg-terminal);
     }
 
-    /* The framed sidebar paints its surface on a pseudo-element that starts below the titlebar
-       strip; the strip takes the pane tint so it matches the main topbar beside it. */
+    /* The framed sidebar paints a rounded panel on a pseudo-element below the titlebar strip. As
+       glass, the rail, strip and panel read as one continuous sheet, so the element carries the
+       tint from top to bottom and the framed panel is dropped. */
     [data-glass-pane="rail"].before\:bg-sidebar {
-      background: linear-gradient(var(--lg-pane) 0 var(--workspace-topbar-height), transparent 0);
+      background-color: var(--lg-rail);
     }
     [data-glass-pane="rail"].before\:bg-sidebar::before {
-      background-color: var(--lg-rail);
+      background-color: transparent;
+    }
+
+    /* The shell's content frame (index.css workspace-content-frame) outlines the main area with a
+       rounded corner and paints an opaque corner cover; on glass that reads as a notch and a
+       recessed panel. One faint full-height divider between sidebar and main replaces it. */
+    .workspace-content-frame {
+      border-color: transparent;
+    }
+    .workspace-content-frame::before {
+      background: none;
+    }
+    [data-slot="sidebar-container"]::after {
+      top: 0;
+      border-color: color-mix(in srgb, var(--contrast-foreground) 8%, transparent);
+    }
+    [data-slot="sidebar-inset"][data-glass-pane="pane"] {
+      box-shadow: none;
     }
 
     [data-glass-layer] {
