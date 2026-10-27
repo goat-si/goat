@@ -51,78 +51,77 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     driver,
     getCapabilities: () => Effect.succeed(capabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-    openSession: (input) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
-          turn: ProviderAdapter.ProviderAdapterV2TurnInput,
-        ) {
-          started.push(turn);
-          yield* Queue.offer(events, {
-            type: "provider_turn.updated",
-            driver,
-            providerTurn: {
-              id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
-              providerThreadId: turn.providerThread.id,
-              nodeId: turn.rootNodeId,
-              runAttemptId: turn.attemptId,
-              nativeTurnRef: { driver, nativeId: `native:${turn.attemptId}`, strength: "strong" },
-              ordinal: turn.providerTurnOrdinal,
-              status: "running",
-              startedAt: now,
-              completedAt: null,
-            },
-          });
-        });
-        return {
-          instanceId,
+    openSession: Effect.fn("SteeringHarness.openSession")(function* (input) {
+      const now = yield* DateTime.now;
+      const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
+        turn: ProviderAdapter.ProviderAdapterV2TurnInput,
+      ) {
+        started.push(turn);
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
           driver,
-          providerSessionId: input.providerSessionId,
-          providerSession: {
-            id: input.providerSessionId,
+          providerTurn: {
+            id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
+            providerThreadId: turn.providerThread.id,
+            nodeId: turn.rootNodeId,
+            runAttemptId: turn.attemptId,
+            nativeTurnRef: { driver, nativeId: `native:${turn.attemptId}`, strength: "strong" },
+            ordinal: turn.providerTurnOrdinal,
+            status: "running",
+            startedAt: now,
+            completedAt: null,
+          },
+        });
+      });
+      return {
+        instanceId,
+        driver,
+        providerSessionId: input.providerSessionId,
+        providerSession: {
+          id: input.providerSessionId,
+          driver,
+          providerInstanceId: instanceId,
+          status: "ready",
+          cwd,
+          model: runSelection.model,
+          capabilities,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+        events: Stream.fromQueue(events),
+        ensureThread: ({ threadId }) =>
+          Effect.succeed({
+            id: ProviderThreadId.make(`provider-thread:${threadId}`),
             driver,
             providerInstanceId: instanceId,
-            status: "ready",
-            cwd,
-            model: runSelection.model,
-            capabilities,
+            providerSessionId: input.providerSessionId,
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: { driver, nativeId: "native-thread", strength: "strong" },
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: null,
+            lastRunOrdinal: null,
+            handoffIds: [],
+            forkedFrom: null,
             createdAt: now,
             updatedAt: now,
-            lastError: null,
-          },
-          events: Stream.fromQueue(events),
-          ensureThread: ({ threadId }) =>
-            Effect.succeed({
-              id: ProviderThreadId.make(`provider-thread:${threadId}`),
-              driver,
-              providerInstanceId: instanceId,
-              providerSessionId: input.providerSessionId,
-              appThreadId: threadId,
-              ownerNodeId: null,
-              nativeThreadRef: { driver, nativeId: "native-thread", strength: "strong" },
-              nativeConversationHeadRef: null,
-              status: "idle",
-              firstRunOrdinal: null,
-              lastRunOrdinal: null,
-              handoffIds: [],
-              forkedFrom: null,
-              createdAt: now,
-              updatedAt: now,
-            }),
-          resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-          startTurn,
-          compactThread: (turn) => beforeCompaction.pipe(Effect.andThen(startTurn(turn))),
-          steerTurn: (turn) =>
-            Effect.sync(() => {
-              steered.push(turn.message.text);
-            }),
-          interruptTurn: () => Effect.void,
-          respondToRuntimeRequest: () => Effect.void,
-          readThreadSnapshot: () => Effect.die("unused"),
-          rollbackThread: () => Effect.die("unused"),
-          forkThread: () => Effect.die("unused"),
-        };
-      }),
+          }),
+        resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
+        startTurn,
+        compactThread: (turn) => beforeCompaction.pipe(Effect.andThen(startTurn(turn))),
+        steerTurn: (turn) =>
+          Effect.sync(() => {
+            steered.push(turn.message.text);
+          }),
+        interruptTurn: () => Effect.void,
+        respondToRuntimeRequest: () => Effect.void,
+        readThreadSnapshot: () => Effect.die("unused"),
+        rollbackThread: () => Effect.die("unused"),
+        forkThread: () => Effect.die("unused"),
+      };
+    }),
   };
   const layer = ProviderReplayHarness.layerWithRegistry(
     { name },
@@ -172,4 +171,48 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     return threadId;
   });
   return { cwd, events, started, steered, layer, startFirstTurn };
+});
+
+export const goalHarness = Effect.fn("goalHarness")(function* (
+  name: string,
+  beforeCompaction: Effect.Effect<void> = Effect.void,
+) {
+  const harness = yield* nextTurnSelectionHarness(name, false, beforeCompaction);
+  const send = Effect.fn("SteeringHarness.sendGoalMessage")(function* (
+    id: string,
+    text: string,
+    delivery: "queue" | "auto",
+  ) {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(id),
+      threadId: ThreadId.make(`thread:${name}`),
+      messageId: MessageId.make(`message:${id}`),
+      text,
+      attachments: [],
+      modelSelection: runSelection,
+      ...(delivery === "queue"
+        ? { dispatchMode: { type: "queue_after_active" } }
+        : { dispatchMode: { type: "start_immediately" }, deliveryIntent: "auto" }),
+      createdBy: "user",
+      creationSource: "web",
+    });
+  });
+  const read = Effect.fn("SteeringHarness.readGoalThread")(function* (threadId: ThreadId) {
+    const projection = yield* (yield* Orchestrator.OrchestratorV2).getThreadProjection(threadId);
+    const textOf = (run: (typeof projection.runs)[number]) =>
+      projection.messages.find((message) => message.id === run.userMessageId)?.text;
+    return {
+      queue: projection.runs
+        .filter((run) => run.status === "queued")
+        .toSorted((left, right) => (left.queuePosition ?? 0) - (right.queuePosition ?? 0))
+        .map(textOf),
+      started: harness.started.map((turn) => turn.message.text),
+      stopRequested: projection.turnItems.some(
+        (item) => item.type === "run_interrupt_request" && item.runId === harness.started[0]?.runId,
+      ),
+    };
+  });
+  return { ...harness, send, read };
 });
