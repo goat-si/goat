@@ -42,7 +42,14 @@ export type TrayControl = (
 
 export interface TrayEffects {
   readonly control: TrayControl;
-  readonly notify: (copy: { readonly title: string; readonly description: string }) => void;
+  /**
+   * Shows a notice with a Stop all action. A session whose Stop could not end its approval offers
+   * only stopAll, so the tray row and the card's buttons are gone and the notice is the way out.
+   */
+  readonly notify: (
+    copy: { readonly title: string; readonly description: string },
+    stopAll: () => Promise<void>,
+  ) => void;
   /** Brings a hidden window forward so a notice can be seen. */
   readonly reveal: () => void;
 }
@@ -160,10 +167,11 @@ export async function runTrayComputerUseAction(
 ): Promise<void> {
   const environmentId = input.environmentId;
   if (environmentId === null) return;
+  const stopAll = () => runTrayComputerUseAction({ kind: "stop-all-computer-use" }, input);
   if (action.kind === "stop-all-computer-use") {
     const result = await input.control(environmentId, { control: "stopAll" });
     if (result._tag === "Success" && !result.value.applied) {
-      input.notify(STOP_ALL_INCOMPLETE);
+      input.notify(STOP_ALL_INCOMPLETE, stopAll);
       input.reveal();
     }
     return;
@@ -179,7 +187,7 @@ export async function runTrayComputerUseAction(
     if (result._tag === "Success" && result.value.reason === "not_allowed") denied = true;
   }
   if (denied) {
-    input.notify(GRANT_STILL_HELD);
+    input.notify(GRANT_STILL_HELD, stopAll);
     input.reveal();
   }
 }

@@ -155,8 +155,18 @@ export function startDesktopTray(
       void computerUse.run(action, {
         control: (environmentId, input) =>
           runAtomCommand(registry, previewSessionsEnvironment.control, { environmentId, input }),
-        notify: (copy) => {
-          toastManager.add({ type: "error", ...copy });
+        notify: (copy, stopAll) => {
+          const id = toastManager.add({
+            type: "error",
+            ...copy,
+            actionProps: {
+              children: "Stop all",
+              onClick: () => {
+                toastManager.close(id);
+                void stopAll();
+              },
+            },
+          });
         },
         reveal: () => {
           void window.desktopBridge?.revealWindow?.().catch(() => undefined);
