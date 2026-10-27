@@ -256,6 +256,8 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       Stream.orDie,
       Stream.decodeText,
       Stream.splitLines,
+      // Heartbeats are blank lines every proxy skips.
+      Stream.filter((line) => line.length > 0),
       Stream.map((line): unknown => JSON.parse(line)),
       Stream.toQueue({ capacity: "unbounded" }),
     );

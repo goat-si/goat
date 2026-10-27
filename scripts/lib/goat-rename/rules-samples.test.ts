@@ -7,7 +7,7 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
-  it("renames multiline GitHub identities without changing nested GitLab fixtures (#1923)", () => {
+  it("renames multiline GitHub identities while preserving nested GitLab owners (#1923)", () => {
     const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
     const source = [
       'canonicalKey: "github.com/pingdotgg/t3code",',
@@ -22,7 +22,7 @@ describe("sample names", () => {
     expect(apply(path, source)).toBe(renamed);
     expect(apply(path, renamed)).toBe(renamed);
     const nested = 'owner: "t3tools",\nname: "t3code",';
-    expect(apply(path, nested)).toBe(nested);
+    expect(apply(path, nested)).toBe('owner: "t3tools",\nname: "goat",');
     const unrelated = 'owner: "pingdotgg",\nname: "t3code",';
     expect(apply("a/b.test.ts", unrelated)).toBe(unrelated);
   });
@@ -54,6 +54,40 @@ describe("sample names", () => {
       '"goat-si/goat#22889" "goat#22889" "goat#2288"',
     );
     expect(apply("src/legacy.ts", '"t3code#22889"')).toBe('"t3code#22889"');
+  });
+
+  it.each([
+    ["packages/shared/src/paletteSearch.test.ts", '"t3code#22889"', '"goat#22889"'],
+    [
+      "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
+      'headRepository: { id: "R_1", name: "t3code" }',
+      'headRepository: { id: "R_1", name: "goat" }',
+    ],
+  ])("keeps repository fixture fields consistent in %s", (path, input, expected) => {
+    expect(apply(path, input)).toBe(expected);
+  });
+
+  it("keeps split change-request identities consistent with their repository keys", () => {
+    const input = `canonicalKey: "github.com/pingdotgg/t3code",
+owner: "pingdotgg",
+name: "t3code",
+canonicalKey: "gitlab.com/t3tools/platform/t3code",
+displayName: "t3tools/platform/t3code",
+owner: "t3tools",
+name: "t3code",`;
+    const expected = `canonicalKey: "github.com/goat-si/goat",
+owner: "goat-si",
+name: "goat",
+canonicalKey: "gitlab.com/t3tools/platform/goat",
+displayName: "t3tools/platform/goat",
+owner: "t3tools",
+name: "goat",`;
+    const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
+    expect(apply(path, input)).toBe(expected);
+    expect(apply(path, expected)).toBe(expected);
+    expect(apply("other.test.ts", 'owner: "pingdotgg",\nname: "t3code",')).toBe(
+      'owner: "pingdotgg",\nname: "t3code",',
+    );
   });
 
   it("renames maintainer samples in tests", () => {

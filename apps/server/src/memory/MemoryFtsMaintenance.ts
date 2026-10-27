@@ -107,8 +107,7 @@ const make = Effect.gen(function* () {
       : MEMORY_STORAGE_SAMPLE_INTERVAL_MS;
     const sampleDue =
       lastAttempt === undefined ||
-      previous.measuredAt === null ||
-      now - Math.max(lastAttempt, previous.measuredAt) >= interval;
+      now - Math.max(lastAttempt, previous.measuredAt ?? lastAttempt) >= interval;
     const mergeWanted =
       previous.mergePending ||
       previous.changedRows >= M.MEMORY_FTS_MERGE_TRIGGER_CHANGES ||

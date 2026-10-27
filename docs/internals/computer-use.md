@@ -67,13 +67,18 @@ provider (Codex, Claude, ...)
   revoke do not stop an already-dispatched driver effect, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
+- Stop, stop all, lease end, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
   input that session holds, and sends a cleanup report over the control channel, which does not
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
+- A dropped lease stream between a live proxy and its server is not an end. The proxy
+  reconnects and keeps its driver, but until the server's next update it sends nothing that acts
+  on or shows the screen and cuts off such work in flight, because a Stop, pause or private field
+  cannot reach it meanwhile. Two minutes without the server end the control as `transport_lost`;
+  the proxy stays up and a fresh snapshot can start it again.
 - Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
   historical stop measurement is repeated through this topology before WS6 counts as
   done.
@@ -168,6 +173,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   back, so it reports `unverifiable` even when it landed. Some apps drop pid-posted mouse events
   entirely, KakaoTalk reportedly among them, so an unchanged window after such a click is an unknown
   outcome to observe, not a coordinate bug ([token first](../../apps/server/src/cua/ComputerUseTokenFirst.ts)).
+  Preview and native results share the optional
+  [action safety contract](../../packages/contracts/src/actionOutcomeSafety.ts): an unknown or
+  cancelled write may have committed and must never replay automatically. Missing safety from an
+  older peer is unclassified; it is not evidence that input was never sent.
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
 - Refusals name their cause. A person's Stop and a person's takeover have their own
@@ -204,7 +213,11 @@ A cell whose result has arrived returns it with its receipts even when a Stop la
 collected. When the agent did not ask for the reset itself, its next cell's result lists
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
-observe again before deciding what to do. The cell never replays that input. Every effect needs a
+observe again before deciding what to do. The cell never replays that input. The first call that
+fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
+their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+unverifiable write is a success whose receipt says it may have committed, because the macOS
+driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.

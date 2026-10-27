@@ -11,6 +11,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { DEVELOPMENT_ICON_OVERRIDES } from "../../../scripts/lib/brand-assets.ts";
 import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-executable-imports.ts";
+import { injectLinuxArm64Sea } from "../../../scripts/lib/linux-arm64-sea.ts";
+import { resolveSeaBuildTarget } from "../../../scripts/lib/sea-build-target.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   ServerCliCommandExitError,
@@ -117,20 +120,23 @@ const buildExeCmd = Command.make(
       const serverDir = path.join(repoRoot, "apps/server");
 
       yield* Effect.log("[cli] Building single-executable...");
+      const platform = yield* HostProcess.Platform;
+      const arch = yield* HostProcess.Architecture;
+      const { target, injectLinuxArm64 } = yield* Effect.try(() =>
+        resolveSeaBuildTarget({
+          target: Option.getOrElse(config.target, () => process.env.GOAT_PACK_EXE_TARGET),
+          platform,
+          arch,
+        }),
+      );
       const spawnCommand = yield* resolveSpawnCommand("vp", ["pack"]);
       yield* runCommand(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: serverDir,
           env: {
             ...process.env,
-            GOAT_PACK_EXE: "1",
-            ...Option.match(config.target, {
-              onNone: () => ({}),
-              onSome: (target) =>
-                target.trim() === "host"
-                  ? { GOAT_PACK_EXE_TARGET: "" }
-                  : { GOAT_PACK_EXE_TARGET: target },
-            }),
+            GOAT_PACK_EXE: injectLinuxArm64 ? "bundle" : "1",
+            GOAT_PACK_EXE_TARGET: target ?? "",
           },
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
@@ -144,13 +150,21 @@ const buildExeCmd = Command.make(
       if (specifiers.length > 0) {
         return yield* new ServerCliExecutableImportError({ bundlePath, specifiers });
       }
+      if (injectLinuxArm64) {
+        yield* injectLinuxArm64Sea({
+          bundlePath,
+          outputPath: path.join(serverDir, "dist-exe/goat"),
+          nodePath: process.execPath,
+          verbose: config.verbose,
+        });
+      }
       yield* Effect.log(
         "[cli] Built dist-exe/goat (expects client/, resource-monitor/, and the runtime-external node_modules beside it; scripts/build-cli-archive.ts assembles that tree)",
       );
     }),
 ).pipe(
   Command.withDescription(
-    "Build the server as a Node single-executable (needs a Node 25.7+ host for --build-sea). The binary still resolves native packages from a node_modules tree beside it.",
+    "Build the server as a Node single-executable (needs a Node 25.7+ host; Linux ARM64 requires a Linux ARM64 host). The binary still resolves native packages from a node_modules tree beside it.",
   ),
 );
 

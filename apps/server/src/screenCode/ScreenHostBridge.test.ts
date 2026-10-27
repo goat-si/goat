@@ -1,4 +1,6 @@
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import type {
   EnvironmentId,
@@ -134,11 +136,11 @@ it.effect("the host retains bounded images and guest replies contain metadata on
       },
     });
     const one = yield* bridge.handle(
-      call(1),
+      { ...call(1), method: "observe" },
       context(() => Effect.void),
     );
     const two = yield* bridge.handle(
-      call(2),
+      { ...call(2), method: "observe" },
       context(() => Effect.void),
     );
     const collected = yield* bridge.takeCellImages("r", "t", "c");
@@ -200,7 +202,9 @@ it.effect("discard and finishTurn release cell and target state", () =>
     expect((yield* bridge.takeCellImages("r", "t", "c")).journal).toHaveLength(0);
     const late = yield* bridge.handle(call(2), context());
     expect(late && "error" in late ? late.error?.code : undefined).toBe("stopped");
-    expect((yield* bridge.takeCellImages("r", "t", "c")).journal).toHaveLength(0);
+    expect(
+      (yield* bridge.takeCellImages("r", "t", "c")).journal[0]?.receipt.safety?.possibleCommit,
+    ).toBe(false);
     yield* bridge.finishTurn("r", "t");
     const after = yield* bridge.handle(call(1), context());
     expect(after && "error" in after ? after.error?.code : undefined).not.toBe("stale_reference");
@@ -249,4 +253,223 @@ it.effect("takeover yields the cursor while private cutoff hides it", () =>
       expect(events.at(-1)).toBe(terminal);
     }
   }),
+);
+
+it.effect("cell stop distinguishes in-flight writes from undispatched and future calls", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    const started = yield* Deferred.make<void>();
+    let sent = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
+        Effect.gen(function* () {
+          sent++;
+          yield* Deferred.succeed(started, undefined);
+          return yield* Effect.never;
+        }),
+    });
+    const active = yield* bridge
+      .handle(
+        call(1),
+        context(() => Effect.void),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(started);
+    const queued = yield* bridge
+      .handle(
+        call(2),
+        context(() => Effect.void),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    bridge.cutCellNow("r", "t", "c");
+    const first = yield* Fiber.join(active);
+    const second = yield* Fiber.join(queued);
+    const third = yield* bridge.handle(
+      call(3),
+      context(() => Effect.void),
+    );
+    expect(first?.error).toMatchObject({ safety: { possibleCommit: true, retryClass: "never" } });
+    expect(second?.error).toMatchObject({
+      safety: { possibleCommit: false, writeStatus: "not_started" },
+    });
+    expect(third?.error).toMatchObject({
+      safety: { possibleCommit: false, writeStatus: "not_started" },
+    });
+    const collected = yield* bridge.takeCellImages("r", "t", "c");
+    expect(collected.journal.map((entry) => entry.receipt.safety?.possibleCommit)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(sent).toBe(1);
+  }),
+);
+
+it.effect.each(["partial", "suspected_noop", "refused"] as const)(
+  "a %s write stops its cell: a call waiting at the target and later calls each report not_run",
+  (category) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let sent = 0;
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.gen(function* () {
+            sent++;
+            yield* Deferred.succeed(started, undefined);
+            yield* Deferred.await(release);
+            return { category };
+          }),
+      });
+      const active = yield* bridge
+        .handle(
+          call(1),
+          context(() => Effect.void),
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      const queued = yield* bridge
+        .handle(
+          call(2),
+          context(() => Effect.void),
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+      const first = yield* Fiber.join(active);
+      const second = yield* Fiber.join(queued);
+      expect(first?.outcome).toBe("error");
+      expect(first?.error?.safety?.possibleCommit).toBe(category === "partial");
+      // The guest caught the failure and went on; the cell still runs nothing more.
+      const third = yield* bridge.handle(
+        { ...call(3), method: "observe" },
+        context(() => Effect.void),
+      );
+      for (const reply of [second, third])
+        expect(reply?.error).toMatchObject({
+          code: "not_run",
+          effectStarted: false,
+          safety: { possibleCommit: false, retryClass: "new_key" },
+        });
+      expect(sent).toBe(1);
+      const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+      expect(journal.map((entry) => entry.receipt.evidence)).toEqual([
+        [],
+        ["not_run:after_call:1"],
+        ["not_run:after_call:1"],
+      ]);
+      expect(journal.slice(1).map((entry) => entry.receipt.dispatched)).toEqual([false, false]);
+    }),
+);
+
+it.effect("a failure on one target keeps another target's in-flight call and its result", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (request) =>
+        request.callId === 1
+          ? Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return { category: "confirmed" as const, evidence: ["readback"], value: "typed" };
+            })
+          : Effect.succeed({ category: "suspected_noop" as const }),
+    });
+    const other = { ...tab, id: "other" };
+    const slow = yield* bridge
+      .handle(
+        call(1),
+        context(() => Effect.void),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(started);
+    const failed = yield* bridge.handle(
+      { ...call(2), targetRef: other },
+      context(() => Effect.void),
+    );
+    yield* Deferred.succeed(release, undefined);
+    expect(failed?.outcome).toBe("error");
+    expect(yield* Fiber.join(slow)).toMatchObject({ outcome: "ok", value: "typed" });
+    expect(
+      (yield* bridge.handle(
+        call(3),
+        context(() => Effect.void),
+      ))?.error?.code,
+    ).toBe("not_run");
+  }),
+);
+
+it.effect("a confirmed write keeps its cell open and an output failure retains its commit", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (request) =>
+        Effect.succeed({
+          category: "confirmed",
+          evidence: ["driver:confirmed"],
+          value: request.callId < 3 ? "ok" : "large".repeat(100),
+        }),
+    });
+    const ctx = {
+      ...context(() => Effect.void),
+      limits: { ...context().limits, returnBytes: 100 },
+    };
+    expect((yield* bridge.handle(call(1), ctx))?.outcome).toBe("ok");
+    expect((yield* bridge.handle(call(2), ctx))?.outcome).toBe("ok");
+    expect((yield* bridge.handle(call(3), ctx))?.error?.safety).toMatchObject({
+      possibleCommit: true,
+      retryClass: "never",
+    });
+    expect((yield* bridge.handle(call(4), ctx))?.error?.safety?.possibleCommit).toBe(false);
+  }),
+);
+
+it.effect(
+  "a confirmed write without readback evidence is unverifiable, may have committed, and the cell goes on",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      let sent = 0;
+      const committed = {
+        possibleCommit: true,
+        retryClass: "never",
+        writeStatus: "committed",
+        code: "write_committed",
+      } as const;
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: (request) => {
+          sent++;
+          return Effect.succeed(
+            request.callId === 1
+              ? { category: "confirmed" as const }
+              : { category: "confirmed" as const, safety: committed },
+          );
+        },
+      });
+      for (const callId of [1, 2])
+        expect(
+          (yield* bridge.handle(
+            call(callId),
+            context(() => Effect.void),
+          ))?.outcome,
+        ).toBe("ok");
+      expect(sent).toBe(2);
+      const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+      for (const entry of journal) {
+        expect(entry.receipt.category).toBe("unverifiable");
+        expect(entry.receipt.safety).toEqual({
+          possibleCommit: true,
+          retryClass: "never",
+          writeStatus: "may_have_applied",
+          code: "write_indeterminate",
+        });
+      }
+    }),
 );
