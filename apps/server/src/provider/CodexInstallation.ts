@@ -148,10 +148,18 @@ export interface CodexExecutable {
   readonly managedVersionDirectory: string | null;
   readonly startupWarning?: (typeof STARTUP_WARNINGS)[keyof typeof STARTUP_WARNINGS];
 }
+export interface CodexAcquisitionOptions {
+  /** Use only GOAT's managed release, even when Codex is on PATH. */
+  readonly managedOnly?: boolean;
+}
 interface CodexInstallationService {
   readonly managedDirectory: string;
-  readonly resolve: () => Effect.Effect<CodexExecutable, CodexInstallationError>;
-  readonly acquire: () => Effect.Effect<CodexExecutable, CodexInstallationError, Scope.Scope>;
+  readonly resolve: (
+    options?: CodexAcquisitionOptions,
+  ) => Effect.Effect<CodexExecutable, CodexInstallationError>;
+  readonly acquire: (
+    options?: CodexAcquisitionOptions,
+  ) => Effect.Effect<CodexExecutable, CodexInstallationError, Scope.Scope>;
   readonly start: Effect.Effect<ProviderInstallState, CodexInstallationError>;
   readonly cancel: (
     operationId: string,
@@ -314,10 +322,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       wrapFailure("resolve", "Codex is not installed in GOAT. Install it to continue."),
     ),
   );
-  const acquire = Effect.fn("CodexInstallation.acquire")(function* () {
+  const acquire = Effect.fn("CodexInstallation.acquire")(function* (
+    options?: CodexAcquisitionOptions,
+  ) {
     return yield* Effect.acquireRelease(
       gate.withPermit(
-        resolve(false).pipe(
+        resolve(options, false).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               leases += 1;
@@ -501,7 +511,11 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     },
     Effect.orElseSucceed(() => null),
   );
-  const resolve = Effect.fn("CodexInstallation.resolve")(function* (diagnose = true) {
+  const resolve = Effect.fn("CodexInstallation.resolve")(function* (
+    options?: CodexAcquisitionOptions,
+    diagnose = true,
+  ) {
+    if (options?.managedOnly) return yield* resolveManaged();
     // Runtime leases use initialize as their authority, without repeating the
     // advisory config request already made by the status check.
     const local = yield* resolveLocal(diagnose);

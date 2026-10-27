@@ -14,6 +14,8 @@ import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneratio
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { chatGptModels } from "../CodexChatGptModels.ts";
 import { makeCodexManagedRuntime } from "../CodexManagedRuntime.ts";
+import { usesAuthlessCodexHome } from "../CodexHomeRouteConfig.ts";
+import { makeManagedHomeCodexProvider } from "./CodexManagedHomeProvider.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { createCodexAdapterV2 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import {
@@ -35,6 +37,7 @@ const DRIVER = ProviderDriverKind.make("codex");
 export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(function* (
   input: ProviderDriverCreateInput<CodexSettings>,
 ) {
+  if (usesAuthlessCodexHome(input.config)) return yield* makeManagedHomeCodexProvider(input);
   const { instanceId, enabled, displayName, accentColor, config } = input;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

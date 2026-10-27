@@ -120,11 +120,16 @@ export const CodexDriver: ProviderDriver<
     enabled,
     config,
   }) {
-    if (config.setupMode === "managed" && config.modelRoute === "opencodex")
+    if (
+      config.setupMode === "managed" &&
+      config.modelRoute === "opencodex" &&
+      config.opencodexAuth !== "none"
+    )
       return yield* new ProviderDriverError({
         driver: DRIVER_KIND,
         instanceId,
-        detail: "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+        detail:
+          "Managed Codex uses Home with None authentication. OpenAI authentication for Home is available on an instance that uses your Codex CLI.",
       });
     const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
     const provideHomeRoute = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

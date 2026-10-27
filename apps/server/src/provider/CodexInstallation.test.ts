@@ -730,6 +730,45 @@ it.effect("protects active process leases and removes the runtime after release"
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each([true, false])(
+  "managed-only acquisition ignores Codex on PATH and keeps its lease (managed release installed: %s)",
+  (hasManaged) =>
+    Effect.gen(function* () {
+      const seed = yield* makeHarness();
+      if (hasManaged) {
+        yield* seed.installation.start;
+        expect((yield* terminalState(seed.installation)).phase).toBe("succeeded");
+      }
+      const h = yield* makeHarness({ baseDir: seed.baseDir, local: { version: "0.164.0" } });
+      const probes = h.fs
+        .exists(h.probeLog)
+        .pipe(
+          Effect.flatMap((exists) =>
+            exists ? h.fs.readFileString(h.probeLog) : Effect.succeed(""),
+          ),
+        );
+      const probesBefore = yield* probes;
+      const selected = yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result);
+      expect(selected._tag).toBe(hasManaged ? "Success" : "Failure");
+      const leaseScope = yield* Scope.make();
+      const acquired = yield* h.installation
+        .acquire({ managedOnly: true })
+        .pipe(Effect.provideService(Scope.Scope, leaseScope), Effect.result);
+      expect(acquired._tag).toBe(hasManaged ? "Success" : "Failure");
+      if (acquired._tag === "Success") {
+        expect(acquired.success.source).toBe("managed");
+        expect((yield* Effect.flip(h.installation.remove())).detail).toContain(
+          "Stop Codex sessions",
+        );
+      }
+      expect(yield* probes).toBe(probesBefore);
+      expect(h.downloads()).toBe(0);
+      yield* Scope.close(leaseScope, Exit.void);
+      if (hasManaged) yield* h.installation.remove();
+      expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("keeps an activated runtime when a later update fails verification", () =>
   Effect.gen(function* () {
     const first = yield* makeHarness();
