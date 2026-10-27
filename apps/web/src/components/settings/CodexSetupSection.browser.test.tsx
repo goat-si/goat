@@ -137,6 +137,14 @@ const provider: ServerProvider = {
   setup: { canAuthenticate: true, canInstall: true },
 };
 
+function deferred<A>() {
+  let resolve!: (value: A) => void;
+  const promise = new Promise<A>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function setup({ update = false, local = true, primary = false } = {}) {
   for (const mock of Object.values(mocks)) mock.mockReset();
   const installation = Atom.make<AsyncResult.AsyncResult<ProviderInstallState, never>>(
@@ -255,7 +263,7 @@ it("opens an authorization page returned before its subscription updates", async
 
 it("does not open a late page after the card unmounts", async () => {
   const state = setup();
-  const response = Promise.withResolvers<{ _tag: "Success"; value: ProviderAuthState }>();
+  const response = deferred<{ _tag: "Success"; value: ProviderAuthState }>();
   mocks.startAuth.mockReturnValue(response.promise);
   await using screen = await render(ui());
   await screen.getByRole("button", { name: "Continue with ChatGPT" }).click();
@@ -308,7 +316,7 @@ it("leaves a remote browser's sign-in page for an explicit click", async () => {
 
 it("completes a desktop callback against the flow that opened its page", async () => {
   const state = setup();
-  const response = Promise.withResolvers<string>();
+  const response = deferred<string>();
   const receive = vi.fn().mockReturnValue(response.promise);
   using _desktop = stubGlobal("desktopBridge", {
     receiveProviderAuthCallback: receive,
@@ -346,7 +354,7 @@ it("uses the primary environment connected while install was running", async () 
 
 it("does not complete a desktop callback after cancelling sign-in", async () => {
   const state = setup();
-  const response = Promise.withResolvers<string>();
+  const response = deferred<string>();
   using _desktop = stubGlobal("desktopBridge", {
     receiveProviderAuthCallback: vi.fn().mockReturnValue(response.promise),
     cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
@@ -400,7 +408,7 @@ it.each(["failed", "cancelled", "succeeded"] as const)(
 
 it("does not submit a cancelled desktop page manually opened from shared auth state", async () => {
   const state = setup();
-  const response = Promise.withResolvers<string>();
+  const response = deferred<string>();
   using _desktop = stubGlobal("desktopBridge", {
     receiveProviderAuthCallback: vi.fn().mockReturnValue(response.promise),
     cancelProviderAuthCallback: vi.fn().mockResolvedValue(undefined),
