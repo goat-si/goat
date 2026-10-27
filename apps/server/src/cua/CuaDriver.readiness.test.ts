@@ -41,7 +41,7 @@ it.effect("host status carries the helper's last readiness only once the helper 
     } satisfies HelperReadiness;
     yield* Ref.set(reported, Option.some(helper));
     expect(yield* service.status).toMatchObject(helper);
-    // Private mode is off (#1695): clients are not told a host detects what the server ignores.
+    // Private mode is off: clients are not told a host detects what the server ignores.
     yield* Ref.set(
       reported,
       Option.some({ ...helper, signals: { privateMode: "supported", humanInput: "supported" } }),
