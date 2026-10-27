@@ -48,6 +48,7 @@ import {
   isWindowCursorMove,
   windowCursorMoveAnswer,
 } from "./ComputerUseCursorTools.ts";
+import { resolveKeyCall } from "./ComputerUseKeyNames.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import { refuseCaptureFileArguments } from "./ComputerUseCaptureFiles.ts";
@@ -653,11 +654,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }),
   );
   const forward = Effect.fn("ComputerUseLeaseProxy.forward")(function* (
-    line: string,
+    incoming: string,
     sink: ReplySink,
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
+    // Key names are resolved first: a key no driver can press is refused before anything else.
+    const keyCall = resolveKeyCall(incoming);
+    if ("answer" in keyCall) return yield* sink.answer(keyCall.answer);
+    const line = keyCall.line;
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
     const message = decoded.message;
