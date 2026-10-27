@@ -22,43 +22,58 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const requestId = (value: unknown): value is string | number =>
   typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 const nonempty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const MAX_TRACKED_CALLS = 64;
 
-/** Each child proves its route with its own initialize exchange, including replayed wire IDs. */
+/**
+ * Each child proves its route with its own initialize exchange, including replayed wire IDs, and
+ * then an answered tool call: a driver that crashes on its first capture still answers the
+ * handshake. Any ending the proxy did not ask for is reported, before or after that.
+ */
 export const makeDriverWatch = () => {
-  let settled = false;
+  let initialized = false;
+  let working = false;
+  let ended = false;
   let stopping = false;
   const pending = new Map<string, string>();
-  const settle = (report: DriverWatchReport) => {
-    if (settled || stopping) return undefined;
-    settled = true;
-    pending.clear();
-    return report;
-  };
+  const calls = new Set<string>();
   return {
     sent: (line: string) => {
-      if (settled || stopping) return;
+      if (working || stopping || ended) return;
       const decoded = decodeMessage(line);
       if (Option.isNone(decoded)) return;
       const message = decoded.value;
       if (
         message.jsonrpc !== "2.0" ||
-        message.method !== "initialize" ||
         !requestId(message.id) ||
-        !record(message.params) ||
-        !nonempty(message.params.protocolVersion) ||
         Object.hasOwn(message, "result") ||
         Object.hasOwn(message, "error")
       )
         return;
+      if (message.method === "tools/call") {
+        if (initialized && calls.size < MAX_TRACKED_CALLS) calls.add(JSON.stringify(message.id));
+        return;
+      }
+      if (
+        message.method !== "initialize" ||
+        !record(message.params) ||
+        !nonempty(message.params.protocolVersion)
+      )
+        return;
       pending.set(JSON.stringify(message.id), message.params.protocolVersion);
     },
-    received: (line: string) => {
-      if (settled || stopping) return undefined;
+    received: (line: string): DriverWatchReport | undefined => {
+      if (working || stopping || ended) return undefined;
       const decoded = decodeMessage(line);
       if (Option.isNone(decoded)) return undefined;
       const message = decoded.value;
       if (!requestId(message.id) || Object.hasOwn(message, "method")) return undefined;
       const key = JSON.stringify(message.id);
+      if (calls.delete(key)) {
+        if (message.jsonrpc !== "2.0" || !Object.hasOwn(message, "result")) return undefined;
+        working = true;
+        calls.clear();
+        return { driverEnded: false };
+      }
       const version = pending.get(key);
       if (version === undefined) return undefined;
       // A failed reply consumes the request too; a later success needs a new initialize send.
@@ -75,18 +90,26 @@ export const makeDriverWatch = () => {
         !nonempty(result.serverInfo.version)
       )
         return undefined;
-      return settle({ driverEnded: false });
+      initialized = true;
+      pending.clear();
+      return undefined;
     },
     stopping: () => {
       stopping = true;
       pending.clear();
+      calls.clear();
     },
-    exited: (code: number | undefined) =>
-      settle({
+    exited: (code: number | undefined): DriverWatchReport | undefined => {
+      if (ended || stopping) return undefined;
+      ended = true;
+      pending.clear();
+      calls.clear();
+      return {
         driverEnded: {
           reason: exitReason(code),
           ...(code === undefined ? {} : { exitCode: code }),
         },
-      }),
+      };
+    },
   };
 };

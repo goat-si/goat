@@ -1,7 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
 
+import {
+  type ConnectionFailure,
+  FAILING_AFTER,
+  nextFailure,
+  reportedFailure,
+} from "./ComputerUseAgentConnections.ts";
 import { exitReason } from "./ComputerUseDriverExit.ts";
-import { makeDriverWatch } from "./ComputerUseDriverWatch.ts";
+import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 
 const initialize = (id: string | number = 1) =>
   JSON.stringify({
@@ -16,8 +22,34 @@ const result = {
   serverInfo: { name: "fixture-driver", version: "1.0" },
 };
 const success = (id: string | number = 1) => JSON.stringify({ jsonrpc: "2.0", id, result });
+const toolCall = (id: number) =>
+  JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "list_windows" } });
+const toolReply = (id: number) =>
+  JSON.stringify({ jsonrpc: "2.0", id, result: { content: [], isError: false } });
+/** What the host records from one child's reports, as the lease route passes them on. */
+const record = (failure: ConnectionFailure | undefined, report: DriverWatchReport | undefined) =>
+  report === undefined
+    ? failure
+    : nextFailure(failure, report.driverEnded === false ? false : report.driverEnded);
+/** Whether the child now reports working: it answers a tool call sent after its handshake. */
+const answersCall = (watch: ReturnType<typeof makeDriverWatch>, id = 99) => {
+  watch.sent(toolCall(id));
+  return watch.received(toolReply(id));
+};
 
 describe("ComputerUseDriverWatch (#1699)", () => {
+  it("drivers that answer the handshake and crash on their first call trip the host failure", () => {
+    let failure: ConnectionFailure | undefined;
+    for (let child = 0; child < FAILING_AFTER; child++) {
+      const watch = makeDriverWatch();
+      watch.sent(initialize());
+      failure = record(failure, watch.received(success()));
+      watch.sent(toolCall(2));
+      failure = record(failure, watch.exited(134));
+    }
+    assert.equal(reportedFailure(failure)?.reason, "helper_restarted");
+  });
+
   it("a child that exits before initialize succeeds reports its ending once", () => {
     const watch = makeDriverWatch();
     watch.sent(initialize());
@@ -28,12 +60,28 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     assert.isUndefined(watch.received(success()));
   });
 
-  it("a correlated initialize success reports once and its later exit says nothing", () => {
+  it("an answered tool call reports the connection working once, and a later crash still counts", () => {
     const watch = makeDriverWatch();
     watch.sent(initialize());
-    assert.deepEqual(watch.received(success()), { driverEnded: false });
     assert.isUndefined(watch.received(success()));
+    assert.deepEqual(answersCall(watch), { driverEnded: false });
+    assert.isUndefined(answersCall(watch, 100));
+    assert.deepEqual(watch.exited(134), {
+      driverEnded: { reason: "helper_restarted", exitCode: 134 },
+    });
     assert.isUndefined(watch.exited(134));
+  });
+
+  it("a tool call answered before the child's own handshake proves nothing", () => {
+    const watch = makeDriverWatch();
+    assert.isUndefined(answersCall(watch));
+    watch.sent(initialize());
+    assert.isUndefined(watch.received(success()));
+    watch.sent(toolCall(5));
+    assert.isUndefined(
+      watch.received(JSON.stringify({ jsonrpc: "2.0", id: 5, error: { code: -32603 } })),
+    );
+    assert.deepEqual(answersCall(watch), { driverEnded: false });
   });
 
   it.each([
@@ -73,6 +121,7 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     const watch = makeDriverWatch();
     watch.sent(initialize());
     assert.isUndefined(watch.received(line));
+    assert.isUndefined(answersCall(watch));
     assert.deepEqual(watch.exited(77), { driverEnded: { reason: "helper_refused", exitCode: 77 } });
   });
 
@@ -84,7 +133,8 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     );
     assert.isUndefined(watch.received(success()));
     watch.sent(initialize());
-    assert.deepEqual(watch.received(success()), { driverEnded: false });
+    assert.isUndefined(watch.received(success()));
+    assert.deepEqual(answersCall(watch), { driverEnded: false });
   });
 
   it("replayed and borrowed children accept only their own outgoing wire IDs", () => {
@@ -94,9 +144,12 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     borrowed.sent(initialize("goat-proxy:handshake:1"));
     assert.isUndefined(replayed.received(success(1)));
     assert.isUndefined(borrowed.received(success("goat-proxy:resume:1")));
-    assert.deepEqual(replayed.received(success("goat-proxy:resume:1")), { driverEnded: false });
+    assert.isUndefined(replayed.received(success("goat-proxy:resume:1")));
+    assert.deepEqual(answersCall(replayed), { driverEnded: false });
     assert.isUndefined(borrowed.received(success(1)));
-    assert.deepEqual(borrowed.received(success("goat-proxy:handshake:1")), { driverEnded: false });
+    assert.isUndefined(answersCall(borrowed));
+    assert.isUndefined(borrowed.received(success("goat-proxy:handshake:1")));
+    assert.deepEqual(answersCall(borrowed), { driverEnded: false });
   });
 
   it.each([
@@ -124,15 +177,17 @@ describe("ComputerUseDriverWatch (#1699)", () => {
     const watch = makeDriverWatch();
     watch.sent(line);
     assert.isUndefined(watch.received(success()));
+    assert.isUndefined(answersCall(watch));
   });
 
-  it("stopping suppresses both late initialize success and exit reports", () => {
+  it("stopping suppresses both a late answered call and exit reports", () => {
     const watch = makeDriverWatch();
     watch.sent(initialize());
-    watch.stopping();
     assert.isUndefined(watch.received(success()));
-    watch.sent(initialize("late"));
-    assert.isUndefined(watch.received(success("late")));
+    watch.sent(toolCall(7));
+    watch.stopping();
+    assert.isUndefined(watch.received(toolReply(7)));
+    assert.isUndefined(answersCall(watch));
     assert.isUndefined(watch.exited(undefined));
   });
 

@@ -73,16 +73,21 @@ const runDriverFixture = Effect.fn("ComputerUseLeaseProxyCli.testDriver")(functi
           stdout.write(chunk);
         }
         for (const line of input.lines) assert.equal(yield* Queue.take(forwarded), line);
+        // A handshake alone proves nothing; an answered tool call reports the driver working.
+        if (input.chunks.at(-1)?.endsWith("\n") !== false) {
+          const call = JSON.stringify({ jsonrpc: "2.0", id: "call", method: "tools/call" });
+          const answer = JSON.stringify({ jsonrpc: "2.0", id: "call", result: { content: [] } });
+          yield* driver.send(call);
+          stdout.write(answer + "\n");
+          assert.equal(yield* Queue.take(forwarded), answer);
+        }
+        if (input.ready) yield* Queue.take(reports);
         stdout.end();
         yield* Fiber.join(reader);
         child.emit("exit", 77, null);
         yield* Queue.take(reports);
-        assert.deepEqual(
-          collected,
-          input.ready
-            ? [{ driverEnded: false }]
-            : [{ driverEnded: { reason: "helper_refused", exitCode: 77 } }],
-        );
+        const ending = { driverEnded: { reason: "helper_refused", exitCode: 77 } };
+        assert.deepEqual(collected, input.ready ? [{ driverEnded: false }, ending] : [ending]);
         return undefined;
       }),
     );
