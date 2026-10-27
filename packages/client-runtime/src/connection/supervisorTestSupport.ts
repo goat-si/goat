@@ -73,6 +73,8 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
   readonly ready?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
   readonly probe?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
   readonly initialConfig?: (attempt: number) => Effect.Effect<ServerConfig, ConnectionAttemptError>;
+  readonly inboundFrames?: Effect.Effect<number>;
+  readonly checkHost?: (prepared: PreparedConnection) => Effect.Effect<ConnectionDriver.RouteCheck>;
   readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
 }) {
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
@@ -132,6 +134,7 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
         subscribeServerConfig: (input) => TEST_RPC_CLIENT.subscribeServerConfig(input),
         ready: options?.ready?.(attempt) ?? Effect.void,
         probe: options?.probe?.(attempt) ?? Effect.void,
+        inboundFrames: options?.inboundFrames ?? Effect.succeed(0),
         closed: Deferred.await(closed),
       } satisfies RpcSession.RpcSession),
       () => Ref.update(releaseCount, (count) => count + 1),
@@ -173,6 +176,9 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
       ConnectionDriver.ConnectionDriver,
       ConnectionDriver.ConnectionDriver.of({
         connect,
+        checkHost: (prepared) =>
+          options?.checkHost?.(prepared) ??
+          Effect.succeed<ConnectionDriver.RouteCheck>("unchecked"),
         checkRoute: (_entry, route) => checkRoute(route),
         preflight: (_entry, route) =>
           checkRoute(route).pipe(Effect.map((check) => check === "answered")),

@@ -143,7 +143,7 @@ describe("connected session health probes", () => {
   );
 
   it.effect.each([
-    { reason: "application-active-probe", timeoutMs: 3_000, shorten: false },
+    { reason: "application-active-probe", timeoutMs: 15_000, shorten: false },
     { reason: "application-active", timeoutMs: 15_000, shorten: false },
     { reason: "application-active", timeoutMs: 4_000, shorten: true },
   ] as const)("keeps remote probe deadline $timeoutMs ms ($reason, shorten=$shorten)", (test) =>
@@ -160,7 +160,7 @@ describe("connected session health probes", () => {
       yield* harness.wake(test.reason);
       yield* Deferred.await(started);
       yield* TestClock.adjust(1_000);
-      if (test.shorten) yield* harness.wake("application-active-probe");
+      if (test.shorten) yield* harness.wake("application-active-long");
       yield* TestClock.adjust(test.timeoutMs - 1_001);
       expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
       expect(yield* Ref.get(harness.releaseCount)).toBe(0);

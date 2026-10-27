@@ -1,4 +1,8 @@
-import { EnvironmentId, type DesktopSshPreparationProgress } from "@goat/contracts";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  EnvironmentId,
+  type DesktopSshPreparationProgress,
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,6 +41,7 @@ const session: RpcSession.RpcSession = {
   subscribeServerConfig: (input) => client.subscribeServerConfig(input),
   ready: Effect.void,
   probe: Effect.void,
+  inboundFrames: Effect.succeed(0),
   closed: Effect.never,
 };
 
@@ -134,6 +139,55 @@ describe("SSH driver routing", () => {
         expect(yield* driver.checkRoute(entry, entry)).toBe("unchecked");
         expect(yield* driver.preflight(entry, entry)).toBe(false);
         expect(ensures).toBe(0);
+      }),
+  );
+});
+
+describe("live host checks", () => {
+  it.effect.each(["matching", "different", "unreachable"] as const)(
+    "checks the session origin afresh without credentials (%s)",
+    (reply) =>
+      Effect.gen(function* () {
+        const calls: { readonly url: string; readonly init: RequestInit }[] = [];
+        const driver = yield* Driver.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(Resolver.ConnectionResolver)({}),
+              Layer.mock(RpcSession.RpcSessionFactory)({}),
+              RpcHttp.layerRemoteHttpClient((url, init) => {
+                calls.push({ url: String(url), init: init ?? {} });
+                return Promise.resolve(
+                  reply === "unreachable"
+                    ? new Response(null, { status: 503 })
+                    : Response.json({
+                        environmentId:
+                          reply === "matching" ? target.environmentId : "another-environment",
+                        label: "Fixture",
+                        platform: { os: "linux", arch: "x64" },
+                        serverVersion: "0.0.0-test",
+                        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                        capabilities: {},
+                      }),
+                );
+              }),
+            ),
+          ),
+        );
+        expect(
+          yield* driver.checkHost({
+            ...prepared,
+            httpAuthorization: { _tag: "Bearer", token: "fixture-token" },
+          }),
+        ).toBe(reply === "matching" ? "answered" : "silent");
+        expect(calls).toHaveLength(1);
+        const request = calls[0]!;
+        expect(request.url).toBe("http://127.0.0.1:1234/.well-known/goat/environment");
+        expect(request.init.cache).toBe("no-store");
+        expect(request.init.credentials).toBe("omit");
+        const headers = new Headers(request.init.headers);
+        expect(headers.has("authorization")).toBe(false);
+        expect(headers.has("dpop")).toBe(false);
+        expect(headers.has("cookie")).toBe(false);
       }),
   );
 });
