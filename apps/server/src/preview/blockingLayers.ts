@@ -123,13 +123,16 @@ const LAYERS_SCRIPT = `(gridSize) => {
     let overlay = null;
     let dialog = null;
     let modal = null;
+    let topLayer = null;
     for (let node = hit; node && node.nodeType === 1; node = parentOf(node)) {
       if (!modal && isModal(node)) modal = node;
+      // An open popover is drawn above the page however it is positioned.
+      if (!topLayer && matches(node, ":popover-open")) topLayer = node;
       if (!qualifies(node)) continue;
       if (coversContent(node, stack)) overlay = node;
       if (isDialog(node)) dialog = node;
     }
-    return overlay || dialog || modal || hit;
+    return overlay || dialog || modal || topLayer || hit;
   };
   const collapse = (text) => (text || "").replace(/\\s+/g, " ").trim();
   const nameOf = (element) => {
@@ -146,7 +149,11 @@ const LAYERS_SCRIPT = `(gridSize) => {
     const heading = element.querySelector("h1,h2,h3,h4,h5,h6");
     const headingText = heading ? collapse(heading.textContent) : "";
     if (headingText) return headingText;
-    return collapse(element.innerText || element.textContent);
+    const text = collapse(element.innerText || element.textContent);
+    if (text) return text;
+    // A consent wall often holds nothing but a cross-origin frame; its title says what it asks.
+    const frame = element.querySelector("iframe[title], iframe[aria-label]");
+    return frame ? collapse(frame.getAttribute("aria-label") || frame.getAttribute("title")) : "";
   };
   const hintOf = (element) => {
     if (element.id) return "#" + element.id;

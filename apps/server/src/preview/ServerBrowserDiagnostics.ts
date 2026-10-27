@@ -31,7 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
-import { maskSecrets, noteRequestUrl, redactValue, tabCookies } from "./pageSecrets.ts";
+import { maskSecrets, redactValue, tabCookies } from "./pageSecrets.ts";
 import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
@@ -227,7 +227,6 @@ export class ServerBrowserDiagnostics {
   }
 
   private readonly onRequest = (request: Request) => {
-    noteRequestUrl(this.page, request.url());
     this.track(request).startedAt = Date.now();
     this.network(request, "request", null);
   };

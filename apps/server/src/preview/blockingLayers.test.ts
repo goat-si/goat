@@ -175,6 +175,13 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
 
     await page.setContent(
       article +
+        '<div popover id="gate" style="position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;border:0"><section style="width:100%;height:100%;background:#fff">Members only</section></div>',
+    );
+    await page.evaluate("document.getElementById('gate').showPopover()");
+    expect((await describeLayers(page, control)).blocking).toMatchObject({ selectorHint: "#gate" });
+
+    await page.setContent(
+      article +
         '<div popover id="menu" style="width:160px;height:120px"><button>Copy</button></div>',
     );
     await page.evaluate("document.getElementById('menu').showPopover()");
@@ -212,6 +219,14 @@ describe.skipIf(!chromiumInstalled)("describeLayers in a browser", () => {
     // 100 x 100 of a 1000 x 800 viewport, though the inner frame itself is 800 x 800.
     expect(clipped.blocking?.coverage).toBeLessThan(0.02);
     expect((await framed("left:-2000px;top:0;width:100px;height:100px")).blocking).toBeNull();
+  });
+
+  it("names a consent wall whose message lives in a cross-origin frame by that frame's title", async () => {
+    const report = await layers(
+      article +
+        '<div role="dialog" id="sp_message_container" style="position:fixed;inset:0;z-index:9"><iframe title="Site consent message" src="about:blank" style="width:100%;height:100%;border:0"></iframe></div>',
+    );
+    expect(report.blocking).toMatchObject({ role: "dialog", name: "Site consent message" });
   });
 
   it("finds an overlay that lives inside an open shadow root", async () => {

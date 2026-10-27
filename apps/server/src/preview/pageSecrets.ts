@@ -6,7 +6,7 @@
  */
 import type { Page } from "playwright-core";
 
-import { redactCookieValues } from "./cookieValues.ts";
+import { MIN_SECRET_LENGTH, redactCookieValues } from "./cookieValues.ts";
 
 const MASKED_VALUE = "••••••••";
 
@@ -14,44 +14,29 @@ type Cookies = ReadonlyArray<{ readonly name: string; readonly value: string }>;
 
 type CookiePage = Pick<Page, "url" | "context"> & Partial<Pick<Page, "frames">>;
 
-/** Enough recent request paths for a page's API calls; the oldest unused one goes first. */
-const MAX_REQUEST_SCOPES = 256;
-const requestScopes = new WeakMap<object, Map<string, true>>();
-
-/**
- * Remembers where a page sent a request. A cookie scoped to a path the page only fetched, never
- * showed in a frame, is sent there, so its value can come back in what the page shows.
- */
-export const noteRequestUrl = (page: object, url: string) => {
-  if (!/^https?:/i.test(url)) return;
-  let scope: string;
-  try {
-    const parsed = new URL(url);
-    scope = parsed.origin + parsed.pathname;
-  } catch {
-    return;
-  }
-  const scopes = requestScopes.get(page) ?? new Map<string, true>();
-  requestScopes.set(page, scopes);
-  scopes.delete(scope);
-  scopes.set(scope, true);
-  if (scopes.size > MAX_REQUEST_SCOPES) scopes.delete(scopes.keys().next().value ?? scope);
-};
-
 /** The page's URL and every frame's, cross-origin iframes included. */
 export const frameUrls = (page: CookiePage) => [
   page.url(),
   ...(typeof page.frames === "function" ? page.frames().map((frame) => frame.url()) : []),
 ];
 
-/** Cookies sent to any of the tab's frames, to URLs it showed earlier, and to what it fetched. */
-export const tabCookies = (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
-  const fetched = requestScopes.get(page)?.keys() ?? [];
-  const urls = [...new Set([...earlier, ...frameUrls(page), ...fetched])].filter((url) =>
+/**
+ * Cookies sent to any of the tab's frames or to URLs it showed earlier, and every cookie in its
+ * browser context long enough to be a credential. A cookie for a path the page only fetched, one
+ * a service worker sent, or one sent before GOAT watched the tab can come back in what the page
+ * shows; a short one from elsewhere, such as consent=true, leaves page text alone.
+ */
+export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
+  const urls = [...new Set([...earlier, ...frameUrls(page)])].filter((url) =>
     /^https?:/i.test(url),
   );
-  // An empty list would return every cookie in the context.
-  return urls.length === 0 ? Promise.resolve([]) : page.context().cookies(urls);
+  const context = page.context();
+  const [sent, held] = await Promise.all([
+    // An empty list would return every cookie in the context.
+    urls.length === 0 ? Promise.resolve([]) : context.cookies(urls),
+    context.cookies(),
+  ]);
+  return [...sent, ...held.filter((cookie) => cookie.value.length >= MIN_SECRET_LENGTH)];
 };
 
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>

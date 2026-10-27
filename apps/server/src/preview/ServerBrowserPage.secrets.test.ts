@@ -98,21 +98,25 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(JSON.stringify(moved)).not.toContain(scoped);
   });
 
-  it("masks a cookie the page only fetched with, under a path no frame ever showed", async () => {
+  it("masks a cookie the page fetched with before GOAT watched it, under a path no frame showed", async () => {
     await context.addCookies([
       { name: "api", value: fetched, domain: "credentials.test", path: "/api", httpOnly: true },
+      // Short and sent only elsewhere: ordinary words that match it stay.
+      { name: "seen", value: "yes", domain: "credentials.test", path: "/other" },
     ]);
     // The API echoes the cookie it got; the page puts the answer in its text and its console.
     await context.route(`${origin}/api/**`, (route) =>
       route.fulfill({ contentType: "application/json", body: JSON.stringify({ api: fetched }) }),
     );
     const { page, cdp } = await open();
-    const diagnostics = new ServerBrowserDiagnostics(page);
-    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
     await page.evaluate(
-      "fetch('/api/whoami').then((answer) => answer.text()).then((text) => { console.log(text); document.body.insertAdjacentHTML('beforeend', '<p id=\"echo\">' + text + '</p>'); })",
+      "fetch('/api/whoami').then((answer) => answer.text()).then((text) => { document.body.insertAdjacentHTML('beforeend', '<p id=\"echo\">yes, ' + text + '</p>'); })",
     );
     await page.locator("#echo").waitFor();
+    // Watching starts after the fetch, as for a tab the desktop already had open.
+    const diagnostics = new ServerBrowserDiagnostics(page);
+    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
+    await page.evaluate("console.log(document.getElementById('echo').textContent)");
     const snapshot = await ServerBrowserPage.snapshot({
       page,
       cdp,
@@ -131,6 +135,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     const logs = await diagnostics.readMasked({});
     for (const observed of [snapshot, read, logs])
       expect(JSON.stringify(observed)).not.toContain(fetched);
-    expect(snapshot.visibleText).toContain('{"api":"');
+    expect(snapshot.visibleText).toContain('yes, {"api":"');
+    expect(JSON.stringify(logs)).toContain("yes, {");
   });
 });

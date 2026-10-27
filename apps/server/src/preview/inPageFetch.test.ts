@@ -23,7 +23,6 @@ import {
   truncateText,
 } from "./inPageFetch.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 describe("resolveFetchUrl", () => {
@@ -242,7 +241,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(result.text).not.toMatch(/set-cookie|x-auth/i);
   });
 
-  it("redacts a cookie the tab only sent to a path it fetched earlier, wherever it comes back", async () => {
+  it("redacts a cookie the tab only sent to another path, wherever it comes back", async () => {
     await context.addCookies([
       {
         name: "api",
@@ -255,8 +254,6 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     await page.route("https://app.example/profile", (route) =>
       route.fulfill({ contentType: "text/plain", body: "your key is ApiScopedValue456" }),
     );
-    const diagnostics = new ServerBrowserDiagnostics(page);
-    using _diagnostics = { [Symbol.dispose]: diagnostics.dispose };
     await page.evaluate("fetch('/api/me').then((answer) => answer.text())");
     const result = await inPageFetch(page, control, { url: "/profile" });
     expect(result.text).toBe("your key is [redacted]");
