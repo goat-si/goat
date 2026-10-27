@@ -121,7 +121,7 @@ export const nativeWindowsAfter =
         );
 
 /** Runs `native` instead of a POSIX command whose sh could not start on native Windows. */
-export const orNativeWindows =
+const orNativeWindows =
   <B, E2, R2>(target: DesktopSshEnvironmentTarget, auth: Auth, native: Effect.Effect<B, E2, R2>) =>
   <A, E, R>(posix: Effect.Effect<A, E | SshCommandError, R>) =>
     posix.pipe(
@@ -134,7 +134,7 @@ export const orNativeWindows =
 const OPERATION_TIMEOUT_MS = { install: 900_000, launch: 80_000 } as const;
 
 /** One framed native operation over the same pinned SSH command path as every POSIX one. */
-export const nativeWindowsCommand = Effect.fn("ssh.windows.command")(function* (
+const nativeWindowsCommand = Effect.fn("ssh.windows.command")(function* (
   target: DesktopSshEnvironmentTarget,
   auth: Auth,
   request: { readonly op: string } & Readonly<Record<string, unknown>>,
