@@ -745,7 +745,12 @@ it("draws the cursor a frame was captured with, and says when the picture stops 
     },
   });
   const captured = (seq: number, fx?: number): PreviewSessionFrameEvent => ({
-    ...{ type: "frame", seq, width: 10, height: 10, mime: "image/jpeg", data: "AAAA" },
+    type: "frame",
+    seq,
+    width: 10,
+    height: 10,
+    mime: "image/jpeg",
+    data: "AAAA",
     capturedAt: seq * 500,
     ...(fx === undefined
       ? {}

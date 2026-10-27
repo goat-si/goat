@@ -3,6 +3,7 @@ import {
   type DesktopCuaFrame,
   type DesktopCuaFrames,
   type DesktopCuaReadinessReport,
+  EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -438,7 +439,7 @@ describe("DesktopFrames", () => {
       const report = (sequence: number, fx: number) =>
         ({
           identity: {
-            environmentId: "env",
+            environmentId: EnvironmentId.make("env"),
             runId: "run",
             turnId: "turn",
             targetId: "target",
