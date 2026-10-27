@@ -111,6 +111,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         sessionId: "thread-1",
         forkedFromId: null,
         preview: "",
+        projectId: null,
         ephemeral: mode !== "persistent-thread",
         modelProvider: provider,
         createdAt: 1,
@@ -154,6 +155,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           itemId: "tool-1",
           threadId: "thread-1",
           turnId: "turn-1",
+          isBlocking: true,
           questions: [
             {
               id: "go",
