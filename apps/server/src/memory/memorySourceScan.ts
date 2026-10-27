@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 /** Stream events one scan statement may visit; the scan yields to the event loop between pages. */
 export const MEMORY_SOURCE_SCAN_PAGE_EVENTS = 1000;
+const encodeSequences = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.Number)));
 
 export interface SourceMessageRow {
   readonly sequence: number;
@@ -109,3 +111,31 @@ export const eligibleSourceMessages = (
     if (runId !== null && status === "rolled_back") return false;
     return message.role === "user" || status === "completed";
   });
+
+/** The whole thread, with no bound on later versions or run state. */
+export const scanWholeSource = (sql: SqlClient.SqlClient, threadId: string) =>
+  scanSourceStream(sql, {
+    threadId,
+    afterSequence: 0,
+    throughSequence: Number.MAX_SAFE_INTEGER,
+    observedSequence: null,
+  });
+
+/** Payload rows of the first `limit` eligible messages, in source order. */
+export const readEligibleSourceRows = Effect.fn("MemoryWorker.readEligibleSourceRows")(function* (
+  sql: SqlClient.SqlClient,
+  input: Parameters<typeof scanSourceStream>[1] & {
+    readonly excluded: ReadonlyArray<string>;
+    readonly limit: number;
+  },
+) {
+  const scan = yield* scanSourceStream(sql, input);
+  const picked = eligibleSourceMessages(scan, { excluded: new Set(input.excluded) });
+  if (!picked.length) return [];
+  const sequences = encodeSequences(picked.slice(0, input.limit).map((row) => row.sequence));
+  return yield* sql<{
+    payload_json: string;
+    sequence: number;
+    event_id: string;
+  }>`SELECT payload_json,sequence,event_id FROM orchestration_events WHERE sequence IN (SELECT value FROM json_each(${sequences})) ORDER BY sequence`;
+});

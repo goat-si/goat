@@ -85,12 +85,10 @@ export function memoryEvidenceSources(
 }
 
 /**
- * The contract-shaped (still undecoded) result. Null references become absent keys, and an
- * entry whose messages a source holds takes that source's references: models miscopy long opaque
- * event ids, and validation accepts nothing but a source's own values anyway. Several sources can
- * hold the same message (a consolidation rereads messages its previous summary cites), and any of
- * them proves the entry, so the first wins. An entry citing messages from several sources becomes
- * one entry per source. Validation still decides whether the result cites only supplied evidence.
+ * The contract-shaped (still undecoded) result. Null references become absent keys; an entry takes
+ * the references of the first source holding its messages (models miscopy long event ids, and a
+ * consolidation rereads messages its previous summary cites), or splits into one entry per source.
+ * Validation still decides whether the result cites only supplied evidence.
  */
 export function memoryResultFromModelOutput(
   output: MemorySummaryModelOutput | MemoryConflictModelOutput,

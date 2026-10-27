@@ -26,7 +26,7 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
-import { eligibleSourceMessages, scanSourceStream, type SourceScan } from "./memorySourceScan.ts";
+import * as SourceScan from "./memorySourceScan.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -80,11 +80,7 @@ const strict = { onExcessProperty: "error" } as const;
 const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
 export const memoryRetryDelay = (attempt: number) =>
   [5000, 30000, 120000][Math.max(0, attempt - 1)] ?? 600000;
-/**
- * A model output that keeps failing validation fails the same way on every retry, and each retry
- * rereads the source. After this many attempts the work fails; the thread's next finished run
- * queues fresh work.
- */
+/** A rejected output repeats on retry; past this the work fails until the thread's next run. */
 export const MEMORY_GENERATION_MAX_ATTEMPTS = 5;
 // Internal ownership deadline for local work rows; this is not the hub resolution lease.
 const workClaimMs = 600000;
@@ -181,28 +177,17 @@ const make = Effect.gen(function* () {
               : [],
           );
           // Filter eligibility before the bound; historical updates and skipped messages cannot fill a chunk.
-          const scan = yield* query(
-            scanSourceStream(sql, {
+          const rows = yield* query(
+            SourceScan.readEligibleSourceRows(sql, {
               threadId: meta.sourceThread.threadId,
               afterSequence: meta.fromSequence ?? 0,
               throughSequence: meta.sourceWatermark.throughSequence,
               observedSequence:
                 meta.observedThroughSequence ?? meta.sourceWatermark.throughSequence,
+              excluded: exclusions,
+              limit: 102,
             }),
           );
-          const picked = eligibleSourceMessages(scan, { excluded: new Set(exclusions) }).slice(
-            0,
-            102,
-          );
-          const rows = picked.length
-            ? yield* query(
-                sql<{
-                  payload_json: string;
-                  sequence: number;
-                  event_id: string;
-                }>`SELECT payload_json,sequence,event_id FROM orchestration_events WHERE sequence IN (SELECT value FROM json_each(${JSON.stringify(picked.map((row) => row.sequence))})) ORDER BY sequence`,
-              )
-            : [];
           const messages: M.GenerateMemorySummaryInput["messages"][number][] = [];
           let bytes = 0;
           let last = rows[0];
@@ -268,7 +253,7 @@ const make = Effect.gen(function* () {
       meta.memoryId,
     );
     // One pass over the source serves every evidence entry.
-    let scan: SourceScan | undefined;
+    let scan: SourceScan.SourceScan | undefined;
     for (const evidence of payload.evidence) {
       if (evidence.origin === "model") continue;
       if (
@@ -289,16 +274,9 @@ const make = Effect.gen(function* () {
         )
       )
         return false;
-      scan ??= yield* query(
-        scanSourceStream(sql, {
-          threadId: meta.sourceThread.threadId,
-          afterSequence: 0,
-          throughSequence: Number.MAX_SAFE_INTEGER,
-          observedSequence: null,
-        }),
-      );
+      scan ??= yield* query(SourceScan.scanWholeSource(sql, meta.sourceThread.threadId));
       const through = evidence.watermark.throughSequence;
-      const eligible = eligibleSourceMessages(scan, { ids: new Set(ids) }).filter(
+      const eligible = SourceScan.eligibleSourceMessages(scan, { ids: new Set(ids) }).filter(
         (message) => message.sequence <= through,
       );
       if (eligible.length !== ids.length) return false;

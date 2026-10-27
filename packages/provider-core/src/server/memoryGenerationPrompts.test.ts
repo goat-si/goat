@@ -58,6 +58,7 @@ const conflict = M.ResolveMemoryConflictInput.make({
   modelSelection: selection,
 });
 const result = { text: "Synthetic result", assertionKind: "inference" as const, evidence: [] };
+const decodeSummaryResult = Schema.decodeUnknownSync(M.GenerateMemorySummaryResult);
 
 import {
   buildMemoryConflictPrompt,
@@ -179,7 +180,7 @@ describe("memory generation prompts", () => {
       importSourceId: null,
     };
     const decide = (messageIds: string[]) =>
-      Schema.decodeUnknownSync(M.GenerateMemorySummaryResult)(
+      decodeSummaryResult(
         memoryResultFromModelOutput(
           { ...result, assertionKind: "fact", evidence: [{ ...miscopied, messageIds }] },
           memoryEvidenceSources(consolidation),
