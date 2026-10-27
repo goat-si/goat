@@ -216,20 +216,59 @@ export function redactComputerUseTypedText(
 const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
 /** Shorter typed values are masked only as whole tokens, so "123" never eats into "1234". */
 const MIN_EMBEDDED_TYPED_LENGTH = 4;
+/** How many times a result may wrap JSON in a JSON string before it is masked as plain text. */
+const MAX_JSON_DEPTH = 3;
 
 const regexLiteral = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeJson = (text: string) => JSON.stringify(text).slice(1, -1);
 
-/** Whether a key of this output object carries protocol structure or binary data, never text. */
+/**
+ * Whether a key of this output object carries protocol structure or binary data, never text: a
+ * content block's type, an image's MIME type, and image data in either the MCP or the Claude shape.
+ */
 const structuralKey = (object: Record<string, unknown>, key: string) =>
   key === "type" ||
   key === "mimeType" ||
-  (key === "data" && (object.type === "image" || typeof object.mimeType === "string"));
+  key === "media_type" ||
+  (key === "data" &&
+    (object.type === "image" ||
+      object.type === "base64" ||
+      typeof object.mimeType === "string" ||
+      typeof object.media_type === "string"));
+
+/** A masker for plain text: literal replacement for long values, whole tokens for short ones. */
+function typedTextMask(typed: ReadonlySet<string>) {
+  // Each value as typed and as JSON escapes it, for text that quotes it inside a string.
+  const forms = new Set<string>();
+  for (const value of typed) {
+    let form = value;
+    for (let depth = 0; depth <= MAX_JSON_DEPTH; depth++) {
+      forms.add(form);
+      form = escapeJson(form);
+    }
+  }
+  const sorted = [...forms].sort((left, right) => right.length - left.length);
+  const long = sorted.filter((form) => form.length >= MIN_EMBEDDED_TYPED_LENGTH);
+  // A short value with no letter or digit, such as a quote mark, would match all over the text.
+  const short = sorted.filter(
+    (form) => form.length < MIN_EMBEDDED_TYPED_LENGTH && /[A-Za-z0-9]/u.test(form),
+  );
+  const tokens =
+    short.length === 0
+      ? undefined
+      : new RegExp(`(?<![A-Za-z0-9])(?:${short.map(regexLiteral).join("|")})(?![A-Za-z0-9])`, "g");
+  return (text: string) => {
+    let masked = text;
+    for (const form of long) masked = masked.split(form).join(COMPUTER_USE_TYPED_OUTPUT);
+    return tokens === undefined ? masked : masked.replace(tokens, COMPUTER_USE_TYPED_OUTPUT);
+  };
+}
 
 /**
  * A computer-use call's output with every value its input typed masked, since a batch report can
- * echo a checked value. Each value goes as typed and as JSON escapes it, for a result kept as a
- * JSON text block; content types, MIME types and image data stay as they are. A script's own
- * results are page reads, which private mode governs.
+ * echo a checked value. Text that is JSON is masked value by value and written back, so keys,
+ * content types, MIME types and image data stay intact. A script's own results are page reads,
+ * which private mode governs.
  */
 export function redactComputerUseTypedOutput(
   toolName: string | null | undefined,
@@ -242,36 +281,36 @@ export function redactComputerUseTypedOutput(
     return value;
   });
   if (typed.size === 0 || output === undefined) return output;
-  const forms = [
-    ...new Set([...typed].flatMap((value) => [value, JSON.stringify(value).slice(1, -1)])),
-  ]
-    .sort((left, right) => right.length - left.length)
-    .map((form) => ({ form, literal: regexLiteral(form) }));
-  const long = forms.filter(({ form }) => form.length >= MIN_EMBEDDED_TYPED_LENGTH);
-  const short = forms.filter(({ form }) => form.length < MIN_EMBEDDED_TYPED_LENGTH);
-  const pattern = new RegExp(
-    [
-      ...long.map(({ literal }) => literal),
-      ...(short.length === 0
-        ? []
-        : [`(?<![A-Za-z0-9])(?:${short.map(({ literal }) => literal).join("|")})(?![A-Za-z0-9])`]),
-    ].join("|"),
-    "g",
-  );
-  const walk = (value: unknown): unknown => {
-    if (typeof value === "string") return value.replace(pattern, COMPUTER_USE_TYPED_OUTPUT);
-    if (Array.isArray(value)) return value.map(walk);
+  const mask = typedTextMask(typed);
+  const walk = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") return maskString(value, depth);
+    if (Array.isArray(value)) return value.map((each) => walk(each, depth));
     const object = asRecord(value);
     return object === undefined
       ? value
       : Object.fromEntries(
           Object.entries(object).map(([key, each]) => [
             key,
-            structuralKey(object, key) ? each : walk(each),
+            structuralKey(object, key) ? each : walk(each, depth),
           ]),
         );
   };
-  return walk(output);
+  const maskString = (text: string, depth: number): string => {
+    const start = text.trimStart()[0];
+    if (depth < MAX_JSON_DEPTH && (start === "{" || start === "[")) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return mask(text);
+      }
+      const walked = walk(parsed, depth + 1);
+      const written = JSON.stringify(walked);
+      return written === JSON.stringify(parsed) ? text : written;
+    }
+    return mask(text);
+  };
+  return walk(output, 0);
 }
 
 export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {

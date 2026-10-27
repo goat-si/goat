@@ -218,6 +218,51 @@ describe("orchestration V2 wire projection", () => {
     ).toBe("code 1234 and [typed text]");
   });
 
+  it("masks typed values through nested JSON text without breaking its structure, and survives huge values", () => {
+    const secret = 'a"b\\c';
+    const input = {
+      steps: [
+        { type_text: { text: secret } },
+        { type_text: { text: "image" } },
+        { type_text: { text: "error" } },
+        { type_text: { text: '"' } },
+      ],
+    };
+    const inner = JSON.stringify({
+      typed: secret,
+      type: "image",
+      mimeType: "image/png",
+      error: "image failed",
+    });
+    const output = {
+      content: [
+        { type: "text", text: JSON.stringify({ result: inner }) },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+      ],
+    };
+    const masked = redactComputerUseTypedOutput(
+      "cua-driver.run_steps",
+      input,
+      output,
+    ) as typeof output;
+    const outer = JSON.parse(masked.content[0]!.text) as { result: string };
+    expect(JSON.parse(outer.result)).toEqual({
+      typed: "[typed text]",
+      type: "image",
+      mimeType: "image/png",
+      error: "[typed text] failed",
+    });
+    expect(masked.content[1]).toEqual(output.content[1]);
+    // A value far past any pattern size is still masked, and a short ok stays.
+    const huge = "x".repeat(100_000);
+    expect(
+      redactComputerUseTypedOutput("cua-driver.run_script", { script: huge }, [
+        "ok",
+        `echo ${huge}`,
+      ]),
+    ).toEqual(["ok", "echo [typed text]"]);
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,
