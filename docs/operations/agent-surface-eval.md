@@ -192,7 +192,7 @@ because setup calls cannot satisfy the case's requirements. For example:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "caseId": "async-delegate-ends-turn",
   "listing": "core",
   "calls": [

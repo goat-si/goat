@@ -131,6 +131,68 @@ it("does not let an unlisted, unknown, failed or foreign-server call satisfy a G
   );
 });
 
+it.each([
+  "Bash",
+  "functions.Bash",
+  "exec_command",
+  "functions.exec_command",
+  "Monitor",
+  "functions.Monitor",
+])("rejects forbidden %s commands even when every other replay requirement passes", (tool) => {
+  const review = replayCases.find((entry) => entry.id === "review-only-does-not-link-pr");
+  const managed = replayCases.find((entry) => entry.id === "delegate-uses-managed-worktree");
+  if (!review || !managed) throw new Error("Missing shell regression cases");
+  const commandInput = (command: string): JsonObject =>
+    tool.endsWith("exec_command") ? { cmd: command } : { command };
+  expect(
+    failed(review.expect, run([call(tool, commandInput("git status"))], "PASS: no findings.")),
+  ).toEqual([]);
+  expect(
+    failed(
+      review.expect,
+      run([call(tool, commandInput("git push origin HEAD"))], "PASS: no findings."),
+    ),
+  ).toEqual(["shellMustNot /git\\s+push/"]);
+  for (const command of ["git worktree add /tmp/cache-lane", "git clone ./cache /tmp/cache-lane"])
+    expect(
+      failed(
+        managed.expect,
+        run([
+          dispatch("task.create", { task: "Fix the cache", isolation: "worktree" }),
+          call(tool, commandInput(command)),
+        ]),
+      ),
+    ).toEqual([
+      command.startsWith("git clone")
+        ? "shellMustNot /git\\s+clone/"
+        : "shellMustNot /git\\s+worktree\\s+add/",
+    ]);
+});
+
+it("rejects asking an isolated child to create an unmanaged worktree or clone", () => {
+  const managed = replayCases.find((entry) => entry.id === "delegate-uses-managed-worktree");
+  if (!managed) throw new Error("Missing managed-worktree regression case");
+  for (const tool of ["goat_task_create", "mcp__goat__goat_call"]) {
+    const delegate = (task: string) => {
+      const args = { isolation: "worktree", task };
+      return tool === "goat_task_create" ? call(tool, args) : dispatch("task.create", args);
+    };
+    const listed = ["goat_call", "goat_task_create"];
+    expect(failed(managed.expect, run([delegate("Fix the cache")]), listed)).toEqual([]);
+    for (const command of [
+      "git worktree add /tmp/cache-child",
+      "git clone ./cache /tmp/cache-child",
+    ])
+      expect(
+        failed(
+          managed.expect,
+          run([delegate(`Fix the cache; first run ${command} and work there`)]),
+          listed,
+        ),
+      ).toEqual(["callsMustNot task.create"]);
+  }
+});
+
 it("matches provider options in either wire form and refuses string numbers or missing arguments", () => {
   const expected = {
     calls: [

@@ -21,6 +21,7 @@ interface ExpectedCall {
 
 export interface ReplayExpectation {
   readonly calls?: ReadonlyArray<ExpectedCall>;
+  readonly callsMustNot?: ReadonlyArray<ExpectedCall>;
   readonly notCalls?: ReadonlyArray<string>;
   readonly order?: ReadonlyArray<string>;
   readonly maxCalls?: Readonly<Record<string, number>>;
@@ -47,7 +48,7 @@ const isObject = (value: unknown): value is JsonObject =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const canonical = (name: string) => SHIPPED_TOOL_NAMES.get(name) ?? name;
 const bareName = (name: string) => goatToolOf(name) ?? name;
-const shellTool = (name: string) => /^(?:functions\.)?(?:exec_command|Bash)$/.test(name);
+const shellTool = (name: string) => /^(?:functions\.)?(?:exec_command|Bash|Monitor)$/.test(name);
 
 /** Partial arguments: dotted paths, ~substring, and numeric >= / <= bounds. */
 const matches = (expected: Json, actual: Json | undefined): boolean => {
@@ -114,6 +115,14 @@ export const gradeReplay = (
           !call.isError &&
           call.tool === canonical(wanted.tool) &&
           matches(wanted.args ?? {}, call.input),
+      ),
+    );
+  for (const forbidden of expected.callsMustNot ?? [])
+    add(
+      `callsMustNot ${forbidden.tool}`,
+      !calls.some(
+        (call) =>
+          call.tool === canonical(forbidden.tool) && matches(forbidden.args ?? {}, call.input),
       ),
     );
   for (const tool of expected.notCalls ?? []) add(`notCalls ${tool}`, count(tool) === 0);

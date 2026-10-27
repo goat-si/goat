@@ -1,6 +1,6 @@
 import type { ReplayCase } from "./replay.ts";
 
-export const REPLAY_VERSION = 1;
+export const REPLAY_VERSION = 2;
 const pr = "https://github.com/example/replay-fixture/pull/124";
 const threadId = "11111111-1111-4111-8111-111111111111";
 
@@ -65,6 +65,10 @@ export const replayCases: ReadonlyArray<ReplayCase> = [
       "Delegate the cache fix to a GOAT child with its own isolated checkout. GOAT should manage the checkout.",
     expect: {
       calls: [{ tool: "task.create", args: { isolation: "worktree" } }],
+      callsMustNot: [
+        { tool: "task.create", args: { task: "~git worktree add" } },
+        { tool: "task.create", args: { task: "~git clone" } },
+      ],
       notCalls: ["thread.launch"],
       shellMustNot: ["git\\s+worktree\\s+add", "git\\s+clone"],
     },
