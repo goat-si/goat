@@ -109,16 +109,28 @@ export const installDesktopTray = Effect.fn("desktop.tray.install")(function* ()
   let tray: Electron.Tray | null = null;
   let menu = EMPTY_MENU;
   let applied: string | null = null;
+  // Replacing the menu while it is open closes it, so a change waits until the user is done.
+  // Linux panels draw the menu over D-Bus and may never report it closing, so it updates live.
+  let menuOpen = false;
   const render = () => {
     if (tray === null || tray.isDestroyed()) return;
+    if (menuOpen) return;
     const key = JSON.stringify(menu);
     if (key === applied) return;
     applied = key;
-    tray.setContextMenu(
-      Electron.Menu.buildFromTemplate(
-        trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions }),
-      ),
+    const built = Electron.Menu.buildFromTemplate(
+      trayMenuTemplate({ menu, platform, appName: displayName, nativeHeaders, actions }),
     );
+    if (platform !== "linux") {
+      built.on("menu-will-show", () => {
+        menuOpen = true;
+      });
+      built.on("menu-will-close", () => {
+        menuOpen = false;
+        render();
+      });
+    }
+    tray.setContextMenu(built);
   };
   const showIcon = () => {
     if (tray !== null || Option.isNone(iconPath)) return;
