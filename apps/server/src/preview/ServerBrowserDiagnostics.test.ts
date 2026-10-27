@@ -12,6 +12,36 @@ const fixture = () => {
 };
 
 describe("ServerBrowserDiagnostics", () => {
+  it("redacts the start of a long cookie value cut by the text limit", async () => {
+    const secret = "k".repeat(3_992);
+    const page = Object.assign(new NodeEvents.EventEmitter(), {
+      url: () => "https://site.test/",
+      context: () => ({ cookies: async () => [{ name: "api", value: secret }] }),
+    });
+    const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page);
+    page.emit("console", { type: () => "log", text: () => `echo ${secret}`, args: () => [] });
+    const logs = await diagnostics.readMasked({});
+    expect(logs.console.entries[0]?.text).toBe("echo [redacted]");
+  });
+
+  it("masks the tab's cookie values in log text without touching the shape of what it returns", async () => {
+    const page = Object.assign(new NodeEvents.EventEmitter(), {
+      url: () => "https://site.test/",
+      context: () => ({
+        // An unrelated cookie whose value happens to be a field name of the logs themselves.
+        cookies: async () => [
+          { name: "word", value: "console" },
+          { name: "sid", value: "SessionSecret77" },
+        ],
+      }),
+    });
+    const diagnostics = new ServerBrowserDiagnostics(page as unknown as Page);
+    page.emit("console", { type: () => "log", text: () => "sid SessionSecret77", args: () => [] });
+    const logs = await diagnostics.readMasked({});
+    expect(Object.keys(logs)).toEqual(["console", "errors", "network"]);
+    expect(logs.console.entries[0]).toMatchObject({ level: "log", text: "sid [redacted]" });
+  });
+
   it("removes Chromium data URL payloads before recording while preserving page-authored text", () => {
     const { diagnostics, consoleMessage } = fixture();
     const url = "data:text/plain;name=private.txt,private payload\nwith more text";

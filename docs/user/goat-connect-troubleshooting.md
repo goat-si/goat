@@ -1,13 +1,13 @@
-# T3 Connect troubleshooting
+# GOAT Connect troubleshooting
 
-Managed T3 Connect routes are currently unavailable in GOAT. Use
+Managed GOAT Connect routes are currently unavailable in GOAT. Use
 [direct pairing or Tailscale](./remote-access.md) to connect devices. The checks below
-describe the upstream relay for builds with T3 Connect enabled.
+apply to builds with GOAT Connect enabled.
 
-A T3 Connect connection goes through four parts, in this order:
+A GOAT Connect connection goes through four parts, in this order:
 
-1. **This device** reaches T3 Connect over the internet.
-2. **T3 Connect** checks your sign-in and the host's link.
+1. **This device** reaches GOAT Connect over the internet.
+2. **GOAT Connect** checks your sign-in and the host's link.
 3. **The host's tunnel** (cloudflared on the host) carries the request to the host.
 4. **GOAT on the host** answers.
 
@@ -16,14 +16,14 @@ and select **Details**. The first part marked as failed is the cause. Find its
 section below.
 
 To see the host's side, run `goat connect status` on the host, or open
-**Settings > Connections** on the host. Both check the host's T3 Connect
+**Settings > Connections** on the host. Both check the host's GOAT Connect
 address from the host, and say why it fails. `goat connect` runs the same check
 when it finishes setup. This check cannot test another device's network. For a
 problem on one device, use **Details** on that device.
 
 ## The host's tunnel is offline
 
-T3 Connect could not reach the host's tunnel. This means one of these:
+GOAT Connect could not reach the host's tunnel. This means one of these:
 
 - The host is asleep, turned off, or offline.
 - GOAT is not running on the host.
@@ -34,7 +34,7 @@ Fix:
 
 1. Make sure the host is awake and GOAT runs on it.
 2. On the host, run `goat connect status`. It names the problem on the host's side.
-3. If the host was offline for a long time, T3 Connect removes its tunnel. Start
+3. If the host was offline for a long time, GOAT Connect removes its tunnel. Start
    GOAT on the host and update it to the latest version. It gets a new tunnel.
 
 ## Port 7844 is blocked on the host
@@ -54,7 +54,7 @@ Common causes:
   to be allowed, or use a direct route instead (see below).
 - **A firewall or strict network.** Allow outbound TCP and UDP port 7844.
 
-If you cannot unblock the port, you can connect without T3 Connect. When the
+If you cannot unblock the port, you can connect without GOAT Connect. When the
 host and this device are on the same Tailscale network, add the host's
 Tailscale address as a direct route. See
 [Reach one machine several ways](./remote-access.md#reach-one-machine-several-ways).
@@ -74,9 +74,11 @@ The host's tunnel is up, but it cannot reach GOAT on the host. Common causes:
 Fix: restart GOAT on the host. For the background service, run
 `goat service restart`. Then run `goat connect status` on the host.
 
-## The T3 Connect address does not resolve or answer
+<a id="the-t3-connect-address-does-not-resolve-or-answer"></a>
 
-The host's T3 Connect address did not resolve, refused the connection, failed a
+## The GOAT Connect address does not resolve or answer
+
+The host's GOAT Connect address did not resolve, refused the connection, failed a
 secure (TLS) connection, or did not answer in time.
 
 Fix:
@@ -85,19 +87,21 @@ Fix:
 2. On the host, run `goat connect status`.
 3. If the check fails only on the host, check the host's DNS, VPN, or proxy.
 
-## This device can't reach T3 Connect
+<a id="this-device-cant-reach-t3-connect"></a>
+
+## This device can't reach GOAT Connect
 
 The problem is on this device's network, not on the host. This device could
-not reach T3 Connect, or it reached T3 Connect but not the host's tunnel
+not reach GOAT Connect, or it reached GOAT Connect but not the host's tunnel
 address.
 
 Fix:
 
 1. Check this device's internet connection. On a captive or dead Wi-Fi network,
    the device can look online but cannot reach anything.
-2. A VPN, firewall, ad blocker, or DNS filter on this device can block T3
+2. A VPN, firewall, ad blocker, or DNS filter on this device can block GOAT
    Connect. Turn it off for a moment to test.
-3. On iPhone, Connectivity Assist in the Wi-Fi settings can break T3 Connect.
+3. On iPhone, Connectivity Assist in the Wi-Fi settings can break GOAT Connect.
    Turn it off to test.
 4. Try another network, or add a direct route to the host, such as its
    Tailscale address. See
@@ -105,25 +109,25 @@ Fix:
 
 ## Sign-in, account, or link problems
 
-T3 Connect does not have an active link between your account and the host.
+GOAT Connect does not have an active link between your account and the host.
 
-- **The host is linked to a different account.** Sign in to the same T3 Connect
+- **The host is linked to a different account.** Sign in to the same GOAT Connect
   account on this device and on the host. On the host, run `goat connect logout`,
   then `goat connect`.
-- **T3 Connect is off on the host, or the host only publishes agent activity.**
-  On the host, open **Settings > Connections** and turn **T3 Connect** on, or
+- **GOAT Connect is off on the host, or the host only publishes agent activity.**
+  On the host, open **Settings > Connections** and turn **GOAT Connect** on, or
   run `goat connect`.
 - **The host was linked, but the server did not apply the link yet.** Run
   `goat service restart` on the host, or restart `goat serve`.
 - **This device's sign-in expired, or the host no longer accepts this
-  device.** Sign out of T3 Connect and sign in again.
+  device.** Sign out of GOAT Connect and sign in again.
 - **Your account reached its tunnel limit.** Remove an environment you do not
-  use from your account's T3 Connect page, then restart GOAT on the host.
+  use from your account's GOAT Connect page, then restart GOAT on the host.
 
 ## The clock is off
 
-T3 Connect signs requests with short-lived proofs. When the clock on this
-device or the host is a few minutes wrong, T3 Connect rejects them. Turn on
+GOAT Connect signs requests with short-lived proofs. When the clock on this
+device or the host is a few minutes wrong, GOAT Connect rejects them. Turn on
 automatic date and time on both devices, then retry.
 
 <a id="the-host-runs-an-older-t3-code"></a>
@@ -133,7 +137,9 @@ automatic date and time on both devices, then retry.
 This app needs a newer GOAT on the host. Update GOAT on the host. See
 [Updating GOAT](./updating.md).
 
-## T3 Connect returned an error
+<a id="t3-connect-returned-an-error"></a>
+
+## GOAT Connect returned an error
 
 | Error                                                     | Fix                                                                                                                                               |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -152,7 +158,7 @@ If GOAT on the host disappears when SSH closes, see
 ## Report a problem
 
 If none of this helps, open an issue on
-[GitHub](https://github.com/pingdotgg/t3code/issues). Include:
+[GitHub](https://github.com/goat-si/goat/issues). Include:
 
 - The text from **Copy diagnostics** in the environment's **Details**.
 - The output of `goat connect status` on the host.

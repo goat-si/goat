@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../test/render";
+import { ComposerBanner } from "../components/chat/ComposerBanner";
+import { ComposerSurface } from "../components/chat/ComposerSurface";
 import "../index.css";
 
 function fixtureAttributes(attributes: Record<string, string>): Disposable {
@@ -16,10 +18,10 @@ function fixtureAttributes(attributes: Record<string, string>): Disposable {
   };
 }
 
-function alpha(element: Element): number {
+function alpha(element: Element, pseudo?: string): number {
   const context = document.createElement("canvas").getContext("2d");
   if (!context) throw new Error("Canvas unavailable");
-  context.fillStyle = getComputedStyle(element).backgroundColor;
+  context.fillStyle = getComputedStyle(element, pseudo).backgroundColor;
   context.fillRect(0, 0, 1, 1);
   return context.getImageData(0, 0, 1, 1).data[3] ?? 0;
 }
@@ -107,6 +109,48 @@ it("lets native material show through the root and rail while restoring floating
       const node = element(screen.container, selector);
       expect(alpha(node)).toBeLessThan(255);
       expect(getComputedStyle(node).backdropFilter).not.toBe("none");
+    }
+  });
+});
+function FloatingOverTranscript() {
+  return (
+    <div data-glass-pane="pane" className="bg-background">
+      <p>Transcript text under the floating surfaces</p>
+      <div className="surface-glass" />
+      <div className="alert-glass" data-variant="warning" />
+      <div className="dropdown-glass" />
+      <ComposerSurface.Shell>
+        <ComposerSurface.Main />
+      </ComposerSurface.Shell>
+      <ComposerBanner.Surface placement="floating" />
+      <ComposerBanner.Peek />
+    </div>
+  );
+}
+
+it("keeps floating surfaces over the transcript near-opaque at the lowest glass opacity", async () => {
+  using _attributes = fixtureAttributes({
+    "data-appearance-preset": "liquid-glass",
+    style: "--glass-opacity: 40%",
+  });
+  await using screen = await render(<FloatingOverTranscript />);
+  // 92% of 255: the floor below which transcript strokes read through the blur.
+  const floor = 234;
+  await vi.waitFor(() => {
+    expect(alpha(element(screen.container, '[data-glass-pane="pane"]'))).toBeLessThan(128);
+    for (const selector of [
+      ".surface-glass",
+      ".alert-glass",
+      ".dropdown-glass",
+      '[data-slot="composer-banner-peek"]',
+    ]) {
+      expect(alpha(element(screen.container, selector)), selector).toBeGreaterThanOrEqual(floor);
+    }
+    for (const selector of ['[data-slot="composer-shell"]', "[data-composer-banner-surface]"]) {
+      expect(
+        alpha(element(screen.container, selector), "::before"),
+        selector,
+      ).toBeGreaterThanOrEqual(floor);
     }
   });
 });

@@ -227,6 +227,7 @@ it.live(
         expect(denied).toMatchObject({
           _tag: "PreviewAutomationControlInterruptedError",
           reason: "agentMismatch",
+          dispatched: false,
         });
 
         // The owning agent session collects items across scrolls and records the action.

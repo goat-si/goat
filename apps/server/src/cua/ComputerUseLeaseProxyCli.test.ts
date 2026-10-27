@@ -193,6 +193,104 @@ describe("primitive report sequencer", () => {
       assert.equal(yield* postPrimitive(url, "Bearer fixture", "channel:fixture", {}), 204);
     }),
   );
+  +it.effect(
+    "a ready the server already took, answered 409 on retry, is announced again after a reconnect",
+    () =>
+      Effect.gen(function* () {
+        const posts = yield* Queue.unbounded<{
+          readonly registrationId: string;
+          readonly connectionId: string;
+        }>();
+        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+          const body = JSON.parse(String(init?.body));
+          Queue.offerUnsafe(posts, body);
+          // The first answer was lost; the retry hears the duplicate generation refused.
+          return new Response(null, {
+            status: body.registrationId === "registration:1" ? 409 : 204,
+          });
+        });
+        const registration = yield* Deferred.make<string>();
+        const reporter = yield* makePrimitiveReporter({
+          url: "http://goat.test/api/computer-use/lease",
+          authorization: "Bearer fixture",
+          token: "channel:fixture",
+          registration,
+        });
+        yield* reporter.enqueue({
+          kind: "ready",
+          controlId: "A",
+          connectionId: "driver:0",
+          driverGeneration: 0,
+        });
+        yield* reporter.run.pipe(Effect.forkScoped);
+        yield* Deferred.succeed(registration, "registration:1");
+        assert.equal((yield* Queue.take(posts)).registrationId, "registration:1");
+        yield* reporter.rebind("registration:2");
+        assert.deepInclude(yield* Queue.take(posts), {
+          registrationId: "registration:2",
+          connectionId: "driver:0",
+        });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a late ready acknowledgement for a cut-off driver is not announced again after a reconnect",
+    () =>
+      Effect.gen(function* () {
+        const posts = yield* Queue.unbounded<{
+          readonly url: string;
+          readonly body: { readonly registrationId: string; readonly connectionId: string };
+        }>();
+        let releaseFirst: () => void = () => undefined;
+        const firstHeld = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        let count = 0;
+        using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+          Queue.offerUnsafe(posts, { url: String(url), body: JSON.parse(String(init?.body)) });
+          if (count++ === 0) await firstHeld;
+          return new Response(null, { status: 204 });
+        });
+        const registration = yield* Deferred.make<string>();
+        const reporter = yield* makePrimitiveReporter({
+          url: "http://goat.test/api/computer-use/lease",
+          authorization: "Bearer fixture",
+          token: "channel:fixture",
+          registration,
+        });
+        yield* reporter.enqueue({
+          kind: "ready",
+          controlId: "A",
+          connectionId: "driver:0",
+          driverGeneration: 0,
+        });
+        yield* reporter.run.pipe(Effect.forkScoped);
+        yield* Deferred.succeed(registration, "registration:1");
+        assert.include((yield* Queue.take(posts)).url, "primitive-control-ready");
+        yield* reporter.enqueue({
+          kind: "cutoff",
+          controlId: "A",
+          connectionId: "driver:0",
+          driverGeneration: 0,
+        });
+        releaseFirst();
+        assert.include((yield* Queue.take(posts)).url, "primitive-control-cutoff");
+        yield* reporter.rebind("registration:2");
+        // Another control's driver is the only live one; nothing of A's may go first.
+        yield* reporter.enqueue({
+          kind: "ready",
+          controlId: "B",
+          connectionId: "driver:b",
+          driverGeneration: 0,
+        });
+        const next = yield* Queue.take(posts);
+        assert.deepInclude(next.body, {
+          registrationId: "registration:2",
+          connectionId: "driver:b",
+        });
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("a rejected ready POST retries and keeps the reporter alive", () =>
     Effect.gen(function* () {
       const attempts = yield* Queue.unbounded<number>();

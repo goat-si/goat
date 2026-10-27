@@ -7,6 +7,15 @@ const rename = (path: string, source: string) =>
 
 describe("upstream chase identities", () => {
   it.each([
+    ["scripts/lib/linux-arm64-sea.ts", 'prefix: "t3-sea-"', 'prefix: "goat-sea-"'],
+    ["apps/server/scripts/cli.ts", '"dist-exe/t3"', '"dist-exe/goat"'],
+    ["apps/server/vite.config.ts", "// builds dist-exe/t3 here", "// builds dist-exe/goat here"],
+  ])("renames SEA build paths in %s", (path, source, expected) => {
+    expect(rename(path, source)).toBe(expected);
+    expect(rename(path, expected)).toBe(expected);
+  });
+
+  it.each([
     [
       "apps/mobile/app.config.ts",
       '"Allow T3 Code to save images."',

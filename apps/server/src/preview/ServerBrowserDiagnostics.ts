@@ -31,6 +31,7 @@ import type {
   PreviewAutomationPageError,
 } from "@goat/contracts";
 import type { ConsoleMessage, Page, Request, Response } from "playwright-core";
+import { maskRecords, maskSecrets, tabCookies } from "./pageSecrets.ts";
 import { consoleText } from "./ServerBrowserPage.ts";
 
 const BUFFER_LIMIT = 200;
@@ -280,6 +281,20 @@ export class ServerBrowserDiagnostics {
           (input.failed === undefined || entry.failed === input.failed) &&
           (input.method === undefined || entry.method.toUpperCase() === input.method.toUpperCase()),
       ),
+    };
+  }
+
+  /**
+   * A read for an agent: the page's own text in it, console output, error messages and request
+   * URLs, has the tab's cookie values masked. Field names and levels are never page text.
+   */
+  async readMasked(input: PreviewAutomationLogsInput): Promise<PreviewAutomationLogs> {
+    const { console, errors, network } = this.read(input);
+    const records = maskRecords(maskSecrets(undefined, await tabCookies(this.page)));
+    return {
+      console: { ...console, entries: console.entries.map(records.console) },
+      errors: { ...errors, entries: errors.entries.map(records.error) },
+      network: { ...network, entries: network.entries.map(records.network) },
     };
   }
 

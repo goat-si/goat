@@ -21,7 +21,7 @@
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Guest links](./user/guest-links.md)
-- [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)
+- [GOAT Connect troubleshooting](./user/goat-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Fleet goals](./user/fleet-goals.md)
 - [Hub](./user/hub.md)
