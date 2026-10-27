@@ -20,6 +20,7 @@
  * @module ComputerUseAppLeases
  */
 import type { ComputerUseCallReservation, ThreadId } from "@goat/contracts";
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import * as Effect from "effect/Effect";
 
 import { callResource } from "./ComputerUseCallReservations.ts";
@@ -60,7 +61,7 @@ interface Lease {
 
 // Grants and the proxy compare app ids without case (ComputerUseScope.approvedApps).
 const sameApp = (a: string | undefined, b: string | undefined) =>
-  a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+  a !== undefined && b !== undefined && cuaAppKey(a) === cuaAppKey(b);
 const meets = (lease: Lease, need: Extract<AppNeed, { _tag: "app" }>) =>
   lease.pids.includes(need.pid) || sameApp(lease.app, need.app);
 

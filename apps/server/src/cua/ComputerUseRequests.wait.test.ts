@@ -287,6 +287,32 @@ it.effect(
     }),
 );
 
+it.effect(
+  "a whole-screen approval naming an app opened after computer use started asks the desktop to admit it",
+  () =>
+    Effect.gen(function* () {
+      const watched = yield* Queue.unbounded<ReadonlyArray<string> | undefined>();
+      const devBuild = "com.t3tools.t3code.dev.worktree";
+      yield* withWaiting(
+        ({ request, handoffs, leases, runId, created }) =>
+          Effect.gen(function* () {
+            yield* leases.control(threadId, Option.none(), runId);
+            assert.deepEqual(yield* Queue.take(watched), []);
+            const screen = yield* request({}, WAIT).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* answer(handoffs, yield* created(), "completed");
+            assert.equal((yield* Fiber.join(screen)).kind, "available");
+            const named = yield* request({ apps: [devBuild] }, WAIT);
+            assert.equal(named.kind, "available");
+            assert.include(named.message, "bounded_resource_outside_manifest");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+          }),
+        (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
+      );
+    }),
+);
+
 it.effect("a request is judged by the running turn, not a scheduled one queued behind it", () =>
   withWaiting(({ request, handoffs, leases, orchestrator, runId, created }) =>
     Effect.gen(function* () {

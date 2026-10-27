@@ -505,7 +505,7 @@ export type GoatConnectTroubleshootingSection =
 
 /** Clients, the CLI, and server logs link here as "More info". */
 export function goatConnectTroubleshootingUrl(section: GoatConnectTroubleshootingSection): string {
-  return `https://github.com/goat-si/goat/blob/dev/docs/user/goat-connect-troubleshooting.md#${section}`;
+  return `https://goat-si.github.io/goat/connect-troubleshooting/#${section}`;
 }
 
 const REACHABILITY_SECTION = {

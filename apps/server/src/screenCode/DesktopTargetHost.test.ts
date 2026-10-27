@@ -3,234 +3,29 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import type {
-  ComputerUsePrimitiveReply,
-  ScreenElementRef,
-  ScreenHostCall,
-  ScreenTargetRef,
-  ThreadId,
-} from "@goat/contracts";
+import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { ComputerUseRefusalDetail, computerUseRefusalReason } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
-import type { ScreenHostContext } from "./ScreenHostBridge.ts";
-import { screenRunLimits } from "./ScreenRunLimits.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-
-const context = {
-  runId: "r",
-  turnId: "t",
-  cellId: "c",
-  threadId: "thread",
-  environmentId: "env",
-  limits: screenRunLimits(),
-  invocation: { thread: { threadId: "thread" as ThreadId } },
-} as ScreenHostContext;
-const call = (
-  method: ScreenHostCall["method"],
-  args: ScreenHostCall["args"] = {},
-  targetRef?: ScreenTargetRef,
-): ScreenHostCall => ({
-  t: "call",
-  runId: "r",
-  turnId: "t",
-  cellId: "c",
-  callId: 1,
-  method,
-  args,
-  deadlineMillis: 1000,
-  ...(targetRef ? { targetRef } : {}),
-});
-const apps = { apps: [{ pid: 42, name: "Editor", bundle_id: "org.example.Editor" }] };
-const windows = { windows: [{ pid: 42, window_id: 7, title: "Document" }] };
-const state = {
-  pid: 42,
-  window_id: 7,
-  tree_markdown: "Apply",
-  elements_complete: true,
-  elements: [{ role: "button", label: "Apply", element_token: "snapshot:1" }],
-};
-
-// Reads shaped as cua-driver-rs-v0.38.0-goat.2 returns them (core window_state_view.rs apply,
-// macOS get_window_state.rs): tokens are <snapshot_id>:N, elements_complete is always false.
-const goat2Element = (snapshot: string, index: number, role: string, label: string) => ({
-  role,
-  depth: 1,
-  element_index: index,
-  element_token: `${snapshot}:${index}`,
-  label,
-});
-const goat2Full = (snapshot: string) => ({
-  window_id: 7,
-  pid: 42,
-  element_count: 2,
-  returned_element_count: 2,
-  elements_complete: false,
-  snapshot_id: snapshot,
-  tree_markdown: '- [0] AXWindow "Document"\n  - [1] AXButton "Apply" [actions=[press]]',
-  elements: [
-    goat2Element(snapshot, 0, "AXWindow", "Document"),
-    goat2Element(snapshot, 1, "AXButton", "Apply"),
-  ],
-});
-/** goat.2 keeps only the requested tree representation; markdown is its default. */
-const goat2Read = (read: ReturnType<typeof goat2Full>, args: Record<string, unknown>) => {
-  const format = typeof args.tree_format === "string" ? args.tree_format : "markdown";
-  const { elements, tree_markdown, ...rest } = read;
-  return {
-    ...rest,
-    tree_format: format,
-    ...(format === "markdown" ? {} : { elements }),
-    ...(format === "elements" ? {} : { tree_markdown }),
-  };
-};
-const goat2Diff = {
-  window_id: 7,
-  pid: 42,
-  elements_complete: false,
-  snapshot_id: "s0000000b",
-  since: "s0000000a",
-  since_status: "diff",
-  tree_diff:
-    'since s0000000a: 1 added, 0 changed, 0 removed. Use element_tokens s0000000b:N for + and ~ rows and unchanged rows; - ids are from s0000000a.\n+ [2] AXButton "Save" [actions=[press]]',
-  diff_counts: { added: 1, changed: 0, removed: 0 },
-  elements: [goat2Element("s0000000b", 2, "AXButton", "Save")],
-  tree_format: "both",
-};
-const goat2NoChange = {
-  window_id: 7,
-  pid: 42,
-  elements_complete: false,
-  snapshot_id: "s0000000d",
-  since: "s0000000b",
-  since_status: "no_change",
-  tree_diff:
-    "no change since s0000000b. Rows and indices are as before; use snapshot_id s0000000d in element_tokens (s0000000d:N).",
-  diff_counts: { added: 0, changed: 0, removed: 0 },
-  elements: [],
-  tree_format: "both",
-};
-const goat2WindowState = (
-  args: Record<string, unknown>,
-  screenshot: Record<string, unknown> = { snapshot_id: "s0000000a" },
-) =>
-  args.include_accessibility_tree === false
-    ? {
-        window_id: 7,
-        pid: 42,
-        elements_complete: false,
-        tree_markdown: "",
-        tree_format: "markdown",
-        screenshot_width: 100,
-        screenshot_height: 80,
-        screenshot_mime_type: "image/png",
-        window_bounds: { x: 10, y: 20, width: 50, height: 40 },
-        screenshot_scale: 2,
-        image: {
-          mimeType: "image/png",
-          bytes: Buffer.from("png").toString("base64"),
-          width: 100,
-          height: 80,
-        },
-        ...screenshot,
-      }
-    : args.since === "s0000000a"
-      ? goat2Diff
-      : args.since === "s0000000b"
-        ? goat2NoChange
-        : args.since !== undefined
-          ? {
-              ...goat2Read(goat2Full("s0000000c"), args),
-              since: args.since,
-              since_status: "unknown_snapshot",
-            }
-          : goat2Read(goat2Full("s0000000a"), args);
-
-/** A driver tools/call answer with isError, as the lease proxy forwards a refusal. */
-class DriverError {
-  readonly structuredContent: Record<string, unknown>;
-  constructor(structuredContent: Record<string, unknown>) {
-    this.structuredContent = structuredContent;
-  }
-}
-/** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
-class NotStarted extends DriverError {}
-// The typed refusal fields the lease proxy adds to a driver reply it refused.
-const typedRefusal = {
-  effect: "refused",
-  refused: "appNotAllowed",
-  detail: "app_not_approved",
-  app: "org.example.Editor",
-};
-
-const fixture = (
-  override: Partial<Record<string, unknown>> = {},
-  connection = { id: "driver:1" },
-  observations?: ScreenObservations,
-) => {
-  const sent: Array<{ tool: string; args: unknown; expectedConnectionGeneration?: string }> = [];
-  const channel = {
-    request: (request: { tool: string; args: unknown; expectedConnectionGeneration?: string }) =>
-      request.expectedConnectionGeneration !== undefined &&
-      request.expectedConnectionGeneration !== connection.id
-        ? Effect.fail({
-            code: "stale_reference" as const,
-            effectStarted: false,
-            nextStep: "Bind again.",
-          })
-        : Effect.sync(() => {
-            sent.push({
-              tool: request.tool,
-              args: request.args,
-              ...(request.expectedConnectionGeneration === undefined
-                ? {}
-                : { expectedConnectionGeneration: request.expectedConnectionGeneration }),
-            });
-            const answer =
-              override[request.tool] ??
-              (request.tool === "list_apps"
-                ? apps
-                : request.tool === "list_windows"
-                  ? windows
-                  : request.tool === "get_window_state"
-                    ? state
-                    : { effect: "confirmed", evidence: ["driver:acted"] });
-            const value =
-              typeof answer === "function"
-                ? (answer as (args: unknown) => unknown)(request.args)
-                : answer;
-            return {
-              status: value instanceof NotStarted ? "not_started" : "settled",
-              connectionGeneration: connection.id,
-              result:
-                value instanceof DriverError
-                  ? { isError: true, structuredContent: value.structuredContent }
-                  : { structuredContent: value },
-              ...(request.tool === "get_window_state" &&
-              typeof (value as { image?: unknown }).image === "object"
-                ? { image: (value as { image: unknown }).image }
-                : {}),
-            } as unknown as ComputerUsePrimitiveReply;
-          }),
-  } as unknown as ComputerUsePrimitiveChannel["Service"];
-  const leases = {
-    currentControl: () => Effect.succeedSome({ controlId: "control" }),
-    controlState: () => Effect.succeed({ _tag: "active", idle: false }),
-    releaseForeground: () => Effect.succeed(true),
-  } as unknown as ComputerUseLeases["Service"];
-  return {
-    host: createDesktopTargetHost({
-      primitiveChannel: channel,
-      leases,
-      ...(observations ? { observations } : {}),
-    }),
-    sent,
-  };
-};
+import {
+  context,
+  call,
+  apps,
+  windows,
+  state,
+  goat2Diff,
+  goat2NoChange,
+  goat2WindowState,
+  DriverError,
+  NotStarted,
+  typedRefusal,
+  fixture,
+} from "./DesktopTargetHost.testkit.ts";
 
 it.effect(
   "a desktop ref bound before a driver restart is refused before input after the restart",
