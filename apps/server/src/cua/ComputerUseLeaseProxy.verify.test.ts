@@ -128,6 +128,42 @@ describe("read-back confirms only a change around the element the input aimed at
     }),
   );
 
+  it.effect("a change in another unnumbered toolbar does not confirm a click in the first", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ verifyInputByTreeDiff: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { ...window, session: "s" }));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        result(
+          1,
+          { snapshot_id: "s1" },
+          [
+            '- AXWindow "Editor"',
+            "  - AXToolbar",
+            '    - [0] AXButton "Apply"',
+            "  - AXToolbar",
+            '    - [1] AXStaticText "12:00"',
+          ].join("\n"),
+        ),
+      );
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "click", { ...window, element_token: "s1:0" }));
+      yield* h.nextToDriver;
+      yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
+      const reread = yield* h.nextToDriver;
+      yield* h.reply(
+        result(
+          reread.id,
+          { since_status: "diff", snapshot_id: "s2" },
+          '~ [1] AXStaticText "12:01"',
+        ),
+      );
+      const answer = ((yield* h.nextToProvider) as unknown as Answer).result;
+      assert.equal(answer.structuredContent.effect, "unverifiable");
+    }),
+  );
+
   it.effect("a sibling the click switched off confirms it", () =>
     Effect.gen(function* () {
       const answer = yield* clickDarkThenDiff(

@@ -103,18 +103,21 @@ const textOf = (result: Readonly<Record<string, unknown>> | undefined) =>
     .map((block) => String(block?.text))
     .join("\n");
 
-/** A tree row's [N] index and indentation, in reading order. */
-type Row = { readonly index: number; readonly indent: number };
+/** A tree row's indentation and its [N] index; rows the driver cannot act on have none. */
+type Row = { readonly index: number | undefined; readonly indent: number };
 
-const ROW = /^( *)- \[(\d+)\]/u;
+const ROW = /^( *)- (?:\[(\d+)\])?/u;
 
-/** The rows of a tree read's reply, as the driver renders them. */
+/** The rows of a tree read's reply, as the driver renders them, numbered or not. */
 function rowsOf(line: string): ReadonlyArray<Row> {
   const rows: Array<Row> = [];
   for (const text of textOf(record(parse(line)?.result)).split("\n")) {
     const match = ROW.exec(text);
-    if (match?.[1] !== undefined && match[2] !== undefined)
-      rows.push({ index: Number(match[2]), indent: match[1].length });
+    if (match?.[1] !== undefined)
+      rows.push({
+        index: match[2] === undefined ? undefined : Number(match[2]),
+        indent: match[1].length,
+      });
   }
   return rows;
 }
@@ -122,17 +125,26 @@ function rowsOf(line: string): ReadonlyArray<Row> {
 /** Rows indexed [start, end] around a target: its parent's subtree, siblings included. */
 type Neighbourhood = { readonly start: number; readonly end: number };
 
-/** Where in the read a change would show the input landed, or undefined when unknown. */
+/**
+ * Where in the read a change would show the input landed, or undefined when unknown. The parent
+ * and its subtree's end come from every row's indentation, numbered or not, so an unnumbered
+ * group bounds its own controls.
+ */
 function neighbourhood(rows: ReadonlyArray<Row>, target: number): Neighbourhood | undefined {
   const at = rows.findIndex((row) => row.index === target);
   const row = rows[at];
   if (row === undefined) return undefined;
   let parent = at - 1;
   while (parent >= 0 && (rows[parent]?.indent ?? 0) >= row.indent) parent--;
-  const floor = parent >= 0 ? (rows[parent]?.indent ?? -1) : -1;
+  // With no parent row in the read, only the target's own subtree is known to be its.
+  if (parent < 0) parent = at;
+  const floor = parent === at ? row.indent : (rows[parent]?.indent ?? row.indent);
   let last = at;
   while (last + 1 < rows.length && (rows[last + 1]?.indent ?? -1) > floor) last++;
-  return { start: rows[Math.max(parent, 0)]?.index ?? target, end: rows[last]?.index ?? target };
+  const numbered = rows
+    .slice(parent, last + 1)
+    .flatMap((each) => (each.index === undefined ? [] : [each.index]));
+  return { start: Math.min(...numbered), end: Math.max(...numbered) };
 }
 
 /** The element an input names, by token of the baseline snapshot or by index. */
