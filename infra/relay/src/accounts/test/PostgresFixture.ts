@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Synchronous local PostgreSQL test process boundary.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -74,10 +75,11 @@ export function createPostgresFixture() {
       bin,
       socket,
       query,
-      migrate: (through?: string) => {
+      migrate: (through?: string, after?: string) => {
         const dir = resolve(import.meta.dirname, "../../../migrations/postgres");
         for (const name of readdirSync(dir).sort()) {
           if (through && name > through) break;
+          if (after && name <= after) continue;
           query(`BEGIN;\n${readFileSync(join(dir, name, "migration.sql"), "utf8")}\nCOMMIT;`);
         }
       },

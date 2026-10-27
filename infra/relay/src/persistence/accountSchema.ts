@@ -1,3 +1,4 @@
+import type { AccountOperationProgress } from "../accounts/AccountOperationProgress.ts";
 import { sql } from "drizzle-orm";
 import {
   check,
@@ -41,9 +42,7 @@ export const relayAccountOperations = pgTable(
     idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
     requestHash: text("request_hash").notNull(),
     state: varchar("state", { length: 16 }).notNull().$type<"pending" | "running" | "completed">(),
-    stepState: jsonb("step_state")
-      .notNull()
-      .$type<{ readonly version: 1; readonly hooksCleared: boolean }>(),
+    stepState: jsonb("step_state").notNull().$type<AccountOperationProgress>(),
     leaseOwner: uuid("lease_owner"),
     leaseExpiresAt: time("lease_expires_at"),
     claimVersion: integer("claim_version").notNull().default(0),
@@ -174,9 +173,34 @@ export const relayManagedProvisioningIntents = pgTable(
 
 export const relayRetiredCollectorState = pgTable("relay_retired_collector_state", {
   stage: text("stage").primaryKey(),
+  tunnelCycle: integer("tunnel_cycle").notNull().default(0),
+  dnsCycle: integer("dns_cycle").notNull().default(0),
   tunnelPage: integer("tunnel_page").notNull().default(1),
   dnsPage: integer("dns_page").notNull().default(1),
   leaseOwner: uuid("lease_owner"),
   leaseExpiresAt: time("lease_expires_at"),
   observedBacklog: integer("observed_backlog").notNull().default(0),
 });
+
+export const relayRetiredInventoryBacklog = pgTable(
+  "relay_retired_inventory_backlog",
+  {
+    stage: text("stage").notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(),
+    resourceId: text("resource_id").notNull(),
+    lastSeenCycle: integer("last_seen_cycle").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.stage, t.kind, t.resourceId] })],
+);
+
+export const relayAccountOperationRequests = pgTable(
+  "relay_account_operation_requests",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => relayAccountOperations.id),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.idempotencyKey] })],
+);

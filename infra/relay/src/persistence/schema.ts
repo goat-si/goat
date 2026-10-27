@@ -42,6 +42,10 @@ export const relayMobileDevices = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayMobileDevices_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.userId, table.deviceId] }),
     uniqueIndex("idx_relay_mobile_devices_push_token").on(table.pushToken),
     uniqueIndex("idx_relay_mobile_devices_push_to_start_token").on(table.pushToStartToken),
@@ -65,6 +69,10 @@ export const relayLiveActivities = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayLiveActivities_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.userId, table.deviceId] }),
     uniqueIndex("idx_relay_live_activities_activity_push_token").on(table.activityPushToken),
   ],
@@ -91,6 +99,10 @@ export const relayEnvironmentLinks = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayEnvironmentLinks_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     uniqueIndex("idx_relay_links_active_key")
       .on(table.environmentPublicKey)
       .where(sql`${table.revokedAt} IS NULL`),
@@ -123,6 +135,10 @@ export const relayManagedEndpointAllocations = pgTable(
     updatedAt: varchar("updated_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayManagedEndpointAllocations_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     uniqueIndex("idx_relay_allocations_live_owner")
       .on(table.userId, table.environmentId)
       .where(sql`${table.deletedAt} IS NULL`),
@@ -170,7 +186,7 @@ export const relayEnvironmentCredentials = pgTable(
   (table) => [
     check(
       "relay_credentials_owner_epoch",
-      sql`(${table.userId} IS NULL AND ${table.accountEpoch} IS NULL) OR (${table.userId} IS NOT NULL AND ${table.accountEpoch} >= 1)`,
+      sql`(${table.userId} IS NULL AND ${table.accountEpoch} IS NULL) OR (${table.userId} IS NOT NULL AND ${table.accountEpoch} IS NOT NULL AND ${table.accountEpoch} >= 1)`,
     ),
     index("idx_relay_credentials_owner_epoch").on(
       table.userId,
@@ -200,6 +216,10 @@ export const relayAgentActivityRows = pgTable(
     createdAt: varchar("created_at", { length: 64 }).notNull(),
   },
   (table) => [
+    check(
+      "relayAgentActivityRows_epoch",
+      sql`${table.accountEpoch} IS NULL OR ${table.accountEpoch} >= 1`,
+    ),
     primaryKey({ columns: [table.environmentId, table.environmentPublicKey, table.threadId] }),
     index("idx_relay_agent_activity_rows_updated").on(table.updatedAt),
   ],

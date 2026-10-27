@@ -167,4 +167,4 @@ INSERT INTO relay_environment_owners(environment_public_key,user_id,environment_
  SELECT environment_public_key,user_id,environment_id,'active' FROM relay_environment_links WHERE revoked_at IS NULL;
 --> statement-breakpoint
 INSERT INTO relay_endpoint_identities(stage,user_id,environment_id,high_water_generation)
- SELECT substring(tunnel_name FROM '^goatrelay-managedendpoint-(.*)-[0-9a-f]{16}$'),user_id,environment_id,0 FROM relay_managed_endpoint_allocations;
+ SELECT '__legacy__',user_id,environment_id,0 FROM relay_managed_endpoint_allocations;

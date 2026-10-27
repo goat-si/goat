@@ -1,3 +1,4 @@
+// @effect-diagnostics globalConsole:off -- Standalone prerequisite CLI reports only the local test server version.
 import { createPostgresFixture } from "../src/accounts/test/PostgresFixture.ts";
 
 if (process.argv[2] !== "check")

@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+// @effect-diagnostics nodeBuiltinImport:off -- Isolated persistence tests own synchronous fixture files.
+import { describe, expect, it } from "@effect/vitest";
 import { createPostgresFixture } from "./test/PostgresFixture.ts";
 
 describe("account policy migration on isolated PostgreSQL", () => {
@@ -22,15 +22,7 @@ describe("account policy migration on isolated PostgreSQL", () => {
     pg.query(
       "INSERT INTO relay_managed_endpoint_allocations(user_id,environment_id,hostname,tunnel_name,created_at,updated_at) VALUES ('fixture','env','prod-0123456789abcdef.example.test','goatrelay-managedendpoint-prod-0123456789abcdef','now','now')",
     );
-    // Only the new migration is applied to this already-upgraded database.
-    const migration = readFileSync(
-      new URL(
-        "../../migrations/postgres/20261027182023_account_limits_and_access/migration.sql",
-        import.meta.url,
-      ),
-      "utf8",
-    );
-    pg.query(`BEGIN;${migration}COMMIT;`);
+    pg.migrate(undefined, "20261020013101_upstream_api_pauses");
     expect(pg.query("SELECT high_water_generation FROM relay_endpoint_identities").trim()).toBe(
       "0",
     );
