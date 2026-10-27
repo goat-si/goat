@@ -264,7 +264,35 @@ describe("ComputerUsePrimitiveChannel", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["stopped", "stopped_all", "revoked", "disabled"] as const)(
+  it.effect.each(["stopped", "stopped_all"] as const)(
+    "%s cancels in-flight input and the next turn reuses the same proxy registration",
+    (reason) =>
+      Effect.gen(function* () {
+        const t = yield* turnFixture();
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        const pending = yield* t.request().pipe(Effect.forkChild);
+        const delivered = Option.getOrThrow(yield* Stream.runHead(t.registration.requests));
+        yield* t.setState({ _tag: "ended", reason });
+        assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
+        assert.deepEqual(Option.getOrThrow(yield* Stream.runHead(t.registration.requests)), {
+          state: "primitive-cancel",
+          requestId: (delivered as ComputerUsePrimitiveRequest).requestId,
+        });
+        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+
+        const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.setState({ _tag: "active" });
+        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(next, 1)));
+        const waiter = yield* t.request().pipe(Effect.forkChild);
+        const resumed = Option.getOrThrow(yield* Stream.runHead(t.registration.requests));
+        assert.equal(resumed.state, "primitive-request");
+        yield* t.channel.cancel("run:one", "cell:one");
+        assert.equal((yield* Fiber.join(waiter)).status, "unknown_outcome");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["revoked", "disabled", "unauthorized"] as const)(
     "a control ended as %s closes the channel and quarantines in-flight input",
     (reason) =>
       Effect.gen(function* () {
