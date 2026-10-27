@@ -24,11 +24,20 @@ interface Archive {
   readonly sha256: string;
 }
 
-/** Runs inside the installer's own filesystem calls, to land a race at that exact boundary. */
+/** Runs inside the installer's own filesystem calls, to land a race or a fault at that boundary. */
 export interface FileSystemHooks {
-  readonly beforeRename?: (from: string, to: string) => Effect.Effect<void>;
-  readonly beforeSymlink?: (target: string, link: string) => Effect.Effect<void>;
-  readonly afterSymlink?: (target: string, link: string) => Effect.Effect<void>;
+  readonly beforeRename?: (
+    from: string,
+    to: string,
+  ) => Effect.Effect<void, PlatformError.PlatformError>;
+  readonly beforeSymlink?: (
+    target: string,
+    link: string,
+  ) => Effect.Effect<void, PlatformError.PlatformError>;
+  readonly afterSymlink?: (
+    target: string,
+    link: string,
+  ) => Effect.Effect<void, PlatformError.PlatformError>;
 }
 
 /**
@@ -173,9 +182,11 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
       .makeDirectory(path.dirname(file), { recursive: true })
       .pipe(Effect.andThen(fs.writeFileString(file, fakeOcx(version), { mode: 0o755 })));
   const desktop = path.join(home, ".opencodex-desktop", "bin", "ocx");
-  const releaseDirectories = fs
-    .readDirectory(prefix)
-    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  const releaseDirectories = fs.readDirectory(prefix).pipe(
+    // The install lock file is permanent by design; only release directories are counted.
+    Effect.map((names) => names.filter((name) => name !== ".install-lock.sqlite")),
+    Effect.orElseSucceed((): Array<string> => []),
+  );
   return {
     fs,
     path,

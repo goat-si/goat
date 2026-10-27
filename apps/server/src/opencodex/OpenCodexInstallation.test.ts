@@ -1,10 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off - a second process holds the install lock.
+import * as NodeSqlite from "node:sqlite";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as Installation from "./OpenCodexInstallation.ts";
@@ -220,88 +225,48 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
-const lockRecord = (pid: number, startTime: string | null, nonce: string) =>
-  JSON.stringify({ pid, startTime, nonce });
-/** The lock and every reclaim leftover in the install prefix. */
-const lockEntries = (world: { readonly prefix: string; readonly fs: FileSystem.FileSystem }) =>
-  world.fs
-    .readDirectory(world.prefix)
-    .pipe(Effect.map((names) => names.filter((name) => name.startsWith(".install-lock"))));
+/** Holds the install lock the way another installer process would: an open exclusive handle. */
+const holdLock = (prefix: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const db = new NodeSqlite.DatabaseSync(`${prefix}/.install-lock.sqlite`);
+      db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+      return db;
+    }),
+    (db) => Effect.sync(() => db.close()),
+  );
 
 it.live(
-  "a live owner with the same pid and start time is never reclaimed, while a reused pid is",
+  "a second installer is busy while another handle or a live process holds the install lock",
   () =>
     Effect.gen(function* () {
       const world = yield* installedWorld();
-      const lock = world.path.join(world.prefix, ".install-lock");
-      const downloading = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const holder = yield* world.installer(world.catalog, world.served, {
-        beforeDownload: Deferred.succeed(downloading, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-        ),
-      });
-      const other = yield* world.installer(world.catalog, world.served);
-      const held = yield* holder.install({ managedVersion: "2.93.0" }).pipe(Effect.forkChild);
-      yield* Deferred.await(downloading);
-      // Another installer in this process: the same pid and start time, so its owner is live.
-      expect(yield* reasonOf(other.install({ managedVersion: "2.93.0" }))).toBe("busy");
-      yield* Deferred.succeed(release, undefined);
-      expect((yield* Fiber.join(held)).version).toBe("2.93.0");
-      // This pid again, started at another time: a reused pid, so the record is stale.
-      yield* world.fs.writeFileString(
-        lock,
-        lockRecord(process.pid, "Thu Jan  1 00:00:00 1970", "reused"),
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* holdLock(world.prefix);
+          expect(yield* reasonOf(world.service.install({ managedVersion: "2.93.0" }))).toBe("busy");
+        }),
       );
-      expect((yield* other.install({ managedVersion: "2.92.0" })).version).toBe("2.92.0");
-      expect(yield* lockEntries(world)).toEqual([]);
+      expect((yield* world.service.install({ managedVersion: "2.93.0" })).version).toBe("2.93.0");
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const holder = yield* spawner.spawn(
+        ChildProcess.make(process.execPath, [
+          "-e",
+          'const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]); db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;"); process.stdout.write("held\\n"); setInterval(() => {}, 1 << 30);',
+          `${world.prefix}/.install-lock.sqlite`,
+        ]),
+      );
+      yield* holder.stdout.pipe(
+        Stream.decodeText(),
+        Stream.takeUntil((text) => text.includes("held")),
+        Stream.runDrain,
+      );
+      expect(yield* reasonOf(world.service.install({ managedVersion: "2.92.0" }))).toBe("busy");
+      // The OS releases a killed holder's lock: nothing stale is left to reclaim.
+      yield* holder.kill({ killSignal: "SIGKILL" });
+      yield* holder.exitCode.pipe(Effect.ignore);
+      expect((yield* world.service.install({ managedVersion: "2.92.0" })).version).toBe("2.92.0");
     }).pipe(Effect.scoped, Effect.provide(services)),
-);
-
-it.live("a new owner that takes the lock between the stale read and the reclaim keeps it", () =>
-  Effect.gen(function* () {
-    const world = yield* installedWorld();
-    const lock = world.path.join(world.prefix, ".install-lock");
-    const newOwner = lockRecord(1, "started later", "new-owner");
-    yield* world.fs.writeFileString(lock, lockRecord(2147483646, null, "crashed"));
-    let raced = false;
-    const service = yield* world.installer(world.catalog, world.served, {
-      fs: {
-        beforeRename: (from) =>
-          from !== lock || raced
-            ? Effect.void
-            : Effect.sync(() => void (raced = true)).pipe(
-                Effect.andThen(world.fs.remove(lock)),
-                Effect.andThen(world.fs.writeFileString(lock, newOwner)),
-                Effect.orDie,
-              ),
-      },
-    });
-    expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("busy");
-    expect(raced).toBe(true);
-    expect(yield* world.fs.readFileString(lock)).toBe(newOwner);
-    expect(yield* lockEntries(world)).toEqual([".install-lock"]);
-  }).pipe(Effect.scoped, Effect.provide(services)),
-);
-
-it.live("a dead owner's lock and an orphaned reclaim tombstone do not block the next install", () =>
-  Effect.gen(function* () {
-    const world = yield* makeWorld();
-    const built = yield* world.archive("2.92.0");
-    yield* world.fs.makeDirectory(world.prefix, { recursive: true });
-    const dead = lockRecord(2147483646, null, "crashed");
-    yield* world.fs.writeFileString(world.path.join(world.prefix, ".install-lock"), dead);
-    // A reclaimer that crashed after moving a stale lock aside.
-    yield* world.fs.writeFileString(
-      world.path.join(world.prefix, ".install-lock.stale-crashed-reclaimer"),
-      lockRecord(2147483645, null, "older"),
-    );
-    const service = yield* world.installer(world.pin("2.92.0", built), {
-      [urlOf("2.92.0")]: built.bytes,
-    });
-    expect((yield* service.install()).ownership).toBe("managed");
-    expect(yield* lockEntries(world)).toEqual([]);
-  }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
 it.live(
@@ -430,5 +395,61 @@ it.live("a missing invalid or copied marker never grants managed ownership", () 
     // Without its marker the selected install is adopted, and a managed update refuses it.
     expect((yield* service.install()).ownership).toBe("adopted");
     expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("not-managed");
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live(
+  "an adopted launcher inserted right before the rollback survives at the launcher path",
+  () =>
+    Effect.gen(function* () {
+      const world = yield* installedWorld();
+      let inserted = false;
+      const service = yield* world.installer(world.catalog, world.served, {
+        // A Desktop install appears during the download, so activation is rolled back.
+        beforeDownload: world.userOcx(world.desktop, "2.95.0").pipe(Effect.orDie),
+        fs: {
+          beforeRename: (from, to) =>
+            from !== world.launcher || !to.endsWith("/rejected") || inserted
+              ? Effect.void
+              : Effect.sync(() => void (inserted = true)).pipe(
+                  Effect.andThen(world.fs.remove(world.launcher)),
+                  Effect.andThen(world.userOcx(world.launcher, "2.80.0")),
+                  Effect.orDie,
+                ),
+        },
+      });
+      expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("activation");
+      expect(inserted).toBe(true);
+      expect(yield* world.fs.readFileString(world.launcher)).toBe(fakeOcx("2.80.0"));
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("a failed publish after moving the launcher aside restores the previous launcher", () =>
+  Effect.gen(function* () {
+    const world = yield* installedWorld();
+    const next = world.path.join(world.prefix, `2.93.0-${TARGET}`, "ocx");
+    let failed = false;
+    const service = yield* world.installer(world.catalog, world.served, {
+      fs: {
+        beforeSymlink: (target) =>
+          target !== next || failed
+            ? Effect.void
+            : Effect.sync(() => void (failed = true)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "Unknown",
+                      module: "FileSystem",
+                      method: "symlink",
+                    }),
+                  ),
+                ),
+              ),
+      },
+    });
+    expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("io");
+    expect(failed).toBe(true);
+    expect(yield* world.fs.realPath(world.launcher)).toBe(world.installed.realPath);
+    expect(yield* world.fs.readDirectory(world.path.dirname(world.launcher))).toEqual(["ocx"]);
   }).pipe(Effect.scoped, Effect.provide(services)),
 );

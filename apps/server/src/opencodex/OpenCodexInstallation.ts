@@ -27,7 +27,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { makeInstallLock } from "./installLock.ts";
+import { acquireInstallLock, INSTALL_LOCK_FILE } from "./installLock.ts";
 
 const MARKER = ".goat-install.json";
 const MAX_MARKER_BYTES = 8192;
@@ -164,7 +164,6 @@ const make = Effect.gen(function* () {
   const cwd = yield* HostProcess.WorkingDirectory;
   const catalog = yield* ReleaseCatalog;
   const gate = yield* Semaphore.make(1);
-  const installLock = yield* makeInstallLock;
 
   /** Resolved, so a symlinked home or ~/.local still yields one canonical install root. */
   const resolvedDirectory = Effect.fn("OpenCodexInstallation.resolvedDirectory")(function* (
@@ -369,10 +368,15 @@ const make = Effect.gen(function* () {
         : fs.link(moved, launcher),
     ).pipe(Effect.orElseSucceed(() => false));
 
+  /** Removes one entry this activation owns, then its directory once nothing else is in it. */
+  const discard = (file: string) => fs.remove(file).pipe(Effect.ignore);
+  const removeIfEmpty = (directory: string) =>
+    Effect.tryPromise(() => NodeFSP.rmdir(directory)).pipe(Effect.ignore);
+
   /**
    * Swaps the launcher only if it is still the entry selected under the lock, then confirms
-   * OpenCodex's resolution selects this managed release. A displaced entry that is not ours is
-   * kept aside under bin/.ocx-* when it cannot be put back.
+   * OpenCodex's resolution selects this managed release. Any failure after the swap puts the
+   * previous launcher back; an entry that is not ours is never removed, only kept aside.
    */
   const activate = Effect.fn("OpenCodexInstallation.activate")(function* (
     executable: string,
@@ -384,7 +388,6 @@ const make = Effect.gen(function* () {
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const activation = yield* fs.makeTempDirectory({ directory: bin, prefix: ".ocx-" });
-        const done = fs.remove(activation, { recursive: true }).pipe(Effect.ignore);
         const backup = path.join(activation, "previous");
         let previous = Option.none<EntryIdentity>();
         if (Option.isSome(selectedLauncher)) {
@@ -393,36 +396,68 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => false),
           );
           if (!moved) {
-            yield* done;
+            yield* removeIfEmpty(activation);
             return yield* fail("not-managed");
           }
           previous = yield* identify(backup);
           if (!same(previous, selectedLauncher)) {
-            if (yield* restoreExclusively(backup, previous, launcher)) yield* done;
+            if (yield* restoreExclusively(backup, previous, launcher)) {
+              yield* discard(backup);
+              yield* removeIfEmpty(activation);
+            }
             return yield* fail("not-managed");
           }
         }
-        // Exclusive: an entry someone created after the move stays theirs.
-        if (!(yield* created(fs.symlink(executable, launcher)))) return yield* fail("not-managed");
-        const published = yield* identify(launcher);
-        const checked = yield* selected().pipe(Effect.option);
-        const selection = Option.isSome(checked) ? checked.value : undefined;
+        let published = Option.none<EntryIdentity>();
+        const attempt = Effect.gen(function* () {
+          // Exclusive: an entry someone created after the move stays theirs.
+          if (!(yield* created(fs.symlink(executable, launcher))))
+            return yield* fail("not-managed");
+          published = yield* identify(launcher);
+          const checked = yield* selected().pipe(Effect.option);
+          const selection = Option.isSome(checked) ? checked.value : undefined;
+          if (
+            selection?.realPath === executable &&
+            selection.version === version &&
+            selection.ownership === "managed"
+          )
+            return selection;
+          return yield* fail(selection?.realPath === executable ? "verify" : "activation");
+        });
+        const outcome = yield* Effect.result(attempt);
+        if (outcome._tag === "Success") {
+          yield* discard(backup);
+          yield* removeIfEmpty(activation);
+          return outcome.success;
+        }
+        // Undo only this activation's own symlink, judged after moving it, so a launcher someone
+        // put there meanwhile is put back instead of removed.
+        let restorePrevious = true;
+        if (Option.isSome(published)) {
+          const rejected = path.join(activation, "rejected");
+          const moved = yield* fs.rename(launcher, rejected).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (moved) {
+            const found = yield* identify(rejected);
+            if (same(found, published) && Option.getOrUndefined(found)?.link === executable)
+              yield* discard(rejected);
+            else {
+              restorePrevious = false;
+              if (yield* restoreExclusively(rejected, found, launcher)) yield* discard(rejected);
+            }
+          }
+        }
         if (
-          selection?.realPath === executable &&
-          selection.version === version &&
-          selection.ownership === "managed"
-        ) {
-          yield* done;
-          return selection;
-        }
-        // Undo only this activation's own symlink, even when its target has disappeared.
-        const current = yield* identify(launcher);
-        if (same(current, published) && Option.getOrUndefined(current)?.link === executable) {
-          yield* fs.rename(launcher, path.join(activation, "rejected"));
-          if (Option.isNone(previous) || (yield* restoreExclusively(backup, previous, launcher)))
-            yield* done;
-        }
-        return yield* fail(selection?.realPath === executable ? "verify" : "activation");
+          restorePrevious &&
+          Option.isSome(previous) &&
+          (yield* restoreExclusively(backup, previous, launcher))
+        )
+          yield* discard(backup);
+        // Removed only when empty: anything left is an entry kept aside for a person to resolve.
+        yield* removeIfEmpty(activation);
+        return yield* outcome.failure;
       }),
     );
   });
@@ -448,7 +483,11 @@ const make = Effect.gen(function* () {
             const prefix = yield* prefixOf(true);
             const bin = yield* resolvedDirectory(true, ".local", "bin");
             const launcher = path.join(bin, "ocx");
-            yield* installLock.acquire(prefix, () => fail("busy"));
+            yield* acquireInstallLock(
+              path.join(prefix, INSTALL_LOCK_FILE),
+              () => fail("busy"),
+              (cause) => fail("io", cause),
+            );
             // Selected again under the lock: this identity is what activation may replace.
             const before = yield* selected();
             if (
