@@ -1,3 +1,20 @@
+import * as ApnsDeliveryQueueConsumer from "./agentActivity/ApnsDeliveryQueueConsumer.ts";
+import * as AccountAccess from "./accounts/AccountAccess.ts";
+import * as AccountTransactions from "./accounts/AccountTransactions.ts";
+import * as AccountDeviceAdmission from "./accounts/AccountDeviceAdmission.ts";
+import * as AccountLimits from "./accounts/AccountLimits.ts";
+import * as AccountRateLimitObject from "./accounts/AccountRateLimitObject.ts";
+import * as RelayRateLimits from "./accounts/RelayRateLimits.ts";
+import * as AccountLifecycle from "./accounts/AccountLifecycle.ts";
+import * as AccountAdminApi from "./http/AccountAdminApi.ts";
+import * as EnvironmentOwnership from "./environments/EnvironmentOwnership.ts";
+import * as EndpointIdentity from "./environments/EndpointIdentity.ts";
+import * as ManagedProvisioningIntents from "./environments/ManagedProvisioningIntents.ts";
+import * as RetiredEndpointCollector from "./environments/RetiredEndpointCollector.ts";
+import * as retiredInventoryBinding from "./environments/retiredInventoryBinding.ts";
+import * as DeliveryAuthorization from "./agentActivity/DeliveryAuthorization.ts";
+import * as HookDeliveryAuthorization from "./hooks/HookDeliveryAuthorization.ts";
+import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -200,7 +217,35 @@ export const layer = Api.make(
         period: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.periodSeconds,
       },
     });
-    const hookInboxes = yield* HookInboxObject.HookInboxObject;
+    const policy = yield* AccountLimits.config;
+    const operatorSecret = yield* Config.Redacted("RELAY_OPERATOR_SECRET").pipe(
+      Config.mapEffect((value) =>
+        /^\S+$/.test(Redacted.value(value))
+          ? Effect.succeed(value)
+          : Effect.fail(
+              new Config.ConfigError(
+                new Error("RELAY_OPERATOR_SECRET must be nonempty and contain no whitespace"),
+              ),
+            ),
+      ),
+    );
+    const accountCounters = yield* AccountRateLimitObject.AccountRateLimitObject;
+    const mobileRate = yield* Cloudflare.RateLimit("MOBILE_REGISTRATION_RATE_LIMIT", {
+      namespaceId: 1003,
+      simple: { limit: policy.mobile_registration, period: 60 },
+    });
+    const publishRate = yield* Cloudflare.RateLimit("ACTIVITY_PUBLISH_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: { limit: policy.activity_publish, period: 60 },
+    });
+    const hookInboxes = yield* HookInboxObject.HookInboxObject.pipe(
+      Effect.provide(HookInboxObject.layer(db)),
+    );
+    const retiredAuth = yield* (yield* Cloudflare.Tunnel.makeTunnelClient(
+      "RelayRetiredEndpoints",
+      ["Cloudflare Tunnel Read", "Cloudflare Tunnel Write"],
+      (auth) => auth,
+    ))();
 
     const alchemyRuntimeContext: Alchemy.BaseRuntimeContext = yield* Cloudflare.Worker;
 
@@ -251,79 +296,154 @@ export const layer = Api.make(
           .wake(baseUrl)
           .pipe(inboxCall("wake", endpointKey));
       }),
-      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey }) {
-        return hookInboxes.getByName(endpointKey).clear().pipe(inboxCall("clear", endpointKey));
+      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey, authorization }) {
+        return hookInboxes
+          .getByName(endpointKey)
+          .clear(authorization)
+          .pipe(inboxCall("clear", endpointKey));
       }),
     });
 
-    const layerRuntime = Layer.empty.pipe(
-      Layer.provideMerge(MobileRegistrations.layer),
-      Layer.provideMerge(AgentActivityPublisher.layer),
-      Layer.provideMerge(EnvironmentConnector.layer),
-      Layer.provideMerge(EnvironmentLinker.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          EnvironmentPublishSignatures.layer,
-          ManagedEndpointReaper.layer,
-          HeldHooks.layer,
-        ),
-      ),
-      Layer.provideMerge(
-        ManagedEndpointProvider.layerCloudflareBindings(
-          managedEndpointTunnelBinding,
-          managedEndpointDnsBinding,
-          alchemyRuntimeContext,
-        ),
-      ),
-      Layer.provideMerge(DpopProofs.layer),
-      Layer.provideMerge(ApnsDeliveries.layer),
-      Layer.provideMerge(
-        FcmDeliveries.layer.pipe(
-          Layer.provide(
-            Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
-              send: Effect.fn("FcmDeliveryQueueSender.send")(
-                function* (body) {
-                  return yield* fcmDeliveryQueueSender.send(body);
-                },
-                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-              ),
-            }),
+    const rateKeyCrypto = yield* Crypto.Crypto.pipe(Effect.provide(layerWebcrypto));
+    const layerRates = Layer.succeed(RelayRateLimits.RelayRateLimits, {
+      charge: Effect.fn("RelayRateLimits.charge")(function* (input) {
+        const crypto = rateKeyCrypto;
+        const key = yield* crypto
+          .digest(
+            "SHA-256",
+            new TextEncoder().encode(
+              (input.operation === "activity_publish"
+                ? [stage, input.environmentId ?? "", input.environmentPublicKey ?? ""]
+                : [stage, input.userId]
+              )
+                .map((part) => `${part.length}:${part}`)
+                .join(""),
+            ),
+          )
+          .pipe(
+            Effect.map((bytes) =>
+              Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""),
+            ),
+            Effect.mapError(
+              () =>
+                new RelayAuthorizationUnavailableError({
+                  code: "authorization_unavailable",
+                  traceId: "relay",
+                }),
+            ),
+          );
+        const result = yield* (
+          input.operation === "mobile_registration" || input.operation === "activity_publish"
+            ? (input.operation === "mobile_registration" ? mobileRate : publishRate)
+                .limit({ key })
+                .pipe(Effect.map((r) => ({ allowed: r.success, retryAfterSeconds: 60 })))
+            : accountCounters.getByName(key).consume(input.operation)
+        ).pipe(
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          Effect.catchCause(() =>
+            Effect.fail(
+              new RelayAuthorizationUnavailableError({
+                code: "authorization_unavailable",
+                traceId: "relay",
+              }),
+            ),
           ),
-          Layer.provideMerge(
-            FcmClient.layer.pipe(
-              Layer.provide(FcmAssertionSigner.layer),
-              Layer.provide(
-                Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+        );
+        yield* RelayRateLimits.enforceRateResult(input.operation, result);
+      }),
+    }).pipe(Layer.provide(layerWebcrypto));
+    const layerRuntime = Layer.empty
+      .pipe(
+        Layer.provideMerge(AccountLifecycle.layer),
+        Layer.provideMerge(RetiredEndpointCollector.layer),
+        Layer.provideMerge(MobileRegistrations.layer),
+        Layer.provideMerge(AgentActivityPublisher.layer),
+        Layer.provideMerge(EnvironmentConnector.layer),
+        Layer.provideMerge(EnvironmentLinker.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            EnvironmentPublishSignatures.layer,
+            ManagedEndpointReaper.layer,
+            HeldHooks.layer,
+          ),
+        ),
+        Layer.provideMerge(
+          ManagedEndpointProvider.layerCloudflareBindings(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(DpopProofs.layer),
+        Layer.provideMerge(ApnsDeliveries.layer),
+        Layer.provideMerge(
+          FcmDeliveries.layer.pipe(
+            Layer.provide(
+              Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
+                send: Effect.fn("FcmDeliveryQueueSender.send")(
+                  function* (body) {
+                    return yield* fcmDeliveryQueueSender.send(body);
+                  },
+                  Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                ),
+              }),
+            ),
+            Layer.provideMerge(
+              FcmClient.layer.pipe(
+                Layer.provide(FcmAssertionSigner.layer),
+                Layer.provide(
+                  Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+                ),
               ),
             ),
           ),
         ),
-      ),
-      Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
-      Layer.provideMerge(
-        ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
-      ),
-      Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
-      Layer.provideMerge(EnvironmentCredentials.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          CloudflareApiPause.layer,
-          EnvironmentLinks.layer,
-          ManagedEndpointAllocations.layer,
-          ManagedTunnelLimits.layer,
+        Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
+        Layer.provideMerge(
+          ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
         ),
-      ),
-      Layer.provideMerge(LiveActivities.layer),
-      Layer.provideMerge(DeliveryAttempts.layer),
-      Layer.provideMerge(RelayTokens.layer),
-      Layer.provideMerge(
-        RelayDb.RelayTransactions.layer.pipe(
-          Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+        Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
+        Layer.provideMerge(EnvironmentCredentials.layer),
+        Layer.provideMerge(
+          retiredInventoryBinding.layer(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            retiredAuth,
+            alchemyRuntimeContext,
+          ),
         ),
-      ),
-      Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
-      Layer.provideMerge(layerWebcrypto),
-    );
+        Layer.provideMerge(ManagedEndpointAllocations.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            CloudflareApiPause.layer,
+            EnvironmentLinks.layer,
+            ManagedTunnelLimits.layer,
+          ),
+        ),
+      )
+      .pipe(
+        Layer.provideMerge(LiveActivities.layer),
+        Layer.provideMerge(DeliveryAuthorization.layer),
+        Layer.provideMerge(DeliveryAttempts.layer),
+        Layer.provideMerge(RelayTokens.layer),
+        Layer.provideMerge(ManagedProvisioningIntents.layer),
+        Layer.provideMerge(EndpointIdentity.layer),
+        Layer.provideMerge(EnvironmentOwnership.layer),
+        Layer.provideMerge(AccountDeviceAdmission.layer),
+        Layer.provideMerge(HookDeliveryAuthorization.layer),
+        Layer.provideMerge(AccountAccess.layer),
+        Layer.provideMerge(AccountTransactions.layer),
+        Layer.provideMerge(layerRates),
+        Layer.provideMerge(Layer.succeed(AccountLimits.AccountLimits, policy)),
+        Layer.provideMerge(Layer.succeed(AccountAdminApi.AccountOperatorSecret, operatorSecret)),
+        Layer.provideMerge(
+          RelayDb.RelayTransactions.layer.pipe(
+            Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+          ),
+        ),
+        Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
+        Layer.provideMerge(layerWebcrypto),
+      );
 
     // Fails open: a limiter outage must not drop webhooks the environment would accept.
     const allowWith =
@@ -347,7 +467,7 @@ export const layer = Api.make(
     });
 
     const layerApp = Layer.merge(
-      layerRelayApi,
+      Layer.merge(layerRelayApi, AccountAdminApi.layer),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),
@@ -371,12 +491,7 @@ export const layer = Api.make(
       (stream) =>
         stream.pipe(
           Stream.withSpan("relay.apn_delivery_queue.process_batch"),
-          Stream.runForEach((message) =>
-            ApnsDeliveries.ApnsDeliveries.pipe(
-              Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-              Effect.withSpan("relay.apn_delivery_queue.process_message"),
-            ),
-          ),
+          Stream.runForEach(ApnsDeliveryQueueConsumer.processMessage),
           Effect.provide(layerRuntime),
         ),
     );
@@ -401,6 +516,20 @@ export const layer = Api.make(
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
       Effect.all(
         [
+          AccountLifecycle.AccountLifecycle.pipe(
+            Effect.flatMap((service) => service.scanPending),
+            Effect.tapError((e) =>
+              Effect.logWarning("Account operations scan failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
+          RetiredEndpointCollector.RetiredEndpointCollector.pipe(
+            Effect.flatMap((service) => service.sweep),
+            Effect.tapError((e) =>
+              Effect.logWarning("Retired inventory failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
           DpopProofs.DpopProofReplay.pipe(
             Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
             Effect.andThen(
@@ -481,7 +610,7 @@ export const layer = Api.make(
         Layer.provideMerge(Cloudflare.Tunnel.ReadWriteTunnelBinding),
         Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
         Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
-        Layer.provideMerge(HookInboxObject.layer),
+        Layer.provideMerge(AccountRateLimitObject.layer),
         // Disable the duplicate runtime span; ours applies route/header/token redaction and rejects sender traceparent.
         Layer.provideMerge(
           Alchemy.Telemetry.layer(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true)),
