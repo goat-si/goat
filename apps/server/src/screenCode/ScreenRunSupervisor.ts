@@ -176,9 +176,9 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
-            // Set once the child's result arrives: a later Stop, wall timer or exit finishes the
-            // cell with that result, because the bridge's journal may already be taken.
-            let finishAfterResult: ((code: typeof SupervisorCode.Type) => void) | undefined;
+            // Set once the child's result arrives: a later Stop or exit finishes the cell with that
+            // result, because the bridge's journal is already taken.
+            let finishAfterResult: (() => void) | undefined;
             const hostErrors = new Map<number, ScreenRunError>();
             const callAbort = new AbortController();
             const cleanup = () => {
@@ -190,7 +190,7 @@ export function createScreenRunSupervisor(deps: {
             };
             const failRun = (code: typeof SupervisorCode.Type) => {
               if (settled) return;
-              if (finishAfterResult) return finishAfterResult(code);
+              if (finishAfterResult) return finishAfterResult();
               settled = true;
               cleanup();
               deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
@@ -275,7 +275,6 @@ export function createScreenRunSupervisor(deps: {
                 : isScreenGuestError(result.error)
                   ? result.error
                   : undefined;
-              let collected: ReturnType<ScreenHostBridge["takeCellImagesNow"]> | undefined;
               const finish = (
                 taken: ReturnType<ScreenHostBridge["takeCellImagesNow"]>,
                 availability: ScreenRunResult["availability"],
@@ -301,50 +300,44 @@ export function createScreenRunSupervisor(deps: {
                   availability,
                 });
               };
-              finishAfterResult = (code) => {
-                if (settled) return;
-                callAbort.abort();
-                // A per-cell Stop leaves an idle child with its values; an exit or failure does not.
-                if (code !== "stopped") close(session);
-                finish(
-                  collected ??
-                    deps.hostBridge.takeCellImagesNow(identity.runId, identity.turnId, cellId),
-                  UNREAD_AVAILABILITY,
-                );
-              };
-              const collect = Effect.gen(function* () {
-                if (result.status === "failed")
-                  yield* deps.hostBridge.cutCell(
-                    identity.runId,
-                    identity.turnId,
-                    cellId,
-                    "unawaited",
-                  );
-                if (result.unawaitedCallIds?.length)
-                  yield* deps.hostBridge.markUnawaited(
-                    identity.runId,
-                    identity.turnId,
-                    cellId,
-                    result.unawaitedCallIds,
-                  );
-                if (result.unawaitedCallIds?.length) callAbort.abort();
-                collected = yield* deps.hostBridge.takeCellImages(
+              // Collected in this callback, so no queued call can dispatch between the result
+              // and its journal; unawaited calls are stopped only after that.
+              if (result.status === "failed")
+                deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId, "unawaited");
+              if (result.unawaitedCallIds?.length)
+                deps.hostBridge.markUnawaitedNow(
                   identity.runId,
                   identity.turnId,
                   cellId,
+                  result.unawaitedCallIds,
                 );
-                const available = yield* deps.hostBridge
-                  .availability(identity.context)
-                  .pipe(Effect.timeoutOption("1 second"));
-                return {
-                  taken: collected,
-                  availability: Option.getOrElse(available, () => UNREAD_AVAILABILITY),
-                };
-              });
-              void deps.runCallback(collect).then(
-                ({ taken, availability }) => finish(taken, availability),
-                () => failRun("runtime_unavailable"),
+              const collected = deps.hostBridge.takeCellImagesNow(
+                identity.runId,
+                identity.turnId,
+                cellId,
               );
+              // The child that sent this result stays until it exits: its exit handler closes it.
+              finishAfterResult = () => {
+                if (settled) return;
+                callAbort.abort();
+                finish(collected, UNREAD_AVAILABILITY);
+              };
+              if (result.unawaitedCallIds?.length) callAbort.abort();
+              void deps
+                .runCallback(
+                  deps.hostBridge
+                    .availability(identity.context)
+                    .pipe(Effect.timeoutOption("1 second")),
+                )
+                .then(
+                  (available) =>
+                    finish(
+                      collected,
+                      Option.getOrElse(available, () => UNREAD_AVAILABILITY),
+                    ),
+                  // An unread surface does not undo the result or the live child.
+                  () => finish(collected, UNREAD_AVAILABILITY),
+                );
             };
             const cancelDeadline = deps.scheduleDeadline
               ? deps.scheduleDeadline(
