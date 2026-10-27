@@ -1,4 +1,11 @@
-import { EnvironmentId, MessageId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  RunId,
+  ScheduledTaskId,
+  ThreadId,
+  type OrchestrationV2ProjectedTurnItem,
+} from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -190,6 +197,26 @@ describe("MessagesTimeline agent messages", () => {
       },
     });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("points an inherited message at the thread it was delivered to", async () => {
+    setup({ shells: [{ id: SENDER_THREAD_ID, title: "CU100 merge manager" }] });
+    const onOpenThread = vi.fn();
+    const inherited = {
+      ...message(AGENT_MESSAGE, { createdBy: "agent", senderThreadId: SENDER_THREAD_ID }),
+      projectedItem: {
+        position: 0,
+        visibility: "inherited",
+        sourceThreadId: ThreadId.make("thread-original"),
+        sourceItemId: "item-1",
+        item: { threadId: ThreadId.make("thread-original") },
+      } as unknown as OrchestrationV2ProjectedTurnItem,
+    };
+    await using screen = await renderTimeline([inherited], { onOpenThread });
+    await click(screen.button("Open CU100 merge manager"));
+    expect(onOpenThread).toHaveBeenCalledWith(SENDER_THREAD_ID, {
+      sentFrom: expect.objectContaining({ threadId: "thread-original" }),
+    });
   });
 
   it("names a deleted sender without a link", async () => {

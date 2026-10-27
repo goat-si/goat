@@ -322,6 +322,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       : null,
   );
   const senderTitle = senderShell?.title.trim() || "Untitled thread";
+  // An inherited message in a fork was delivered to the thread it was forked from.
+  const destinationThreadId = row.projectedItem?.item.threadId ?? ctx.threadRef?.threadId ?? null;
   const machine = useEnvironment(folded ? ctx.activeThreadEnvironmentId : null)?.label ?? null;
   // Only a sender this environment still holds gets a link; anything else would open nowhere.
   const sender: SentBySender = !senderThreadId
@@ -457,7 +459,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         <TimelineSentByLabel
           sender={sender}
           destination={
-            ctx.threadRef ? { threadId: ctx.threadRef.threadId, messageId: row.message.id } : null
+            destinationThreadId === null
+              ? null
+              : { threadId: destinationThreadId, messageId: row.message.id }
           }
           machine={machine}
           sentAt={formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}

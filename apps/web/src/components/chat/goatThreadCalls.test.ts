@@ -1,4 +1,4 @@
-import { RunId } from "@goat/contracts";
+import { RunAttemptId, RunId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { goatThreadCallOf } from "./goatThreadCalls";
@@ -149,6 +149,22 @@ describe("findSendingCall", () => {
       },
     ];
     expect(sendingCallRowIndex(rows, secondSend.entry, () => undefined)).toBe(1);
+  });
+
+  it("points a call in a superseded attempt at that attempt's fold", () => {
+    const runId = RunId.make("run-1");
+    const rows: MessagesTimelineRow[] = [
+      {
+        kind: "attempt-fold",
+        id: "fold-attempt",
+        createdAt: "",
+        runId,
+        attemptId: RunAttemptId.make("attempt-1"),
+        label: "Superseded attempt",
+        expanded: false,
+      },
+    ];
+    expect(sendingCallRowIndex(rows, { ...secondSend.entry, runId }, () => undefined)).toBe(0);
   });
 
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {

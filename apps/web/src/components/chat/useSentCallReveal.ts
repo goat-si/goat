@@ -29,7 +29,7 @@ export function findSendingCall(
 
 /**
  * The row showing the call, else the collapsed turn or segment that holds it (post-steer segments
- * fold under their own key, which `foldKeyOf` gives), else its collapsed tool group.
+ * fold under their own key, which `foldKeyOf` gives), else its superseded attempt or tool group.
  */
 export function sendingCallRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
@@ -48,7 +48,11 @@ export function sendingCallRowIndex(
       ? -1
       : rows.findIndex((row) => row.kind === "turn-fold" && row.runId === foldKey);
   if (fold >= 0 || entry.runId == null) return fold;
-  return rows.findIndex((row) => row.kind === "work-toggle" && row.runId === entry.runId);
+  // A superseded attempt folds its calls under its own row while the replacement runs.
+  return rows.findIndex(
+    (row) =>
+      (row.kind === "attempt-fold" || row.kind === "work-toggle") && row.runId === entry.runId,
+  );
 }
 
 const MAX_HISTORY_PAGES = 20;
