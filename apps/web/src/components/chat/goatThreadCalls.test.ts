@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { goatThreadCallOf } from "./goatThreadCalls";
 import { callEntry, callTimelineEntry } from "./goatThreadCalls.fixtures";
-import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
+import { deriveMessagesTimelineRows, type MessagesTimelineRow } from "./MessagesTimeline.logic";
 import { findSendingCall, sendingCallRowIndex } from "./useSentCallReveal";
 
 describe("goatThreadCallOf", () => {
@@ -288,6 +288,29 @@ describe("findSendingCall", () => {
     expect(
       sendingCallRowIndex(rows, [firstSend, between, secondSend], secondSend, () => undefined),
     ).toBe(-1);
+  });
+
+  it("finds a send folded into the live thinking row after a later tool failed", () => {
+    const runId = RunId.make("turn-1");
+    const send = { ...secondSend, entry: { ...secondSend.entry, runId } };
+    const failed = callTimelineEntry("goat_thread_read", {}, {}, "failed", "read-failed");
+    const timelineEntries = [send, { ...failed, entry: { ...failed.entry, runId } }];
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      latestRun: {
+        runId,
+        status: "running",
+        startedAt: "2026-10-27T00:00:00.000Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-10-27T00:00:00.000Z",
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    const thinking = rows.findIndex((row) => row.kind === "thinking");
+    expect(rows[thinking]).toMatchObject({ expanded: false });
+    expect(sendingCallRowIndex(rows, timelineEntries, send, () => undefined)).toBe(thinking);
   });
 
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {

@@ -65,6 +65,7 @@ export function sendingCallRowIndex(
 
 // Every row starts at a timeline entry and runs until the next row starts, so the row whose start
 // entry is the nearest one at or before the call holds it; timestamps can tie, entry order cannot.
+// A running turn whose latest tool failed folds its calls into the live thinking row, named by group.
 function toolGroupRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
   entries: ReadonlyArray<TimelineEntry>,
@@ -76,14 +77,20 @@ function toolGroupRowIndex(
   let holder = -1;
   let holderPosition = -1;
   rows.forEach((row, index) => {
-    const start = position.get(row.id.replace(/^work-(?:toggle|live):/, ""));
+    const startId =
+      row.kind === "thinking" && row.groupId !== undefined
+        ? row.groupId.replace(/^work-group:/, "")
+        : row.id.replace(/^work-(?:toggle|live):/, "");
+    const start = position.get(startId);
     if (start !== undefined && start <= callPosition && start > holderPosition) {
       holder = index;
       holderPosition = start;
     }
   });
   const row = rows[holder];
-  return row?.kind === "work-toggle" && !row.expanded ? holder : -1;
+  return (row?.kind === "work-toggle" || row?.kind === "thinking") && row.expanded === false
+    ? holder
+    : -1;
 }
 
 const MAX_HISTORY_PAGES = 20;
