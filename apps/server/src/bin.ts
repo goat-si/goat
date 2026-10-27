@@ -23,7 +23,13 @@ if (
   // Guard sockets before either dispatch path can load outbound-capable modules.
   const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
   ignoreMacosTypeOfServiceEinval();
-  if (command === "__document-text") {
+  if (command === "--version" && process.argv.length === 3) {
+    const { runVersionMain } = await import("./cli/helperMain.ts");
+    runVersionMain();
+  } else if (command === "__ssh-helper") {
+    const { runSshHelperMain } = await import("./cli/helperMain.ts");
+    await runSshHelperMain(process.argv.slice(2));
+  } else if (command === "__document-text") {
     const { extractDocumentText } = await import("./provider/documentTextWorker.ts");
     try {
       process.stdout.write(await extractDocumentText(process.argv[3]!, process.argv[4]!));
