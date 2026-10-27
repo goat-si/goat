@@ -1,3 +1,4 @@
+import { setActiveComposerDraftText } from "../../state/queued-run-edit";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -732,9 +733,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     capabilities: currentModelOption?.capabilities,
     selections: currentModelSelection.options,
   });
-  const settingsOwnerId = composerOwnerKey;
   const settingsRouteSession = {
-    ownerId: settingsOwnerId,
+    ownerId: composerOwnerKey,
     environmentId: props.environmentId,
     projectId: props.selectedThread.projectId,
     providerInstanceId: currentModelSelection.instanceId,
@@ -742,7 +742,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     providerGroups: threadProviderGroups,
     selectedModel: currentModelSelection,
     prompt: draftMessage,
-    onPromptChange: (text) => setComposerDraftText(composerDraftKey, text),
+    onPromptChange: (text) => setActiveComposerDraftText(composerOwnerKey, composerDraftKey, text),
     reportedModelSelection: props.reportedModelSelection,
     onSelectModel: (option) =>
       props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
