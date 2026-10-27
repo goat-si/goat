@@ -1,3 +1,6 @@
+import { isGoatConnectPushEnabled } from "@goat/shared/goatConnect";
+import * as ClientKeys from "./auth/ClientKeys.ts";
+import * as CliLinkApprovals from "./auth/CliLinkApprovals.ts";
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -142,7 +145,9 @@ export const layer = Api.make(
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
     yield* RelayObservability;
 
-    const apnsEnabled = yield* Config.Boolean("APNS_ENABLED").pipe(Config.withDefault(true));
+    const apnsEnabled =
+      isGoatConnectPushEnabled() &&
+      (yield* Config.Boolean("APNS_ENABLED").pipe(Config.withDefault(false)));
     const apnsCredentials = apnsEnabled
       ? {
           environment: yield* Config.schema(RelayConfiguration.ApnsEnvironment, "APNS_ENVIRONMENT"),
@@ -152,12 +157,14 @@ export const layer = Api.make(
           privateKey: yield* Config.Redacted("APNS_PRIVATE_KEY"),
         }
       : null;
-    const fcmServiceAccount = Option.getOrUndefined(
-      Option.filter(
-        yield* Config.option(Config.Redacted("FCM_SERVICE_ACCOUNT")),
-        (value) => Redacted.value(value).trim().length > 0,
-      ),
-    );
+    const fcmServiceAccount = isGoatConnectPushEnabled()
+      ? Option.getOrUndefined(
+          Option.filter(
+            yield* Config.option(Config.Redacted("FCM_SERVICE_ACCOUNT")),
+            (value) => Redacted.value(value).trim().length > 0,
+          ),
+        )
+      : undefined;
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
     const fcmDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(fcmDeliveryQueue);
@@ -165,6 +172,11 @@ export const layer = Api.make(
     const clerkSecretKey = yield* Config.Redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.String("CLERK_JWT_AUDIENCE");
+    const clerkAuthorizedParties = (yield* Config.String("CLERK_AUTHORIZED_PARTIES"))
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+    const clerkCliOAuthClientId = yield* Config.String("CLERK_CLI_OAUTH_CLIENT_ID");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -213,6 +225,8 @@ export const layer = Api.make(
         clerkSecretKey,
         clerkPublishableKey,
         clerkJwtAudience,
+        clerkAuthorizedParties,
+        clerkCliOAuthClientId,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
@@ -315,7 +329,13 @@ export const layer = Api.make(
       ),
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
-      Layer.provideMerge(RelayTokens.layer),
+      Layer.provideMerge(
+        Layer.mergeAll(
+          RelayTokens.layer,
+          ClientKeys.layer,
+          CliLinkApprovals.layer.pipe(Layer.provide(DpopProofs.layer)),
+        ),
+      ),
       Layer.provideMerge(
         RelayDb.RelayTransactions.layer.pipe(
           Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
@@ -369,16 +389,18 @@ export const layer = Api.make(
         deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
       },
       (stream) =>
-        stream.pipe(
-          Stream.withSpan("relay.apn_delivery_queue.process_batch"),
-          Stream.runForEach((message) =>
-            ApnsDeliveries.ApnsDeliveries.pipe(
-              Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-              Effect.withSpan("relay.apn_delivery_queue.process_message"),
+        !isGoatConnectPushEnabled()
+          ? Stream.runDrain(stream)
+          : stream.pipe(
+              Stream.withSpan("relay.apn_delivery_queue.process_batch"),
+              Stream.runForEach((message) =>
+                ApnsDeliveries.ApnsDeliveries.pipe(
+                  Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
+                  Effect.withSpan("relay.apn_delivery_queue.process_message"),
+                ),
+              ),
+              Effect.provide(layerRuntime),
             ),
-          ),
-          Effect.provide(layerRuntime),
-        ),
     );
 
     yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
@@ -391,11 +413,13 @@ export const layer = Api.make(
         deadLetterQueue: fcmDeliveryDeadLetterQueue.queueName as unknown as string,
       },
       (stream) =>
-        stream.pipe(
-          Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
-          Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
-          Effect.provide(layerRuntime),
-        ),
+        !isGoatConnectPushEnabled()
+          ? Stream.runDrain(stream)
+          : stream.pipe(
+              Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
+              Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
+              Effect.provide(layerRuntime),
+            ),
     );
 
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>

@@ -56,15 +56,36 @@ function signTestJwt(payload: object, typ: string, privateKey: string): string {
   return `${signingInput}.${NodeCrypto.sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
 }
 
+const makeAssurance = (now: number) => ({
+  policyVersion: 1 as const,
+  source: "clerk-session" as const,
+  userId: "user_123",
+  sessionId: "session-1",
+  firstVerifiedAtFloor: Math.max(0, now - 60),
+  secondVerifiedAtFloor: Math.max(0, now - 60),
+  checkedAt: now,
+  authGeneration: 1,
+});
+const intent = {
+  connectAuthPolicyVersion: 1 as const,
+  environmentId: "env-link-test",
+  environmentPublicKey: environmentKeyPair.publicKey.trim(),
+  origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+  notificationsEnabled: false as const,
+  liveActivitiesEnabled: false as const,
+  managedTunnelsEnabled: false,
+};
 const makeRequest = Effect.gen(function* () {
   const now = yield* DateTime.now;
   const expiresAt = DateTime.add(now, { minutes: 5 });
   const relayTokens = yield* RelayTokens.RelayTokens;
   const challenge = yield* relayTokens.issueLinkChallenge({
+    assurance: makeAssurance(Math.floor(now.epochMilliseconds / 1000)),
+    intent,
     userId: "user_123",
     request: {
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
+      notificationsEnabled: false,
+      liveActivitiesEnabled: false,
       managedTunnelsEnabled: true,
     },
     jti: "challenge-jti",
@@ -81,6 +102,7 @@ const makeRequest = Effect.gen(function* () {
     challenge,
     environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
     descriptor: {
+      connectAuthPolicyVersion: 1,
       environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
       label: "Link Test Environment",
       platform: { os: "darwin", arch: "arm64" },
@@ -99,8 +121,8 @@ const makeRequest = Effect.gen(function* () {
   return {
     request: {
       proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
+      notificationsEnabled: false,
+      liveActivitiesEnabled: false,
       managedTunnelsEnabled: false,
     } satisfies RelayEnvironmentLinkRequest,
     payload,
@@ -186,10 +208,12 @@ describe("EnvironmentLinker", () => {
       const expiresAt = DateTime.add(now, { minutes: 5 });
       const relayTokens = yield* RelayTokens.RelayTokens;
       const challenge = yield* relayTokens.issueLinkChallenge({
+        assurance: makeAssurance(Math.floor(now.epochMilliseconds / 1000)),
+        intent,
         userId: "user_123",
         request: {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
+          notificationsEnabled: false,
+          liveActivitiesEnabled: false,
           managedTunnelsEnabled: false,
         },
         jti: "publish-only-challenge-jti",
@@ -206,6 +230,7 @@ describe("EnvironmentLinker", () => {
         challenge,
         environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
         descriptor: {
+          connectAuthPolicyVersion: 1,
           environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
           label: "Link Test Environment",
           platform: { os: "darwin", arch: "arm64" },
@@ -223,8 +248,8 @@ describe("EnvironmentLinker", () => {
       } satisfies RelayEnvironmentLinkProofPayload;
       const request = {
         proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-        notificationsEnabled: true,
-        liveActivitiesEnabled: true,
+        notificationsEnabled: false,
+        liveActivitiesEnabled: false,
         managedTunnelsEnabled: false,
       } satisfies RelayEnvironmentLinkRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;

@@ -34,6 +34,25 @@ const config = RelayConfiguration.RelayConfiguration.of({
   managedEndpointNamespace: undefined,
 });
 
+const assurance = {
+  policyVersion: 1 as const,
+  source: "clerk-session" as const,
+  userId: "user_123",
+  sessionId: "session-1",
+  firstVerifiedAtFloor: 40,
+  secondVerifiedAtFloor: 40,
+  checkedAt: 100,
+  authGeneration: 1,
+};
+const intent = {
+  connectAuthPolicyVersion: 1 as const,
+  environmentId: "environment-1",
+  environmentPublicKey: "environment-key",
+  origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+  notificationsEnabled: false as const,
+  liveActivitiesEnabled: false as const,
+  managedTunnelsEnabled: true,
+};
 const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
 
 describe("RelayTokens", () => {
@@ -41,10 +60,12 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueLinkChallenge({
+        assurance,
+        intent,
         userId: "user_123",
         request: {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
+          notificationsEnabled: false,
+          liveActivitiesEnabled: false,
           managedTunnelsEnabled: true,
         },
         jti: "challenge-1",
@@ -57,8 +78,8 @@ describe("RelayTokens", () => {
           token,
           userId: "user_123",
           request: {
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled: true,
           },
           nowEpochSeconds: 150,
@@ -69,8 +90,8 @@ describe("RelayTokens", () => {
           token,
           userId: "attacker",
           request: {
-            notificationsEnabled: true,
-            liveActivitiesEnabled: true,
+            notificationsEnabled: false,
+            liveActivitiesEnabled: false,
             managedTunnelsEnabled: true,
           },
           nowEpochSeconds: 150,
@@ -83,13 +104,15 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
+        assurance,
+        clientKeyAuthorizedAt: 100,
         userId: "user_123",
         proofKeyThumbprint: "proof-key-thumbprint",
         jti: "access-token-1",
         issuedAtEpochSeconds: 100,
         expiresAtEpochSeconds: 1_900,
         clientId: "goat-mobile",
-        scopes: ["environment:connect", "environment:status", "mobile:registration"],
+        scopes: ["environment:connect", "environment:status"],
       });
 
       expect(
@@ -98,7 +121,7 @@ describe("RelayTokens", () => {
         sub: "user_123",
         cnf: { jkt: "proof-key-thumbprint" },
         client_id: "goat-mobile",
-        scope: ["environment:connect", "environment:status", "mobile:registration"],
+        scope: ["environment:connect", "environment:status"],
       });
       expect(
         yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 1_961 }),
@@ -110,6 +133,8 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
+        assurance,
+        clientKeyAuthorizedAt: 100,
         userId: "user_123",
         proofKeyThumbprint: "web-proof-key-thumbprint",
         jti: "web-access-token-1",
@@ -136,6 +161,8 @@ describe("RelayTokens", () => {
         privateKey: keyPair.privateKey,
         typ: "goat-relay-dpop-access+jwt",
         payload: {
+          assurance,
+          clientKeyAuthorizedAt: 100,
           iss: "https://relay.example.test",
           aud: "https://relay.example.test",
           sub: "user_123",
@@ -159,6 +186,8 @@ describe("RelayTokens", () => {
         privateKey: keyPair.privateKey,
         typ: "goat-relay-dpop-access+jwt",
         payload: {
+          assurance,
+          clientKeyAuthorizedAt: 100,
           iss: "https://relay.example.test",
           aud: "https://relay.example.test",
           sub: "user_123",

@@ -67,6 +67,7 @@ export const relayEnvironmentLinks = pgTable(
   {
     userId: varchar("user_id", { length: 191 }).notNull(),
     environmentId: varchar("environment_id", { length: 191 }).notNull(),
+    connectAuthPolicyVersion: integer("connect_auth_policy_version"),
     environmentLabel: text("environment_label").notNull().default("T3 Environment"),
     environmentPublicKey: text("environment_public_key").notNull(),
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
@@ -204,4 +205,18 @@ export const relayDpopProofs = pgTable(
     primaryKey({ columns: [table.thumbprint, table.jti] }),
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
+);
+
+export const relayClientKeys = pgTable(
+  "relay_client_keys",
+  {
+    userId: varchar("user_id", { length: 255 }).notNull(),
+    clientId: varchar("client_id", { length: 64 }).notNull(),
+    thumbprint: varchar("thumbprint", { length: 191 }).notNull(),
+    admittedAt: integer("admitted_at").notNull(),
+    policyVersion: integer("policy_version").notNull(),
+    authGeneration: integer("auth_generation").notNull(),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.clientId, table.thumbprint] })],
 );

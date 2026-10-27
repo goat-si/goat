@@ -75,6 +75,7 @@ export class EnvironmentLinker extends Context.Service<
   {
     readonly link: (input: {
       readonly userId: string;
+      readonly cliKeyThumbprint?: string;
       readonly request: RelayEnvironmentLinkRequest;
     }) => Effect.Effect<
       {
@@ -234,7 +235,18 @@ const make = Effect.gen(function* () {
         },
         nowEpochSeconds: nowSeconds,
       });
-      if (challenge === null) {
+      if (
+        challenge === null ||
+        verified.descriptor.connectAuthPolicyVersion !== 1 ||
+        input.request.notificationsEnabled ||
+        input.request.liveActivitiesEnabled ||
+        challenge.intent.environmentId !== verified.environmentId ||
+        challenge.intent.environmentPublicKey !== verified.environmentPublicKey ||
+        challenge.intent.origin.localHttpHost !== verified.origin.localHttpHost ||
+        challenge.intent.origin.localHttpPort !== verified.origin.localHttpPort ||
+        challenge.intent.managedTunnelsEnabled !== input.request.managedTunnelsEnabled ||
+        challenge.cliKeyThumbprint !== input.cliKeyThumbprint
+      ) {
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
           environmentId: verified.environmentId,

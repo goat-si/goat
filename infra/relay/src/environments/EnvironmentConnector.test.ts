@@ -225,6 +225,7 @@ function makeLinks(
         },
         linkedAt: "2026-05-25T00:00:00.000Z",
         environmentPublicKey: environmentKeyPair.publicKey,
+        connectAuthPolicyVersion: 1,
         ...overrides,
       }),
     findActiveManagedForEnvironment: () => Effect.succeed([]),
