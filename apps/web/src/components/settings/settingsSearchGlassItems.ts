@@ -8,6 +8,12 @@ export const GLASS_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["liquid glass transparent translucent wallpaper preset frosted"],
   },
   {
+    id: "appearance-background",
+    title: "Background",
+    to: "/settings/appearance",
+    searchTerms: ["wallpaper backdrop image custom liquid glass"],
+  },
+  {
     // Prefixed because the slider control already owns the `glass-opacity` id.
     id: "setting-glass-opacity",
     title: "Glass opacity",

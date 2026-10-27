@@ -103,6 +103,9 @@ describe("searchSettings", () => {
       title: "Style",
       to: "/settings/appearance",
     });
+    expect(
+      searchSettings("custom backdrop").find((item) => item.id === "appearance-background"),
+    ).toMatchObject({ title: "Background", to: "/settings/appearance" });
     expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
     const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");

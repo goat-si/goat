@@ -1,4 +1,5 @@
 import { DesktopWindowMaterialSync } from "../desktop/DesktopWindowMaterialSync";
+import { LiquidGlassBackdrop } from "../appearance/LiquidGlassBackdrop";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { type ServerLifecycleWelcomePayload } from "@goat/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
@@ -199,6 +200,7 @@ function RootRouteBranch() {
         <BrowserChromeThemeSync key={pathname} />
         <EnvironmentThemeSync />
         <DesktopWindowMaterialSync />
+        <LiquidGlassBackdrop />
         <CustomSnoozeDialogHost />
         <GuestShareDialogHost />
         <CommandPalette>
@@ -232,6 +234,7 @@ function RootRouteBranch() {
       <BrowserChromeThemeSync key={pathname} />
       <EnvironmentThemeSync />
       <DesktopWindowMaterialSync />
+      <LiquidGlassBackdrop />
       <ChatGptWelcomeCoordinator />
       <FirstRunGate
         enabled={primaryEnvironmentAuthenticated}

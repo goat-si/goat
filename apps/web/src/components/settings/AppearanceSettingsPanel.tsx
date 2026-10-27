@@ -1,6 +1,6 @@
 import { DesktopWindowMaterialSetting } from "./DesktopWindowMaterialSetting";
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
@@ -19,7 +19,14 @@ import {
 } from "../sidebar/brandChannel";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useTheme } from "../../hooks/useTheme";
+import {
+  clearCustomBackdrop,
+  saveCustomBackdrop,
+  useCustomBackdropPresence,
+} from "../../appearance/glassBackdropStore";
+import { useDesktopWindowMaterial } from "../../desktop/useDesktopWindowMaterial";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { ThemeLibrary } from "./ThemeSettings";
@@ -46,6 +53,97 @@ const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
   wide: "Wide",
   full: "Full",
 };
+
+const BACKDROP_ERROR_MESSAGES = {
+  "not-image": "Choose an image file.",
+  "too-large": "That image is larger than 25 MB.",
+  unreadable: "The image could not be read.",
+} as const;
+
+function BackgroundSettingsRow({ glassBackdrop }: { glassBackdrop: "built-in" | "custom" }) {
+  const updateSettings = useUpdateScopedSettings();
+  const presence = useCustomBackdropPresence();
+  const { state } = useDesktopWindowMaterial();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const nativeMaterialApplied =
+    state?.applied === "macos-glass" || state?.applied === "windows-mica";
+  const description =
+    error ??
+    (nativeMaterialApplied
+      ? "Your desktop shows through the window. This background is used when System glass is off."
+      : glassBackdrop === "custom" && presence === "missing"
+        ? "No image on this device. Showing the built-in background."
+        : "Shown behind the glass panels.");
+
+  return (
+    <SettingsRow
+      {...searchableSetting("appearance-background")}
+      description={description}
+      control={
+        <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+          <Select
+            value={glassBackdrop}
+            onValueChange={(value) => {
+              if (value === "built-in" || value === "custom") {
+                setError(null);
+                updateSettings({ glassBackdrop: value });
+              }
+            }}
+          >
+            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Background">
+              <SelectValue>{glassBackdrop === "custom" ? "Custom image" : "Built-in"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              <SelectItem value="built-in">Built-in</SelectItem>
+              <SelectItem value="custom">Custom image</SelectItem>
+            </SelectPopup>
+          </Select>
+          <input
+            ref={fileInputRef}
+            aria-label="Background image"
+            className="sr-only"
+            type="file"
+            accept="image/*"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (!file) return;
+              void saveCustomBackdrop(file).then(
+                (result) => {
+                  if (result.ok) {
+                    setError(null);
+                    updateSettings({ glassBackdrop: "custom" });
+                  } else {
+                    setError(BACKDROP_ERROR_MESSAGES[result.error]);
+                  }
+                },
+                () => setError(BACKDROP_ERROR_MESSAGES.unreadable),
+              );
+            }}
+          />
+          <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+            Choose image…
+          </Button>
+          {presence === "present" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void clearCustomBackdrop().then(() => {
+                  setError(null);
+                  updateSettings({ glassBackdrop: "built-in" });
+                });
+              }}
+            >
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
 
 export function AppearanceSettingsPanel() {
   const {
@@ -143,6 +241,10 @@ export function AppearanceSettingsPanel() {
             </Select>
           }
         />
+
+        {settings.appearancePreset === "liquid-glass" ? (
+          <BackgroundSettingsRow glassBackdrop={settings.glassBackdrop} />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
