@@ -82,7 +82,7 @@ const muted = (alpha: number) =>
 const MENU_OVER_CARD = [
   "var(--background)",
   "var(--card)",
-  "color-mix(in srgb, var(--popover) 18%, color-mix(in srgb, var(--popover) var(--glass-opacity), transparent))",
+  "color-mix(in srgb, var(--popover) 18%, color-mix(in srgb, var(--popover) var(--glass-surface-opacity), transparent))",
 ];
 
 // Backgrounds list every layer from the canvas up, so translucent fills such as
