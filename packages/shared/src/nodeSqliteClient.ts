@@ -600,10 +600,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   writer: NodeSqlite.DatabaseSync,
 ) {
   const warn = (reason: string) =>
-    Effect.logWarning(
-      "SQLite checkpoint worker unavailable; writer admission paused during recovery",
-      { reason },
-    );
+    Effect.logWarning("SQLite checkpoint worker unavailable; recovery pending", { reason });
   if (typeof writer.isTransaction !== "boolean" || typeof writer.setAuthorizer !== "function") {
     return yield* failed(
       new Error("Node SQLite lacks checkpoint capabilities"),
@@ -621,6 +618,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       "open",
     );
   }
+  const journalMode = writer.prepare("PRAGMA journal_mode");
   const frames = writer.prepare("PRAGMA wal_checkpoint(NOOP)");
   const sizeLimit = writer.prepare("PRAGMA journal_size_limit");
   const started = yield* Effect.try({
@@ -662,11 +660,14 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   let log = 0;
   let checkpointed = 0;
   let unknown = false;
+  let walEnabled: boolean | undefined;
   let truncate: { id: number; acknowledged: boolean } | undefined;
   type Waiter = { resume: () => void; cancelled: boolean };
   const waiters: Array<Waiter> = [];
   let elected: Waiter | undefined;
+  // Only confirmed pre-WAL bootstrap bypasses checkpoint admission.
   const gated = () =>
+    walEnabled !== false &&
     !writer.isTransaction &&
     (stopped ||
       recovering ||
@@ -714,6 +715,10 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   };
   const observe = () => {
     try {
+      if (walEnabled !== true) {
+        walEnabled = undefined;
+        walEnabled = String(journalMode.get()?.journal_mode).toLowerCase() === "wal";
+      }
       const state = frames.get();
       const nextLog = readSafeSqliteInteger(state?.log);
       const nextCheckpointed = readSafeSqliteInteger(state?.checkpointed);
@@ -756,7 +761,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
     }
   };
   const check = () => {
-    if (stopped || writer.isTransaction) return;
+    if (writer.isTransaction) return;
     generation++;
     observe();
     request();
@@ -806,7 +811,10 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
         checkpointed = message.checkpointed;
         blocked = message.blocked;
         unknown = false;
-        if (ready) recovering = false;
+        if (ready) {
+          walEnabled = true;
+          recovering = false;
+        }
         retryMs = 250;
       }
       // Even a stale snapshot must retire its request so a newer check can run.

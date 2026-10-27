@@ -83,6 +83,7 @@ const withCheckpointClient = <A, E>(
     sql: SqlClient.SqlClient,
     filename: string,
   ) => Effect.Effect<A, E, SqlClient.SqlClient | FileSystem.FileSystem>,
+  options: { readonly enableWal?: boolean } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -91,7 +92,7 @@ const withCheckpointClient = <A, E>(
     const filename = path.join(directory, "state.sqlite");
     return yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`PRAGMA journal_mode = WAL`;
+      if (options.enableWal !== false) yield* sql`PRAGMA journal_mode = WAL`;
       return yield* use(sql, filename);
     }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
@@ -641,5 +642,60 @@ it.effect(
           ),
         );
       }),
+    ),
+);
+
+it.effect(
+  "finishes WAL bootstrap after the first checkpoint worker fails before WAL is enabled",
+  () =>
+    withCheckpointClient(
+      (sql) =>
+        Effect.gen(function* () {
+          assert.notEqual((yield* sql`PRAGMA journal_mode`)[0]?.journal_mode, "wal");
+          const failed = startedWorkers.at(-1)!;
+          yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
+          if (failed.threadId !== -1) {
+            yield* Effect.promise(
+              () => new Promise<void>((resolve) => failed.once("exit", () => resolve())),
+            );
+          }
+          assert.equal(failed.threadId, -1);
+          const bootstrapped = yield* Deferred.make<void>();
+          const setup = yield* Effect.forkChild(
+            Effect.gen(function* () {
+              yield* sql`PRAGMA busy_timeout = 5000`;
+              yield* sql`PRAGMA foreign_keys = ON`;
+              yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
+              yield* sql`PRAGMA journal_mode = WAL`;
+              yield* sql`PRAGMA synchronous = NORMAL`;
+              yield* sql`PRAGMA checkpoint_fullfsync = ON`;
+              yield* sql`PRAGMA journal_size_limit = 33554432`;
+              yield* Deferred.succeed(bootstrapped, undefined);
+            }),
+            { startImmediately: true },
+          );
+          yield* TestClock.adjust("0 millis");
+          assert.isTrue(yield* Deferred.isDone(bootstrapped));
+          yield* Fiber.join(setup);
+          assert.equal((yield* sql`PRAGMA journal_mode`)[0]?.journal_mode, "wal");
+          const admitted = yield* Deferred.make<void>();
+          const mutation = yield* Effect.forkChild(
+            sql`CREATE TABLE bootstrap_probe(value INTEGER)`.pipe(
+              Effect.andThen(Deferred.succeed(admitted, undefined)),
+            ),
+            { startImmediately: true },
+          );
+          yield* TestClock.adjust("0 millis");
+          assert.isFalse(yield* Deferred.isDone(admitted));
+          const created = yield* Effect.forkChild(nextStartedWorker, { startImmediately: true });
+          yield* TestClock.adjust("250 millis");
+          const replacement = yield* Fiber.join(created);
+          yield* checkpointWorkerReply(replacement);
+          yield* Fiber.join(mutation);
+          yield* sql`INSERT INTO bootstrap_probe VALUES (1)`;
+          assert.deepEqual(yield* sql`SELECT value FROM bootstrap_probe`, [{ value: 1 }]);
+          assert.equal((yield* sql`PRAGMA wal_autocheckpoint`)[0]?.wal_autocheckpoint, 0);
+        }),
+      { enableWal: false },
     ),
 );
