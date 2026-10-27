@@ -89,16 +89,29 @@ function longSpans(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<str
  * A text cut to a limit can end partway through a long value, and that start no longer matches
  * it. The last token's tail goes when it is the start of one.
  */
-function cutTailSpan(text: string, byPrefix: ReadonlyMap<string, ReadonlyArray<string>>) {
-  const tail = /\S+$/u.exec(text);
-  if (tail === null) return [];
-  const token = tail[0];
-  for (let at = 0; at + MIN_SECRET_LENGTH <= token.length; at++) {
-    const rest = token.slice(at);
-    const cut = byPrefix
-      .get(rest.slice(0, MIN_SECRET_LENGTH))
-      ?.some((form) => form.length > rest.length && form.startsWith(rest));
-    if (cut === true) return [[tail.index + at, text.length] as const];
+function cutTailSpan(text: string, prepared: Prepared): ReadonlyArray<Span> {
+  // Backward from the end, linear: a /\S+$/ search backtracks over a long run before a space.
+  let start = text.length;
+  while (start > 0 && !/\s/u.test(text[start - 1] ?? "")) start--;
+  const { sortedLong, byPrefix, maxLong } = prepared;
+  // A cut value is shorter than the value, so only the last few thousand characters can hold one.
+  for (
+    let at = Math.max(start, text.length - maxLong + 1);
+    at + MIN_SECRET_LENGTH <= text.length;
+    at++
+  ) {
+    if (!byPrefix.has(text.slice(at, at + MIN_SECRET_LENGTH))) continue;
+    const rest = text.slice(at);
+    // The first value at or after rest in sorted order is the one that could start with it.
+    let low = 0;
+    let high = sortedLong.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if ((sortedLong[middle] ?? "") < rest) low = middle + 1;
+      else high = middle;
+    }
+    const next = sortedLong[low] === rest ? sortedLong[low + 1] : sortedLong[low];
+    if (next !== undefined && next.startsWith(rest)) return [[at, text.length]];
   }
   return [];
 }
@@ -122,6 +135,54 @@ function replaceSpans(text: string, spans: ReadonlyArray<Span>) {
   return result + text.slice(copied, from) + REDACTED + text.slice(to);
 }
 
+/** What a cookie list needs for matching, built once per list and kept while the list lives. */
+interface Prepared {
+  readonly byPrefix: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly sortedLong: ReadonlyArray<string>;
+  readonly maxLong: number;
+  readonly pairForms: ReadonlyArray<string>;
+  readonly tokenForms: ReadonlyArray<string>;
+}
+
+const preparedLists = new WeakMap<object, Prepared>();
+
+function prepare(cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>) {
+  const known = preparedLists.get(cookies);
+  if (known !== undefined) return known;
+  const valued = cookies.filter((cookie) => cookie.value !== "");
+  // As sent, as a URL encodes it, and as JSON escapes it inside a string.
+  const formsOf = (value: string) => [
+    value,
+    encodeURIComponent(value),
+    JSON.stringify(value).slice(1, -1),
+  ];
+  const long = [
+    ...new Set(
+      valued
+        .filter(({ value }) => value.length >= MIN_SECRET_LENGTH)
+        .flatMap(({ value }) => formsOf(value)),
+    ),
+  ];
+  const short = valued.filter(({ value }) => value.length < MIN_SECRET_LENGTH);
+  const prepared: Prepared = {
+    byPrefix: indexByPrefix(long),
+    sortedLong: [...long].sort(),
+    maxLong: Math.max(0, ...long.map((form) => form.length)),
+    pairForms: longestFirst(
+      short
+        .filter(({ name }) => name !== "")
+        .flatMap(({ name, value }) => formsOf(value).map((form) => `${name}=${form}`)),
+    ),
+    tokenForms: longestFirst(
+      short
+        .filter(({ value }) => value.length >= MIN_TOKEN_LENGTH)
+        .flatMap(({ value }) => formsOf(value)),
+    ),
+  };
+  preparedLists.set(cookies, prepared);
+  return prepared;
+}
+
 /**
  * Each cookie is redacted wherever it appears as name=value, which is how an echoed Cookie or
  * Set-Cookie header looks. Its value is redacted anywhere once it has six characters, and as a
@@ -132,44 +193,25 @@ export const redactCookieValues = (
   text: string,
   cookies: ReadonlyArray<{ readonly name: string; readonly value: string }>,
 ) => {
-  const valued = cookies.filter((cookie) => cookie.value !== "");
-  if (valued.length === 0) return text;
-  // As sent, as a URL encodes it, and as JSON escapes it inside a string.
-  const formsOf = (value: string) => [
-    value,
-    encodeURIComponent(value),
-    JSON.stringify(value).slice(1, -1),
-  ];
-  const byPrefix = indexByPrefix(
-    valued
-      .filter(({ value }) => value.length >= MIN_SECRET_LENGTH)
-      .flatMap(({ value }) => formsOf(value)),
-  );
-  const short = valued.filter(({ value }) => value.length < MIN_SECRET_LENGTH);
+  const prepared = prepare(cookies);
+  if (prepared.sortedLong.length + prepared.pairForms.length + prepared.tokenForms.length === 0)
+    return text;
   const pairs = matchInBatches(
     text,
-    longestFirst(
-      short
-        .filter(({ name }) => name !== "")
-        .flatMap(({ name, value }) => formsOf(value).map((form) => `${name}=${form}`)),
-    ),
+    prepared.pairForms,
     (alternation) => `(?<![\\w-])(?:${alternation})(?![\\w%-])`,
     (match): Span => [match.index + match[0].indexOf("=") + 1, match.index + match[0].length],
   );
   // A short value only as a whole token, so "ab12" never eats into "ab123" or a word.
   const tokens = matchInBatches(
     text,
-    longestFirst(
-      short
-        .filter(({ value }) => value.length >= MIN_TOKEN_LENGTH)
-        .flatMap(({ value }) => formsOf(value)),
-    ),
+    prepared.tokenForms,
     (alternation) => `(?<![A-Za-z0-9])(?:${alternation})(?![A-Za-z0-9])`,
     (match): Span => [match.index, match.index + match[0].length],
   );
   return replaceSpans(text, [
-    ...longSpans(text, byPrefix),
-    ...cutTailSpan(text, byPrefix),
+    ...longSpans(text, prepared.byPrefix),
+    ...cutTailSpan(text, prepared),
     ...pairs,
     ...tokens,
   ]);

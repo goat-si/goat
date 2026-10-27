@@ -84,5 +84,14 @@ describe("redactCookieValues", () => {
     ];
     // Bounded by the test runner's own timeout: the scan must not recheck every offset.
     expect(redactCookieValues("a".repeat(24_000), cookies)).not.toContain("aaaaaaaaaa");
+    // A long last token is checked for a cut value only where one could start.
+    expect(redactCookieValues(`x ${"a".repeat(24_000)}b`, cookies)).toContain("b");
+  });
+  it("finds the last token of a long text in linear time", () => {
+    const value = "a".repeat(3_980);
+    // Bounded by the test runner's own timeout: a backtracking tail scan takes many seconds here.
+    expect(redactCookieValues(`${value.repeat(160)} `, [{ name: "sid", value }])).not.toContain(
+      "aaaaaaaaaa",
+    );
   });
 });
