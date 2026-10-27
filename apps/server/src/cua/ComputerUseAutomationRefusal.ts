@@ -23,7 +23,7 @@ const APPLE_EVENT_TOOLS: ReadonlySet<string> = new Set(["invoke_menu", "set_valu
 
 /**
  * Whether this call may need Apple Events for an app the proxy cannot name yet. A call by element
- * token alone names no pid, so it is listed when nothing has been.
+ * token alone names no pid, and other answers can drop the app's entry, so it always lists.
  */
 export const sendsAppleEvents = (
   name: unknown,
@@ -32,7 +32,7 @@ export const sendsAppleEvents = (
 ): boolean => {
   if (typeof name !== "string" || !APPLE_EVENT_TOOLS.has(name)) return false;
   const pid = targetPid(isRecord(args) ? args : undefined);
-  return pid === undefined ? listed.size === 0 : !listed.has(pid);
+  return pid === undefined || !listed.has(pid);
 };
 
 const CODES: ReadonlyMap<string, ComputerUseRefusalDetail> = new Map([

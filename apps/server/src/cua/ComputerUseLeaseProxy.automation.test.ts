@@ -121,8 +121,18 @@ describe("lease proxy macOS Automation refusals", () => {
     () =>
       Effect.gen(function* () {
         const h = yield* harness({ automationHolder: "app" });
-        // A whole-desktop control never lists apps for its scope.
-        yield* h.push(active());
+        yield* listApps(h);
+        // A window read names Finder only by name, which drops its listed bundle id.
+        yield* h.send(call(5, "get_window_state", { pid: 43, window_id: 9 }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 5,
+            result: { structuredContent: { pid: 43, app_name: "Finder", window_id: 9 } },
+          }),
+        );
+        yield* h.nextToProvider;
         yield* h.send(tokenRename);
         const lookup = yield* h.nextToDriver;
         assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
