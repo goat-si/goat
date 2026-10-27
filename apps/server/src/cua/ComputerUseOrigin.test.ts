@@ -251,6 +251,7 @@ describe("gateUnattendedSteering", () => {
       bot: {},
       mine: {},
       peer: {},
+      busy: {},
       "channel-worker:9c": {},
       remote: {
         launchedBy: {
@@ -282,8 +283,21 @@ describe("gateUnattendedSteering", () => {
       "channel-worker:9c": [run("w1", "wm", 0)],
       remoteRun: [run("r1", "rm", 0)],
       remoteAsking: [run("a1", "am", 0)],
+      // A schedule runs the busy thread now; a person's follow-up waits behind it.
+      busy: [
+        { ...run("cron", "bm1", 0), status: "running" },
+        { ...run("follow-up", "bm2", 1), status: "queued" },
+      ],
     },
-    messages: { m1: typed(1), pm: typed(0), wm: typed(0), rm: typed(0), am: typed(0) },
+    messages: {
+      m1: typed(1),
+      pm: typed(0),
+      wm: typed(0),
+      rm: typed(0),
+      am: typed(0),
+      bm1: { createdAt: at(0), scheduledTaskId: "task-1" },
+      bm2: typed(1),
+    },
   };
   const steer = (thread: string, runId: string) =>
     ({ type: "steer_active", targetRunId: RunId.make(runId) }) as const;
@@ -318,6 +332,8 @@ describe("gateUnattendedSteering", () => {
       assert.deepEqual(yield* gate("mine", "typed", { scheduledTaskId: "task-1" }), queued);
       // Full access opens the screen to a remote launch, not a person's running turn.
       assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "remote" }), queued);
+      // The sender is the run it sends from, not the person's follow-up queued behind it.
+      assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "busy" }), queued);
     }),
   );
 

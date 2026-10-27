@@ -17,46 +17,54 @@ import {
 // Messages, promotions and answers that would join a running turn are weighed against how much
 // of the screen that turn may use; less reach waits as the next turn (ComputerUseSteering).
 
-it.effect("a promotion cannot steer an unattended message into a person's running turn", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { cwd, events, started, steered, layer } = yield* harness("promote-unattended", {
-        supportsActiveSteering: true,
-        computerUse: true,
-      });
-      yield* Effect.gen(function* () {
-        const threads = yield* ThreadManagementService.ThreadManagementService;
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        yield* startTarget(cwd, started);
-        yield* reportRunning(events, started[0]!);
-        yield* worker.drain();
-        const sent = yield* send(
-          "steer_when_ready",
-          "use the screen",
-          ThreadId.make("channel-worker:promote"),
-        );
-        yield* worker.drain();
-        assert.equal(sent.delivery, "queued");
+it.effect.each([
+  // Choosing to promote is the person's own decision, whoever wrote the queued message.
+  { by: "a person's client", path: "dispatch", promoted: true },
+  // An agent's promotion is held to the same reach as a steer; the server's own automatic
+  // promotion is gated too (AgentThreadSteering: an unattended message queued behind a slow start).
+  { by: "an agent", path: "promoteQueuedToSteer", promoted: false },
+] as const)(
+  "a promotion by $by of an unattended message into a person's running turn",
+  ({ path, promoted }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { cwd, events, started, steered, layer } = yield* harness("promote-" + path, {
+          supportsActiveSteering: true,
+          computerUse: true,
+        });
+        yield* Effect.gen(function* () {
+          const threads = yield* ThreadManagementService.ThreadManagementService;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          yield* startTarget(cwd, started);
+          yield* reportRunning(events, started[0]!);
+          yield* worker.drain();
+          const sent = yield* send(
+            "steer_when_ready",
+            "use the screen",
+            ThreadId.make("channel-worker:promote"),
+          );
+          yield* worker.drain();
+          assert.equal(sent.delivery, "queued");
 
-        // The steer the send gate refused is refused again when asked for by promotion.
-        const promoted = yield* threads
-          .dispatch({
+          const result = yield* threads[path]({
             type: "queued-message.promote-to-steer",
             commandId: CommandId.make("promote-unattended"),
             threadId,
             queuedRunId: sent.run.id,
             targetRunId: started[0]!.runId,
-          })
-          .pipe(Effect.result);
-        yield* worker.drain();
-        assert.equal(promoted._tag, "Failure");
-        assert.deepEqual(steered, []);
-        const projection = yield* orchestrator.getThreadProjection(threadId);
-        assert.equal(projection.runs.find((run) => run.id === sent.run.id)?.status, "queued");
-      }).pipe(Effect.provide(layer));
-    }),
-  ),
+          }).pipe(Effect.result);
+          yield* worker.drain();
+          assert.equal(result._tag, promoted ? "Success" : "Failure");
+          assert.equal(steered.length, promoted ? 1 : 0);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(
+            projection.runs.find((run) => run.id === sent.run.id)?.status,
+            promoted ? "cancelled" : "queued",
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
 
 const agent = (thread: string, environmentId: string | null) =>

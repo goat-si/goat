@@ -442,11 +442,13 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   never gains the foreground. This host cannot read the
   turn that launched it, so it stays unattended outside full access. A user's own `cua-driver`
   stays blocked for it whatever admission decides, since that driver would not hear Stop. A
-  message, a promotion of a queued message, or an agent's answer to a question from an origin
-  that reaches less of the screen than the running turn waits as the next turn instead of joining
+  message, an agent's or the server's promotion of a queued message, or an agent's answer to a
+  question from an origin that reaches less of the screen than the running turn waits as the next turn instead of joining
   it (`ComputerUseSteering.ts`): a person's turn outranks a remote full access turn, which
   outranks unattended work, and a turn whose origin, or any sender or launcher behind it, cannot be read counts as a person's. A
-  promotion weighs the queued turn's own origin; an answer names the one turn it may join, which
+  promotion weighs the queued turn's own origin, and a person's own promotion from a client is
+  their decision and is not weighed (`ThreadManagementService.promoteQueuedToSteer` is the agent
+  path); an answer names the one turn it may join, which
   the orchestrator checks again under its lock. Another computer's agent's answer counts as remote
   work, and its queued turn keeps that origin through its runtime request's responder.
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels

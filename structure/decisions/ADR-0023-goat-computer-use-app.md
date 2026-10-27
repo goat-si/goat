@@ -25,9 +25,9 @@
   use): every directed full access run takes the foreground without asking: one a person's
   client started, one an agent started from a directed run, a launch or an answer from another
   environment, and an approval's wake. Other server wakes and unattended work still ask. A
-  message, a promotion of a queued message, or an agent's answer to a question that reaches less
-  of the screen than the running turn waits as the next turn. D16 below states the amended
-  decision.
+  message, an agent's or the server's promotion of a queued message, or an agent's answer to a
+  question that reaches less of the screen than the running turn waits as the next turn; a
+  person's own promotion is their decision. D16 below states the amended decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the

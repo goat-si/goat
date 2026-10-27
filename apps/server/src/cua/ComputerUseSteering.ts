@@ -27,6 +27,11 @@ import type * as CuaDriver from "./CuaDriver.ts";
 const unattendedRemote: ComputerUseOrigin = { _tag: "unattended", reason: "launched_remotely" };
 const unattendedSent: ComputerUseOrigin = { _tag: "unattended", reason: "sent_by_unattended" };
 
+type PromoteCommand = Extract<
+  OrchestrationV2Command,
+  { readonly type: "queued-message.promote-to-steer" }
+>;
+
 type DispatchMode = Extract<
   OrchestrationV2Command,
   { readonly type: "message.dispatch" }
@@ -86,33 +91,40 @@ export const makeComputerUseSteering = (deps: {
     : deps.cuaDriver.value.enabled;
 
   /**
-   * Holds a promotion or an agent's answer to the same rule as a steer; others pass unchanged. A
-   * promotion weighs its queued turn's own origin, which follows the sender as it was when it
-   * wrote. An answer names the one running turn it may join, which the orchestrator checks again
-   * under its lock, so a turn that starts after this check never takes it.
+   * Holds an agent's or the server's promotion to the same rule as a steer, weighing the queued
+   * turn's own origin (the sender as it was when it wrote). A person's own promotion is their
+   * decision and does not come here.
+   */
+  const admitPromotion = Effect.fn("ComputerUseSteering.admitPromotion")(function* (
+    command: PromoteCommand,
+  ) {
+    if (!(yield* enabled)) return command;
+    const message = yield* computerUseOrigin(reads, {
+      threadId: command.threadId,
+      runId: command.queuedRunId,
+    });
+    if (
+      yield* steeringAllowed(reads, {
+        threadId: command.threadId,
+        message,
+        targetRunId: command.targetRunId,
+      })
+    )
+      return command;
+    return yield* refuse(
+      command,
+      "This message comes from work with less of the screen than the running turn, so it stays queued and runs as its own turn.",
+    );
+  });
+
+  /**
+   * Holds an agent's answer to the same rule as a steer; other commands pass unchanged. The
+   * answer names the one running turn it may join, which the orchestrator checks again under its
+   * lock, so a turn that starts after this check never takes it.
    */
   const admit = Effect.fn("ComputerUseSteering.admit")(function* (
     command: OrchestrationV2ServerCommand,
   ) {
-    if (command.type === "queued-message.promote-to-steer") {
-      if (!(yield* enabled)) return command;
-      const message = yield* computerUseOrigin(reads, {
-        threadId: command.threadId,
-        runId: command.queuedRunId,
-      });
-      if (
-        yield* steeringAllowed(reads, {
-          threadId: command.threadId,
-          message,
-          targetRunId: command.targetRunId,
-        })
-      )
-        return command;
-      return yield* refuse(
-        command,
-        "This message comes from work with less of the screen than the running turn, so it stays queued and runs as its own turn.",
-      );
-    }
     if (command.type !== "runtime-request.respond" || command.respondedBy?.type !== "agent")
       return command;
     const responder = command.respondedBy;
@@ -142,5 +154,5 @@ export const makeComputerUseSteering = (deps: {
       : command;
   });
 
-  return { steeringMode, admit };
+  return { steeringMode, admit, admitPromotion };
 };

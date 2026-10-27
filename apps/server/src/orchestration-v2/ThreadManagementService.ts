@@ -431,6 +431,13 @@ export interface ThreadManagementServiceShape {
     Orchestrator.OrchestratorV2DispatchResult,
     Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
   >;
+  /** An agent's promotion: refused, and the message stays queued, when it reaches less. */
+  readonly promoteQueuedToSteer: (
+    command: Extract<OrchestrationV2Command, { readonly type: "queued-message.promote-to-steer" }>,
+  ) => Effect.Effect<
+    Orchestrator.OrchestratorV2DispatchResult,
+    Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
+  >;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -1939,6 +1946,8 @@ const make = Effect.gen(function* () {
       );
     }),
     dispatch,
+    promoteQueuedToSteer: (command) =>
+      steering.admitPromotion(command).pipe(Effect.flatMap(dispatch)),
     getThreadHistoryPage: Effect.fn("ThreadManagementService.getThreadHistoryPage")(
       function (threadId, cursor, throughEntryId, conversationOnly) {
         return ensureProjectionTranscript(threadId).pipe(

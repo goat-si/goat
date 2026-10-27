@@ -1,12 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import {
-  CommandId,
-  MessageId,
-  type OrchestrationV2ServerCommand,
-  RunId,
-  RuntimeRequestId,
-  ThreadId,
-} from "@goat/contracts";
+import { CommandId, MessageId, RunId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -90,8 +83,8 @@ const steering = (
   });
 };
 
-const promote = (queuedRunId: string, targetRunId: string): OrchestrationV2ServerCommand => ({
-  type: "queued-message.promote-to-steer",
+const promote = (queuedRunId: string, targetRunId: string) => ({
+  type: "queued-message.promote-to-steer" as const,
   commandId: CommandId.make("promote"),
   threadId: ThreadId.make("mine"),
   queuedRunId: RunId.make(queuedRunId),
@@ -125,7 +118,7 @@ it.effect(
           "p-typed": { createdAt: 5 },
         },
       )
-        .admit(promote("queued", "typed"))
+        .admitPromotion(promote("queued", "typed"))
         .pipe(Effect.result);
       assert.equal(admitted._tag, "Failure");
     }),
@@ -145,7 +138,7 @@ it.effect("a promotion into a turn whose origin cannot be read stays queued", ()
       },
       { "m-cron": { createdAt: 3, scheduledTaskId: "task-1" } },
     )
-      .admit(promote("queued", "lost"))
+      .admitPromotion(promote("queued", "lost"))
       .pipe(Effect.result);
     assert.equal(admitted._tag, "Failure");
   }),
@@ -206,7 +199,7 @@ it.effect("a promotion into a turn whose sender cannot be read stays queued", ()
         "m-cron": { createdAt: 3, scheduledTaskId: "task-1" },
       },
     )
-      .admit(promote("queued", "sent"))
+      .admitPromotion(promote("queued", "sent"))
       .pipe(Effect.result);
     assert.equal(admitted._tag, "Failure");
   }),
