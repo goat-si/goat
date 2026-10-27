@@ -447,6 +447,10 @@
       "types": "./src/goatHome.ts",
       "import": "./src/goatHome.ts"
     },
+    "./desktopAppServer": {
+      "types": "./src/desktopAppServer.ts",
+      "import": "./src/desktopAppServer.ts"
+    },
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"

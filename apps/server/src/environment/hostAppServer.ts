@@ -1,3 +1,4 @@
+import { desktopAppServerStateDirs } from "@goat/shared/desktopAppServer";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,10 +25,10 @@ const processRuns = (pid: number) => {
 };
 
 /**
- * Whether this is the server GOAT runs for SSH clients (base directory `~/.goat`) while the
- * packaged GOAT app's own server (`~/.goat/desktop`, see `resolveDesktopBaseDir`) is live on the
- * same host. SSH clients prefer the app's server, so the descriptor tells an attached client to
- * move once this server has no work left. Any read failure answers false: clients then stay put.
+ * Whether this is the server GOAT runs for SSH clients (base directory `~/.goat`) while a
+ * desktop app server (`desktopAppServerStateDirs`) is live on the same host. SSH clients prefer
+ * the app's server, so the descriptor tells an attached client to move once this server has no
+ * work left. Any read failure skips that directory: clients stay put only when none is live.
  */
 export const makeAppServerLive = Effect.fn("ServerEnvironment.makeAppServerLive")(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -36,18 +37,20 @@ export const makeAppServerLive = Effect.fn("ServerEnvironment.makeAppServerLive"
   const home = yield* HostProcess.HomeDirectory;
   const platform = yield* HostProcess.Platform;
   const sshHome = path.join(home, ".goat");
-  const runtimeFile = path.join(sshHome, "desktop", "userdata", "server-runtime.json");
   // SSH clients never probe Windows hosts for the app's server.
-  const applies = platform !== "win32" && path.resolve(config.baseDir) === path.resolve(sshHome);
-  return applies
-    ? fs.readFileString(runtimeFile).pipe(
-        Effect.map((text) =>
-          Option.match(decodeRuntimePid(text.trim()), {
-            onNone: () => false,
-            onSome: (record) => processRuns(record.pid),
-          }),
-        ),
-        Effect.orElseSucceed(() => false),
-      )
-    : Effect.succeed(false);
+  if (platform === "win32" || path.resolve(config.baseDir) !== path.resolve(sshHome)) {
+    return Effect.succeed(false);
+  }
+  // Read when the descriptor is built, not when this effect is constructed.
+  return Effect.gen(function* () {
+    for (const dir of desktopAppServerStateDirs) {
+      const text = yield* fs
+        .readFileString(path.join(home, ...dir.split("/"), "server-runtime.json"))
+        .pipe(Effect.option);
+      if (Option.isNone(text)) continue;
+      const record = decodeRuntimePid(text.value.trim());
+      if (Option.isSome(record) && processRuns(record.value.pid)) return true;
+    }
+    return false;
+  });
 });
