@@ -101,6 +101,7 @@ const fixture = Effect.fnUntraced(function* (
   const desktopCaptures = yield* Ref.make(options.desktopCaptures === true);
   const safety = yield* PubSub.unbounded<DesktopCuaReadinessReport>();
   const state = yield* Ref.make<ComputerUseLeases.ComputerUseControlState>(active);
+  const record = yield* Ref.make(control);
   const signals = yield* PubSub.unbounded<void>();
   const requests = yield* Queue.unbounded<DesktopCuaFrames["targets"]>();
   const fromDesktop = yield* PubSub.unbounded<DesktopCuaFrame>();
@@ -147,12 +148,13 @@ const fixture = Effect.fnUntraced(function* (
     // A held read returns the state it saw before it was held, like a read awaiting the database.
     sessions: Effect.gen(function* () {
       const current = yield* Ref.get(state);
+      const recorded = yield* Ref.get(record);
       const held = yield* Ref.getAndSet(hold, Option.none());
       if (Option.isSome(held)) {
         yield* Deferred.succeed(held.value.reading, undefined);
         yield* Deferred.await(held.value.release);
       }
-      return [{ control, state: current }];
+      return [{ control: recorded, state: current }];
     }),
     subscribe: PubSub.subscribe(signals),
     changed: PubSub.publish(signals, undefined).pipe(Effect.asVoid),
@@ -230,6 +232,9 @@ const fixture = Effect.fnUntraced(function* (
       ),
     set: (next: ComputerUseLeases.ComputerUseControlState) =>
       Ref.set(state, next).pipe(Effect.andThen(leases.changed)),
+    /** The control's record changes, as a proxy's cursor report changes it. */
+    record: (next: ComputerUseLeases.ComputerUseControl) =>
+      Ref.set(record, next).pipe(Effect.andThen(leases.changed)),
     /** A change nothing signals, such as a control reaching its expiry. */
     quietly: (next: ComputerUseLeases.ComputerUseControlState) => Ref.set(state, next),
     failNextWrite: Ref.set(failNext, true),
@@ -425,6 +430,58 @@ describe("DesktopFrames", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("pairs each frame with when it arrived and the agent's cursor as it was then", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const next = yield* watch(f.service);
+      yield* f.requested;
+      const report = (sequence: number, fx: number) =>
+        ({
+          identity: {
+            environmentId: "env",
+            runId: "run",
+            turnId: "turn",
+            targetId: "target",
+            generation: 1,
+            sequence,
+          },
+          cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "moving" },
+          phase: "moving",
+        }) as const;
+      const pointAt = (sequence: number, fx: number) => ({
+        ...control,
+        cursor: { windowId: 3, point: { fx, fy: 0.5 }, phase: "acting" } as const,
+        cursorReport: report(sequence, fx),
+      });
+      yield* TestClock.adjust("1 second");
+      yield* f.record(pointAt(1, 0.25));
+      yield* f.send(frame(yield* f.seq));
+      assert.deepInclude(yield* next, {
+        type: "frame",
+        capturedAt: 1_000,
+        cursor: { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" },
+        cursorState: { identity: report(1, 0.25).identity, phase: "moving" },
+      });
+      // The cursor moves on after this frame: only the next frame carries it.
+      yield* TestClock.adjust("500 millis");
+      yield* f.record(pointAt(2, 0.75));
+      yield* f.send(frame(yield* f.seq, "TkVX"));
+      const later = yield* next;
+      assert.deepInclude(later, { type: "frame", capturedAt: 1_500, data: "TkVX" });
+      assert.deepInclude(later.type === "frame" ? later.cursor : undefined, {
+        point: { fx: 0.75, fy: 0.5 },
+      });
+      // No cursor on the window: the frame says so by carrying none.
+      yield* TestClock.adjust("500 millis");
+      yield* f.record(control);
+      yield* f.send(frame(yield* f.seq, "R09ORQ=="));
+      const bare = yield* next;
+      assert.deepInclude(bare, { type: "frame", capturedAt: 2_000 });
+      assert.notProperty(bare, "cursor");
+      assert.notProperty(bare, "cursorState");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("shows at most one frame per interval however fast the desktop sends them", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -510,6 +567,8 @@ describe("DesktopFrames", () => {
 
   it("drops a frame from before a stop or for another window, and refuses an oversized one", () => {
     const current = { seq: 4, targets: [target] };
+    const admit = (message: DesktopCuaFrame, at: typeof current, gate: FrameGate | undefined) =>
+      admitFrame(message, at, gate, 0);
     const open = {
       _tag: "open",
       pid: 7,
@@ -517,19 +576,19 @@ describe("DesktopFrames", () => {
       apps: ["com.apple.calculator"],
       wakeAt: 60_000,
     } as const;
-    assert.isDefined(admitFrame(frame(4), current, open));
-    assert.isUndefined(admitFrame(frame(3), current, open));
-    assert.isUndefined(admitFrame(frame(4), current, { _tag: "closed", reason: "paused" }));
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, windowId: 9 }));
-    assert.isUndefined(admitFrame({ ...frame(4), key: "desktop:other" }, current, open));
+    assert.isDefined(admit(frame(4), current, open));
+    assert.isUndefined(admit(frame(3), current, open));
+    assert.isUndefined(admit(frame(4), current, { _tag: "closed", reason: "paused" }));
+    assert.isUndefined(admit(frame(4), current, { ...open, windowId: 9 }));
+    assert.isUndefined(admit({ ...frame(4), key: "desktop:other" }, current, open));
     // Grants narrowed since the capture was asked for: the helper checked against the old apps.
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: [] }));
-    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: undefined }));
-    assert.deepEqual(admitFrame(frame(4, "A".repeat(400_000)), current, open), {
+    assert.isUndefined(admit(frame(4), current, { ...open, apps: [] }));
+    assert.isUndefined(admit(frame(4), current, { ...open, apps: undefined }));
+    assert.deepEqual(admit(frame(4, "A".repeat(400_000)), current, open), {
       type: "unavailable",
       reason: "captureFailed",
     });
-    assert.deepEqual(admitFrame({ ...frame(4), width: 1_000 }, current, open), {
+    assert.deepEqual(admit({ ...frame(4), width: 1_000 }, current, open), {
       type: "unavailable",
       reason: "captureFailed",
     });
