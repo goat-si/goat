@@ -161,11 +161,10 @@ thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
-Such work only gets the screen on a computer whose GOAT can tell when you enter
-a password or another secret; elsewhere the request is refused and says why.
-For now no computer qualifies: detecting secret fields in desktop apps is
-switched off while it is being fixed, so such work is refused everywhere and a
-secret field in a desktop app does not pause agents.
+In full access mode, a thread started from another computer's GOAT uses every
+app here beside the threads you run, rather than waiting for the screen.
+Detecting secret fields in desktop apps is switched off while it is being
+fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts
 until the time shown and does not approve each action. If the agent already has
 the tools, it continues in the same turn; otherwise, GOAT wakes it in a new turn

@@ -30,7 +30,7 @@ import { installComputerUseSkill } from "./ComputerUseGuide.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import { everyAppKind } from "./ComputerUseFullAccess.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
+import { type ComputerUseOrigin, usesScreenLikePerson } from "./ComputerUseOrigin.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 
 export type ComputerUseRefusal =
@@ -43,9 +43,7 @@ export type ComputerUseRefusal =
   | "not-granted"
   | "needs-approval"
   /** Another thread holds the screen for unattended work; one does at a time. */
-  | "held"
-  /** Unattended work needs a helper that reports secret fields (#1235). */
-  | "detection-unsupported";
+  | "held";
 
 /**
  * Every provider session's computer use comes from this one decision, so the
@@ -113,12 +111,15 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   cua: Option.Option<CuaDriver.CuaDriver["Service"]>,
   input: ComputerUseAttachmentInput,
 ) {
-  const unattended = input.origin._tag === "unattended";
+  const unattended = !usesScreenLikePerson(input.origin, input.runtimeMode);
+  // Separate from admission: whatever full access opens, a driver outside GOAT's proxy would
+  // not hear Stop, stop all or a takeover, so no unattended origin runs one.
+  const blockUserConfig = input.origin._tag === "unattended";
   if (input.driver === undefined || !COMPUTER_USE_PROVIDER_DRIVERS.has(input.driver))
-    return none("unsupported-provider", unattended);
-  if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", unattended);
-  if (input.interactionMode === "plan") return none("plan", unattended);
-  if (input.readOnly) return none("read-only", unattended);
+    return none("unsupported-provider", blockUserConfig);
+  if (Option.isNone(cua) || !(yield* cua.value.enabled)) return none("disabled", blockUserConfig);
+  if (input.interactionMode === "plan") return none("plan", blockUserConfig);
+  if (input.readOnly) return none("read-only", blockUserConfig);
   // Unreadable settings keep every default: the built-in skills on and grants required.
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const current = Option.isNone(settings)
@@ -142,15 +143,9 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
     if (Option.isSome(held)) return none("held", true);
   }
-  if (unattended && Option.isSome(leases)) {
-    const detection = yield* leases.value.detection;
-    // Admitted work continues while a person uses the machine; secret-field detection still
-    // protects unattended turns. Supported human-input signals never become an admission gate.
-    if (!detection.privateMode) return none("detection-unsupported", true);
-  }
   // Without its proxy nothing could stop the driver, so there is no computer use at all.
   if (Option.isNone(leases) || leases.value.proxy === undefined)
-    return none("unavailable", unattended);
+    return none("unavailable", blockUserConfig);
   const mcp = yield* cua.value.acquire;
   if (Option.isNone(mcp)) {
     const block = CuaDriver.agentBlock(yield* cua.value.lastFailure);
@@ -168,17 +163,10 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
           ? { "computerUse.blocker": block.blocker ?? "helper" }
           : {}),
     });
-    if (block === undefined) return none("unavailable", unattended);
+    if (block === undefined) return none("unavailable", blockUserConfig);
     // The session list shows the turn as waiting for the grant while it runs.
     yield* leases.value.blocked(input.threadId, block);
-    return { ...none("not-granted", unattended), block };
-  }
-  if (unattended) {
-    // Acquisition may have started another helper build than the one readiness described (an
-    // update between a check and this turn); the desktop reports the started one's signals before
-    // it reports the driver ready, so this reads the helper the agent will actually get (#1553).
-    const detection = yield* leases.value.detection;
-    if (!detection.privateMode) return none("detection-unsupported", true);
+    return { ...none("not-granted", blockUserConfig), block };
   }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
@@ -197,7 +185,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
         })
         .pipe(Effect.orElseSucceed(() => Option.none()))
     : Option.some(yield* leases.value.control(input.threadId, lease, input.runId));
-  if (Option.isNone(control)) return none("held", unattended);
+  if (Option.isNone(control)) return none("held", blockUserConfig);
   // Sessions are also prepared outside a turn: a re-attach, a rollback, a memory policy
   // rotation. With no run open, no turn end will settle the control this minted or reused,
   // and the session list would show an agent acting until it expires (#1551). A turn's own

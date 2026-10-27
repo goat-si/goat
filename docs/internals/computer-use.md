@@ -287,9 +287,9 @@ PreviewSession {
 - Desktop private mode is switched off for now (#1695): `privateModeOn` in
   `apps/server/src/cua/ComputerUsePrivateMode.ts` and `HelperSafety.privateModeDisabled` in the
   macOS helper. While it is off the server counts no host as detecting secret fields, whatever
-  its helper advertises, so unattended computer use is refused on every platform. Turning it back
+  its helper advertises, and a desktop secret field pauses no agent. Turning it back
   on means flipping both switches and restoring the server's handling of private reports
-  (`privateHost` in `ComputerUseLeases.ts`); that lifts the refusal. Only a focused secure field
+  (`privateHost` in `ComputerUseLeases.ts`). Only a focused secure field
   may pause agents, because pausing on an unreadable focus stalled every agent on the host. Once
   the switch is on, the macOS helper keeps an unreadable focus out of frames and pauses nothing
   (`HelperSafety.pausingWindow`); the Windows (`Signals.cs`) and Linux (`linuxSignals.ts`)
@@ -419,7 +419,15 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling unchanged.
+  ceiling unchanged. In full access, a thread launched from another environment, and turns it
+  launches or sends here (`launched_remotely`), use every app like a person's threads, beside
+  them rather than holding the screen alone, and wait in the same turn for a foreground approval
+  (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
+  cannot read the turn that launched it, so it stays unattended for steering a person's turn and
+  outside full access, and asks for foreground like any run no person started. A user's own
+  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
+  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
+  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
@@ -431,8 +439,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - **Human input.** An agent with approved control keeps working while a person uses the same
   desktop: the person's keyboard and pointer input does not pause it (owner decision, Jun,
   2026-10-25, [#1550](https://github.com/goat-si/goat/pull/1550)). Stop, stop all, takeover and
-  hand-back, lease expiry and the private-field pause still apply. Unattended attachment requires
-  private-mode detection, not human-input detection. Human-input detection (#1426, #1477, #1504,
+  hand-back, lease expiry and the private-field pause still apply. No detection gates admission:
+  unattended work is admitted on a host that does not detect secret fields (owner decision, Jun,
+  2026-10-28). Human-input detection (#1426, #1477, #1504,
   #1512) tells a person's input from an agent's own for input arbitration and reports; it never
   gates admission or pauses work. On macOS each agent connection's helper reports
   every pointer event (moves, drags, scrolls, presses) to its lease proxy with its own time, from
