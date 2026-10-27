@@ -26,7 +26,7 @@ import {
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
-import { CodexRouteStatus } from "./codexRoute.ts";
+import { CodexRouteStatus, ProviderHomeRouteStatus } from "./codexRoute.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
@@ -285,6 +285,7 @@ export const ServerProvider = Schema.Struct({
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
   codexRoute: Schema.optionalKey(CodexRouteStatus),
+  homeRoute: Schema.optionalKey(ProviderHomeRouteStatus),
   availability: Schema.optional(ServerProviderAvailability),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   models: Schema.Array(ServerProviderModel),

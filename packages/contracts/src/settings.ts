@@ -34,7 +34,7 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
-import { CodexHomeSettingsFields, CodexModelRoute } from "./codexRoute.ts";
+import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } from "./codexRoute.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
@@ -693,6 +693,7 @@ const InstanceIdleCompaction = Schema.Literals(
 
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
+    ...ProviderHomeRouteFields,
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
