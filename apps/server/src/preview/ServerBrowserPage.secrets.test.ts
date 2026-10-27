@@ -65,7 +65,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       renderScale: 1,
       captureImage: false,
       consoleEntries: [{ text: `sid=${session}` }] as never,
-      networkEntries: [{ url: `${origin}/?js=${script}` }] as never,
+      networkEntries: [{ url: `${origin}/?js=${script}`, method: "GET" }] as never,
       actionTimeline: [{ error: password }] as never,
       timeoutMs: 30_000,
     });
