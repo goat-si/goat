@@ -252,13 +252,22 @@ it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
       started = resolve;
     });
     await page.exposeFunction("readWaiting", () => started());
-    await page.clock.install();
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
     // The read adds its load listener in the same step that arms its deadline timer.
     await page.setContent(
       "<main>Changing</main><script>const add = window.addEventListener.bind(window); window.addEventListener = (type, ...rest) => { if (type === 'load') window.readWaiting(); return add(type, ...rest); };</script>",
     );
     const reading = read({ timeoutMs: 150, settleMs: 5_000 });
-    await waiting;
+    // A read that ends before arming its deadline fails here instead of waiting on the hook.
+    const first = await Promise.race([
+      waiting.then(() => "armed" as const),
+      reading.then(
+        () => "ended" as const,
+        () => "ended" as const,
+      ),
+    ]);
+    expect(first).toBe("armed");
     await page.clock.runFor(200);
     expect(await reading).toMatchObject({
       settled: false,
