@@ -100,9 +100,11 @@ function TurnThreadCard(props: {
         ? "Not available in this app"
         : shell.deletedAt !== null
           ? "Deleted"
-          : target.via === "launch"
-            ? "Started in this turn"
-            : "Messaged in this turn";
+          : shell.source.latestAnswerExcerpt !== undefined
+            ? shell.source.latestAnswerExcerpt
+            : target.via === "launch"
+              ? "Started in this turn"
+              : "Messaged in this turn";
   const content = (
     <>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60">

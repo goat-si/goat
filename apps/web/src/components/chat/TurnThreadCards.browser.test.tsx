@@ -24,6 +24,7 @@ function shell(
     readonly deleted?: boolean;
     readonly subagentRequest?: boolean;
     readonly backgroundWork?: boolean;
+    readonly answer?: string;
   },
 ) {
   return {
@@ -37,6 +38,7 @@ function shell(
       : [],
     runtime: state.runtime === undefined ? null : { status: state.runtime },
     latestRun: state.run === undefined ? null : { status: state.run },
+    source: state.answer === undefined ? {} : { latestAnswerExcerpt: state.answer },
   };
 }
 
@@ -95,6 +97,21 @@ describe("turn thread cards", () => {
     expect(screen.buttons("Open Lane 2, Waiting")).toHaveLength(1);
     // A failed run stays Failed even while its background work is still held.
     expect(screen.buttons("Open Lane 3, Failed")).toHaveLength(1);
+  });
+
+  it("shows the last line a thread answered under its title", async () => {
+    setup([
+      ["lane-1", shell("Lane 1", { run: "completed", answer: "PR #12 is open and green." })],
+      ["lane-2", shell("Lane 2", { runtime: "running" })],
+    ]);
+    await using screen = await renderTimeline([
+      launch("lane-1", "Lane 1"),
+      launch("lane-2", "Lane 2"),
+      answer,
+    ]);
+    expect(screen.text()).toContain("PR #12 is open and green.");
+    // A thread that has not answered yet says how it got here instead.
+    expect(screen.text()).toContain("Started in this turn");
   });
 
   it("shows three cards and the rest behind +N more", async () => {
