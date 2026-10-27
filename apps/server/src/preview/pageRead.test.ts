@@ -247,9 +247,20 @@ it("refuses a changed secret even when its new value appeared in page text durin
 
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
-    await page.setContent("<main>Changing</main>");
-    // The quiet period outlasts the deadline, so the read must return unsettled at the deadline.
-    expect(await read({ timeoutMs: 150, settleMs: 5_000 })).toMatchObject({
+    let started = () => {};
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    await page.exposeFunction("readWaiting", () => started());
+    await page.clock.install();
+    // The read adds its load listener in the same step that arms its deadline timer.
+    await page.setContent(
+      "<main>Changing</main><script>const add = window.addEventListener.bind(window); window.addEventListener = (type, ...rest) => { if (type === 'load') window.readWaiting(); return add(type, ...rest); };</script>",
+    );
+    const reading = read({ timeoutMs: 150, settleMs: 5_000 });
+    await waiting;
+    await page.clock.runFor(200);
+    expect(await reading).toMatchObject({
       settled: false,
       pending: { domChanging: true },
       text: "Changing",
