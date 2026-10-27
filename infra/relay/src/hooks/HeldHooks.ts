@@ -1,3 +1,7 @@
+import * as EnvironmentOwnership from "../environments/EnvironmentOwnership.ts";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as HookDeliveryAuthorization from "./HookDeliveryAuthorization.ts";
+import { RelayEnvironmentOwnerMismatchError } from "@goat/contracts/relayErrors";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -20,10 +24,13 @@ export const endpointKeyForTunnelName = (namespace: string, tunnelName: string):
 };
 
 type PersistenceError =
+  | AccountAccess.AccountAccessError
+  | RelayEnvironmentOwnerMismatchError
   | EnvironmentLinks.EnvironmentLinkEnvironmentLookupPersistenceError
   | ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError;
 
 interface HookEndpoint {
+  readonly authorization: HookDeliveryAuthorization.HookAuthorization;
   readonly httpBaseUrl: string;
   readonly environmentId: string;
   readonly holdWhileOffline: boolean;
@@ -37,11 +44,13 @@ export class HeldHooks extends Context.Service<
       endpointKey: string,
     ) => Effect.Effect<HookEndpoint | null, PersistenceError>;
     readonly setHoldWhileOffline: (input: {
+      readonly userId: string;
       readonly environmentId: string;
       readonly environmentPublicKey: string;
       readonly holdWebhooksWhileOffline: boolean;
     }) => Effect.Effect<void, PersistenceError | HookInbox.HookInboxError>;
     readonly wake: (input: {
+      readonly userId: string;
       readonly environmentId: string;
       readonly environmentPublicKey: string;
     }) => Effect.Effect<boolean, PersistenceError | HookInbox.HookInboxError>;
@@ -49,6 +58,9 @@ export class HeldHooks extends Context.Service<
 >()("goat-relay/hooks/HeldHooks") {}
 
 const make = Effect.gen(function* () {
+  const access = yield* AccountAccess.AccountAccess;
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
+  const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const settings = yield* RelayConfiguration.RelayConfiguration;
@@ -66,7 +78,15 @@ const make = Effect.gen(function* () {
       environmentId: allocation.environmentId,
       userId: allocation.userId,
     });
-    if (!link) return null;
+    if (!link || allocation.accountEpoch === null) return null;
+    const owner = {
+      userId: allocation.userId,
+      accountEpoch: allocation.accountEpoch,
+      environmentId: allocation.environmentId,
+      environmentPublicKey: link.environmentPublicKey,
+      incarnationId: allocation.incarnationId,
+    };
+    if (!(yield* authorization.allowed(owner))) return null;
     const result = validateManagedEndpoint({
       link,
       allocation,
@@ -75,6 +95,7 @@ const make = Effect.gen(function* () {
     if (Result.isFailure(result)) return null;
     return {
       ...result.success,
+      authorization: owner,
       environmentId: allocation.environmentId,
       holdWhileOffline: link.holdWebhooksWhileOffline,
     };
@@ -82,9 +103,12 @@ const make = Effect.gen(function* () {
 
   /** Only links proven by this environment key count; other accounts can claim the same environment id. */
   const ownEndpointKeys = Effect.fn("relay.hooks.own_endpoint_keys")(function* (input: {
+    readonly userId: string;
     readonly environmentId: string;
     readonly environmentPublicKey: string;
   }) {
+    const admitted = yield* access.admit(input.userId);
+    yield* ownership.assertActive({ ...admitted, ...input });
     const namespace = settings.managedEndpointNamespace;
     if (!namespace) return [];
     const ownLinks = yield* links.findActiveManagedForEnvironment(input);
@@ -106,7 +130,8 @@ const make = Effect.gen(function* () {
     yield* links.setHoldWebhooksWhileOffline(input);
     if (input.holdWebhooksWhileOffline) return;
     for (const endpointKey of yield* ownEndpointKeys(input)) {
-      yield* inbox.clear({ endpointKey });
+      const endpoint = yield* resolveEndpoint(endpointKey);
+      if (endpoint) yield* inbox.clear({ endpointKey, authorization: endpoint.authorization });
     }
   });
 

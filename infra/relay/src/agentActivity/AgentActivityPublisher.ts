@@ -1,3 +1,7 @@
+import * as EnvironmentOwnership from "../environments/EnvironmentOwnership.ts";
+import * as AccountAccess from "../accounts/AccountAccess.ts";
+import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
+import { RelayEnvironmentOwnerMismatchError } from "@goat/contracts/relayErrors";
 import {
   makeAggregateState,
   TERMINAL_AGENT_ACTIVITY_DISPLAY_TTL_MS,
@@ -27,6 +31,9 @@ import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 import * as FcmDeliveries from "./FcmDeliveries.ts";
 
 export type AgentActivityPublishError =
+  | AccountAccess.AccountAccessError
+  | RelayRateLimits.RateLimitError
+  | RelayEnvironmentOwnerMismatchError
   | FcmDeliveries.FcmDeliveryError
   | AgentActivityRows.AgentActivityRowUpsertPersistenceError
   | AgentActivityRows.AgentActivityRowDeletePersistenceError
@@ -39,6 +46,7 @@ export class AgentActivityPublisher extends Context.Service<
   AgentActivityPublisher,
   {
     readonly publish: (input: {
+      readonly userId: string;
       readonly environmentId: string;
       readonly environmentPublicKey: string;
       readonly threadId: string;
@@ -56,6 +64,9 @@ export class AgentActivityPublisher extends Context.Service<
 >()("goat-relay/agentActivity/AgentActivityPublisher") {}
 
 export const make = Effect.gen(function* () {
+  const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
+  const access = yield* AccountAccess.AccountAccess;
+  const rates = yield* RelayRateLimits.RelayRateLimits;
   const rows = yield* AgentActivityRows.AgentActivityRows;
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const liveActivities = yield* LiveActivities.LiveActivities;
@@ -205,47 +216,58 @@ export const make = Effect.gen(function* () {
       );
     }).pipe(Effect.withSpan("relay.agent_activity_publisher.end_idle_live_activities")),
     publish: Effect.fn("relay.agent_activity_publisher.publish")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.environmentId,
-        "relay.thread_id": input.threadId,
-        "relay.agent_activity.phase": input.state?.phase ?? "deleted",
-      });
-      if (input.state) {
-        // Retain terminal rows until cron pruning so completed threads remain visible alongside active ones.
-        yield* rows.upsert({
-          environmentPublicKey: input.environmentPublicKey,
-          state: input.state,
-        });
-      } else {
-        yield* rows.remove({
-          environmentId: input.environmentId,
-          environmentPublicKey: input.environmentPublicKey,
-          threadId: input.threadId,
-        });
-      }
-
-      const deliveryUsers = yield* links.listDeliveryUsersForEnvironment({
+      const admitted = yield* access.admit(input.userId);
+      yield* ownership.assertActive({
+        ...admitted,
         environmentId: input.environmentId,
         environmentPublicKey: input.environmentPublicKey,
       });
-      const now = yield* DateTime.now;
-      const deliveriesByUser = yield* Effect.forEach(
-        deliveryUsers,
-        (deliveryUser) =>
-          publishForDeliveryUser({
-            deliveryUser,
+      yield* rates.charge({ ...input, operation: "activity_publish" });
+      return yield* Effect.gen(function* () {
+        yield* Effect.annotateCurrentSpan({
+          "relay.environment_id": input.environmentId,
+          "relay.thread_id": input.threadId,
+          "relay.agent_activity.phase": input.state?.phase ?? "deleted",
+        });
+        if (input.state) {
+          // Retain terminal rows until cron pruning so completed threads remain visible alongside active ones.
+          yield* rows.upsert({
+            ...admitted,
+            environmentPublicKey: input.environmentPublicKey,
             state: input.state,
-            nowMs: now.epochMilliseconds,
-          }),
-        { concurrency: 4 },
-      );
-      const deliveries = deliveriesByUser.flat();
-      return {
-        ok: true,
-        deliveries: deliveries.filter(
-          (delivery): delivery is RelayDeliveryResult => delivery !== null,
-        ),
-      };
+          });
+        } else {
+          yield* rows.remove({
+            ...admitted,
+            environmentId: input.environmentId,
+            environmentPublicKey: input.environmentPublicKey,
+            threadId: input.threadId,
+          });
+        }
+
+        const deliveryUsers = yield* links.listDeliveryUsersForEnvironment({
+          environmentId: input.environmentId,
+          environmentPublicKey: input.environmentPublicKey,
+        });
+        const now = yield* DateTime.now;
+        const deliveriesByUser = yield* Effect.forEach(
+          deliveryUsers.filter((user) => user.userId === input.userId),
+          (deliveryUser) =>
+            publishForDeliveryUser({
+              deliveryUser,
+              state: input.state,
+              nowMs: now.epochMilliseconds,
+            }),
+          { concurrency: 4 },
+        );
+        const deliveries = deliveriesByUser.flat();
+        return {
+          ok: true,
+          deliveries: deliveries.filter(
+            (delivery): delivery is RelayDeliveryResult => delivery !== null,
+          ),
+        };
+      }).pipe(Effect.provideService(AccountAccess.AccountRequestAdmission, admitted));
     }),
   });
 });

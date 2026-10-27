@@ -1,3 +1,6 @@
+import * as HookDeliveryAuthorization from "./HookDeliveryAuthorization.ts";
+import * as RelayDb from "../db.ts";
+import * as Layer from "effect/Layer";
 import * as SqliteClient from "@effect/sql-sqlite-do/SqliteClient";
 import type * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -23,7 +26,7 @@ export class HookInboxObject extends Cloudflare.DurableObject<
     /** Holds a request for `baseUrl`; false when the inbox is full and nothing was stored. */
     readonly hold: (hook: HookInboxStore.HeldHook, baseUrl: string) => Call<boolean>;
     readonly wake: (baseUrl: string) => Call<boolean>;
-    readonly clear: () => Call<void>;
+    readonly clear: (authorization?: HookDeliveryAuthorization.HookAuthorization) => Call<void>;
   }
 >()("HookInboxObject") {}
 
@@ -34,8 +37,15 @@ const withInboxSpan =
       Effect.withSpan(name, { root: true, attributes: { "relay.hook.endpoint_key": inboxId } }),
     );
 
-const deliver = (baseUrl: string, hook: HookInboxStore.HeldHook) =>
-  sendUpstream(baseUrl, hook).pipe(
+const deliver = Effect.fn("HookInboxObject.deliver")(function* (
+  baseUrl: string,
+  hook: HookInboxStore.HeldHook,
+) {
+  const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
+  const allowed = yield* authorization.allowed(hook.authorization).pipe(Effect.result);
+  if (Result.isFailure(allowed)) return "authorization_unavailable" as const;
+  if (!allowed.success) return "dropped" as const;
+  return yield* sendUpstream(baseUrl, hook).pipe(
     Effect.result,
     Effect.map((result) => {
       // Timeouts may have executed; retries reuse delivery IDs for environment deduplication.
@@ -70,12 +80,16 @@ const deliver = (baseUrl: string, hook: HookInboxStore.HeldHook) =>
     Effect.map(({ outcome }) => outcome),
     Effect.provide(FetchHttpClient.layer),
   );
+});
 
-export const layer = HookInboxObject.make(
+export const makeWithAuthorization = <R>(
+  authorizationLayer: Layer.Layer<HookDeliveryAuthorization.HookDeliveryAuthorization, never, R>,
+) =>
   Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
     // Only the per-object inner Effect may access storage.
     return Effect.gen(function* () {
+      const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
       const layerSql = SqliteClient.layer({ storage: state.raw.storage });
       const inboxId = state.raw.id.name ?? state.raw.id.toString();
       const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -91,6 +105,8 @@ export const layer = HookInboxObject.make(
       return {
         hold: Effect.fnUntraced(
           function* (hook: HookInboxStore.HeldHook, baseUrl: string) {
+            if (!(yield* authorization.allowed(hook.authorization).pipe(Effect.orDie)))
+              return false;
             const dueAt = yield* run(HookInboxStore.hold(hook, baseUrl));
             yield* Effect.annotateCurrentSpan({ "relay.inbox.stored": dueAt !== null });
             if (dueAt === null) return false;
@@ -109,18 +125,30 @@ export const layer = HookInboxObject.make(
           withInboxSpan("relay.inbox.wake", inboxId),
         ),
         clear: Effect.fnUntraced(
-          function* () {
-            yield* run(HookInboxStore.clear);
-            yield* state.storage.deleteAlarm();
+          function* (owner?: HookDeliveryAuthorization.HookAuthorization) {
+            const pending = owner
+              ? yield* run(HookInboxStore.clearOwned(owner))
+              : (yield* run(HookInboxStore.clear), false);
+            if (pending) yield* scheduleBy(yield* Clock.currentTimeMillis);
+            else yield* state.storage.deleteAlarm();
           },
           withInboxSpan("relay.inbox.clear", inboxId),
         ),
         alarm: () =>
-          run(HookInboxStore.deliverDue(deliver)).pipe(
+          run(
+            HookInboxStore.deliverDue(deliver).pipe(
+              Effect.provideService(
+                HookDeliveryAuthorization.HookDeliveryAuthorization,
+                authorization,
+              ),
+            ),
+          ).pipe(
             // Backoff must not delay an earlier run requested by a concurrent wake.
             Effect.flatMap((nextAt) => (nextAt === null ? Effect.void : scheduleBy(nextAt))),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Held webhook delivery run failed", { cause }).pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning("Held webhook delivery run failed", {
+                errorTag: "inbox_delivery_failed",
+              }).pipe(
                 Effect.andThen(Effect.annotateCurrentSpan({ "relay.inbox.run_result": "failed" })),
                 Effect.andThen(Clock.currentTimeMillis),
                 Effect.flatMap((now) => scheduleBy(now + RUN_FAILURE_RETRY_MS)),
@@ -129,6 +157,11 @@ export const layer = HookInboxObject.make(
             withInboxSpan("relay.inbox.deliver", inboxId),
           ),
       };
-    });
-  }),
-);
+    }).pipe(Effect.provide(authorizationLayer));
+  });
+export const layer = (db: RelayDb.RelayDb["Service"]) =>
+  HookInboxObject.make(
+    makeWithAuthorization(
+      HookDeliveryAuthorization.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, db))),
+    ),
+  );

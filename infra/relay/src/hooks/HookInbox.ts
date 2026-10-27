@@ -1,3 +1,4 @@
+import type { HookAuthorization } from "./HookDeliveryAuthorization.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -28,6 +29,7 @@ export class HookInbox extends Context.Service<
       readonly baseUrl: string;
     }) => Effect.Effect<boolean, HookInboxError>;
     readonly clear: (input: {
+      readonly authorization?: HookAuthorization;
       readonly endpointKey: string;
     }) => Effect.Effect<void, HookInboxError>;
   }
