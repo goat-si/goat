@@ -94,4 +94,3 @@ export function UnavailableThreadDraftRedirect(props: { readonly environmentId: 
   }, []);
   return <OpeningThreadLoadingScreen />;
 }
-

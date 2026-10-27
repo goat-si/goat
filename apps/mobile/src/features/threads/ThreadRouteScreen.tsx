@@ -98,9 +98,7 @@ import {
 } from "./thread-route-fallback";
 import { useThreadPromptLink } from "../prompt-links/useThreadPromptLink";
 import { ThreadHeader } from "./ThreadHeader";
-import {
-  useAndroidWorkspaceBack,
-} from "../workspace/useAndroidWorkspaceNavigation";
+import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
 import { openSettings } from "../settings/settings-navigation";
 import {
   InspectorContentScope,

@@ -15,9 +15,6 @@ import {
   buildProjectCreateCommand,
   canCreateProjectInEnvironment,
   findExistingAddProject,
-  getAddProjectInitialQuery,
-  getCloneDestinationBrowsePath,
-  getCloneDestinationPath,
   getCloneDirectoryName,
   getDefaultCloneUrl,
   getNewProjectPathPreview,
@@ -36,17 +33,11 @@ import {
   type EnvironmentConnectionPhase,
 } from "@goat/client-runtime/connection";
 import {
-  canPreloadBrowsePath,
-  createBrowseNavigationCoordinator,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
   resolveFilesystemReadAccess,
 } from "@goat/client-runtime/state/filesystem";
-import {
-  appendBrowsePathSegment,
-  inferProjectTitleFromPath,
-  isWindowsPlatform,
-} from "@goat/client-runtime/state/projects";
+import { inferProjectTitleFromPath, isWindowsPlatform } from "@goat/client-runtime/state/projects";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
@@ -96,10 +87,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import {
   useRemoteConnectionStatus,
-  useRemoteEnvironmentRuntime,
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
 import { resolveAddProjectEnvironment } from "./AddProjectScreen.logic";
+import { useBrowsePathInput } from "./use-browse-path-input";
 import {
   createNewTaskDraft,
   setComposerDraftText,
@@ -292,89 +283,6 @@ function ProjectPathInput(props: {
       onSubmitEditing={props.onSubmit}
     />
   );
-}
-
-function useBrowsePathInput(environment: EnvironmentOption | null, pinnedDirectoryName = "") {
-  const environmentId = environment?.environmentId ?? null;
-  const environmentBaseDirectory = environment?.baseDirectory ?? null;
-  const clonePathCaseSensitive = !isWindowsPlatform(environment?.platform ?? "");
-  const [pathInput, commitPathInput] = useState(() =>
-    getCloneDestinationPath(
-      getAddProjectInitialQuery(environmentBaseDirectory),
-      pinnedDirectoryName,
-    ),
-  );
-  const previousEnvironmentIdRef = useRef(environmentId);
-  const environmentRuntime = useRemoteEnvironmentRuntime(environmentId);
-  const loadBrowsePath = useAtomQueryRunner(filesystemEnvironment.browse, {
-    reportFailure: false,
-    reportDefect: false,
-  });
-  const [browseNavigation] = useState(createBrowseNavigationCoordinator);
-  const [isBrowseNavigating, setIsBrowseNavigating] = useState(false);
-  const setPathInput = (path: string) => {
-    browseNavigation.invalidate();
-    setIsBrowseNavigating(false);
-    commitPathInput(path);
-  };
-  const navigateToBrowsePath = async (input: {
-    readonly browseDirectoryPath: string;
-    readonly selectedDirectoryName?: string;
-  }) => {
-    const selectedDirectoryPath = input.selectedDirectoryName
-      ? appendBrowsePathSegment(input.browseDirectoryPath, input.selectedDirectoryName)
-      : input.browseDirectoryPath;
-    const nextPathInput =
-      pinnedDirectoryName && input.selectedDirectoryName
-        ? getCloneDestinationBrowsePath({
-            browseDirectoryPath: input.browseDirectoryPath,
-            selectedDirectoryName: input.selectedDirectoryName,
-            cloneDirectoryName: pinnedDirectoryName,
-            caseSensitive: clonePathCaseSensitive,
-          })
-        : getCloneDestinationPath(selectedDirectoryPath, pinnedDirectoryName);
-    setIsBrowseNavigating(true);
-    const committed = await browseNavigation.run(
-      async () => {
-        if (
-          environment &&
-          readEnvironmentScope(environment.environmentId, AuthFilesystemReadScope) &&
-          canPreloadBrowsePath(environmentRuntime?.connectionState)
-        ) {
-          await loadBrowsePath({
-            environmentId: environment.environmentId,
-            input: { partialPath: selectedDirectoryPath },
-          });
-        }
-      },
-      () => commitPathInput(nextPathInput),
-    );
-    if (committed) {
-      setIsBrowseNavigating(false);
-    }
-    return committed;
-  };
-
-  useEffect(() => {
-    if (environmentId !== null && environmentId !== previousEnvironmentIdRef.current) {
-      previousEnvironmentIdRef.current = environmentId;
-      setPathInput(
-        getCloneDestinationPath(
-          getAddProjectInitialQuery(environmentBaseDirectory),
-          pinnedDirectoryName,
-        ),
-      );
-    }
-  }, [environmentBaseDirectory, environmentId, pinnedDirectoryName, setPathInput]);
-
-  useEffect(
-    () => () => {
-      browseNavigation.invalidate();
-    },
-    [browseNavigation],
-  );
-
-  return { isBrowseNavigating, pathInput, setPathInput, navigateToBrowsePath };
 }
 
 function useEnvironmentOptions(
