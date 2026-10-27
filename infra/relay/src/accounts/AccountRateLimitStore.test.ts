@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { it, expect } from "@effect/vitest";
-import { consumeWindow, type RateStorage } from "./AccountRateLimitStore.ts";
+import { closeWindows, consumeWindow, type RateStorage } from "./AccountRateLimitStore.ts";
 import { HOURLY_OPERATIONS } from "./AccountLimits.ts";
 
 function storage(db: DatabaseSync): RateStorage {
@@ -116,3 +116,22 @@ it.effect(
       }
     }).pipe(Effect.provide(NodeCrypto.layer)),
 );
+it("erases usage windows and keeps terminal denial after reopening the database", () => {
+  const root = mkdtempSync(join(tmpdir(), "relay-rate-close-"));
+  const file = join(root, "state.sqlite");
+  try {
+    let db = new DatabaseSync(file);
+    expect(consumeWindow(storage(db), "connect", 20, 100).allowed).toBe(true);
+    closeWindows(storage(db));
+    db.close();
+    db = new DatabaseSync(file);
+    expect(consumeWindow(storage(db), "connect", 20, 4_000_000).allowed).toBe(false);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='account_rate_windows'").all(),
+    ).toEqual([]);
+    expect(db.prepare("SELECT id FROM account_rate_closed").all()).toHaveLength(1);
+    db.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -12,6 +12,10 @@ export type RateLimitError = RelayRateLimitExceededError | RelayAuthorizationUna
 export class RelayRateLimits extends Context.Service<
   RelayRateLimits,
   {
+    readonly close?: (
+      userId: string,
+      subjectDigest: string,
+    ) => Effect.Effect<void, RelayAuthorizationUnavailableError>;
     readonly charge: (input: {
       readonly userId: string;
       readonly operation: RelayRateLimitOperation;
@@ -42,6 +46,7 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
   PublishError,
 >(bindings: {
   readonly stage: string;
+  readonly close?: (key: string) => Effect.Effect<void, HourlyError>;
   readonly hourly: (
     key: string,
     operation: HourlyOperation,
@@ -53,7 +58,25 @@ export const makeWorkerRateLimits = Effect.fn("RelayRateLimits.makeWorker")(func
   readonly publish: (key: string) => Effect.Effect<{ readonly success: boolean }, PublishError>;
 }) {
   const crypto = yield* Crypto.Crypto;
+  const close = bindings.close;
   return RelayRateLimits.of({
+    ...(close
+      ? {
+          close: Effect.fn("RelayRateLimits.close")(function* (userId, subjectDigest) {
+            const legacy = yield* crypto.digest(
+              "SHA-256",
+              new TextEncoder().encode(
+                [bindings.stage, userId].map((part) => `${part.length}:${part}`).join(""),
+              ),
+            );
+            const legacyKey = Array.from(legacy, (b) => b.toString(16).padStart(2, "0")).join("");
+            yield* Effect.all([close(legacyKey), close(subjectDigest)]);
+          }, Effect.mapError(() => new RelayAuthorizationUnavailableError({
+            code: "authorization_unavailable",
+            traceId: "relay",
+          }))),
+        }
+      : {}),
     charge: Effect.fn("RelayRateLimits.charge")(function* (input) {
       const key = yield* crypto
         .digest(

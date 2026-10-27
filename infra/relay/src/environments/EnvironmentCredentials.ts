@@ -1,3 +1,5 @@
+import { assertEnabled } from "../auth/MintControl.ts";
+import { RelayConfiguration } from "../Config.ts";
 import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
 import * as AccountTransactions from "../accounts/AccountTransactions.ts";
 import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
@@ -94,6 +96,7 @@ export class EnvironmentCredentials extends Context.Service<
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const config = yield* RelayConfiguration;
   const ownership = yield* EnvironmentOwnership.EnvironmentOwnership;
   const transactions = yield* AccountTransactions.AccountTransactions;
   const crypto = yield* Crypto.Crypto;
@@ -115,6 +118,7 @@ const make = Effect.gen(function* () {
 
   return EnvironmentCredentials.of({
     create: Effect.fn("relay.environment_credentials.create")(function* (input) {
+      yield* assertEnabled(config);
       return yield* transactions
         .run(
           { userIds: [input.userId] },

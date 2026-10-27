@@ -1,4 +1,6 @@
 export const ACCOUNT_ENDPOINT_POLICY = {
+  deleteAccount: "owner",
+  getAccountDeletion: "owner",
   createEnvironmentLinkChallenge: "guarded",
   linkEnvironment: "guarded",
   exchangeDpopAccessToken: "guarded",

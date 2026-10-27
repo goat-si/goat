@@ -38,7 +38,7 @@ export const layer = Layer.unwrap(
           !operatorAuthenticated(request.headers.authorization, secret)
         )
           return response({ code: "operator_unauthorized" }, 401);
-        const account = /^\/internal\/admin\/accounts\/([^/]+)(?:\/(suspend|allow))?$/u.exec(
+        const account = /^\/internal\/admin\/accounts\/([^/]+)(?:\/(suspend|allow|delete))?$/u.exec(
           url.pathname,
         );
         const operation =
@@ -50,7 +50,10 @@ export const layer = Layer.unwrap(
           if (!userId || userId.length > 255) return response({ code: "invalid_request" }, 400);
           if (request.method === "GET" && !account[2])
             return response(yield* lifecycle.getAccount(userId));
-          if (request.method === "POST" && (account[2] === "suspend" || account[2] === "allow")) {
+          if (
+            request.method === "POST" &&
+            (account[2] === "suspend" || account[2] === "allow" || account[2] === "delete")
+          ) {
             const key = request.headers["idempotency-key"];
             if (!key || !/^[A-Za-z0-9_-]{1,255}$/u.test(key))
               return response({ code: "invalid_idempotency_key" }, 400);
@@ -62,6 +65,13 @@ export const layer = Layer.unwrap(
               )._tag !== "Some"
             )
               return response({ code: "invalid_request" }, 400);
+            if (account[2] === "delete") {
+              const result = yield* lifecycle.requestDelete({ userId, idempotencyKey: key });
+              return response(
+                result,
+                result.status === "progress" && result.relayState === "erasing" ? 202 : 200,
+              );
+            }
             const result = yield* lifecycle.request({
               userId,
               kind: account[2],

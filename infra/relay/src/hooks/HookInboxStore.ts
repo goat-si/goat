@@ -121,6 +121,7 @@ export const migrate = Effect.gen(function* () {
       body BLOB NOT NULL
     )
   `;
+  yield* sql`CREATE TABLE IF NOT EXISTS held_hooks_closed (id INTEGER PRIMARY KEY CHECK(id=1))`;
   const columns = yield* sql<{ name: string }>`PRAGMA table_info(held_hooks)`;
   if (!columns.some((c) => c.name === "authorization"))
     yield* sql`ALTER TABLE held_hooks ADD COLUMN authorization TEXT`;
@@ -142,11 +143,11 @@ const setTarget = Effect.fn("HookInboxStore.setTarget")(function* (
   const sql = yield* SqlClient.SqlClient;
   yield* options.resetFailures
     ? sql`
-          INSERT INTO held_hooks_target (id, base_url) VALUES (1, ${baseUrl})
+          INSERT INTO held_hooks_target (id, base_url) SELECT 1, ${baseUrl} WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed)
           ON CONFLICT (id) DO UPDATE SET base_url = excluded.base_url, failures = 0
         `
     : sql`
-          INSERT INTO held_hooks_target (id, base_url) VALUES (1, ${baseUrl})
+          INSERT INTO held_hooks_target (id, base_url) SELECT 1, ${baseUrl} WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed)
           ON CONFLICT (id) DO UPDATE SET base_url = excluded.base_url
         `;
 });
@@ -187,7 +188,7 @@ export const hold = Effect.fn("HookInboxStore.hold")(function* (hook: HeldHook, 
       (id, received_at, method, raw_hook_id, raw_token, hook_key, query, headers, body, authorization)
     SELECT ${hook.id}, ${hook.receivedAt}, ${hook.method}, ${hook.rawHookId}, ${hook.rawToken},
       ${hook.hookKey}, ${hook.query}, ${encodeHeaders(hook.headers)}, ${hook.body}, ${hook.authorization ? yield* Schema.encodeEffect(Schema.fromJsonString(HookAuthorization))(hook.authorization) : null}
-    WHERE (SELECT count(*) FROM held_hooks) < ${HOOK_INBOX_MAX_REQUESTS}
+    WHERE NOT EXISTS(SELECT 1 FROM held_hooks_closed) AND (SELECT count(*) FROM held_hooks) < ${HOOK_INBOX_MAX_REQUESTS}
       AND (SELECT count(*) FROM held_hooks WHERE hook_key = ${hook.hookKey})
         < ${HOOK_INBOX_MAX_PER_HOOK}
       AND (SELECT coalesce(sum(length(body)), 0) FROM held_hooks) + ${hook.body.byteLength}
@@ -235,6 +236,20 @@ export const wake = Effect.fn("HookInboxStore.wake")(function* (baseUrl: string)
   return true;
 });
 
+export const isClosed = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return (yield* sql`SELECT id FROM held_hooks_closed LIMIT 1`).length > 0;
+});
+export const close = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`INSERT INTO held_hooks_closed(id) VALUES(1) ON CONFLICT DO NOTHING`;
+      yield* sql`DELETE FROM held_hooks`;
+      yield* sql`DELETE FROM held_hooks_target`;
+    }),
+  );
+});
 export const clear = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM held_hooks`;

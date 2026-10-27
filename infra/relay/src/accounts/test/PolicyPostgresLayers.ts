@@ -1,3 +1,6 @@
+import * as DeliveryAttempts from "../../agentActivity/DeliveryAttempts.ts";
+import * as AccountErasure from "../AccountErasure.ts";
+import { RelayRateLimits } from "../RelayRateLimits.ts";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import * as Drizzle from "drizzle-orm/effect-postgres";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -25,6 +28,7 @@ import * as HookInbox from "../../hooks/HookInbox.ts";
 import type { createPostgresFixture } from "./PostgresFixture.ts";
 
 export const testConfig: RelayConfiguration.RelayConfiguration["Service"] = {
+  subjectDigestKey: Redacted.make("fixture-subject-digest-key-32-bytes-minimum"),
   relayIssuer: "https://relay.example.test",
   apns: null,
   clerkSecretKey: Redacted.make("fixture-clerk"),
@@ -44,6 +48,14 @@ export function policyServicesLayer(options?: {
 }) {
   return Layer.empty.pipe(
     Layer.provideMerge(AccountLifecycle.layer),
+    Layer.provideMerge(AccountErasure.layer),
+    Layer.provideMerge(DeliveryAttempts.layer),
+    Layer.provideMerge(
+      Layer.succeed(RelayRateLimits, {
+        charge: Effect.fn("RelayRateLimits.charge")(function* () {}),
+        close: Effect.fn("RelayRateLimits.close")(function* () {}),
+      }),
+    ),
     Layer.provideMerge(EnvironmentCredentials.layer),
     Layer.provideMerge(EnvironmentLinks.layer),
     Layer.provideMerge(Devices.layer),

@@ -1,3 +1,5 @@
+import { AccountTransactions } from "../accounts/AccountTransactions.ts";
+import { AccountAccess } from "../accounts/AccountAccess.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -29,6 +31,7 @@ export class DeliveryAttemptRecordPersistenceError extends Schema.TaggedError<De
 }
 
 export interface DeliveryAttemptInput {
+  readonly accountEpoch?: number | null;
   readonly userId: string | null;
   readonly environmentId: string | null;
   readonly threadId: string | null;
@@ -77,6 +80,7 @@ function insertValues(
   return {
     id,
     createdAt,
+    accountEpoch: input.accountEpoch ?? null,
     userId: input.userId,
     environmentId: input.environmentId,
     threadId: input.threadId,
@@ -93,6 +97,8 @@ function insertValues(
 
 export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const transactions = yield* AccountTransactions;
+  const access = yield* AccountAccess;
   const crypto = yield* Crypto.Crypto;
 
   const isExpiredClaim = (claimedAt: string | null, now: DateTime.DateTime) => {
@@ -116,25 +122,37 @@ export const make = Effect.gen(function* () {
         ...(input.environmentId ? { "relay.environment_id": input.environmentId } : {}),
         ...(input.threadId ? { "relay.thread_id": input.threadId } : {}),
       });
-      yield* Effect.gen(function* () {
-        const id = yield* crypto.randomUUIDv4();
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
-        yield* db.insert(relayDeliveryAttempts).values(insertValues(input, id, createdAt));
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new DeliveryAttemptRecordPersistenceError({
-              operation: "record",
-              sourceJobId: input.sourceJobId ?? null,
-              userId: input.userId,
-              environmentId: input.environmentId,
-              threadId: input.threadId,
-              deviceId: input.deviceId,
-              kind: input.kind,
-              cause,
-            }),
-        ),
-      );
+      yield* transactions
+        .run(
+          { userIds: input.userId ? [input.userId] : [] },
+          Effect.gen(function* () {
+            if (!input.userId || input.accountEpoch == null) return;
+            const eligible = yield* access.capture(input.userId).pipe(Effect.result);
+            if (eligible._tag === "Failure") {
+              if (eligible.failure._tag === "RelayAccountAccessDeniedError") return;
+              return yield* eligible.failure;
+            }
+            if (eligible.success.accountEpoch !== input.accountEpoch) return;
+            const id = yield* crypto.randomUUIDv4();
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            yield* db.insert(relayDeliveryAttempts).values(insertValues(input, id, createdAt));
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new DeliveryAttemptRecordPersistenceError({
+                operation: "record",
+                sourceJobId: input.sourceJobId ?? null,
+                userId: input.userId,
+                environmentId: input.environmentId,
+                threadId: input.threadId,
+                deviceId: input.deviceId,
+                kind: input.kind,
+                cause,
+              }),
+          ),
+        );
     }),
     claimSourceJob: Effect.fn("relay.delivery_attempts.claim_source_job")(function* (input) {
       yield* Effect.annotateCurrentSpan({
@@ -144,92 +162,136 @@ export const make = Effect.gen(function* () {
         ...(input.environmentId ? { "relay.environment_id": input.environmentId } : {}),
         ...(input.threadId ? { "relay.thread_id": input.threadId } : {}),
       });
-      return yield* Effect.gen(function* () {
-        const id = yield* crypto.randomUUIDv4();
-        const now = yield* DateTime.now;
-        const createdAt = DateTime.formatIso(now);
-        const inserted = yield* db
-          .insert(relayDeliveryAttempts)
-          .values(insertValues(input, id, createdAt))
-          .onConflictDoNothing({ target: relayDeliveryAttempts.sourceJobId })
-          .returning({ id: relayDeliveryAttempts.id });
-        if (inserted.length > 0) {
-          return "claimed";
-        }
+      return yield* transactions
+        .run(
+          { userIds: input.userId ? [input.userId] : [] },
+          Effect.gen(function* () {
+            if (!input.userId || input.accountEpoch == null) return "completed" as const;
+            const eligible = yield* access.capture(input.userId).pipe(Effect.result);
+            if (eligible._tag === "Failure") {
+              if (eligible.failure._tag === "RelayAccountAccessDeniedError")
+                return "completed" as const;
+              return yield* eligible.failure;
+            }
+            if (eligible.success.accountEpoch !== input.accountEpoch) return "completed" as const;
+            const id = yield* crypto.randomUUIDv4();
+            const now = yield* DateTime.now;
+            const createdAt = DateTime.formatIso(now);
+            const inserted = yield* db
+              .insert(relayDeliveryAttempts)
+              .values(insertValues(input, id, createdAt))
+              .onConflictDoNothing({ target: relayDeliveryAttempts.sourceJobId })
+              .returning({ id: relayDeliveryAttempts.id });
+            if (inserted.length > 0) {
+              return "claimed";
+            }
 
-        const existing = yield* db
-          .select({
-            createdAt: relayDeliveryAttempts.createdAt,
-            apnsStatus: relayDeliveryAttempts.apnsStatus,
-            apnsReason: relayDeliveryAttempts.apnsReason,
-            apnsId: relayDeliveryAttempts.apnsId,
-            transportError: relayDeliveryAttempts.transportError,
-          })
-          .from(relayDeliveryAttempts)
-          .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId))
-          .limit(1);
-        const row = existing[0];
-        if (!row) {
-          return "in_flight";
-        }
-        if (
-          row.apnsStatus !== null ||
-          row.apnsReason !== null ||
-          row.apnsId !== null ||
-          row.transportError !== null
-        ) {
-          return "completed";
-        }
-        if (!isExpiredClaim(row.createdAt, now)) {
-          return "in_flight";
-        }
+            const existing = yield* db
+              .select({
+                createdAt: relayDeliveryAttempts.createdAt,
+                apnsStatus: relayDeliveryAttempts.apnsStatus,
+                apnsReason: relayDeliveryAttempts.apnsReason,
+                apnsId: relayDeliveryAttempts.apnsId,
+                transportError: relayDeliveryAttempts.transportError,
+              })
+              .from(relayDeliveryAttempts)
+              .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId))
+              .limit(1);
+            const row = existing[0];
+            if (!row) {
+              return "in_flight";
+            }
+            if (
+              row.apnsStatus !== null ||
+              row.apnsReason !== null ||
+              row.apnsId !== null ||
+              row.transportError !== null
+            ) {
+              return "completed";
+            }
+            if (!isExpiredClaim(row.createdAt, now)) {
+              return "in_flight";
+            }
 
-        const reclaimed = yield* db
-          .update(relayDeliveryAttempts)
-          .set({
-            createdAt,
-          })
-          .where(
-            and(
-              eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId),
-              eq(relayDeliveryAttempts.createdAt, row.createdAt),
-              isNull(relayDeliveryAttempts.apnsStatus),
-              isNull(relayDeliveryAttempts.apnsReason),
-              isNull(relayDeliveryAttempts.apnsId),
-              isNull(relayDeliveryAttempts.transportError),
-            ),
-          )
-          .returning({ id: relayDeliveryAttempts.id });
-        return reclaimed.length > 0 ? "claimed" : "in_flight";
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new DeliveryAttemptRecordPersistenceError({
-              operation: "claim-source-job",
-              sourceJobId: input.sourceJobId,
-              userId: input.userId,
-              environmentId: input.environmentId,
-              threadId: input.threadId,
-              deviceId: input.deviceId,
-              kind: input.kind,
-              cause,
-            }),
-        ),
-      );
+            const reclaimed = yield* db
+              .update(relayDeliveryAttempts)
+              .set({
+                createdAt,
+              })
+              .where(
+                and(
+                  eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId),
+                  eq(relayDeliveryAttempts.createdAt, row.createdAt),
+                  isNull(relayDeliveryAttempts.apnsStatus),
+                  isNull(relayDeliveryAttempts.apnsReason),
+                  isNull(relayDeliveryAttempts.apnsId),
+                  isNull(relayDeliveryAttempts.transportError),
+                ),
+              )
+              .returning({ id: relayDeliveryAttempts.id });
+            return reclaimed.length > 0 ? "claimed" : "in_flight";
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new DeliveryAttemptRecordPersistenceError({
+                operation: "claim-source-job",
+                sourceJobId: input.sourceJobId,
+                userId: input.userId,
+                environmentId: input.environmentId,
+                threadId: input.threadId,
+                deviceId: input.deviceId,
+                kind: input.kind,
+                cause,
+              }),
+          ),
+        );
     }),
     completeSourceJob: Effect.fn("relay.delivery_attempts.complete_source_job")(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.delivery.job_id": input.sourceJobId });
       const completedAt = DateTime.formatIso(yield* DateTime.now);
-      yield* db
-        .update(relayDeliveryAttempts)
-        .set({
-          createdAt: completedAt,
-          apnsStatus: input.apnsStatus ?? null,
-          apnsReason: input.apnsReason ?? null,
-          apnsId: input.apnsId ?? null,
-          transportError: input.transportError ?? null,
-        })
-        .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId))
+      const [owner] = yield* db.$client<{
+        user_id: string | null;
+      }>`SELECT user_id,account_epoch FROM relay_delivery_attempts WHERE source_job_id=${input.sourceJobId}`.pipe(
+        Effect.mapError(
+          (cause) =>
+            new DeliveryAttemptRecordPersistenceError({
+              operation: "complete-source-job",
+              sourceJobId: input.sourceJobId,
+              userId: null,
+              environmentId: null,
+              threadId: null,
+              deviceId: null,
+              kind: null,
+              cause,
+            }),
+        ),
+      );
+      if (!owner?.user_id) return;
+      const ownerId = owner.user_id;
+      yield* transactions
+        .run(
+          { userIds: [ownerId] },
+          Effect.gen(function* () {
+            const eligible = yield* access.capture(ownerId).pipe(Effect.result);
+            if (eligible._tag === "Failure") {
+              if (eligible.failure._tag === "RelayAccountAccessDeniedError") return;
+              return yield* eligible.failure;
+            }
+            if (eligible.success.accountEpoch !== owner.account_epoch) return;
+            yield* db
+              .update(relayDeliveryAttempts)
+              .set({
+                createdAt: completedAt,
+                apnsStatus: input.apnsStatus ?? null,
+                apnsReason: input.apnsReason ?? null,
+                apnsId: input.apnsId ?? null,
+                transportError: input.transportError ?? null,
+              })
+              .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId));
+          }),
+        )
         .pipe(
           Effect.mapError(
             (cause) =>

@@ -1,3 +1,5 @@
+import { testConfig } from "../accounts/test/PolicyPostgresLayers.ts";
+import * as RelayConfiguration from "../Config.ts";
 import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
@@ -50,6 +52,7 @@ describe("EnvironmentCredentials", () => {
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(
+          Layer.provide(RelayConfiguration.layer(testConfig)),
           Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
@@ -148,6 +151,7 @@ describe("EnvironmentCredentials", () => {
       }).pipe(
         Effect.provide(
           EnvironmentCredentials.layer.pipe(
+            Layer.provide(RelayConfiguration.layer(testConfig)),
             Layer.provide(policyUnitLayer),
             Layer.provide(NodeCryptoLayer.layer),
             Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
@@ -204,6 +208,7 @@ describe("EnvironmentCredentials", () => {
     }).pipe(
       Effect.provide(
         EnvironmentCredentials.layer.pipe(
+          Layer.provide(RelayConfiguration.layer(testConfig)),
           Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),

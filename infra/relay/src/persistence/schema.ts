@@ -231,6 +231,7 @@ export const relayDeliveryAttempts = pgTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
+    accountEpoch: integer("account_epoch"),
     userId: varchar("user_id", { length: 255 }),
     environmentId: varchar("environment_id", { length: 191 }),
     threadId: varchar("thread_id", { length: 512 }),
@@ -244,6 +245,7 @@ export const relayDeliveryAttempts = pgTable(
     transportError: text("transport_error"),
   },
   (table) => [
+    index("idx_relay_delivery_attempts_owner_epoch").on(table.userId, table.accountEpoch),
     index("idx_relay_delivery_attempts_environment").on(
       table.environmentId,
       table.threadId,

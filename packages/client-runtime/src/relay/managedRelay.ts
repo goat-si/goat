@@ -1,3 +1,6 @@
+import { disabledManagedRelayClient } from "./managedRelayDisabled.ts";
+import * as ManagedRelayAccount from "./managedRelayAccount.ts";
+import type { RelayAccountDeletion, RelayAccountDeletionStatus } from "@goat/contracts/relay";
 import {
   ManagedRelayRequestFailedError,
   ManagedRelayRequestAction,
@@ -96,6 +99,8 @@ export type ManagedRelayDpopSignerError = typeof ManagedRelayDpopSignerError.Typ
 
 export const ManagedRelayRequestActivity = Schema.Literals([
   "Relay DPoP access token exchange",
+  "Relay account deletion",
+  "Relay account deletion status",
   "Relay environment listing",
   "Relay client device listing",
   "Relay environment link challenge",
@@ -232,6 +237,13 @@ export class ManagedRelayClient extends Context.Service<
   ManagedRelayClient,
   {
     readonly relayUrl: string;
+    readonly deleteAccount: (input: {
+      readonly clerkToken: string;
+      readonly idempotencyKey: string;
+    }) => Effect.Effect<RelayAccountDeletion, ManagedRelayClientError>;
+    readonly getAccountDeletion: (input: {
+      readonly clerkToken: string;
+    }) => Effect.Effect<RelayAccountDeletionStatus, ManagedRelayClientError>;
     readonly listEnvironments: (input: {
       readonly clerkToken: string;
     }) => Effect.Effect<ReadonlyArray<RelayClientEnvironmentRecord>, ManagedRelayClientError>;
@@ -409,33 +421,6 @@ function dpopHeaders(authorization: ManagedRelayAuthorization) {
   };
 }
 
-function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Service"] {
-  const unavailable = (spanName: string) =>
-    Effect.fn(spanName)(function* () {
-      return yield* new ManagedRelayUrlInvalidError({ relayUrl });
-    });
-  return ManagedRelayClient.of({
-    relayUrl,
-    listEnvironments: unavailable("clientRuntime.managedRelay.listEnvironments"),
-    listDevices: unavailable("clientRuntime.managedRelay.listDevices"),
-    createEnvironmentLinkChallenge: unavailable(
-      "clientRuntime.managedRelay.createEnvironmentLinkChallenge",
-    ),
-    linkEnvironment: unavailable("clientRuntime.managedRelay.linkEnvironment"),
-    unlinkEnvironment: unavailable("clientRuntime.managedRelay.unlinkEnvironment"),
-    getEnvironmentStatus: unavailable("clientRuntime.managedRelay.getEnvironmentStatus"),
-    connectEnvironment: unavailable("clientRuntime.managedRelay.connectEnvironment"),
-    registerDevice: unavailable("clientRuntime.managedRelay.registerDevice"),
-    unregisterDevice: unavailable("clientRuntime.managedRelay.unregisterDevice"),
-    registerLiveActivity: unavailable("clientRuntime.managedRelay.registerLiveActivity"),
-    getAgentActivitySnapshot: unavailable("clientRuntime.managedRelay.getAgentActivitySnapshot"),
-    requestKeyReadmission: unavailable("clientRuntime.managedRelay.readmitKey"),
-    resetTokenCache: Effect.void.pipe(
-      Effect.withSpan("clientRuntime.managedRelay.resetTokenCache"),
-    ),
-  });
-}
-
 /** @public */
 export const make = Effect.fn("ManagedRelayClient.make")(function* (
   options: ManagedRelayClientLayerOptions,
@@ -480,6 +465,10 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
   });
   const signer = yield* ManagedRelayDpopSigner;
   const client = yield* HttpApiClient.make(RelayApi, { baseUrl: relayUrl });
+  const account = yield* ManagedRelayAccount.make(relayUrl, {
+    error: requestError,
+    timeout: timeoutRelayRequest("Relay account deletion"),
+  });
   const initialTokens = options.accessTokenStore ? yield* options.accessTokenStore.load : [];
   const cachedTokens = yield* SynchronizedRef.make<
     ReadonlyArray<ManagedRelayAccessTokenCacheEntry>
@@ -761,6 +750,7 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
 
   return ManagedRelayClient.of({
     relayUrl,
+    ...account,
     listEnvironments: Effect.fnUntraced(
       function* (input) {
         return yield* client.client

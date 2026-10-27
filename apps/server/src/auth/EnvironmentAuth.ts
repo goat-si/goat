@@ -1,3 +1,5 @@
+import * as IssuedEnvironmentSession from "./issueEnvironmentSession.ts";
+import * as CloudCredentialWithdrawal from "./CloudCredentialWithdrawal.ts";
 import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
@@ -382,6 +384,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthCloudRelayIssuerMissingError,
   ServerAuthCloudHealthJwtSigningError,
   ServerAuthCloudMintJwtSigningError,
+  CloudCredentialWithdrawal.CloudCredentialWithdrawalError,
 ]);
 export type ServerAuthInternalError = typeof ServerAuthInternalError.Type;
 export const isServerAuthInternalError = Schema.is(ServerAuthInternalError);
@@ -482,6 +485,11 @@ export class EnvironmentAuth extends Context.Service<
     readonly getSessionState: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthSessionState, ServerAuthInternalError>;
+    readonly withCloudCredentialPermit: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | ServerAuthInternalError, R>;
+    readonly withdrawCloudCredentials: () => Effect.Effect<void, ServerAuthInternalError>;
+    readonly completeCloudWithdrawal: () => Effect.Effect<void, ServerAuthInternalError>;
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
@@ -739,6 +747,7 @@ function isBrowserOriginAllowed(
 
 /** @public */
 export const make = Effect.gen(function* () {
+  const withdrawal = yield* CloudCredentialWithdrawal.make;
   const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
   const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
   const sessions = yield* SessionStore.SessionStore;
@@ -765,6 +774,7 @@ export const make = Effect.gen(function* () {
           : Effect.void,
       ),
       mapSessionVerificationErrors,
+      Effect.tap((session) => withdrawal.guard(session.subject)),
       Effect.flatMap(rejectMcpClientAudience),
       Effect.map((session) => ({
         sessionId: session.sessionId,
@@ -911,6 +921,7 @@ export const make = Effect.gen(function* () {
     const grant = yield* bootstrapCredentials
       .consume(credential)
       .pipe(Effect.mapError(toBootstrapExchangeError));
+    yield* withdrawal.guard(grant.subject);
     const session = yield* sessions
       .issue({
         method: "browser-session-cookie",
@@ -984,6 +995,7 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
+            yield* withdrawal.guard(grant.subject);
             const grantedScopes =
               requestedScopes === undefined
                 ? grant.scopes
@@ -1110,37 +1122,7 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokePairingLink"),
     );
 
-  const issueSession: EnvironmentAuth["Service"]["issueSession"] = (input) =>
-    input?.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
-      ? Effect.fail(new PairingGrantStore.ReservedAuthSubjectError())
-      : sessions
-          .issue({
-            subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
-            method: "bearer-access-token",
-            scopes: input?.scopes ?? AuthStandardClientScopes,
-            client: {
-              ...(input?.label ? { label: input.label } : {}),
-              deviceType: "bot",
-            },
-            ...(input?.ttl ? { ttl: input.ttl } : {}),
-            ...(input?.runtimeModeCeiling ? { runtimeModeCeiling: input.runtimeModeCeiling } : {}),
-          })
-          .pipe(
-            Effect.map(
-              (issued) =>
-                ({
-                  sessionId: issued.sessionId,
-                  token: issued.token,
-                  method: "bearer-access-token",
-                  scopes: issued.scopes,
-                  subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
-                  client: issued.client,
-                  expiresAt: DateTime.toUtc(issued.expiresAt),
-                }) satisfies IssuedBearerSession,
-            ),
-            Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
-            Effect.withSpan("EnvironmentAuth.issueSession"),
-          );
+  const issueSession = yield* IssuedEnvironmentSession.make(DEFAULT_SESSION_SUBJECT);
 
   const listSessions: EnvironmentAuth["Service"]["listSessions"] = () =>
     sessions.listActive().pipe(
@@ -1276,9 +1258,11 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(requestUrl)) {
         const websocketTicket = requestUrl.value.searchParams.get(WEBSOCKET_TICKET_QUERY_PARAM);
         if (websocketTicket && websocketTicket.trim().length > 0) {
-          const session = yield* sessions
-            .verifyWebSocketToken(websocketTicket)
-            .pipe(mapSessionVerificationErrors, Effect.flatMap(rejectMcpClientAudience));
+          const session = yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
+            mapSessionVerificationErrors,
+            Effect.tap((session) => withdrawal.guard(session.subject)),
+            Effect.flatMap(rejectMcpClientAudience),
+          );
           if (session.audience !== undefined && session.audience !== use) {
             return yield* new ServerAuthInvalidCredentialError({
               diagnostic: `WebSocket ticket was issued for the ${session.audience} route.`,
@@ -1413,9 +1397,19 @@ export const make = Effect.gen(function* () {
       return Effect.succeed(descriptor);
     }),
     getSessionState,
-    createBrowserSession,
-    exchangeBootstrapCredentialForAccessToken,
-    createPairingLink,
+    withCloudCredentialPermit: (effect) =>
+      withdrawal.withPermit(withdrawal.guard("cloud-connect").pipe(Effect.andThen(effect))),
+    withdrawCloudCredentials: withdrawal.withdraw,
+    completeCloudWithdrawal: withdrawal.complete,
+    createBrowserSession: (...args) => withdrawal.withPermit(createBrowserSession(...args)),
+    exchangeBootstrapCredentialForAccessToken: (...args) =>
+      withdrawal.withPermit(exchangeBootstrapCredentialForAccessToken(...args)),
+    createPairingLink: (input) =>
+      withdrawal.withPermit(
+        withdrawal
+          .guard(input?.subject ?? "one-time-token")
+          .pipe(Effect.andThen(createPairingLink(input))),
+      ),
     setCloudLinkTrust: Effect.fn("EnvironmentAuth.setCloudLinkTrust")((userId) =>
       bootstrapCredentials
         .setCloudTrust(userId)
@@ -1425,7 +1419,12 @@ export const make = Effect.gen(function* () {
     issueStartupPairingCredential,
     listPairingLinks,
     revokePairingLink,
-    issueSession,
+    issueSession: (input) =>
+      withdrawal.withPermit(
+        withdrawal
+          .guard(input?.subject ?? DEFAULT_SESSION_SUBJECT)
+          .pipe(Effect.andThen(issueSession(input))),
+      ),
     listSessions,
     revokeSession,
     revokeOtherSessionsExcept,

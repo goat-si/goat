@@ -1,3 +1,4 @@
+import { assertEnabled } from "../auth/MintControl.ts";
 import * as EnvironmentOwnership from "../environments/EnvironmentOwnership.ts";
 import * as AccountTransactions from "../accounts/AccountTransactions.ts";
 import {
@@ -143,7 +144,7 @@ const appendRelayTraceContextResponseHeader = Effect.gen(function* () {
 
 const relayCorsMiddleware = HttpMiddleware.cors({
   allowedMethods: ["GET", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["authorization", "b3", "traceparent", "content-type", "dpop"],
+  allowedHeaders: ["authorization", "b3", "traceparent", "content-type", "dpop", "idempotency-key"],
   exposedHeaders: ["traceparent", "www-authenticate", "retry-after"],
   maxAge: 86_400,
 });
@@ -729,6 +730,7 @@ export const registerEnvironmentTunnelRecovery = Effect.fn(
   readonly tunnelId: string;
   readonly origin: RelayManagedEndpointOrigin;
 }) {
+  yield* assertEnabled(yield* RelayConfiguration.RelayConfiguration);
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -767,6 +769,7 @@ export const recoverEnvironmentTunnelRecord = Effect.fn(
   readonly environmentPublicKey: string;
   readonly origin: RelayManagedEndpointOrigin;
 }) {
+  yield* assertEnabled(yield* RelayConfiguration.RelayConfiguration);
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
   const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;

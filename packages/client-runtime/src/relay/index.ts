@@ -4,3 +4,4 @@ export * from "./errorPresentation.ts";
 export * as ManagedRelay from "./managedRelay.ts";
 export * from "./managedRelayState.ts";
 export * from "./connectReverification.ts";
+export * from "./accountDeletion.ts";

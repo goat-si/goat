@@ -18,6 +18,11 @@ export function consumeWindow(
 ) {
   return storage.transactionSync(() => {
     storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS account_rate_closed (id INTEGER PRIMARY KEY CHECK(id=1))",
+    );
+    if ([...storage.sql.exec("SELECT id FROM account_rate_closed")].length)
+      return { allowed: false, retryAfterSeconds: 3600 };
+    storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS account_rate_windows (operation TEXT PRIMARY KEY,window_start_ms INTEGER NOT NULL,used INTEGER NOT NULL)",
     );
     const found = [
@@ -54,5 +59,15 @@ export function consumeWindow(
       used + 1,
     );
     return { allowed: true, retryAfterSeconds: 0 };
+  });
+}
+
+export function closeWindows(storage: RateStorage): void {
+  storage.transactionSync(() => {
+    storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS account_rate_closed (id INTEGER PRIMARY KEY CHECK(id=1))",
+    );
+    storage.sql.exec("INSERT INTO account_rate_closed(id) VALUES(1) ON CONFLICT DO NOTHING");
+    storage.sql.exec("DROP TABLE IF EXISTS account_rate_windows");
   });
 }

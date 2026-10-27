@@ -23,7 +23,17 @@ export function dpopFailureMessage(message: string, reason: DpopFailureReason | 
 
 export function relayProtectedErrorMessage(error: RelayProtectedError): string {
   switch (error._tag) {
+    case "RelayAccountDeletionUnavailableError":
+      return "Account deletion status is unavailable. Read status again before retrying.";
+    case "RelayMintDisabledError":
+      return "Relay credential issuance and tunnel provisioning are paused. Try again later.";
+    case "RelayAuthenticationStrengthError":
+      return "Verify your account with MFA in the last 10 minutes, then try again.";
+    case "RelayAccountDeletionConflictError":
+      return "A conflicting account request was received. Read deletion status before retrying.";
     case "RelayAccountAccessDeniedError":
+      if (error.reason === "account_deleted")
+        return "This GOAT Connect account has been deleted. Unlink connected machines locally if cleanup is unconfirmed.";
       return error.reason === "not_invited"
         ? "GOAT Connect is invite-only. Ask the operator for access."
         : "GOAT Connect access is suspended. Contact the operator.";

@@ -1,4 +1,14 @@
 import {
+  RelayAccountDeletionAccepted,
+  RelayAccountDeletionCompleted,
+  RelayAccountDeletionTerminal,
+  RelayAccountDeletionStatus,
+  RelayHostRevocationRequest,
+  RelayHostRevocationAckRequest,
+  RelayHostRevocationReceipt,
+} from "./relayAccountDeletion.ts";
+export * from "./relayAccountDeletion.ts";
+import {
   RelayEnvironmentEndpointFailure,
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
@@ -789,6 +799,51 @@ const RelayMobileGroup = HttpApiGroup.make("mobile")
   .annotate(OpenApi.Description, "Mobile push-notification and Live Activity registration.")
   .middleware(RelayDpopClientAuth);
 
+export const RelayDeleteAccountEndpoint = HttpApiEndpoint.delete(
+  "deleteAccount",
+  "/v1/client/account",
+  {
+    headers: Schema.Struct({
+      authorization: Schema.String,
+      "idempotency-key": Schema.String.check(Schema.isUUID()),
+    }),
+    success: [
+      RelayAccountDeletionAccepted,
+      RelayAccountDeletionCompleted,
+      RelayAccountDeletionTerminal,
+    ],
+    error: RelayAuthAndInternalErrors,
+  },
+);
+const RelayAccountGroup = HttpApiGroup.make("account").add(
+  RelayDeleteAccountEndpoint,
+  HttpApiEndpoint.get("getAccountDeletion", "/v1/client/account/deletion", {
+    headers: RelayBearerRequestHeaders,
+    success: RelayAccountDeletionStatus,
+    error: RelayAuthAndInternalErrors,
+  }),
+);
+const RelayHostRevocationGroup = HttpApiGroup.make("hostRevocation").add(
+  HttpApiEndpoint.post("getHostRevocation", "/v1/environments/:environmentId/cloud-revocation", {
+    headers: RelayBearerRequestHeaders,
+    params: Schema.Struct({ environmentId: EnvironmentId }),
+    payload: RelayHostRevocationRequest,
+    success: RelayHostRevocationReceipt,
+    error: RelayAuthAndInternalErrors,
+  }),
+  HttpApiEndpoint.post(
+    "ackHostRevocation",
+    "/v1/environments/:environmentId/cloud-revocation/ack",
+    {
+      headers: RelayBearerRequestHeaders,
+      params: Schema.Struct({ environmentId: EnvironmentId }),
+      payload: RelayHostRevocationAckRequest,
+      success: RelayOkResponse,
+      error: RelayAuthAndInternalErrors,
+    },
+  ),
+);
+
 const RelayClientGroup = HttpApiGroup.make("client")
   .add(
     HttpApiEndpoint.post("createCliLinkApproval", "/v1/client/cli-link-approvals", {
@@ -992,6 +1047,8 @@ const RelayHooksGroup = HttpApiGroup.make("hooks")
 
 export const RelayApi = HttpApi.make("RelayApi")
   .add(
+    RelayAccountGroup,
+    RelayHostRevocationGroup,
     RelayHealthGroup,
     RelayMetadataGroup,
     RelayMobileGroup,

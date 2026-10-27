@@ -1,3 +1,4 @@
+import { assertEnabled } from "../auth/MintControl.ts";
 import * as AccountAccess from "../accounts/AccountAccess.ts";
 import * as EnvironmentOwnership from "./EnvironmentOwnership.ts";
 import * as RelayRateLimits from "../accounts/RelayRateLimits.ts";
@@ -434,6 +435,7 @@ const make = Effect.gen(function* () {
 
   return EnvironmentConnector.of({
     status: Effect.fn("relay.environment_connector.status")(function* (input) {
+      yield* assertEnabled(settings);
       const admitted = yield* access.admit(input.userId);
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,
@@ -601,6 +603,7 @@ const make = Effect.gen(function* () {
       };
     }),
     connect: Effect.fn("relay.environment_connector.connect")(function* (input) {
+      yield* assertEnabled(settings);
       const admitted = yield* access.admit(input.userId);
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,

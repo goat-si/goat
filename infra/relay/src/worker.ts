@@ -1,3 +1,10 @@
+import * as MintControlApi from "./http/MintControlApi.ts";
+import * as MintControl from "./auth/MintControl.ts";
+import * as AccountDeletionAuthentication from "./auth/AccountDeletionAuthentication.ts";
+import * as AccountErasure from "./accounts/AccountErasure.ts";
+import * as HostRevocations from "./accounts/HostRevocations.ts";
+import * as AccountDeletionApi from "./http/AccountDeletionApi.ts";
+import * as ClerkDeletionWebhook from "./http/ClerkDeletionWebhook.ts";
 import * as ApnsDeliveryQueueConsumer from "./agentActivity/ApnsDeliveryQueueConsumer.ts";
 import * as AccountAccess from "./accounts/AccountAccess.ts";
 import * as AccountTransactions from "./accounts/AccountTransactions.ts";
@@ -122,6 +129,8 @@ const layerHttpPlatformNotSupported = Layer.succeed(HttpPlatform.HttpPlatform, {
 });
 
 const layerRelayApi = Layer.mergeAll(
+  AccountDeletionApi.layerAccount,
+  AccountDeletionApi.layerHost,
   RelayHttpApi.layerHealthApi,
   RelayHttpApi.layerMetadataApi,
   RelayHttpApi.layerMobileApi,
@@ -198,6 +207,14 @@ export const layer = Api.make(
       .map((origin) => origin.trim())
       .filter(Boolean);
     const clerkCliOAuthClientId = yield* Config.String("CLERK_CLI_OAUTH_CLIENT_ID");
+    const mintDisabled = yield* MintControl.config;
+    const subjectDigestKey = yield* Config.Redacted("RELAY_SUBJECT_DIGEST_KEY");
+    const clerkWebhookSigningSecret = Option.getOrUndefined(
+      yield* Config.option(Config.Redacted("CLERK_WEBHOOK_SIGNING_SECRET")),
+    );
+    const clerkSessionIssuer = Option.getOrUndefined(
+      yield* Config.option(Config.String("CLERK_SESSION_ISSUER")),
+    );
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -269,6 +286,10 @@ export const layer = Api.make(
         clerkJwtAudience,
         clerkAuthorizedParties,
         clerkCliOAuthClientId,
+        mintDisabled,
+        subjectDigestKey,
+        clerkWebhookSigningSecret,
+        clerkSessionIssuer,
         cloudMintPrivateKey: yield* cloudMintPrivateKey,
         cloudMintPublicKey: yield* cloudMintPublicKey,
         managedEndpointBaseDomain: yield* managedEndpointZoneName,
@@ -307,10 +328,10 @@ export const layer = Api.make(
           .wake(baseUrl)
           .pipe(inboxCall("wake", endpointKey));
       }),
-      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey, authorization }) {
+      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey, authorization, retire }) {
         return hookInboxes
           .getByName(endpointKey)
-          .clear(authorization)
+          .clear(authorization, retire)
           .pipe(inboxCall("clear", endpointKey));
       }),
     });
@@ -319,6 +340,10 @@ export const layer = Api.make(
       RelayRateLimits.RelayRateLimits,
       yield* RelayRateLimits.makeWorkerRateLimits({
         stage,
+        close: (key) =>
+          accountCounters.getByName(key).close().pipe(
+            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          ),
         hourly: (key, operation) =>
           accountCounters
             .getByName(key)
@@ -337,6 +362,9 @@ export const layer = Api.make(
     const layerRuntime = Layer.empty
       .pipe(
         Layer.provideMerge(AccountLifecycle.layer),
+        Layer.provideMerge(AccountErasure.layer),
+        Layer.provideMerge(HostRevocations.layer),
+        Layer.provideMerge(AccountDeletionAuthentication.layer),
         Layer.provideMerge(RetiredEndpointCollector.layer),
         Layer.provideMerge(MobileRegistrations.layer),
         Layer.provideMerge(AgentActivityPublisher.layer),
@@ -460,7 +488,7 @@ export const layer = Api.make(
     });
 
     const layerApp = Layer.merge(
-      Layer.merge(layerRelayApi, AccountAdminApi.layer),
+      Layer.mergeAll(layerRelayApi, AccountAdminApi.layer, ClerkDeletionWebhook.layer),
       HookForwarder.layerApi.pipe(
         Layer.provide(HookForwarder.layer),
         Layer.provide(layerHookRateLimiter),
@@ -576,7 +604,12 @@ export const layer = Api.make(
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         RelayHttpApi.layerDocsRedirectRoute,
       ).pipe(
-        Layer.provide([Etag.layerWeak, layerHttpPlatformNotSupported, RelayHttpApi.layerCors]),
+        Layer.provide([
+          Etag.layerWeak,
+          layerHttpPlatformNotSupported,
+          RelayHttpApi.layerCors,
+          MintControlApi.layer.pipe(Layer.provide(layerRuntime)),
+        ]),
       ),
       RelayHttpApi.layerNotFoundRoute,
     ).pipe(

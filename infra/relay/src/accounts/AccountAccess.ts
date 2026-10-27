@@ -6,6 +6,9 @@ import {
   RelayAccountEpochStaleError,
   RelayAuthorizationUnavailableError,
 } from "@goat/contracts/relayErrors";
+import { subjectDigest } from "./SubjectDigest.ts";
+import { RelayConfiguration } from "../Config.ts";
+import { RelayMintDisabledError } from "@goat/contracts/relayErrors";
 import { RelayDb } from "../db.ts";
 
 export interface AccountAdmission {
@@ -17,6 +20,7 @@ export const AccountRequestAdmission = Context.Reference<AccountAdmission | unde
   { defaultValue: () => undefined },
 );
 export type AccountAccessError =
+  | RelayMintDisabledError
   | RelayAccountAccessDeniedError
   | RelayAccountEpochStaleError
   | RelayAuthorizationUnavailableError;
@@ -35,11 +39,16 @@ export class AccountAccess extends Context.Service<
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb;
+  const config = yield* RelayConfiguration;
   const read = Effect.fn("AccountAccess.read")(function* (userId: string) {
+    const digest = yield* subjectDigest(userId).pipe(
+      Effect.provideService(RelayConfiguration, config),
+    );
     const rows = yield* db.$client<{
-      status: "allowed" | "suspended";
+      status: "allowed" | "suspended" | "deleted";
+      deletion_requested_at: string | null;
       account_epoch: number;
-    }>`SELECT status,account_epoch FROM relay_account_access WHERE user_id=${userId}`.pipe(
+    }>`SELECT status,account_epoch,deletion_requested_at FROM relay_account_access WHERE subject_digest=${digest} OR (subject_digest IS NULL AND user_id=${userId})`.pipe(
       Effect.mapError(
         () =>
           new RelayAuthorizationUnavailableError({
@@ -49,10 +58,15 @@ const make = Effect.gen(function* () {
       ),
     );
     const row = rows[0];
-    if (!row || row.status !== "allowed")
+    if (!row || row.status !== "allowed" || row.deletion_requested_at)
       return yield* new RelayAccountAccessDeniedError({
         code: "account_access_denied",
-        reason: row ? "suspended" : "not_invited",
+        reason:
+          row?.status === "deleted" || row?.deletion_requested_at
+            ? "account_deleted"
+            : row
+              ? "suspended"
+              : "not_invited",
         traceId: "relay",
       });
     return { userId, accountEpoch: row.account_epoch };

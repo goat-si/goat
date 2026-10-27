@@ -1,3 +1,4 @@
+import { policyUnitLayer } from "../accounts/test/PolicyUnitLayers.ts";
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -37,6 +38,7 @@ describe("DeliveryAttempts", () => {
     return Effect.gen(function* () {
       const attempts = yield* DeliveryAttempts.DeliveryAttempts;
       const claimed = yield* attempts.claimSourceJob({
+        accountEpoch: 1,
         userId: "user-1",
         environmentId: null,
         threadId: null,
@@ -50,6 +52,7 @@ describe("DeliveryAttempts", () => {
     }).pipe(
       Effect.provide(
         DeliveryAttempts.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
         ),
@@ -87,6 +90,7 @@ describe("DeliveryAttempts", () => {
     return Effect.gen(function* () {
       const attempts = yield* DeliveryAttempts.DeliveryAttempts;
       const claimed = yield* attempts.claimSourceJob({
+        accountEpoch: 1,
         userId: "user-1",
         environmentId: null,
         threadId: null,
@@ -100,6 +104,7 @@ describe("DeliveryAttempts", () => {
     }).pipe(
       Effect.provide(
         DeliveryAttempts.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
         ),
@@ -148,6 +153,7 @@ describe("DeliveryAttempts", () => {
     return Effect.gen(function* () {
       const attempts = yield* DeliveryAttempts.DeliveryAttempts;
       const claimed = yield* attempts.claimSourceJob({
+        accountEpoch: 1,
         userId: "user-1",
         environmentId: null,
         threadId: null,
@@ -162,6 +168,7 @@ describe("DeliveryAttempts", () => {
     }).pipe(
       Effect.provide(
         DeliveryAttempts.layer.pipe(
+          Layer.provide(policyUnitLayer),
           Layer.provide(NodeCryptoLayer.layer),
           Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
         ),
