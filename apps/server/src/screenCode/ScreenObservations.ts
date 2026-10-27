@@ -8,6 +8,9 @@ import type {
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
 
+// Playwright single-quotes a tree line whose name contains ": ".
+const TREE_ROLE = /^(?:-\s*)?'?(\w[\w-]*)/;
+
 export interface ScreenObservationDraft {
   readonly targetRef: ScreenTargetRef;
   readonly targetGeneration: number;
@@ -181,7 +184,7 @@ export class ScreenObservations {
     for (const line of lines) {
       const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
       if (!ref) continue;
-      const role = line.trim().match(/^-?\s*([\w-]+)/)?.[1] ?? "element";
+      const role = line.trim().match(TREE_ROLE)?.[1] ?? "element";
       const name = line.replace(/\[ref=[^\]]+\]/g, "").trim();
       elements.push({ role, name, driverToken: `aria-ref=${ref}` });
     }
@@ -252,8 +255,8 @@ export class ScreenObservations {
       };
       for (let index = 0; index < lines.length; index++) {
         const line = lines[index] ?? "";
-        const content = line.trim().replace(/^-\s*/, "");
-        const role = content.match(/^([\w-]+)/)?.[1] ?? "";
+        const content = line.trim().replace(/^-\s*'?/, "");
+        const role = content.match(TREE_ROLE)?.[1] ?? "";
         const name = content
           .slice(role.length)
           .replace(/\[(?:ref=[^\]]+|active|focused)\]/g, "")

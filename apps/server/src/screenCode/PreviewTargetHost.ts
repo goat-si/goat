@@ -1,3 +1,4 @@
+import { classifyBrowserActionOutcome } from "../preview/actionOutcomeSafety.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Target and image IDs are host-owned opaque values.
 import * as NodeCrypto from "node:crypto";
 import type {
@@ -225,9 +226,26 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     operation: Parameters<typeof broker.invoke>[0]["operation"],
     input: unknown,
   ) =>
-    broker
-      .invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) })
-      .pipe(Effect.mapError((error) => previewTargetFailure(error, operation)));
+    broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
+      Effect.mapError((error) => {
+        const safety = classifyBrowserActionOutcome({
+          operation,
+          status: "failed",
+          errorTag: error._tag,
+          ...(error._tag === "PreviewAutomationControlInterruptedError"
+            ? { controlReason: error.reason, dispatched: error.dispatched }
+            : {}),
+        });
+        return {
+          ...previewTargetFailure(error, operation),
+          code: safety.possibleCommit
+            ? ("unknown_outcome" as const)
+            : ("downstream_failure" as const),
+          effectStarted: safety.possibleCommit,
+          safety,
+        };
+      }),
+    );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
       yield* authorize(context);
@@ -625,6 +643,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         value: result,
         category: "unverifiable",
         evidence: ["dispatched; observe to confirm"],
+        safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
       };
     },
   );

@@ -91,6 +91,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
+import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -1366,8 +1367,7 @@ export const CODEX_THREAD_CONFIG = {
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
 
-// GOAT wait tools can block for up to an hour. Keep Codex's MCP timeout above
-// that limit so the server's own wait timeout ends a long call.
+// Keep Codex MCP calls longer than GOAT's hour-long wait tools.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
 // openai/codex 2f19a57704 (0.147.0) keeps a boolean `features.multi_agent_v2` enabled when a table
@@ -1885,18 +1885,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               )
             : [];
-        const client = yield* clientFactory.open({
-          instanceId: adapterOptions.instanceId,
-          threadId: input.threadId,
-          providerSessionId: input.providerSessionId,
-          runtimePolicy: input.runtimePolicy,
-          settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: McpProviderSession.withThreadMcpEnvironment(
-            routeInput.execution.environment,
-            undefined,
-          ),
-          routeArgs,
-        });
+        const client = yield* clientFactory
+          .open({
+            instanceId: adapterOptions.instanceId,
+            threadId: input.threadId,
+            providerSessionId: input.providerSessionId,
+            runtimePolicy: input.runtimePolicy,
+            settings: resolvedRuntime?.config ?? adapterOptions.settings,
+            environment: McpProviderSession.withThreadMcpEnvironment(
+              routeInput.execution.environment,
+              undefined,
+            ),
+            routeArgs,
+          })
+          .pipe(Effect.flatMap(withCodexRequestDeadlines));
         const memoryByThread = new Map<
           string,
           {
@@ -2083,8 +2085,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const initialized = yield* Ref.make(false);
         let codexVersion: string | undefined;
         let reportedSubagentGap = false;
-        // Threads share this app-server, and Codex rejects a second
-        // `initialize`.
+        // A shared app-server accepts initialize only once.
         const initializePermit = yield* Semaphore.make(1);
         const verifySessionRoute = (cwd = routeInput.execution.cwd) =>
           Effect.gen(function* () {
@@ -2115,7 +2116,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* verifySessionRoute();
               return;
             }
-
             const initializeResponse = yield* client
               .request("initialize", {
                 clientInfo: buildCodexInitializeParams().clientInfo,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  PreviewAutomationConnectionId,
+  PreviewAutomationControlInterruptedError,
+  PreviewAutomationTimeoutError,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Stream from "effect/Stream";
@@ -120,6 +128,138 @@ it.effect(
     );
   },
 );
+
+it.effect("preview click and evaluate expose safety after MCP result encoding", () => {
+  const scope: McpInvocationContext.McpInvocationScope = {
+    environmentId: EnvironmentId.make("preview-safety-env"),
+    requestNamespace: "preview-safety",
+    thread: {
+      threadId: ThreadId.make("preview-safety-thread"),
+      providerSessionId: "safety",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    },
+    client: undefined,
+    capabilities: new Set(["preview"]),
+    issuedAt: 0,
+  };
+  const dependencies = Layer.mergeAll(
+    layerPermissionProfilesOff,
+    liveThreadsLayer,
+    ServerConfig.layerTest(process.cwd(), { prefix: "goat-preview-safety-" }).pipe(
+      Layer.provideMerge(NodeServices.layer),
+    ),
+    Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
+      invoke: <A>(
+        request: Parameters<
+          PreviewAutomationBroker.PreviewAutomationBroker["Service"]["invoke"]
+        >[0],
+      ) => {
+        if (request.operation === "type")
+          return Effect.fail(
+            new PreviewAutomationTimeoutError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "type",
+              requestId: "safety-request",
+              timeoutMs: 1,
+            }),
+          );
+        if (request.operation === "press")
+          return Effect.fail(
+            new PreviewAutomationControlInterruptedError({
+              environmentId: scope.environmentId,
+              threadId: ThreadId.make("preview-safety-thread"),
+              providerSessionId: "safety",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              clientId: "browser",
+              connectionId: PreviewAutomationConnectionId.make("connection"),
+              operation: "press",
+              requestId: "safety-request",
+              timeoutMs: 1,
+              remoteTag: "PreviewAutomationControlInterruptedError",
+              remoteMessageLength: 0,
+              cause: undefined,
+              reason: "stopped",
+              dispatched: false,
+            }),
+          );
+        if (request.operation === "fillSecret")
+          return Effect.succeed({
+            filled: true,
+            origin: "https://x.test",
+            privateMode: false,
+          } as A);
+        return Effect.succeed((request.operation === "evaluate" ? 42 : {}) as A);
+      },
+    }),
+  );
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const click = yield* server.callTool({
+      name: "goat_preview_click",
+      arguments: { selector: "button" },
+    });
+    expect(click.isError, JSON.stringify(click)).not.toBe(true);
+    expect(click.structuredContent).toMatchObject({
+      safety: { possibleCommit: true, retryClass: "never", code: "write_committed" },
+    });
+    const evaluated = yield* server.callTool({
+      name: "goat_preview_evaluate",
+      arguments: { expression: "42" },
+    });
+    expect(evaluated.structuredContent).toMatchObject({
+      value: 42,
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    const failed = yield* server.callTool({
+      name: "goat_preview_type",
+      arguments: { selector: "input", text: "hello" },
+    });
+    expect(failed.isError).toBe(true);
+    expect(
+      JSON.parse(
+        failed.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join(""),
+      ),
+    ).toMatchObject({
+      _tag: "PreviewAutomationTimeoutError",
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    // A tab stopped before the key went out sent nothing.
+    const stopped = yield* server.callTool({ name: "goat_preview_press", arguments: { key: "a" } });
+    expect(stopped.isError).toBe(true);
+    const stoppedText = stopped.content.find((part) => part.type === "text");
+    expect(stoppedText?.type === "text" ? JSON.parse(stoppedText.text) : null).toMatchObject({
+      reason: "stopped",
+      safety: { possibleCommit: false },
+    });
+    const filled = yield* server.callTool({
+      name: "goat_preview_fill_secret",
+      arguments: { secretRef: "secret-ref" },
+    });
+    expect(filled.isError, JSON.stringify(filled)).not.toBe(true);
+    expect(filled.structuredContent).toMatchObject({
+      filled: true,
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+  }).pipe(
+    Effect.provideService(McpSchema.McpServerClient, mcpClient),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    Effect.provide(
+      McpHttpServer.toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard).pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(dependencies),
+        Layer.provideMerge(Sqlite.layerMemory),
+      ),
+    ),
+  );
+});
 
 describe("claimPreviewRecording", () => {
   it.effect("overlapping and repeated claims return the same retained recording", () =>

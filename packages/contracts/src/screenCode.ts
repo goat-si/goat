@@ -4,6 +4,8 @@ import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 
+import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
+
 const id = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(200));
 const text = (max: number) => Schema.String.check(Schema.isMaxLength(max));
 const natural = Schema.Int.check(
@@ -132,6 +134,8 @@ export const ScreenRunCell = Schema.Struct({
   source: utf8Text(64 * 1024),
   resetValues: Schema.Boolean,
   limits: ScreenRunLimits,
+  /** The parent's epoch-ms wall deadline, so time spent starting the child counts on both sides. */
+  deadlineMillis: natural,
 });
 export type ScreenRunCell = typeof ScreenRunCell.Type;
 
@@ -227,6 +231,7 @@ export const ScreenObservation = Schema.Struct({
 export type ScreenObservation = typeof ScreenObservation.Type;
 
 export const ScreenEffectReceipt = Schema.Struct({
+  safety: Schema.optionalKey(ActionOutcomeSafety),
   callId: natural,
   targetId: Schema.optionalKey(id),
   method: ScreenMethod,
@@ -246,6 +251,7 @@ export const ScreenEffectReceipt = Schema.Struct({
 export type ScreenEffectReceipt = typeof ScreenEffectReceipt.Type;
 
 export const ScreenRunError = Schema.Struct({
+  safety: Schema.optionalKey(ActionOutcomeSafety),
   code: Schema.Literals([
     "invalid_argument",
     "unsupported",
@@ -276,6 +282,8 @@ export const ScreenRunError = Schema.Struct({
     "private",
     "cleanup_failed",
     "context_reset",
+    // An earlier call in the same cell failed, so this one was never dispatched.
+    "not_run",
   ]),
   reason: Schema.optionalKey(Schema.Literal("desktop_not_ready")),
   ...refusalFields,
@@ -293,6 +301,7 @@ export type ScreenRunError = typeof ScreenRunError.Type;
 export const ScreenGuestError = Schema.Struct({
   name: text(80),
   message: utf8Text(1024),
+  safety: Schema.optionalKey(ActionOutcomeSafety),
 });
 export type ScreenGuestError = typeof ScreenGuestError.Type;
 

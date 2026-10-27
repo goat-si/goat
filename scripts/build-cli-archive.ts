@@ -22,6 +22,7 @@ import { ownRuntimeManifest, RUNTIME_MANIFEST_ARCHIVE_ENTRY } from "@goat/shared
 import { resolveBuildCommit, resolveBuildCommitTime } from "./lib/build-commit-time.ts";
 import { fromYaml } from "@goat/shared/schemaYaml";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { assertLinuxArm64PageCompatibility } from "./lib/linux-arm64-sea.ts";
 import rootPackageJson from "../package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -594,8 +595,12 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
 
   yield* requireInput(
     builtExecutable,
-    `Run \`node apps/server/scripts/cli.ts build-exe --target ${targetKey}\` first.`,
+    `Run \`node apps/server/scripts/cli.ts build-exe${targetKey === hostKey ? "" : ` --target ${targetKey}`}\` first.`,
   );
+  if (input.platform === "linux" && input.arch === "arm64") {
+    const bytes = yield* fs.readFile(builtExecutable);
+    yield* Effect.try(() => assertLinuxArm64PageCompatibility(bytes));
+  }
   yield* requireInput(
     path.join(webClient, "index.html"),
     "Run `vp run --filter goat build` first.",

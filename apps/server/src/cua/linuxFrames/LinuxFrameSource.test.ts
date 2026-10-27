@@ -9,10 +9,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   BUSY_CAPTURE,
   SHARED_CAPTURE,
+  STILL_DRAWING,
   UNREDIRECTED_CAPTURE,
   type X11WindowCapture,
 } from "../linuxHelper/x11WindowCapture.ts";
@@ -119,6 +121,29 @@ describe("Linux live frames (#1370)", () => {
       const message = yield* Queue.take(sent);
       assert.include(message, { type: "cuaFrame", seq: 3, key: TARGET.key, width: 16 });
     }),
+  );
+
+  it.effect(
+    "tells a viewer the capture failed once a window stays unreadable three tries in a row",
+    () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const { source, sent } = yield* sourceWith({
+          capture: async () => {
+            reads++;
+            return { refused: STILL_DRAWING, transient: true };
+          },
+        });
+        yield* source.setTargets(1, [TARGET]);
+        yield* TestClock.adjust(TARGET.intervalMs);
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          seq: 1,
+          reason: "captureFailed",
+        });
+        assert.strictEqual(reads, 3);
+      }),
   );
 
   it.effect("sends no pixels when a check cannot be passed, and never reads the window", () =>

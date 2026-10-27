@@ -17,6 +17,7 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
   E,
 >(options: {
   readonly connectionId: string;
+  readonly firstGeneration?: number | undefined;
   readonly manifestStamp?: (() => string | undefined) | undefined;
   readonly startDriver: Effect.Effect<LeaseProxyDriver, E, Scope.Scope>;
   readonly active: () => boolean;
@@ -26,7 +27,7 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
   const scope = yield* Effect.scope;
   let current: Running | undefined;
   let revision = 0;
-  let generation = 0;
+  let generation = options.firstGeneration ?? 0;
   return {
     get current() {
       return current;

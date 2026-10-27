@@ -1,6 +1,7 @@
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
+  ActionOutcomeSafety,
   OrchestratorMcpFailure,
   ToolActivityIcon,
   PreviewAutomationClickInput,
@@ -59,9 +60,11 @@ const dependencies = [
 
 const PreviewToolFailure = Schema.Union([PreviewAutomationError, OrchestratorMcpFailure]);
 
+const safetyFields = { safety: Schema.optionalKey(ActionOutcomeSafety) };
 const presentationFields = {
   toolIcon: Schema.optional(ToolActivityIcon),
   next: Schema.optional(Schema.String),
+  ...safetyFields,
 };
 
 const PreviewActionResult = Schema.Struct(presentationFields);
@@ -72,8 +75,10 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.status"]));
 
@@ -83,8 +88,10 @@ const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.open"]));
 
@@ -94,8 +101,10 @@ const PreviewDialogTool = Tool.make(agentSurfaceRegistry["preview.dialog"].name,
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.dialog"]));
 
@@ -105,8 +114,10 @@ const PreviewNavigateTool = Tool.make(agentSurfaceRegistry["preview.navigate"].n
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.navigate"]));
 
@@ -116,8 +127,10 @@ const PreviewBackTool = Tool.make(agentSurfaceRegistry["preview.back"].name, {
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.back"]));
 
@@ -127,8 +140,10 @@ const PreviewForwardTool = Tool.make(agentSurfaceRegistry["preview.forward"].nam
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.forward"]));
 
@@ -138,8 +153,10 @@ const PreviewReloadTool = Tool.make(agentSurfaceRegistry["preview.reload"].name,
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
+    ...safetyFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.reload"]));
 
@@ -148,6 +165,7 @@ const PreviewResizeTool = Tool.make(agentSurfaceRegistry["preview.resize"].name,
   parameters: PreviewAutomationResizeInput,
   success: Schema.Struct({ ...PreviewAutomationResizeResult.fields, ...presentationFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.resize"]));
 
@@ -159,6 +177,7 @@ const PreviewSetAppearanceTool = Tool.make(agentSurfaceRegistry["preview.set_app
     ...presentationFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.set_appearance"]));
 
@@ -180,16 +199,18 @@ export const PreviewSnapshotTool = Tool.make(agentSurfaceRegistry["preview.snaps
       }),
     ),
   }),
-  success: PreviewAutomationSnapshot,
+  success: Schema.Struct({ ...PreviewAutomationSnapshot.fields, ...safetyFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.snapshot"]));
 
 const PreviewLogsTool = Tool.make(agentSurfaceRegistry["preview.logs"].name, {
   description: agentSurfaceRegistry["preview.logs"].description,
   parameters: PreviewAutomationLogsInput,
-  success: PreviewAutomationLogs,
+  success: Schema.Struct({ ...PreviewAutomationLogs.fields, ...safetyFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.logs"]));
 
@@ -206,13 +227,14 @@ const PreviewFetchTool = Tool.make(agentSurfaceRegistry["preview.fetch"].name, {
   parameters: PreviewAutomationFetchInput,
   success: Schema.Struct({ ...PreviewAutomationFetchResult.fields, ...presentationFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fetch"]));
 
 const PreviewFillSecretTool = Tool.make(agentSurfaceRegistry["preview.fill_secret"].name, {
   description: agentSurfaceRegistry["preview.fill_secret"].description,
   parameters: PreviewAutomationFillSecretInput,
-  success: PreviewAutomationFillSecretResult,
+  success: Schema.Struct({ ...PreviewAutomationFillSecretResult.fields, ...safetyFields }),
   failure: PreviewToolFailure,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_secret"]));
@@ -222,6 +244,7 @@ const PreviewScrollCollectTool = Tool.make(agentSurfaceRegistry["preview.scroll_
   parameters: PreviewAutomationScrollCollectInput,
   success: Schema.Struct({ ...PreviewAutomationScrollCollectResult.fields, ...presentationFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.scroll_collect"]));
 
@@ -230,6 +253,7 @@ const PreviewClickTool = Tool.make(agentSurfaceRegistry["preview.click"].name, {
   parameters: PreviewAutomationClickInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.click"]));
 
@@ -238,6 +262,7 @@ const PreviewTypeTool = Tool.make(agentSurfaceRegistry["preview.type"].name, {
   parameters: PreviewAutomationTypeInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.type"]));
 
@@ -246,6 +271,7 @@ const PreviewHoverTool = Tool.make(agentSurfaceRegistry["preview.hover"].name, {
   parameters: PreviewAutomationHoverInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.hover"]));
 
@@ -257,6 +283,7 @@ const PreviewSelectTool = Tool.make(agentSurfaceRegistry["preview.select"].name,
     ...presentationFields,
   }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.select"]));
 
@@ -265,6 +292,7 @@ const PreviewDragTool = Tool.make(agentSurfaceRegistry["preview.drag"].name, {
   parameters: PreviewAutomationDragInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.drag"]));
 
@@ -273,6 +301,7 @@ const PreviewUploadTool = Tool.make(agentSurfaceRegistry["preview.upload"].name,
   parameters: PreviewAutomationUploadInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.upload"]));
 
@@ -281,6 +310,7 @@ const PreviewPressTool = Tool.make(agentSurfaceRegistry["preview.press"].name, {
   parameters: PreviewAutomationPressInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.press"]));
 
@@ -289,6 +319,7 @@ const PreviewScrollTool = Tool.make(agentSurfaceRegistry["preview.scroll"].name,
   parameters: PreviewAutomationScrollInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.scroll"]));
 
@@ -305,6 +336,7 @@ const PreviewEvaluateTool = Tool.make(agentSurfaceRegistry["preview.evaluate"].n
   parameters: PreviewAutomationEvaluateInput,
   success: PreviewEvaluateResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.evaluate"]));
 
@@ -313,6 +345,7 @@ const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait"].name, 
   parameters: PreviewAutomationWaitForInput,
   success: PreviewActionResult,
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.wait"]));
 
@@ -321,6 +354,7 @@ const PreviewRecordingStartTool = Tool.make(agentSurfaceRegistry["preview.record
   parameters: PreviewAutomationTabTargetInput,
   success: Schema.Struct({ ...PreviewAutomationRecordingStatus.fields, ...presentationFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.recording_start"]));
 
@@ -329,6 +363,7 @@ const PreviewRecordingStopTool = Tool.make(agentSurfaceRegistry["preview.recordi
   parameters: PreviewAutomationTabTargetInput,
   success: Schema.Struct({ ...PreviewAutomationRecordingArtifact.fields, ...presentationFields }),
   failure: PreviewToolFailure,
+  failureMode: "return",
   dependencies: [...dependencies, FileSystem.FileSystem, ServerConfig.ServerConfig],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.recording_stop"]));
 

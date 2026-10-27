@@ -22,6 +22,83 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it.each(["cursor", "cursorCloud"])(
+    "keeps ambiguous families in the mixed %s catalog and honors supplied labels",
+    (driver) => {
+      const config = {
+        providers: [
+          {
+            instanceId: driver,
+            driver,
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [
+              { slug: "grok", name: "Grok 4 Pro", isCustom: false, capabilities: null },
+              { slug: "claude", name: "Claude Opus 5.5", isCustom: false, capabilities: null },
+              {
+                slug: "supplied",
+                name: "Grok 4 Pro",
+                shortName: "Account label",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+          },
+        ],
+      } as unknown as ServerConfig;
+      const options = buildModelOptions(config, null, undefined, null);
+      expect(options.map((option) => option.shortName ?? option.label)).toEqual([
+        "Grok 4 Pro",
+        "Opus 5.5",
+        "Account label",
+      ]);
+      expect(options.map((option) => option.selection)).toEqual(
+        ["grok", "claude", "supplied"].map((model) => ({ instanceId: driver, model })),
+      );
+    },
+  );
+
+  it("keeps full labels and routing while deriving compact model labels", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "gpt-sol", name: "GPT-6.1-Sol", isCustom: false, capabilities: null },
+            { slug: "custom", name: "Claude Opus 5.5", isCustom: true, capabilities: null },
+            {
+              slug: "special",
+              name: "GPT Special",
+              shortName: "Supplied label",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+    const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-sol" };
+    const options = buildModelOptions(config, selection, undefined, null);
+    expect(options).toMatchObject([
+      { label: "GPT-6.1-Sol", shortName: "6.1 Sol", selection },
+      { label: "Claude Opus 5.5", shortName: "Opus 5.5", selection: { model: "custom" } },
+      { label: "GPT Special", shortName: "Supplied label" },
+    ]);
+
+    const disabledConfig = {
+      ...config,
+      providers: config.providers.map((p) => ({ ...p, enabled: false })),
+    };
+    expect(buildModelOptions(disabledConfig, selection, undefined, null)).toMatchObject([
+      { label: "GPT-6.1-Sol", shortName: "6.1 Sol", selection, isUnavailable: true },
+    ]);
+  });
+
   it("distinguishes same-name OpenCode models without changing their routing", () => {
     const sources = [
       { id: "anthropic", label: "Anthropic" },

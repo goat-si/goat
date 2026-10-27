@@ -49,7 +49,7 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.35",
+    "@cursor/sdk": "1.0.38",
     "@goat/contracts": "workspace:*",
     "@goat/provider-core": "workspace:*",
     "@goat/shared": "workspace:*",
