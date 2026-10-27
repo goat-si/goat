@@ -194,6 +194,7 @@ const fixture = Effect.gen(function* () {
   const ssh = SshRemoteDispatch.SshRemoteDispatch.of({
     proxyEndpoint: () => Effect.die("unused"),
     issueProxySession: () => Effect.die("unused"),
+    revokeChildSetupSessions: () => Effect.die("unused"),
     identifyTarget: (target: { alias: string }) =>
       Effect.suspend(() => {
         state.identify.push(target.alias);

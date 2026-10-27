@@ -7,6 +7,8 @@ import {
   AttachmentCreateUploadUrlResult,
   type AuthEnvironmentScope,
   ChatAttachmentId,
+  type ChildSetupBinding,
+  type ChildSetupPurpose,
   ChatFileAttachment,
   ChatImageAttachment,
   type CloudMachineAlias,
@@ -25,29 +27,22 @@ import {
   type RuntimeMode,
   type SshLaunchWorkspace,
   type SshHostResult,
-  type SshDispatchFailureReason,
 } from "@goat/contracts";
-import * as Semaphore from "effect/Semaphore";
 import * as NetService from "@goat/shared/Net";
 import { isWindowsShellOs, toWindowsHostPath } from "@goat/shared/path";
-import { targetConnectionKey } from "@goat/ssh/command";
 import * as SshAuth from "@goat/ssh/auth";
 import { discoverSshHosts } from "@goat/ssh/config";
-import { SshPairingError, SshPasswordPromptError } from "@goat/ssh/errors";
+import { SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
-import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import type * as Path from "effect/Path";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type { ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { resolveSshCliRunner } from "./sshCliRunner.ts";
@@ -79,6 +74,14 @@ import {
   pendingRuntimeMessage,
 } from "./sshEnvironmentRoute.ts";
 import { remoteModelOffer } from "./remoteModelOffer.ts";
+import {
+  describe,
+  failure,
+  memoryRefusal,
+  type RuntimeServices,
+  SshRemoteDispatchError,
+} from "./dispatchFailure.ts";
+import { type DispatchSession, makeDispatchSessions, SESSION_TTL } from "./dispatchSessions.ts";
 import * as HostRuntime from "./sshHostRuntime.ts";
 import {
   buildRemoteBrowseScript,
@@ -100,32 +103,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
  * name resolves to an HTTPS origin and the session saved when it was linked.
  */
 
-export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchError")<{
-  /**
-   * host_unavailable: SSH, the tunnel, or the remote server could not be
-   * reached or did not answer in time. remote_refused: the remote answered
-   * and refused; remoteCode carries its failure code when it sent one. remote_outdated: the
-   * remote has no such tool, so nothing ran there; this machine never runs it locally instead.
-   * caller_changed: the caller's modes changed while the call was in flight.
-   */
-  readonly reason: SshDispatchFailureReason;
-  readonly message: string;
-  readonly remoteCode?: string | undefined;
-  readonly launchMayHaveStarted?: boolean | undefined;
-}> {}
-
-/**
- * remoteCode on a refusal before any launch because the remote cannot verify or apply a task
- * memory ceiling (an older GOAT). Callers that must not run without the grant fail on it.
- */
-export const MEMORY_CEILING_UNSUPPORTED = "memory_ceiling_unsupported";
-
-const memoryRefusal = (message: string) =>
-  new SshRemoteDispatchError({
-    reason: "remote_refused",
-    message,
-    remoteCode: MEMORY_CEILING_UNSUPPORTED,
-  });
+export { MEMORY_CEILING_UNSUPPORTED, SshRemoteDispatchError } from "./dispatchFailure.ts";
 
 export interface SshDispatchHost {
   readonly alias: string;
@@ -218,6 +196,8 @@ export interface SshLaunchResult {
 
 /** One tool call on another machine's GOAT server. */
 export interface SshHostToolCall {
+  /** A Home's bounded Child setup purpose; only the pinned SSH channel carries it. */
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly environmentId?: EnvironmentId | null;
   readonly onResolvedEnvironmentId?: (environmentId: EnvironmentId | null) => void;
   readonly host: string;
@@ -340,6 +320,10 @@ export class SshRemoteDispatch extends Context.Service<
       call: SshHostToolCall,
       authorize: Effect.Effect<RuntimeMode, E, R>,
     ) => Effect.Effect<unknown, SshRemoteDispatchError | E, R>;
+    /** Revokes every Child setup session issued under a binding; issuance under it stops. */
+    readonly revokeChildSetupSessions: (
+      binding: ChildSetupBinding,
+    ) => Effect.Effect<void, SshRemoteDispatchError>;
     readonly resolveThreadEnvironment?: <E, R>(
       host: string,
       threadId: string,
@@ -379,17 +363,6 @@ const decodeRemoteThread = Schema.decodeUnknownEffect(
   Schema.Struct({ threadId: ThreadId, runId: Schema.optional(Schema.NullOr(Schema.String)) }),
 );
 
-type RuntimeServices =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
-  | FileSystem.FileSystem
-  | Path.Path
-  | HttpClient.HttpClient
-  | NetService.NetService;
-
-const SESSION_TTL = "12h";
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000;
 const BROWSE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_PREPARE_TIMEOUT_MS = 20_000;
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
@@ -406,17 +379,6 @@ const AGENT_CONNECTION = { reuseWhileRefreshPending: true } as const;
 
 /** An alias the SSH config or known_hosts names, with nothing ssh could read as an option. */
 const SAFE_HOST_ALIAS = /^[A-Za-z0-9_][A-Za-z0-9_.@:%+\-[\]]*$/u;
-
-const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
-  new SshRemoteDispatchError({ reason, message, ...facts });
-
-const describe = (error: unknown): string => {
-  if (typeof error === "object" && error !== null && "message" in error) {
-    const message = String((error as { readonly message: unknown }).message).trim();
-    if (message.length > 0) return message;
-  }
-  return String(error);
-};
 
 /**
  * Agents cannot answer an SSH password prompt. Saying the prompt is available
@@ -527,12 +489,7 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = Context.get(runtime, FileSystem.FileSystem);
   const httpClient = Context.get(runtime, HttpClient.HttpClient);
-  const sessions = new Map<
-    string,
-    { readonly token: string; readonly expiresAt: number; readonly ceilingApplied: boolean }
-  >();
-  const sessionLocks = new Map<string, Semaphore.Semaphore>();
-  const primaryServerKinds = new Map<string, "app" | "external" | "managed">();
+  const sessions = new Map<string, DispatchSession>();
   // Cache only optional launch arguments; memory admission always uses a fresh catalog.
   const launchArguments = new Map<string, ReadonlySet<string>>();
   const connected = new Set<string>();
@@ -555,7 +512,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const prefix = `${alias}\u0000`;
       for (const key of sessions.keys()) if (key.startsWith(prefix)) sessions.delete(key);
-      primaryServerKinds.delete(alias);
+      forgetAlias(alias);
       for (const key of launchArguments.keys())
         if (key.startsWith(prefix)) launchArguments.delete(key);
       connected.delete(alias);
@@ -824,138 +781,11 @@ const make = Effect.gen(function* () {
     } satisfies SshBrowseResult;
   });
 
-  const sessionFor = Effect.fn("SshRemoteDispatch.sessionFor")(function* (
-    target: DesktopSshEnvironmentTarget,
-    ceiling: RuntimeMode,
-    approvals = false,
-    memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
-    requireReady?: true,
-    providersManage = false,
-    existingSessionOnly = false,
-    settingsWrite = false,
-    environmentId?: EnvironmentId | null,
-  ) {
-    if (environmentId === undefined || environmentId === null) {
-      const kind = yield* manager.attachedServerKind?.(target) ?? Effect.succeed(null);
-      const previousKind = primaryServerKinds.get(target.alias);
-      if (kind !== null && previousKind !== undefined && previousKind !== kind) {
-        const primaryPrefix = `${targetConnectionKey(target)}\u0000primary\u0000`;
-        for (const session of sessions.keys())
-          if (session.startsWith(primaryPrefix)) sessions.delete(session);
-      }
-      if (kind !== null) primaryServerKinds.set(target.alias, kind);
-    }
-    const key = sessionKey(
-      target,
-      ceiling,
-      approvals,
-      memoryGrantCeiling,
-      providersManage,
-      settingsWrite,
-      environmentId,
-    );
-    if (existingSessionOnly) {
-      const cached = sessions.get(key);
-      const now = yield* Clock.currentTimeMillis;
-      if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
-      return yield* failure(
-        "host_unavailable",
-        "No existing GOAT session permits this operation; reconnect explicitly.",
-      );
-    }
-    const gate = sessionLocks.get(key) ?? Semaphore.makeUnsafe(1);
-    sessionLocks.set(key, gate);
-    const work = Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const cached = sessions.get(key);
-      if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
-      // A session that may answer approvals is never swapped for a narrower one.
-      const issueExisting = manager.issueExistingMcpSession;
-      if (environmentId !== undefined && environmentId !== null && issueExisting === undefined)
-        return yield* failure(
-          "host_unavailable",
-          "This SSH manager cannot issue a session for the requested environment.",
-        );
-      const issued = yield* withRuntime(
-        environmentId === undefined || environmentId === null
-          ? manager.issueMcpClientSession(target, {
-              ...(requireReady === undefined ? {} : { requireReady }),
-              label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""}${settingsWrite ? ", settings" : ""})`,
-              ttl: SESSION_TTL,
-              runtimeModeCeiling: ceiling,
-              ...(approvals ? { approvals: true } : {}),
-              ...(providersManage ? { providersManage: true } : {}),
-              ...(settingsWrite ? { settingsWrite: true } : {}),
-              memoryScopes:
-                memoryGrantCeiling === "none"
-                  ? []
-                  : memoryGrantCeiling === "read"
-                    ? ["memory:read"]
-                    : ["memory:read", "memory:write"],
-            })
-          : issueExisting === undefined
-            ? Effect.die("Existing session issuer disappeared")
-            : issueExisting(target, environmentId, {
-                label: `GOAT SSH dispatch (${ceiling})`,
-                ttl: SESSION_TTL,
-                runtimeModeCeiling: ceiling,
-                ...(approvals ? { approvals: true } : {}),
-                ...(providersManage ? { providersManage: true } : {}),
-                ...(settingsWrite ? { settingsWrite: true } : {}),
-                memoryScopes:
-                  memoryGrantCeiling === "none"
-                    ? []
-                    : memoryGrantCeiling === "read"
-                      ? ["memory:read"]
-                      : ["memory:read", "memory:write"],
-              }),
-      ).pipe(
-        // The remote answered and refused; its message names the runtime and what happens next.
-        Effect.mapError((error) =>
-          error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
-            ? memoryRefusal(error.message)
-            : error,
-        ),
-        approvals
-          ? Effect.mapError((error) =>
-              error instanceof SshRemoteDispatchError
-                ? error
-                : failure(
-                    "remote_refused",
-                    `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
-                  ),
-            )
-          : providersManage
-            ? Effect.mapError((error) =>
-                error instanceof SshRemoteDispatchError
-                  ? error
-                  : failure(
-                      "remote_refused",
-                      `${target.alias} could not issue a GOAT session that may manage providers: ${describe(error)}. Update GOAT there, or manage providers in Settings on ${target.alias}.`,
-                    ),
-              )
-            : sshFailed(target.alias),
-      );
-      const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
-      const session = {
-        token: issued.token,
-        expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : now + SESSION_TTL_MS,
-        ceilingApplied: issued.runtimeModeCeilingApplied,
-      };
-      sessions.set(key, session);
-      launchArguments.delete(key);
-      return session;
-    });
-    if (requireReady === true) {
-      const result = yield* work.pipe(gate.withPermitsIfAvailable(1));
-      if (Option.isNone(result))
-        return yield* failure(
-          "host_unavailable",
-          `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry ${goatCallText("provider.diagnose")}.`,
-        );
-      return result.value;
-    }
-    return yield* work.pipe(gate.withPermit);
+  const { sessionFor, revokeChildSetupSessions, forgetAlias } = makeDispatchSessions({
+    manager,
+    withRuntime,
+    sessions,
+    launchArguments,
   });
 
   // A delayed rejection of an older bearer must not evict its replacement.
@@ -1927,7 +1757,9 @@ const make = Effect.gen(function* () {
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
     const linked = yield* linkedFor(call.host);
-    if (Option.isSome(linked)) return yield* callLinkedHostTool(linked.value, call, authorize);
+    // Setup stays on the pinned SSH channel even after linking; a linked bearer never substitutes.
+    if (Option.isSome(linked) && call.childSetupPurpose === undefined)
+      return yield* callLinkedHostTool(linked.value, call, authorize);
     const target = yield* resolveHost(call.host);
     const ceiling = yield* authorize;
     const requireReady = call.requireReady === true || call.existingSessionOnly === true;
@@ -2006,6 +1838,7 @@ const make = Effect.gen(function* () {
           call.existingSessionOnly === true,
           call.settingsWrite === true,
           routeOrigin,
+          call.childSetupPurpose,
         ).pipe(unavailable(target.alias));
         attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
@@ -2204,6 +2037,7 @@ const make = Effect.gen(function* () {
     validateLaunchAttachments,
     launchThread,
     callHostTool,
+    revokeChildSetupSessions,
     resolveThreadEnvironment,
     connectedHosts,
     runRemoteScript,

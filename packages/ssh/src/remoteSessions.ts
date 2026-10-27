@@ -1,5 +1,13 @@
-import type { AuthEnvironmentScope, DesktopSshEnvironmentTarget } from "@goat/contracts";
-import { AuthEnvironmentScopes } from "@goat/contracts";
+import type {
+  AuthEnvironmentScope,
+  ChildSetupPurpose,
+  DesktopSshEnvironmentTarget,
+} from "@goat/contracts";
+import {
+  AuthEnvironmentScopes,
+  AuthSessionId,
+  ChildSetupPurpose as ChildSetupPurposeSchema,
+} from "@goat/contracts";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -31,6 +39,11 @@ import {
 import type { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
 
 export interface RemoteMcpClientSessionOptions {
+  /**
+   * A Home's bounded Child setup purpose: the issued session carries only orchestration:read
+   * and this signed purpose. An issuer that does not echo it back is refused, never retried.
+   */
+  readonly childSetupPurpose?: ChildSetupPurpose;
   readonly requireReady?: boolean;
   readonly label: string;
   /** A duration the remote CLI accepts, such as `12h`. */
@@ -48,6 +61,8 @@ export interface RemoteMcpClientSessionOptions {
 }
 
 export interface RemoteMcpClientSession {
+  /** Always present for a Child setup session, so the Home can revoke exactly it. */
+  readonly sessionId?: AuthSessionId;
   readonly token: string;
   readonly expiresAt: string | null;
   /** False when the remote CLI predates `--runtime-mode-ceiling` and kept its default. */
@@ -70,6 +85,8 @@ export interface RemoteClientSession {
 const RemoteMcpSessionResult = Schema.Struct({
   token: Schema.String,
   expiresAt: Schema.optional(Schema.NullOr(Schema.String)),
+  sessionId: Schema.optional(AuthSessionId),
+  childSetupPurpose: Schema.optional(ChildSetupPurposeSchema),
 });
 
 const RemoteClientSessionResult = Schema.Struct({
@@ -93,11 +110,18 @@ const REMOTE_MCP_SESSION_SCRIPT = `set -eu
 STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.goat"
 @@GOAT_RUNNER_SETUP@@
-set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate @@GOAT_EXTRA_SCOPES@@--ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
+set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read @@GOAT_OPERATE_SCOPE@@@@GOAT_EXTRA_SCOPES@@--ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
 CEILING=@@GOAT_CEILING@@
 MEMORY_SCOPES=@@GOAT_MEMORY_SCOPES@@
+CHILD_SETUP_PURPOSE=@@GOAT_CHILD_SETUP_PURPOSE@@
 recheck_selected_before_use
-if [ "$MEMORY_SCOPES" = required ]; then
+if [ -n "$CHILD_SETUP_PURPOSE" ]; then
+  # Runs once: an older CLI that rejects the flag fails here instead of issuing a broader session.
+  set -- "$@" --child-setup-purpose "$CHILD_SETUP_PURPOSE"
+  if [ -n "$CEILING" ]; then set -- "$@" --runtime-mode-ceiling "$CEILING"; fi
+  OUTPUT="$("$RUNNER_FILE" "$@")"
+  printf 'GOAT_CEILING=applied\n%s\n' "$OUTPUT"
+elif [ "$MEMORY_SCOPES" = required ]; then
   if lacks_memory_scopes "$RUNNER_FILE"; then
     runtime="$("$RUNNER_FILE" --version 2>/dev/null || true)"; runtime="\${runtime#goat v}"
     printf 'GOAT_SESSION_ERROR=memory_scopes_unsupported runtime=%s\\n' "\${runtime:-unknown}"
@@ -194,21 +218,84 @@ export const memoryScopesUnsupportedError = (stdout: string, alias: string, reme
       });
 };
 
-/** Reads the remote session script's output: a ceiling marker line, then the CLI's JSON. */
+const CHILD_SETUP_PURPOSE_KEYS = [
+  "purpose",
+  "homeEnvironmentId",
+  "destinationEnvironmentId",
+  "operationId",
+  "grantId",
+  "grantRevision",
+  "issuedAt",
+  "expiresAt",
+  "phase",
+  "phaseId",
+  "phaseDeadline",
+] as const;
+
+/**
+ * Reads the remote session script's output: a ceiling marker line, then the CLI's JSON. With a
+ * Child setup purpose the issuer must echo that exact purpose, its session id and an expiry
+ * within it; an issuer that silently dropped the claim would hand back an unbounded bearer.
+ */
 export const decodeRemoteMcpSessionOutput = Effect.fn("ssh/tunnel.decodeRemoteMcpSessionOutput")(
-  function* (stdout: string) {
+  function* (stdout: string, purpose?: ChildSetupPurpose) {
     const marker = /^(?:GOAT|T3)_CEILING=(applied|default)$/mu.exec(stdout);
     const session = yield* decodeRemoteJsonOutput(
       marker === null ? stdout : stdout.slice(marker.index + marker[0].length),
       decodeRemoteMcpSessionResult,
     );
+    if (purpose !== undefined) {
+      const echoed = session.childSetupPurpose;
+      const expiry = typeof session.expiresAt === "string" ? Date.parse(session.expiresAt) : NaN;
+      if (
+        echoed === undefined ||
+        session.sessionId === undefined ||
+        !Number.isFinite(expiry) ||
+        expiry > purpose.expiresAt ||
+        CHILD_SETUP_PURPOSE_KEYS.some((key) => echoed[key] !== purpose[key])
+      )
+        return yield* new SshPairingError({
+          message:
+            "This GOAT issuer did not preserve the bounded Child setup purpose. Update GOAT there.",
+          stdout: "",
+        });
+    }
     return {
+      // Only a setup session is revoked by id; ordinary results keep their earlier shape.
+      ...(purpose === undefined || session.sessionId === undefined
+        ? {}
+        : { sessionId: session.sessionId }),
       token: session.token,
       expiresAt: session.expiresAt ?? null,
       runtimeModeCeilingApplied: marker?.[1] === "applied",
     } satisfies RemoteMcpClientSession;
   },
 );
+
+/**
+ * The typed issuer request for an MCP session. A Child setup purpose asks only for read scope:
+ * its writes are admitted by the purpose itself, never by a broader grant.
+ */
+export const mcpSessionRequestInput = (sessionOptions: RemoteMcpClientSessionOptions) => ({
+  subject: "mcp-client",
+  scopes:
+    sessionOptions.childSetupPurpose === undefined
+      ? [
+          "orchestration:read",
+          "orchestration:operate",
+          ...(sessionOptions.approvals === true ? ["orchestration:approve"] : []),
+          ...(sessionOptions.providersManage === true ? ["providers:manage"] : []),
+          ...(sessionOptions.settingsWrite === true ? ["settings:write"] : []),
+          ...(sessionOptions.memoryScopes ?? []),
+        ]
+      : ["orchestration:read"],
+  ttl: sessionOptions.ttl,
+  label: sessionOptions.label,
+  runtimeModeCeiling: sessionOptions.runtimeModeCeiling,
+  ...(sessionOptions.childSetupPurpose === undefined
+    ? {}
+    : { childSetupPurpose: sessionOptions.childSetupPurpose }),
+});
 
 interface RemoteSessionHooks {
   readonly buildRemoteRunnerSetupScript: (
@@ -238,6 +325,11 @@ export function makeRemoteSessions({
       GOAT_LABEL: shellSingleQuote(options.label),
       GOAT_CEILING: shellSingleQuote(options.runtimeModeCeiling ?? ""),
       GOAT_MEMORY_SCOPES: (options.memoryScopes?.length ?? 0) > 0 ? "required" : "none",
+      GOAT_OPERATE_SCOPE:
+        options.childSetupPurpose === undefined ? "--scope orchestration:operate " : "",
+      GOAT_CHILD_SETUP_PURPOSE: shellSingleQuote(
+        options.childSetupPurpose === undefined ? "" : JSON.stringify(options.childSetupPurpose),
+      ),
       GOAT_EXTRA_SCOPES:
         (options.approvals === true ? "--scope orchestration:approve " : "") +
         (options.providersManage === true ? "--scope providers:manage " : "") +
@@ -289,20 +381,7 @@ export function makeRemoteSessions({
     > {
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
       if (prepared?.appServerPort !== undefined) {
-        const request = appServerSessionRequest({
-          subject: "mcp-client",
-          scopes: [
-            "orchestration:read",
-            "orchestration:operate",
-            ...(sessionOptions.approvals === true ? ["orchestration:approve"] : []),
-            ...(sessionOptions.providersManage === true ? ["providers:manage"] : []),
-            ...(sessionOptions.settingsWrite === true ? ["settings:write"] : []),
-            ...(sessionOptions.memoryScopes ?? []),
-          ],
-          ttl: sessionOptions.ttl,
-          label: sessionOptions.label,
-          runtimeModeCeiling: sessionOptions.runtimeModeCeiling,
-        });
+        const request = appServerSessionRequest(mcpSessionRequestInput(sessionOptions));
         if (Option.isNone(request))
           return yield* new SshPairingError({
             message: `The MCP session requested for ${target.alias} has a scope or runtime mode GOAT cannot grant.`,
@@ -314,7 +393,10 @@ export function makeRemoteSessions({
           request.value,
           input,
         );
-        const session = yield* decodeRemoteMcpSessionOutput(body).pipe(
+        const session = yield* decodeRemoteMcpSessionOutput(
+          body,
+          sessionOptions.childSetupPurpose,
+        ).pipe(
           Effect.mapError(
             (cause) =>
               new SshPairingError({
@@ -373,7 +455,10 @@ export function makeRemoteSessions({
             ),
         }),
       );
-      const session = yield* decodeRemoteMcpSessionOutput(result.stdout).pipe(
+      const session = yield* decodeRemoteMcpSessionOutput(
+        result.stdout,
+        sessionOptions.childSetupPurpose,
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new SshPairingError({

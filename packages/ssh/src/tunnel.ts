@@ -4941,6 +4941,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     existingEnvironment: withSharing(routes.existingEnvironment),
     existingEnvironmentOther: withSharing(routes.existingEnvironmentOther),
     issueExistingMcpSession: withSharing(routes.issueExistingMcpSession),
+    revokeExistingMcpSession: withSharing(routes.revokeExistingMcpSession),
     revalidateTunnels: withSharing(revalidateTunnels),
     issueMcpClientSession: withSharing(issueMcpClientSession),
     issueClientSession: withSharing(issueClientSession),

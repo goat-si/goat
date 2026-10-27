@@ -159,6 +159,7 @@ export const makeSsh = (
     validateLaunchAttachments: unused,
     launchThread: unused,
     callHostTool: unused,
+    revokeChildSetupSessions: unused,
     connectedHosts: Effect.succeed([]),
     proxyEndpoint: (target) =>
       Effect.sync(() => {

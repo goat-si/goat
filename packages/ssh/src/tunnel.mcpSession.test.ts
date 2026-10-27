@@ -1,5 +1,10 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import {
+  type ChildSetupPurpose,
+  EnvironmentId,
+  makeChildSetupPurpose,
+  ORCHESTRATION_PROTOCOL_VERSION,
+} from "@goat/contracts";
 // Execute the generated remote script without contacting SSH or a release server.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
@@ -45,7 +50,12 @@ describe("remote MCP session script", () => {
     NodeFS.rmSync(home, { recursive: true, force: true });
   });
 
-  const fakeCli = (rejectCeiling: boolean, issuedToken = token, rejectMemory = false) => `#!/bin/sh
+  const fakeCli = (
+    rejectCeiling: boolean,
+    issuedToken = token,
+    rejectMemory = false,
+    purposeMode: "echo" | "omit" | "reject" = "omit",
+  ) => `#!/bin/sh
 set -eu
 if [ "$1" = --version ]; then printf 'goat v${archiveVersion}\\n'; exit 0; fi
 if [ "$1" = __ssh-helper ] && [ "$2" = protocol ]; then
@@ -65,7 +75,15 @@ else
   ARGS="$HOME/call-1.args"
 fi
 printf '%s\\n' "$@" > "$ARGS"
+PURPOSE=
+PREVIOUS=
 for ARG in "$@"; do
+  if [ "$PREVIOUS" = "--child-setup-purpose" ]; then PURPOSE="$ARG"; fi
+  PREVIOUS="$ARG"
+  if [ "$ARG" = "--child-setup-purpose" ] && [ "${purposeMode}" = reject ]; then
+    printf 'unknown option: --child-setup-purpose\\n' >&2
+    exit 2
+  fi
   if [ "$ARG" = "memory:read" ] && [ "${rejectMemory ? "1" : "0"}" = "1" ]; then exit 2; fi
   if [ "$ARG" = "--runtime-mode-ceiling" ] && [ "${rejectCeiling ? "1" : "0"}" = "1" ]; then
     if [ -f "$HOME/change-runner" ]; then printf '# changed during auth\\n' >> "$HOME/.goat/ssh-launch/${stateKey}/run-t3.sh"; fi
@@ -73,13 +91,21 @@ for ARG in "$@"; do
     exit 2
   fi
 done
+if [ -n "$PURPOSE" ] && [ "${purposeMode}" = echo ]; then
+  printf '{"sessionId":"fake-session-id","token":"%s","expiresAt":"%s","childSetupPurpose":%s}\\n' '${issuedToken}' '${expiresAt}' "$PURPOSE"
+  exit 0
+fi
 cat <<'JSON'
 ${JSON.stringify({ sessionId: "fake-session-id", token: issuedToken, expiresAt, subject: "mcp-client" }, null, 2)}
 JSON
 `;
 
-  const installFakeRunner = (rejectCeiling: boolean, rejectMemory = false) => {
-    const script = fakeCli(rejectCeiling, token, rejectMemory);
+  const installFakeRunner = (
+    rejectCeiling: boolean,
+    rejectMemory = false,
+    purposeMode: "echo" | "omit" | "reject" = "omit",
+  ) => {
+    const script = fakeCli(rejectCeiling, token, rejectMemory, purposeMode);
     const directory = NodePath.join(home, ".goat/runtime/goat/versions", archiveVersion);
     NodeFS.mkdirSync(directory, { recursive: true });
     NodeFS.writeFileSync(NodePath.join(directory, "goat"), script, { mode: 0o700 });
@@ -104,10 +130,17 @@ JSON
     retainedSha = NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(runner)).digest("hex"),
     approvals = false,
     memoryScopes: ReadonlyArray<"memory:read" | "memory:write"> = [],
+    childSetupPurpose?: ChildSetupPurpose,
   ) => {
     const script = buildRemoteMcpSessionScript(
       stateKey,
-      { ...options, runtimeModeCeiling, memoryScopes, ...(approvals ? { approvals: true } : {}) },
+      {
+        ...options,
+        runtimeModeCeiling,
+        memoryScopes,
+        ...(approvals ? { approvals: true } : {}),
+        ...(childSetupPurpose === undefined ? {} : { childSetupPurpose }),
+      },
       {
         archiveVersion,
         keepExistingRunner,
@@ -142,7 +175,7 @@ JSON
       return Effect.sync(() => {
         child.kill();
       });
-    }).pipe(Effect.flatMap(decodeRemoteMcpSessionOutput));
+    }).pipe(Effect.flatMap((stdout) => decodeRemoteMcpSessionOutput(stdout, childSetupPurpose)));
   };
 
   const receivedArgs = (call: number) =>
@@ -330,6 +363,56 @@ JSON
           (name) => name.includes(".next.") || name.endsWith(".pin"),
         ),
       ).toEqual([]);
+    }),
+  );
+
+  const purpose = makeChildSetupPurpose(
+    {
+      purpose: "opencodex-child-setup",
+      homeEnvironmentId: EnvironmentId.make("home"),
+      destinationEnvironmentId: EnvironmentId.make("child"),
+      operationId: "setup-1",
+      grantId: "consent-1",
+      grantRevision: 1,
+    },
+    "installCodex",
+    "phase-1",
+    Date.parse(expiresAt),
+  );
+  const runSetupSession = () =>
+    runSession(true, options.runtimeModeCeiling, undefined, false, [], purpose);
+
+  it.effect("issues only read scopes for bounded Child setup", () =>
+    Effect.gen(function* () {
+      installFakeRunner(false, false, "echo");
+      expect(yield* runSetupSession()).toEqual({
+        sessionId: "fake-session-id",
+        token,
+        expiresAt,
+        runtimeModeCeilingApplied: true,
+      });
+      const args = receivedArgs(1);
+      expect(args.filter((arg) => arg.startsWith("orchestration:"))).toEqual([
+        "orchestration:read",
+      ]);
+      expect(args[args.indexOf("--child-setup-purpose") + 1]).toBe(JSON.stringify(purpose));
+      expect(() => receivedArgs(2)).toThrow();
+    }),
+  );
+
+  it.effect("refuses an issuer that omits the signed purpose acknowledgement", () =>
+    Effect.gen(function* () {
+      installFakeRunner(false, false, "omit");
+      expect((yield* runSetupSession().pipe(Effect.result))._tag).toBe("Failure");
+    }),
+  );
+
+  it.effect("does not retry an unsupported setup-purpose CLI flag with a broad session", () =>
+    Effect.gen(function* () {
+      installFakeRunner(false, false, "reject");
+      expect((yield* runSetupSession().pipe(Effect.result))._tag).toBe("Failure");
+      expect(receivedArgs(1)).toContain("--child-setup-purpose");
+      expect(() => receivedArgs(2)).toThrow();
     }),
   );
 

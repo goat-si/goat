@@ -1,5 +1,6 @@
 import {
   AuthGrantScope,
+  type ChildSetupPurpose,
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
   GOAT_RUNTIME_CONTROL_HEADER,
@@ -322,7 +323,8 @@ export const appServerSessionRequest = (input: {
   readonly ttl: string;
   readonly label: string;
   readonly runtimeModeCeiling?: string | null;
-}): Option.Option<RuntimeSessionRequest> => {
+  readonly childSetupPurpose?: ChildSetupPurpose;
+}): Option.Option<Extract<RuntimeSessionRequest, { kind: "session" }>> => {
   const [first, ...rest] = input.scopes;
   if (first === undefined || !isGrantScope(first) || !rest.every(isGrantScope))
     return Option.none();
@@ -335,6 +337,9 @@ export const appServerSessionRequest = (input: {
     ttl: input.ttl,
     label: input.label,
     ...(ceiling === undefined ? {} : { runtimeModeCeiling: ceiling }),
+    ...(input.childSetupPurpose === undefined
+      ? {}
+      : { childSetupPurpose: input.childSetupPurpose }),
   });
 };
 

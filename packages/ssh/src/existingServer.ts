@@ -1,8 +1,14 @@
-import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@goat/contracts";
+import {
+  type AuthSessionId,
+  type DesktopSshEnvironmentTarget,
+  type EnvironmentId,
+  RuntimeSessionRevokeResult,
+} from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as SshAuth from "./auth.ts";
@@ -15,6 +21,7 @@ import { targetConnectionKey } from "./command.ts";
 import { SshLaunchError, SshPairingError } from "./errors.ts";
 import {
   decodeRemoteMcpSessionOutput,
+  mcpSessionRequestInput,
   type RemoteMcpClientSession,
   type RemoteMcpClientSessionOptions,
 } from "./remoteSessions.ts";
@@ -56,7 +63,17 @@ export interface ExistingServerRouteShape {
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext
   >;
+  /** Ends one session on that server, through the same pinned owner that issued it. */
+  readonly revokeExistingMcpSession?: (
+    target: DesktopSshEnvironmentTarget,
+    environmentId: EnvironmentId,
+    sessionId: AuthSessionId,
+  ) => Effect.Effect<boolean, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
 }
+
+const decodeRevokeResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(RuntimeSessionRevokeResult),
+);
 
 export function makeExistingServerRoutes(input: {
   readonly managerScope: Scope.Scope;
@@ -234,20 +251,7 @@ export function makeExistingServerRoutes(input: {
   ) {
     const selected = yield* existingOwner(target, environmentId);
     yield* existingEnvironment(target, environmentId);
-    const request = appServerSessionRequest({
-      subject: "mcp-client",
-      scopes: [
-        "orchestration:read",
-        "orchestration:operate",
-        ...(sessionOptions.approvals === true ? ["orchestration:approve"] : []),
-        ...(sessionOptions.providersManage === true ? ["providers:manage"] : []),
-        ...(sessionOptions.settingsWrite === true ? ["settings:write"] : []),
-        ...(sessionOptions.memoryScopes ?? []),
-      ],
-      ttl: sessionOptions.ttl,
-      label: sessionOptions.label,
-      runtimeModeCeiling: sessionOptions.runtimeModeCeiling,
-    });
+    const request = appServerSessionRequest(mcpSessionRequestInput(sessionOptions));
     if (Option.isNone(request))
       return yield* new SshPairingError({
         message: `The MCP session requested for ${target.alias} has a scope or runtime mode GOAT cannot grant.`,
@@ -261,7 +265,10 @@ export function makeExistingServerRoutes(input: {
       input.authFor(selected.key),
       environmentId,
     );
-    const session = yield* decodeRemoteMcpSessionOutput(body).pipe(
+    const session = yield* decodeRemoteMcpSessionOutput(
+      body,
+      sessionOptions.childSetupPurpose,
+    ).pipe(
       Effect.mapError(
         (cause) =>
           new SshPairingError({
@@ -279,7 +286,41 @@ export function makeExistingServerRoutes(input: {
     return { ...session, runtimeModeCeilingApplied: sessionOptions.runtimeModeCeiling !== null };
   });
 
+  const revokeExistingMcpSession = Effect.fn("ssh/tunnel.revokeExistingMcpSession")(function* (
+    target: DesktopSshEnvironmentTarget,
+    environmentId: EnvironmentId,
+    sessionId: AuthSessionId,
+  ) {
+    const selected = yield* existingOwner(target, environmentId);
+    yield* existingEnvironment(target, environmentId);
+    const body = yield* issueExistingServerCredential(
+      selected.target,
+      selected.kind,
+      selected.owner.port,
+      { kind: "revoke", sessionId },
+      input.authFor(selected.key),
+      environmentId,
+    );
+    const result = yield* decodeRevokeResult(body).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SshPairingError({
+            message: "The Child did not acknowledge session revocation.",
+            stdout: "",
+            cause,
+          }),
+      ),
+    );
+    if (result.sessionId !== sessionId)
+      return yield* new SshPairingError({
+        message: "The Child acknowledged a different session.",
+        stdout: "",
+      });
+    return result.revoked;
+  });
+
   return {
+    revokeExistingMcpSession,
     existingEnvironment,
     existingEnvironmentOther,
     issueExistingMcpSession,
