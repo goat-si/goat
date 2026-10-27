@@ -812,8 +812,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
-  Layer.provideMerge(AuxiliarySqlite.layer),
-  Layer.provideMerge(layerMemoryHub),
+  Layer.provideMerge(Layer.merge(AuxiliarySqlite.layer, layerMemoryHub)),
   // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
   // Same EventSink layer reference as orchestration, so memoization shares one instance.
   // Remote channel workers reach other machines through the same SshRemoteDispatch layer

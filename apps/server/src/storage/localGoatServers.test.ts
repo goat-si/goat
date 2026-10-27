@@ -1,5 +1,5 @@
 import * as AuxiliarySqlite from "./AuxiliarySqlite.ts";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";

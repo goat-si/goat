@@ -1,5 +1,5 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - seeds other homes' databases the way their servers write them.
 import * as NodeSqlite from "node:sqlite";
 

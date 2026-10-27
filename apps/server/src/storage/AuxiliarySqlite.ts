@@ -177,7 +177,7 @@ export const layerWithLauncher = Layer.effect(
       }),
     );
     const read = Effect.fn("AuxiliarySqlite.read")(function* (input: AuxiliaryRead) {
-      if (closed || jobs.size >= 2 || !validInput(input)) return yield* Effect.fail(failure());
+      if (closed || jobs.size >= 2 || !validInput(input)) return yield* failure();
       return yield* Effect.callback<AuxiliaryRows, AuxiliarySqliteError>((resume) => {
         let listening = true;
         let retired = false;

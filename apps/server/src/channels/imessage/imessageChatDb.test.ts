@@ -1,6 +1,6 @@
 import * as AuxiliarySqlite from "../../storage/AuxiliarySqlite.ts";
 import * as Effect from "effect/Effect";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off -- synthetic SQLite file fixture only.
 import * as NodeSqlite from "node:sqlite";
 import * as NodeFS from "node:fs";
