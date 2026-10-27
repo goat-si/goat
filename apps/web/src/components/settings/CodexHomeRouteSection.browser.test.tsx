@@ -144,6 +144,7 @@ describe("OpenCodex Home routing", () => {
     await click("Use OpenCodex Home", confirmation());
     expect(onChange).toHaveBeenCalledExactlyOnceWith({
       modelRoute: "opencodex",
+      opencodexAuth: "openai",
       opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
     });
   });
@@ -211,14 +212,15 @@ describe("OpenCodex Home routing", () => {
       );
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(button("Save URL")).toBeDefined();
+    expect(button("Save route")).toBeDefined();
     expect(button("Use OpenCodex Home", container)).toBeUndefined();
     expect(button("Stop using OpenCodex Home", container)).toBeDefined();
-    await click("Save URL");
+    await click("Save route");
     expect(onChange).not.toHaveBeenCalled();
     await click("Use OpenCodex Home", confirmation());
     expect(onChange).toHaveBeenCalledExactlyOnceWith({
       modelRoute: "opencodex",
+      opencodexAuth: "openai",
       opencodexBaseUrl: "http://127.0.0.1:10101/v1",
     });
   });

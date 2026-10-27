@@ -16,7 +16,6 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import {
-  DEFAULT_OPENCODEX_BASE_URL,
   type CodexModelRoute,
   defaultInstanceIdForDriver,
   implicitDefaultInstance,
@@ -101,9 +100,8 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { ensureLocalApi } from "../../localApi";
 import { readPrimaryEnvironmentTarget } from "../../environments/primary/target";
-import { CodexHomeRouteSection } from "./CodexHomeRouteSection";
+import { ProviderCodexHomeRouteSection } from "./ProviderCodexHomeRouteSection";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
@@ -1404,6 +1402,10 @@ function ProviderInstanceRow({
       }
     : undefined;
   const codexSetupMode = driver === "codex" ? readCodexSetupMode(instance.config) : null;
+  // Managed Home with None never signs in, so its setup panel would only say "Preparing sign-in".
+  const homeWithoutSignIn =
+    providerConfigString(instance.config, "modelRoute") === "opencodex" &&
+    providerConfigString(instance.config, "opencodexAuth") === "none";
   const recommendedVersion = liveProvider?.compatibilityAdvisory?.recommendedVersion;
   const canInstallRecommended =
     !readOnly &&
@@ -1441,63 +1443,22 @@ function ProviderInstanceRow({
       canWriteSettings={canWriteSettings}
       homeRoute={
         mode === "editor" && driver === "codex" ? (
-          <CodexHomeRouteSection
-            key={instanceId}
+          <ProviderCodexHomeRouteSection
             environmentId={environmentId}
             environmentLabel={environmentLabel}
             instanceId={instanceId}
-            settings={{
-              setupMode: readCodexSetupMode(instance.config),
-              modelRoute:
-                providerConfigString(instance.config, "modelRoute") === "opencodex"
-                  ? "opencodex"
-                  : "default",
-              opencodexBaseUrl:
-                providerConfigString(instance.config, "opencodexBaseUrl") ??
-                DEFAULT_OPENCODEX_BASE_URL,
-            }}
+            instance={instance}
             status={liveProvider?.codexRoute}
             readOnly={readOnly}
             active={active}
             canRefresh={canRefreshProviders}
-            onChange={async (route) => {
-              await actions.configureInstance(instanceId, {
-                ...instance,
-                config: {
-                  ...(instance.config !== null && typeof instance.config === "object"
-                    ? instance.config
-                    : {}),
-                  ...route,
-                },
-              });
+            canOpenDashboard={canOpenHomeDashboard}
+            onConfigure={async (next) => {
+              await actions.configureInstance(instanceId, next);
             }}
             onRefresh={async () => {
               await actions.refreshInstance(instanceId);
             }}
-            onOpenDashboard={
-              canOpenHomeDashboard
-                ? async () => {
-                    const baseUrl =
-                      providerConfigString(instance.config, "opencodexBaseUrl") ||
-                      DEFAULT_OPENCODEX_BASE_URL;
-                    if (!URL.canParse(baseUrl))
-                      throw new Error(
-                        "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
-                      );
-                    const url = new URL(baseUrl);
-                    if (
-                      url.protocol !== "http:" ||
-                      !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
-                      url.username ||
-                      url.password
-                    )
-                      throw new Error(
-                        "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
-                      );
-                    await ensureLocalApi().shell.openExternal(url.origin);
-                  }
-                : undefined
-            }
             onAddInstance={actions.addOpenCodexInstance}
           />
         ) : undefined
@@ -1515,7 +1476,7 @@ function ProviderInstanceRow({
             readOnly={readOnly}
             onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
           />
-        ) : mode === "editor" && codexSetupMode === "managed" ? (
+        ) : mode === "editor" && codexSetupMode === "managed" && !homeWithoutSignIn ? (
           <CodexSetupSection
             environmentId={environmentId}
             instanceId={instanceId}

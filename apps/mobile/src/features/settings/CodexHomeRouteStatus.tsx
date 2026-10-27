@@ -9,6 +9,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  type CodexHomeAuth,
   type EnvironmentId,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
@@ -39,6 +40,9 @@ export function buildDefaultCodexRouteMutation(
   environmentId: EnvironmentId,
   instanceId: ProviderInstanceId,
   instance: ProviderInstanceConfig,
+  change: { readonly modelRoute: "default" } | { readonly opencodexAuth: CodexHomeAuth } = {
+    modelRoute: "default",
+  },
 ) {
   const config =
     typeof instance.config === "object" && instance.config !== null ? instance.config : {};
@@ -49,11 +53,16 @@ export function buildDefaultCodexRouteMutation(
       providerInstanceMutation: {
         operation: "upsert" as const,
         instanceId,
-        instance: { ...instance, config: { ...config, modelRoute: "default" } },
+        instance: { ...instance, config: { ...config, ...change } },
       },
     },
   };
 }
+
+const configValue = (instance: ProviderInstanceConfig | undefined, key: string) =>
+  typeof instance?.config === "object" && instance.config !== null && key in instance.config
+    ? (instance.config as Record<string, unknown>)[key]
+    : undefined;
 
 export function CodexHomeRouteStatus({
   environment,
@@ -91,17 +100,23 @@ export function CodexHomeRouteStatus({
   const handoff = openCodexHomeHandoff({ environmentLabel: environment.label, action: "connect" });
   const settings = config.data?.config.settings;
   const instance = settings?.providerInstances[provider.instanceId];
-  async function run(disconnect: boolean) {
+  const managed = configValue(instance, "setupMode") === "managed";
+  const homeAuth: CodexHomeAuth =
+    configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
+  /** Without a change this only refreshes; a change is written to the selected environment first. */
+  async function run(
+    change?: { readonly modelRoute: "default" } | { readonly opencodexAuth: CodexHomeAuth },
+  ) {
     if (pendingRef.current) return;
-    if (disconnect && !readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
+    if (change && !readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
     pendingRef.current = true;
     setPending(true);
     setError(null);
     try {
-      if (disconnect) {
+      if (change) {
         if (!instance) throw new Error("Refresh settings and try again.");
         const result = await mutate(
-          buildDefaultCodexRouteMutation(environmentId, provider.instanceId, instance),
+          buildDefaultCodexRouteMutation(environmentId, provider.instanceId, instance, change),
         );
         if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       }
@@ -138,12 +153,35 @@ export function CodexHomeRouteStatus({
       {instructions ? (
         <Text className="text-sm text-foreground-muted">{handoff.instruction}</Text>
       ) : null}
+      {canManage && instance ? (
+        <SettingsActionRow
+          icon="person.crop.circle"
+          label="Home authentication"
+          description={homeAuth === "none" ? "None" : "OpenAI"}
+          disabled={pending || config.isPending || config.error !== null}
+          onPress={() =>
+            Alert.alert(
+              "Home authentication",
+              managed
+                ? "Managed Codex uses Home without a sign-in. OpenAI authentication for Home needs an instance that uses your Codex CLI."
+                : "None uses Home without a sign-in on this machine. OpenAI keeps this instance's own sign-in.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "None", onPress: () => void run({ opencodexAuth: "none" }) },
+                ...(managed
+                  ? []
+                  : [{ text: "OpenAI", onPress: () => void run({ opencodexAuth: "openai" }) }]),
+              ],
+            )
+          }
+        />
+      ) : null}
       <SettingsActionRow
         icon="arrow.clockwise"
         label="Check status"
         loading={pending}
         disabled={pending || !canRefresh}
-        onPress={() => void run(false)}
+        onPress={() => void run()}
       />
       {canManage ? (
         <SettingsActionRow
@@ -157,7 +195,7 @@ export function CodexHomeRouteStatus({
             });
             Alert.alert(disconnect.title, disconnect.instruction, [
               { text: "Cancel", style: "cancel" },
-              { text: disconnect.title, onPress: () => void run(true) },
+              { text: disconnect.title, onPress: () => void run({ modelRoute: "default" }) },
             ]);
           }}
         />

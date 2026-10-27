@@ -474,6 +474,7 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
             homePath: "/home/person/.codex",
             customOption: 42,
             modelRoute: "opencodex",
+            opencodexAuth: "openai",
             opencodexBaseUrl: "http://127.0.0.1:10100/v1",
           },
         }),
@@ -494,4 +495,53 @@ describe("EnvironmentProviderSettings OpenCodex Home route", () => {
       .toBeVisible();
     expect(state.mutateProviderInstance).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["existing", "managed"] as const)(
+    "saves Home with None authentication for a %s instance in the selected environment",
+    async (setupMode) => {
+      await setup();
+      state.settings = {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerInstances: {
+          [customId]: {
+            driver: ProviderDriverKind.make("codex"),
+            displayName: "Child",
+            config: { setupMode, customOption: 42 },
+          },
+        },
+      };
+      await using _screen = await render(panel({ targetInstanceId: customId }));
+      const auth = page.getByRole("group", { name: "Home authentication" });
+      // Managed Codex has no OpenAI credential to send through Home.
+      if (setupMode === "managed")
+        await expect.element(auth.getByRole("button", { name: "OpenAI" })).toBeDisabled();
+      else await userEvent.click(auth.getByRole("button", { name: "None" }));
+      await expect
+        .element(auth.getByRole("button", { name: "None" }))
+        .toHaveAttribute("aria-pressed", "true");
+      await userEvent.click(button("Use OpenCodex Home"));
+      await userEvent.click(
+        page.getByRole("alertdialog").getByRole("button", { name: "Use OpenCodex Home" }),
+      );
+      await vi.waitFor(() =>
+        expect(state.mutateProviderInstance).toHaveBeenCalledExactlyOnceWith(
+          {
+            operation: "upsert",
+            instanceId: customId,
+            instance: expect.objectContaining({
+              config: {
+                setupMode,
+                customOption: 42,
+                modelRoute: "opencodex",
+                opencodexAuth: "none",
+                opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+              },
+            }),
+          },
+          expect.anything(),
+        ),
+      );
+      expect(state.mutationEnvironmentIds).toContain(environmentId);
+    },
+  );
 });

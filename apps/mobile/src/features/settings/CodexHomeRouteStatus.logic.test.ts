@@ -73,4 +73,23 @@ describe("OpenCodex Home routing", () => {
     });
     expect(instance.config).toMatchObject({ modelRoute: "opencodex" });
   });
+  it("changes only Home authentication on the selected environment's instance", () => {
+    const instance: ProviderInstanceConfig = {
+      driver: codex,
+      displayName: "Child",
+      config: { modelRoute: "opencodex", opencodexAuth: "openai", extensionOption: 42 },
+    };
+    const mutation = buildDefaultCodexRouteMutation(
+      EnvironmentId.make("child"),
+      ProviderInstanceId.make("child_codex"),
+      instance,
+      { opencodexAuth: "none" },
+    );
+    expect(mutation.environmentId).toBe("child");
+    expect(mutation.input.providerInstanceMutation.instance).toEqual({
+      ...instance,
+      config: { modelRoute: "opencodex", opencodexAuth: "none", extensionOption: 42 },
+    });
+    expect(instance.config).toMatchObject({ opencodexAuth: "openai" });
+  });
 });
