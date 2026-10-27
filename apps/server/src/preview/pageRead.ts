@@ -5,11 +5,11 @@ import type { CDPSession, Page } from "playwright-core";
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { dottedPattern, maskSecrets, openReaders, tabCookies } from "./pageSecrets.ts";
-import { readFailure, resolvePageScope, scopeHidden } from "./pageScope.ts";
+import { HIDDEN_IN_DOCUMENT, readFailure, resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { withoutDataPayload } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 
-const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, hidden }) => {
+const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, scoped }) => {
   const document = scope.ownerDocument;
   const window = document.defaultView;
   const deadline = performance.now() + timeoutMs;
@@ -56,6 +56,7 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, hidden }) =>
     const loading = document.readyState !== 'complete';
     let collapsedCount = 0, omittedFrames = 0, nodes = 0, truncatedRender = false;
     const formatNode = ${MARKDOWN_FORMAT};
+    const hiddenInDocument = ${HIDDEN_IN_DOCUMENT};
     const skipped = new Set(['script','style','template','noscript','input','textarea','select','option','head']);
     const hrefOf = element => {
       try {
@@ -97,7 +98,7 @@ const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, hidden }) =>
       if (tag === 'pre') return markdown ? '\\n\\n~~~\\n' + inner.replace(/\\n+$/, '') + '\\n~~~\\n\\n' : '\\n\\n' + inner + '\\n\\n';
       return formatNode(node, inner, markdown, hrefOf);
     };
-    return { url: document.location.href, title: document.title, text: hidden ? '' : render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
+    return { url: document.location.href, title: document.title, text: scoped && hiddenInDocument(scope) ? '' : render(scope), loading, domChanging, collapsedCount, omittedFrames, truncatedRender };
   } finally {
     if (observer) observer.disconnect();
     clearTimeout(quietTimer);
@@ -181,13 +182,15 @@ export const pageRead = (
             settleMs: input.settleMs ?? 600,
             timeoutMs: Math.max(1, deadline - Date.now()),
             markdown: input.format !== "text",
-            hidden: input.scope ? await scopeHidden(scope) : false,
+            scoped: input.scope !== undefined,
           };
           const render = new Function(
             "scope",
             `return (${READ_SCRIPT})(scope, ${JSON.stringify(args)})`,
           ) as (scope: unknown) => Promise<Rendered>;
           rendered = await scope.evaluate(render);
+          // Frame elements embedding the scope live in other documents; check them after the read.
+          if (input.scope && (await scopeHidden(scope))) rendered = { ...rendered, text: "" };
           if (tracker.state().network !== "busy" || Date.now() >= deadline) break;
           await tracker.changed(Math.max(1, deadline - Date.now()));
         }

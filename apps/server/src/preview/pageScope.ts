@@ -20,7 +20,7 @@ export const readFailure = (
  * Page-side check that a scope root or anything it is composed into (slots, shadow hosts,
  * closed details) is hidden. Stops at its document; scopeHidden walks embedding frames.
  */
-const HIDDEN_IN_DOCUMENT = `node => {
+export const HIDDEN_IN_DOCUMENT = `node => {
   for (let element = node; element; ) {
     if (element.nodeType === 1) {
       const style = element.ownerDocument.defaultView.getComputedStyle(element);

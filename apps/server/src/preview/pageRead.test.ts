@@ -96,6 +96,16 @@ it("never returns data URL payloads or text under hidden ancestors", () =>
     ).toBe("");
   }));
 
+it("keeps text unread when an ancestor hides it while the read runs", () =>
+  fixture(async (page, read) => {
+    // The page hides the ancestor the moment the read starts watching it for changes.
+    await page.setContent(
+      "<div id=box><main>fictional-late-hidden-token</main></div><script>const Observer = MutationObserver; window.MutationObserver = function (callback) { document.querySelector('#box').hidden = true; return new Observer(callback); };</script>",
+    );
+    const late = await read({ scope: { selector: "main" } });
+    expect(JSON.stringify(late)).not.toContain("fictional-late-hidden-token");
+  }));
+
 it("pages encoded results without splitting emoji and restarts after mutation or navigation", () =>
   fixture(async (page, read) => {
     const body = `<title>${"Title".repeat(1200)}</title><pre>${`A\n"\\${String.fromCodePoint(0x1f600)}`.repeat(5000)}</pre>`;

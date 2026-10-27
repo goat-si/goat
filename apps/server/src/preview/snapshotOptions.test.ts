@@ -68,6 +68,13 @@ it("narrows snapshots before budgeting, preserves actionable refs and isolates d
       expect(JSON.stringify(scoped)).not.toContain(`fictional-${id}`);
       expect(scoped.tabId).toBe("tab-1");
     }
+    // The page hides the ancestor while the snapshot reads its title, before the scoped text.
+    await page.setContent(
+      "<div id=box><main>fictional-late-token</main></div><script>Object.defineProperty(document, 'title', { get() { document.querySelector('#box')?.setAttribute('hidden', ''); return ''; } });</script>",
+    );
+    expect(JSON.stringify(await take({ scope: { selector: "main" } }))).not.toContain(
+      "fictional-late-token",
+    );
     await page.setContent("<main>" + "<p>Long paragraph</p>".repeat(4000) + "</main>");
     expect((await take()).omitted).toContain("tree_budget");
   } finally {

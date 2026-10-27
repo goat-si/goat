@@ -1,5 +1,6 @@
 import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "@goat/contracts";
 import type { Locator, Page } from "playwright-core";
+import { HIDDEN_IN_DOCUMENT } from "./pageScope.ts";
 
 const interactive =
   /^\s*- '?(?:button|link|textbox|searchbox|combobox|checkbox|radio|switch|tab|menuitem|option|slider|spinbutton|treeitem)(?=[\s"':])/;
@@ -74,7 +75,7 @@ export const snapshotOptionsResult = (
   };
 };
 
-export const snapshotPageMetadata = async (page: Page, scope?: Locator, hidden = false) => {
+export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
   const metadata = (await page.evaluate(
     `({ url: location.href, title: document.title, loading: document.readyState !== "complete", visibleText: document.body?.innerText || "", interactiveElements: [] })`,
   )) as Pick<
@@ -84,9 +85,12 @@ export const snapshotPageMetadata = async (page: Page, scope?: Locator, hidden =
   return scope
     ? {
         ...metadata,
-        visibleText: hidden
-          ? ""
-          : await scope.evaluate((node) => (node as { innerText?: string }).innerText || ""),
+        visibleText: await scope.evaluate(
+          new Function(
+            "node",
+            `return (${HIDDEN_IN_DOCUMENT})(node) ? "" : node.innerText || "";`,
+          ) as (node: unknown) => string,
+        ),
       }
     : metadata;
 };

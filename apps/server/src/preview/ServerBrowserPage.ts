@@ -491,7 +491,6 @@ const capture = async (
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
   const scoped = input.scope ? await resolvePageScope(input.page, input.scope) : undefined;
-  const hidden = scoped ? await scopeHidden(scoped) : false;
   invalidateRefs(input.page, true);
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
@@ -511,7 +510,7 @@ const capture = async (
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    snapshotPageMetadata(input.page, scoped, hidden),
+    snapshotPageMetadata(input.page, scoped),
     readLayersHeader(input.page),
     input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),
@@ -523,13 +522,11 @@ const capture = async (
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
-    tree = hidden
-      ? ""
-      : await (scoped ?? input.page).ariaSnapshot({
-          mode: "ai",
-          boxes: true,
-          timeout: Math.max(1, deadline - Date.now() - 2_000),
-        });
+    tree = await (scoped ?? input.page).ariaSnapshot({
+      mode: "ai",
+      boxes: true,
+      timeout: Math.max(1, deadline - Date.now() - 2_000),
+    });
     const image =
       input.annotate && input.captureImage !== false
         ? withRefAnnotations(
@@ -564,7 +561,11 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [page, layersLine, capturedImage, cookies] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies] = await pageAndScreenshot;
+  // Checked after the reads: an embedding frame element can be hidden while they run.
+  const hidden = scoped ? await scopeHidden(scoped) : false;
+  const page = hidden ? { ...captured, visibleText: "" } : captured;
+  if (hidden) tree = "";
   screenshot ??= capturedImage;
   if (state.generation !== generation) throw pageChanged();
   const mask = maskSecrets(dotted, cookies);
