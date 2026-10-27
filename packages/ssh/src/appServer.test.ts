@@ -8,6 +8,7 @@ import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -364,6 +365,65 @@ describe("GOAT app server attachment", () => {
         if (preferred.status !== "ready") return;
         expect(preferred.remoteServerKind).toBe("app");
         expect(preferred.remotePort).toBe(nightly.port);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live(
+    "a nightly record that is live but unreachable, or has no token, falls through to the stable app server",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stable = yield* startAppServer(attachableDescriptor);
+        const attachesToStable = function* (
+          prepare: (
+            nightlyDir: string,
+          ) => Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem>,
+        ) {
+          // The nightly record names this live process, but nothing answers on its port.
+          const host = yield* makeHost({
+            pid: process.pid,
+            port: 1,
+            stateDir: ".goat/desktop-nightly/userdata",
+          });
+          yield* prepare(`${host.home}/.goat/desktop-nightly/userdata`);
+          const stableDir = `${host.home}/.goat/desktop/userdata`;
+          yield* fs.makeDirectory(stableDir, { recursive: true });
+          yield* fs.writeFileString(`${stableDir}/runtime-control.token`, `${TOKEN}\n`);
+          yield* fs.writeFileString(
+            `${stableDir}/server-runtime.json`,
+            JSON.stringify({
+              version: 1,
+              pid: process.pid,
+              port: stable.port,
+              origin: `http://127.0.0.1:${stable.port}`,
+            }),
+          );
+          const launch = yield* launchOrReuseRemoteServer(uploadTarget, {}, RUNNER).pipe(
+            Effect.provide(host.spawner),
+          );
+          expect(launch.status).toBe("ready");
+          if (launch.status !== "ready") return;
+          expect(launch.remoteServerKind).toBe("app");
+          expect(launch.remotePort).toBe(stable.port);
+          expect(yield* fs.exists(`${host.home}/.goat/ssh-launch`)).toBe(false);
+        };
+        yield* attachesToStable(() => Effect.void);
+        // A live nightly server whose control token is missing cannot be attached either.
+        const live = yield* startAppServer(attachableDescriptor);
+        yield* attachesToStable((nightlyDir) =>
+          Effect.gen(function* () {
+            yield* fs.writeFileString(
+              `${nightlyDir}/server-runtime.json`,
+              JSON.stringify({
+                version: 1,
+                pid: process.pid,
+                port: live.port,
+                origin: `http://127.0.0.1:${live.port}`,
+              }),
+            );
+            yield* fs.remove(`${nightlyDir}/runtime-control.token`);
+          }),
+        );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
