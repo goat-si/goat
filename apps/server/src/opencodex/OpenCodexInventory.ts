@@ -22,22 +22,6 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ProcessRunner from "../processRunner.ts";
 
-// Forward-compatible fields decode JSON null to undefined and keep the key. Undefined is not a
-// JSON value, so host status would refuse the whole section.
-const omitUndefined = <T>(value: T): T => {
-  if (Array.isArray(value)) return value.map((item) => omitUndefined(item)) as T;
-  if (value !== null && typeof value === "object") {
-    const kept: Record<string, unknown> = {};
-    for (const key of Object.keys(value)) {
-      const item = (value as Record<string, unknown>)[key];
-      if (item === undefined) continue;
-      kept[key] = omitUndefined(item);
-    }
-    return kept as T;
-  }
-  return value;
-};
-
 const MAX_BYTES = 256 * 1024;
 const PROBE_TIMEOUT = "2 seconds";
 const COMMAND_TIMEOUT = "3 seconds";
@@ -479,7 +463,7 @@ const make = Effect.gen(function* () {
         ...(localProviderCount !== undefined ? { localProviderCount } : {}),
       };
     }
-    return omitUndefined({
+    return {
       installed,
       binaries,
       ownership: installed ? (managed ? "managed" : "adopted") : "none",
@@ -513,7 +497,7 @@ const make = Effect.gen(function* () {
             },
           }
         : {}),
-    } satisfies OpenCodexInventorySnapshot);
+    } satisfies OpenCodexInventorySnapshot;
   });
 
   // Host status is polled by several clients; share in-flight work and avoid spawning ocx on every poll.
