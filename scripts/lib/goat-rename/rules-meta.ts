@@ -336,7 +336,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "uses the native default without sending GOAT's default selection as a model ID",
   ],
   [
-    "apps/web/src/components/chat/MessagesTimeline.browser.test.tsx",
+    "apps/web/src/components/chat/MessagesTimeline.folded.browser.test.tsx",
     "leaves messages sent by T3 Code as full bubbles",
     "leaves messages sent by GOAT as full bubbles",
   ],

@@ -5,7 +5,7 @@ import type { Rect, Snapshot } from "./checks.ts";
 import { runJourney, type StepResult } from "./journey.ts";
 
 vi.mock(import("./device.ts"), () => ({
-  BUNDLE_ID: "com.t3tools.t3code.dev",
+  BUNDLE_ID: "com.t3tools.t3code.dev" as const,
   delay: async () => {},
 }));
 vi.mock(import("./video.ts"), () => ({
