@@ -62,6 +62,7 @@ const fakeLeases = (input: {
     channelOrigin: () => Effect.die("unused"),
     state: () => Effect.die("unused"),
     attached: () => Effect.succeedNone,
+    nameApps: () => Effect.void,
     everyAppControl: (threadId, unattended) =>
       Effect.sync(() => {
         everyApp.push(unattended);

@@ -51,6 +51,7 @@ const fixture = Effect.fnUntraced(function* () {
     control: () => Effect.die("unused"),
     attached: () => Effect.succeedNone,
     everyAppControl: () => Effect.die("unused"),
+    nameApps: () => Effect.die("unused"),
     serializeAdmission: (effect) => effect,
     currentControl: () => Effect.die("unused"),
     controlState: () =>

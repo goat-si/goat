@@ -67,7 +67,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
   );
 
   it.effect.each(["darwin", "win32"] as const)(
-    "does not restart %s for an approved app still absent or excluded",
+    "does not restart %s for an approved app still absent or excluded, including the host GOAT",
     (platform) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -75,9 +75,13 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
           yield* test.request("agent");
           assert.equal((yield* test.next).status, "ready");
           yield* test.approveApps(["com.example.not-running"]);
-          yield* test.listApps([{ bundle_id: "com.apple.Passwords", name: "Passwords" }]);
-          yield* test.approveApps(["com.apple.Passwords"]);
+          yield* test.listApps([
+            { bundle_id: "com.apple.Passwords", name: "Passwords" },
+            { bundle_id: "codes.t3.host-test", name: "GOAT" },
+          ]);
+          yield* test.approveApps(["com.apple.Passwords", "codes.t3.host-test"]);
           assert.notInclude(test.manifest(), "com.apple.Passwords");
+          assert.notInclude(test.manifest(), "codes.t3.host-test");
           assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
           // With no host an approval must neither list nor start one.
           yield* test.restart;
