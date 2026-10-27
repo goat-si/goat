@@ -19,6 +19,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import { ComposerVoiceButton, type ComposerVoiceButtonProps } from "./ComposerVoiceButton";
 import {
   alternateComposerDispatchAction,
   resolveComposerDispatchMode,
@@ -33,6 +34,7 @@ interface PendingActionState {
 }
 
 interface ComposerPrimaryActionsProps {
+  voiceControl?: ComposerVoiceButtonProps | undefined;
   compact: boolean;
   canOperateThread: boolean;
   pendingAction: PendingActionState | null;
@@ -97,6 +99,7 @@ const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
 };
 
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
+  voiceControl,
   compact,
   canOperateThread,
   pendingAction,
@@ -275,7 +278,23 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
-    return renderStopGenerationButton();
+    return (
+      <span className="inline-flex items-center gap-2">
+        {voiceControl ? (
+          <ComposerVoiceButton
+            {...voiceControl}
+            disabled={
+              voiceControl.disabled ||
+              !canOperateThread ||
+              isSendBusy ||
+              isConnecting ||
+              isEnvironmentUnavailable
+            }
+          />
+        ) : null}
+        {renderStopGenerationButton()}
+      </span>
+    );
   }
 
   const showResume = canResume && !hasSendableContent && !isEditingQueuedMessage;
@@ -351,10 +370,24 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   );
 
   const submit = (
-    <Tooltip key="submit">
-      <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup>{submitTooltip}</TooltipPopup>
-    </Tooltip>
+    <span className="inline-flex items-center gap-2">
+      {voiceControl ? (
+        <ComposerVoiceButton
+          {...voiceControl}
+          disabled={
+            voiceControl.disabled ||
+            !canOperateThread ||
+            isSendBusy ||
+            isConnecting ||
+            isEnvironmentUnavailable
+          }
+        />
+      ) : null}
+      <Tooltip key="submit">
+        <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
+        <TooltipPopup>{submitTooltip}</TooltipPopup>
+      </Tooltip>
+    </span>
   );
   if (compactTokens === null) return submit;
 

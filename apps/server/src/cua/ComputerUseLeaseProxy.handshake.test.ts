@@ -25,6 +25,25 @@ const newerTools = { tools: [...tools.tools, { name: "zoom", inputSchema: { type
 // A paused control has no driver, but MCP clients drop a server whose handshake fails, so the
 // agent would lose its tools for the session (#1604). Only tool calls wait for the person.
 describe("proxy handshake while computer use is paused (#1604)", () => {
+  it.effect("rejecting a paused handshake id preserves its pending answer", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+      yield* h.applied;
+      yield* h.killed;
+      yield* h.send(initialize);
+      assert.equal(yield* handshakeChild(h), "child");
+      const init = yield* h.nextToDriver;
+      yield* h.send(initialize);
+      assert.include(JSON.stringify(yield* h.nextToProvider), "work in progress");
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.startedQueued, 0);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: init.id, result: serverInfo }));
+      assert.deepEqual(yield* h.nextToProvider, { jsonrpc: "2.0", id: 1, result: serverInfo });
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
   it.effect(
     "answers initialize and tools/list from a driver that never hears a call, and refuses calls with the pause reason",
     () =>

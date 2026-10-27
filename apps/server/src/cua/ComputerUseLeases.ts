@@ -157,6 +157,16 @@ export class ComputerUseLeases extends Context.Service<
       unattended: boolean,
       run?: { readonly person?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
+    /**
+     * Apps a full access run named in a request. The desktop adds them to the driver's manifest,
+     * which otherwise holds only the apps open when the driver started, such as a dev build of
+     * GOAT launched by this turn. The manifest still leaves out the host GOAT and credential stores.
+     */
+    readonly nameApps: (
+      threadId: ThreadId,
+      controlId: string,
+      apps: ReadonlyArray<string>,
+    ) => Effect.Effect<void>;
     /** The thread's control while an agent can act through it, and the run it was taken for. */
     readonly attached: (threadId: ThreadId) => Effect.Effect<
       Option.Option<{
@@ -295,6 +305,8 @@ interface ControlRecord extends ComputerUseControl {
   readonly uses: number;
   /** Admitted by full access rather than a grant; see everyAppControl. */
   readonly everyApp?: EveryAppKind;
+  /** Apps this full access control named for the driver's manifest; see nameApps. */
+  readonly named?: ReadonlyArray<string>;
   /** The run whose attachment last took this control up. */
   readonly runId?: RunId;
 }
@@ -692,7 +704,10 @@ const make = Effect.gen(function* () {
         const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
         const approved = new Set<string>();
         for (const record of current) {
-          if (record.everyApp !== undefined) continue;
+          if (record.everyApp !== undefined) {
+            for (const app of record.named ?? []) approved.add(app);
+            continue;
+          }
           const held = grants.filter(
             (grant) =>
               grant.threadId === record.threadId &&
@@ -768,6 +783,19 @@ const make = Effect.gen(function* () {
     state,
     control,
     everyAppControl,
+    nameApps: Effect.fn("ComputerUseLeases.nameApps")(function* (
+      threadId: ThreadId,
+      controlId: string,
+      apps: ReadonlyArray<string>,
+    ) {
+      const record = controls.get(threadId);
+      if (record?.controlId !== controlId || record.everyApp === undefined || !acting(record))
+        return;
+      const named = [...new Set([...(record.named ?? []), ...apps])].sort();
+      if (named.length === (record.named?.length ?? 0)) return;
+      controls.set(threadId, { ...record, named });
+      yield* kick;
+    }),
     attached: Effect.fn("ComputerUseLeases.attached")(function* (threadId: ThreadId) {
       const record = controls.get(threadId);
       if (record === undefined || !acting(record)) return Option.none();

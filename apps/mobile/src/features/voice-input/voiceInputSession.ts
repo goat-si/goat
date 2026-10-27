@@ -4,10 +4,15 @@ import {
   type VoiceDraftSnapshot,
   type VoiceInputControllerDependencies,
 } from "@goat/client-runtime/voice-input";
+import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 
 export type VoiceInputTarget = {
   readonly ownerKey: string;
   readonly label?: string;
+  readonly environmentId?: EnvironmentId | null;
+  readonly providerInstanceId?: ProviderInstanceId | null;
+  readonly cwd?: string | null;
+  readonly threadId?: ThreadId | null;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: VoiceInputControllerDependencies["commitDraft"];
   readonly subscribe: () => () => void;
@@ -19,9 +24,11 @@ export function createVoiceInputTarget(
   commitDraft: VoiceInputTarget["commitDraft"],
   selection: VoiceDraftSnapshot["selection"],
   subscribeToChanges: (onChange: () => void) => () => void,
+  context: Pick<VoiceInputTarget, "environmentId" | "providerInstanceId" | "cwd" | "threadId"> = {},
 ): VoiceInputTarget {
   let revision = 0;
   return {
+    ...context,
     ownerKey,
     readDraft: () => {
       const text = readText();
@@ -64,6 +71,10 @@ export class VoiceInputSession {
 
   get ownerKey(): string | null {
     return this.target?.ownerKey ?? null;
+  }
+
+  get currentTarget(): VoiceInputTarget | null {
+    return this.target;
   }
 
   get label(): string | null {

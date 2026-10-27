@@ -39,6 +39,30 @@ export function getLocalVoiceTranscriber(): VoiceTranscriber | null {
   return { prepare: (options) => prepareVoiceTranscription(locale, options) };
 }
 
+export function getVoiceTranscriber(
+  remoteTranscriber?: VoiceTranscriber | null,
+): VoiceTranscriber | null {
+  const local = getLocalVoiceTranscriber();
+  if (!local) return remoteTranscriber ?? null;
+  if (!remoteTranscriber) return local;
+  return {
+    prepare: async (options) => {
+      try {
+        return await local.prepare(options);
+      } catch (error) {
+        throwIfVoiceTranscriptionAborted(options.signal);
+        if (
+          error instanceof VoiceTranscriptionError &&
+          (error.code === "unavailable" || error.code === "unsupported-locale")
+        ) {
+          return remoteTranscriber.prepare(options);
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 async function prepareVoiceTranscription(
   locale: string,
   { signal }: VoiceTranscriptionOptions,
@@ -65,6 +89,15 @@ async function prepareVoiceTranscription(
         "unsupported-locale",
         "Voice transcription does not support this device language.",
         { cause: error },
+      );
+    }
+    if (getNativeErrorCode(error) === "AppleTranscriptionUnavailable") {
+      throw new VoiceTranscriptionError(
+        "unavailable",
+        "Local voice transcription is unavailable.",
+        {
+          cause: error,
+        },
       );
     }
 
