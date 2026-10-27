@@ -124,17 +124,33 @@ function replaceFields(record: unknown, fields: ReadonlyArray<string>, replace: 
   };
 }
 
-const replaceChecks = (checks: unknown, replace: ReplaceValue) =>
+/**
+ * A check's value fields always go. Its text is usually words on screen and stays readable,
+ * unless it repeats a value the same batch typed or checked.
+ */
+const replaceCheck = (check: unknown, replace: ReplaceValue, typed: ReadonlySet<string>) => {
+  const text = asRecord(check)?.text;
+  const repeats =
+    typeof text === "string" &&
+    (typed.has(text) || [...typed].some((value) => value.length >= 4 && text.includes(value)));
+  return replaceFields(
+    check,
+    repeats ? [...CHECK_VALUE_FIELDS, "text"] : CHECK_VALUE_FIELDS,
+    replace,
+  );
+};
+
+const replaceChecks = (checks: unknown, replace: ReplaceValue, typed: ReadonlySet<string>) =>
   Array.isArray(checks)
-    ? checks.map((check) => replaceFields(check, CHECK_VALUE_FIELDS, replace) ?? check)
-    : replaceFields(checks, CHECK_VALUE_FIELDS, replace);
+    ? checks.map((check) => replaceCheck(check, replace, typed) ?? check)
+    : replaceCheck(checks, replace, typed);
 
 /**
  * One run_steps step, `{tool, args}` or `{<tool>: args}` as the driver reads it, with its typed
  * text and the field values its checks name replaced. The driver skips a null key, so every other
  * key that names a typing tool is treated as the action.
  */
-function replaceStep(step: unknown, replace: ReplaceValue): unknown {
+function replaceStep(step: unknown, replace: ReplaceValue, typed: ReadonlySet<string>): unknown {
   const object = asRecord(step);
   if (object === undefined) return step;
   const fieldOf = (tool: unknown) =>
@@ -149,8 +165,8 @@ function replaceStep(step: unknown, replace: ReplaceValue): unknown {
     const args = field === undefined ? undefined : replaceFields(object[key], [field], replace);
     return args === undefined ? [] : [[key, args] as const];
   });
-  const waitFor = replaceFields(object.wait_for, CHECK_VALUE_FIELDS, replace);
-  const expect = replaceChecks(object.expect, replace);
+  const waitFor = replaceCheck(object.wait_for, replace, typed);
+  const expect = replaceChecks(object.expect, replace, typed);
   return {
     ...object,
     ...Object.fromEntries(replaced),
@@ -167,7 +183,18 @@ function replaceArguments(tool: string, args: unknown, replace: ReplaceValue): u
   if (tool === "run_script") return replaceFields(args, ["script"], replace);
   const steps = asRecord(args)?.steps;
   if (tool !== "run_steps" || !Array.isArray(steps)) return undefined;
-  return { ...asRecord(args), steps: steps.map((step) => replaceStep(step, replace)) };
+  // What the batch types or checks, raw, so a text check that repeats it goes too.
+  const typed = new Set<string>();
+  for (const step of steps)
+    replaceStep(
+      step,
+      (value) => {
+        if (typeof value === "string" && value !== "") typed.add(value);
+        return value;
+      },
+      new Set(),
+    );
+  return { ...asRecord(args), steps: steps.map((step) => replaceStep(step, replace, typed)) };
 }
 
 function replaceTypedValues(

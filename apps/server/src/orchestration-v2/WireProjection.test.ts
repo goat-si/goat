@@ -297,6 +297,24 @@ describe("orchestration V2 wire projection", () => {
     expect(JSON.parse(masked.text)).toEqual({ expected: "[typed text]" });
   });
 
+  it("masks a text check that repeats what the batch typed, and leaves other text checks readable", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { type_text: { text: "hunter2" }, expect: { text: "hunter2" } },
+          { click: { name: "Sign in" }, wait_for: { text: "Welcome hunter2" } },
+          { click: { name: "OK" }, expect: [{ text: "Thanks" }] },
+        ],
+      },
+    } as OrchestrationV2TurnItem;
+    const sent = projectTurnItemForWire(item);
+    const input = JSON.stringify(sent.type === "dynamic_tool" ? sent.input : null);
+    expect(input).not.toContain("hunter2");
+    expect(input).toContain('"text":"Thanks"');
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,
