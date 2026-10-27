@@ -58,6 +58,8 @@ export function useProjectThreads(
   pinnedThreads: readonly SidebarThreadSummary[] | undefined,
   openSubagentOwnerKey: string | undefined,
   childAttentionByKey: ReadonlyMap<string, SidebarChildAttention>,
+  /** Logical project of a scoped project key; a launched thread folds only within one. */
+  projectKeyByScopedRef: ReadonlyMap<string, string> | undefined,
 ) {
   const threadSortOrder = useClientSettings<SidebarThreadSortOrder>(
     (settings) => settings.sidebarThreadSortOrder,
@@ -129,11 +131,16 @@ export function useProjectThreads(
   // them. The pinned section shows pinned roots and a project list the rest.
   const pinnedRoots = pinnedThreads ?? sidebarThreads.filter(isProjectsViewPinnedThread);
   const pinnedKeys = new Set(pinnedRoots.map(keyOfThread));
+  const logicalProjectOf = (thread: SidebarThreadSummary) => {
+    const key = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    return projectKeyByScopedRef?.get(key) ?? key;
+  };
   const launchFold = foldLaunchedThreads({
     visible: [...listedInProjects, ...pinnedRoots],
     all: sidebarThreads,
     now: `${nowMinute}:00.000Z`,
     delegatedAttentionByKey: childAttentionByKey,
+    sameList: (child, parent) => logicalProjectOf(child) === logicalProjectOf(parent),
   });
   const visibleProjectThreads = (pinnedThreads ?? launchFold.roots).filter(
     (thread) =>

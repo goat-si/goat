@@ -66,6 +66,11 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
   const showAllKeys = current.showAll;
   // A collapse made while a folded thread is open lasts until the route changes.
   const routeCollapsed = current.route === routeThreadKey ? current.routeCollapsed : NO_KEYS;
+  // oxlint-disable-next-line goat/react-effect-budget -- The shared session forgets a collapse made for the previous route once the route changes.
+  useEffect(() => {
+    if (session.route !== routeThreadKey)
+      setSession({ ...session, route: routeThreadKey, routeCollapsed: NO_KEYS });
+  }, [routeThreadKey]);
   const routeAncestors = routeThreadKey === null ? [] : launchAncestorKeys(fold, routeThreadKey);
   const routePath = new Set(routeThreadKey === null ? [] : [routeThreadKey, ...routeAncestors]);
   const pendingReveal = routeAncestors.filter(

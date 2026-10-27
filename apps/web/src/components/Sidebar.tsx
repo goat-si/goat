@@ -529,15 +529,7 @@ function useSidebarThreads(input: {
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
-  // Settled threads folded under a launcher consumed their page rows too.
-  useOlderSettledShelfGrowth(olderSettledShelf, [
-    ...listedSettledThreads,
-    ...partition.launchFold.folded.filter(
-      (thread) =>
-        partition.foldedSectionByKey.get(threadShellKey(thread)) === "settled" &&
-        olderSettledShelf.isListed(thread),
-    ),
-  ]);
+  useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
   const settledCount =
     settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
   const visibleSettledThreads = (() => {

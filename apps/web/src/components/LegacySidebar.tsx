@@ -1315,7 +1315,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     visibleProjectThreads,
     launchFold,
     lastVisitedAtByThreadKey,
-  } = useProjectThreads(project, pinnedThreads, openSubagent?.ownerKey, childAttentionByKey);
+  } = useProjectThreads(
+    project,
+    pinnedThreads,
+    openSubagent?.ownerKey,
+    childAttentionByKey,
+    projectKeyByScopedRef,
+  );
   const readSidebarThreadByKey = useStableCallback(() => sidebarThreadByKey);
   const projectPreferenceKeys = projectExpansionPreferenceKeys(project);
   const storedProjectExpanded = useUiStateStore((state) =>
