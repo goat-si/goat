@@ -287,6 +287,7 @@ it.effect(
             kind: op.kind,
             code: 0,
             healthy: true,
+            role: op.kind === "connectHubClient" ? "client" : "standalone",
           });
         }
         expect(f.writes.map(({ args }) => args[0])).toEqual(["connect", "disconnect", "restart"]);
