@@ -236,7 +236,7 @@ describe("lease proxy macOS Automation refusals", () => {
         yield* h.send(line);
         const answer = yield* Effect.raceFirst(h.nextToProvider, h.nextToDriver);
         assert.equal(answer.id, JSON.parse(line).id);
-        assert.isDefined(answer.result?.structuredContent?.refused);
+        assert.isDefined((answer as unknown as Reply).result.structuredContent.refused);
         assert.equal(yield* h.driverQueued, 0);
       }
     }),

@@ -68,8 +68,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
   if (verdict === "proof") input.setProven(current);
 });
 
-/** Shared admission decision for provider and reverse-channel calls. */
-export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (input: {
+interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
   readonly finished: () => LeaseEnd | undefined;
@@ -86,7 +85,12 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   readonly listApps: Effect.Effect<void>;
   /** macOS: an Apple Events route's refusal names its app, so its pid is listed before it runs. */
   readonly automationTargets?: boolean;
-}) {
+}
+
+/** Shared admission decision for provider and reverse-channel calls. */
+export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
+  input: ProxyCallCheck,
+) {
   const judge = () =>
     scopeVerdict({
       name: input.message.params?.name,
@@ -166,7 +170,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
  * so an Automation refusal can name the app. The lease can end or pause while it waits.
  */
 const listAutomationTarget = Effect.fn("ComputerUseLeaseProxy.listAutomationTarget")(function* (
-  input: Parameters<typeof refuseProxyCall>[0],
+  input: ProxyCallCheck,
 ) {
   const params = input.message.params;
   if (
