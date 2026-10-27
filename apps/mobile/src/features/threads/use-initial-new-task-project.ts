@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@goat/contracts";
+import { useNewTaskEnvironmentLoading } from "./use-new-task-environment-loading";
 import { useEffect, useRef } from "react";
 import { CommonActions, useIsFocused, useNavigation } from "@react-navigation/native";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
@@ -23,10 +25,16 @@ export function useInitialNewTaskProject(
   const isFocused = useIsFocused();
   const goBack = useWorkspaceBackNavigation("threads");
   const environments = useWorkspaceEnvironments();
+  const environmentLoading = useNewTaskEnvironmentLoading(
+    props.initialProjectRef?.environmentId
+      ? EnvironmentId.make(props.initialProjectRef.environmentId)
+      : null,
+  );
   const appliedInitialProjectKeyRef = useRef<string | null>(null);
-  const initialPickerRef = useRef<"open" | "dismissed" | null>(null);
+  const initialPickerRef = useRef<"opening" | "open" | "dismissed" | null>(null);
   const lastInitialProjectRefRef = useRef(props.initialProjectRef);
 
+  // oxlint-disable-next-line goat/react-effect-budget -- Applies route selection and coordinates the initial project picker.
   useEffect(() => {
     if (!servesRoute || props.pendingTaskId || props.draftId) {
       return;
@@ -80,13 +88,14 @@ export function useInitialNewTaskProject(
         return;
       }
 
-      if (projects.length > 0) {
+      if (!environmentLoading) {
         // oxlint-disable-next-line react/set-state-in-effect -- Route-driven project resolution starts the return-to-picker flow when no project matches.
         props.onMissingProject(true);
       }
       return;
     }
 
+    if (initialPickerRef.current === "opening" && !isFocused) initialPickerRef.current = "open";
     const selection = resolveDraftProjectSelection(selectedProjectKey, projects, projectScopes, {
       incomingShareId: props.incomingShareId,
       pickerClosed: initialPickerRef.current === "open" && isFocused,
@@ -111,7 +120,7 @@ export function useInitialNewTaskProject(
       return;
     }
     if (initialPickerRef.current !== null) return;
-    initialPickerRef.current = "open";
+    initialPickerRef.current = "opening";
     navigation.dispatch(
       CommonActions.navigate("NewTaskProject", { incomingShareId: props.incomingShareId }),
     );
@@ -120,6 +129,7 @@ export function useInitialNewTaskProject(
     isFocused,
     goBack,
     environments,
+    environmentLoading,
     props.onMissingProject,
     projectScopes,
     projects,

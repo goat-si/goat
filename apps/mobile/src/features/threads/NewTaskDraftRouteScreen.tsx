@@ -26,7 +26,8 @@ import {
   type BranchCheckoutResult,
 } from "./new-task-branch-checkout";
 import { liveNewTaskFlowKeys, newTaskFlowKey } from "./new-task-flow-state";
-import { useWorkspaceState } from "../../state/workspace";
+import { EnvironmentId } from "@goat/contracts";
+import { useNewTaskEnvironmentLoading } from "./use-new-task-environment-loading";
 import { vcsEnvironment } from "../../state/vcs";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 import { resolveNewTaskBranchWorktreePath } from "./new-task-context-presentation";
@@ -88,7 +89,6 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     : params.pendingTaskId;
   const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
   const projects = useProjects();
-  const { state: catalogState } = useWorkspaceState();
 
   const initialProjectRef = useMemo(
     () => ({
@@ -130,12 +130,10 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const workspaceRoot = checkoutProject?.workspaceRoot;
   const needsPreparation = Boolean(initialProjectRef.branch && !pendingTaskId && !draftId);
 
-  const waitingForProject =
-    !project &&
-    (catalogState.isLoadingConnections ||
-      (!catalogState.hasLoadedShellSnapshot &&
-        catalogState.hasConnectingEnvironment &&
-        catalogState.connectionError === null));
+  const environmentLoading = useNewTaskEnvironmentLoading(
+    initialProjectRef.environmentId ? EnvironmentId.make(initialProjectRef.environmentId) : null,
+  );
+  const waitingForProject = !project && environmentLoading;
 
   const checkoutKey =
     needsPreparation &&

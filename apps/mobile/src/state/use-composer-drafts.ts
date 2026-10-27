@@ -1747,6 +1747,9 @@ export function undoComposerDraftMergeState(
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
     workspaceSelection: undoSetting("workspaceSelection"),
+    importedShareIds: existing.importedShareIds?.filter(
+      (id) => snapshot.importedShareIds?.includes(id) || !merged.importedShareIds?.includes(id),
+    ),
   };
   return withComposerDraft(current, draftKey, draft);
 }

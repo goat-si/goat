@@ -89,7 +89,6 @@ import { useRememberThreadProject } from "./useRememberThreadProject";
 import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
-  resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
@@ -468,6 +467,8 @@ export function NewTaskDraftScreen(props: {
       !shareId ||
       !draftKey ||
       !destinationProject ||
+      selectedProjectKey !==
+        scopedProjectKey(destinationProject.environmentId, destinationProject.id) ||
       !selectedProjectMatchesRoute ||
       cancelledIncomingShareId === shareId
     ) {
@@ -667,6 +668,7 @@ export function NewTaskDraftScreen(props: {
       });
   }, [
     servesRoute,
+    selectedProjectKey,
     consumeShare,
     cancelledIncomingShareId,
     flow.draftKey,
@@ -751,15 +753,7 @@ export function NewTaskDraftScreen(props: {
         draft.modelSelection ?? null,
         selectedProject.id,
       ) ?? flow.selectedModel;
-    const workspaceSelection = resolveNewTaskWorkspaceSelection({
-      selection: draft.workspaceSelection,
-      fallback: {
-        mode: flow.workspaceMode,
-        branch: flow.selectedBranchName,
-        worktreePath: flow.selectedWorktreePath,
-      },
-      isGitRepo: flow.isGitRepo,
-    });
+    const workspaceSelection = flow.resolveWorkspaceSelection(draft.workspaceSelection);
     const workspaceMode = workspaceSelection.mode;
     const selectedBranchName = workspaceSelection.branch;
     const initialMessageText = draft.text.trim();

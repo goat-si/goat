@@ -6,14 +6,12 @@ import {
   getComposerDraftSnapshot,
   useComposerDraft,
 } from "../../state/use-composer-drafts";
-import { useEnvironmentShellReadiness } from "../../state/shell";
-import { useConnectionsReady, useWorkspaceEnvironments } from "../../state/workspace";
+import { useNewTaskEnvironmentLoading } from "./use-new-task-environment-loading";
 import {
   INACTIVE_FLOW_KEY,
   newTaskFlowStateAtom,
   readNewTaskFlowState,
   resolveRouteDraft,
-  stampedEnvironmentProjectsLoading,
   updateNewTaskFlowState,
   type NewTaskFlowState,
 } from "./new-task-flow-state";
@@ -29,18 +27,7 @@ export function useNewTaskRouteFlow(
     stored.draftKey === null ? (props.routeDraftId ?? null) : null,
   );
   const stampedId = routeDraft.project?.environmentId ?? null;
-  const connectionsReady = useConnectionsReady();
-  const connection = useWorkspaceEnvironments().find(
-    (environment) => environment.environmentId === stampedId,
-  );
-  const shell = useEnvironmentShellReadiness(stampedId);
-  const stampedEnvironmentLoading = stampedEnvironmentProjectsLoading({
-    connectionsReady,
-    connectionState: connection?.connectionState ?? null,
-    shellCacheRead: shell.cacheRead,
-    shellStatus: shell.status,
-    shellHasError: shell.hasError,
-  });
+  const stampedEnvironmentLoading = useNewTaskEnvironmentLoading(stampedId);
   const resolve = (
     flow: NewTaskFlowState,
     draftsLoaded: boolean,

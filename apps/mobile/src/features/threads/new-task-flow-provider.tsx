@@ -1,6 +1,6 @@
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import * as Dialog from "../../components/ui/Dialog";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo } from "react";
 
 import type {
   EnvironmentId,
@@ -41,6 +41,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import {
   appendComposerDraftAttachments,
   type ComposerDraftInsertion,
+  type ComposerDraftWorkspaceSelection,
   clearComposerDraft,
   createNewTaskDraft,
   getComposerDraftSnapshot,
@@ -154,6 +155,9 @@ type NewTaskFlowContextValue = {
   readonly isGitRepo: boolean;
   readonly isGitRepoKnown: boolean;
   readonly canChooseWorkspace: boolean;
+  readonly resolveWorkspaceSelection: (
+    selection: ComposerDraftWorkspaceSelection | undefined,
+  ) => ComposerDraftWorkspaceSelection;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
@@ -260,6 +264,7 @@ export function NewTaskFlowProvider(
     submitting,
     expandedProvider,
     editingPendingTask,
+    switchingToEnvironmentId,
   } = flowState;
   const setSelectedEnvironmentId = (environmentId: EnvironmentId | null) =>
     updateFlow({ environmentId });
@@ -466,15 +471,17 @@ export function NewTaskFlowProvider(
     Arr.filter((branch) => !branch.isRemote),
   );
 
-  const workspaceSelection = resolveNewTaskDraftWorkspace({
-    selection: selectedProjectDraft.workspaceSelection,
-    canChooseWorkspace,
-    defaultMode: defaultWorkspaceMode,
-    defaultModeSettled: defaultWorkspaceModeSettled,
-    isGitRepo,
-    branches: allBranchRefs,
-    projectCwd: selectedProject?.workspaceRoot ?? null,
-  });
+  const resolveWorkspaceSelection = (selection: ComposerDraftWorkspaceSelection | undefined) =>
+    resolveNewTaskDraftWorkspace({
+      selection,
+      canChooseWorkspace,
+      defaultMode: defaultWorkspaceMode,
+      defaultModeSettled: defaultWorkspaceModeSettled,
+      isGitRepo,
+      branches: allBranchRefs,
+      projectCwd: selectedProject?.workspaceRoot ?? null,
+    });
+  const workspaceSelection = resolveWorkspaceSelection(selectedProjectDraft.workspaceSelection);
   const workspaceMode = workspaceSelection.mode;
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
@@ -650,9 +657,8 @@ export function NewTaskFlowProvider(
   };
 
   const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
-  const [switchingToEnvironmentId, setSwitchingToEnvironmentId] = useState<EnvironmentId | null>(
-    null,
-  );
+  const setSwitchingToEnvironmentId = (switchingToEnvironmentId: EnvironmentId | null) =>
+    updateFlow({ switchingToEnvironmentId });
   const latestSwitchRef = useMemo(() => ({ flowKey, current: null as object | null }), [flowKey]);
   const switchEnvironment = async (environmentId: EnvironmentId): Promise<boolean> => {
     if (environmentId === selectedEnvironmentId) {
@@ -820,15 +826,7 @@ export function NewTaskFlowProvider(
     ) {
       return null;
     }
-    const workspaceSelection = resolveNewTaskDraftWorkspace({
-      selection: draft.workspaceSelection,
-      canChooseWorkspace,
-      defaultMode: defaultWorkspaceMode,
-      defaultModeSettled: defaultWorkspaceModeSettled,
-      isGitRepo,
-      branches: allBranchRefs,
-      projectCwd: selectedProject.workspaceRoot,
-    });
+    const workspaceSelection = resolveWorkspaceSelection(draft.workspaceSelection);
     const mode = workspaceSelection.mode;
     // When the selection is the stand-in built from the queued snapshot,
     // persist the original (possibly absent) snapshot values — the
@@ -978,6 +976,7 @@ export function NewTaskFlowProvider(
     isGitRepoKnown: knownIsGitRepo !== null,
     canChooseWorkspace,
     selectedBranchName,
+    resolveWorkspaceSelection,
     selectedWorktreePath,
     startFromOrigin,
     draftKey: selectedProjectDraftKey,

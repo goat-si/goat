@@ -58,11 +58,7 @@ interface CheckoutEntry {
   abandoned: boolean;
 }
 
-/**
- * Branch checkouts for draft routes. A checkout is a Git mutation, so it is
- * tied to the request, not to an atom node: the node can be removed and rebuilt
- * (a render read before the subscription commits) without running it again.
- */
+/** Checkout ownership survives atom eviction because Git mutations cannot be undone by unmounting. */
 export function makeNewTaskBranchCheckouts(deps: {
   readonly run: (request: BranchCheckoutRequest) => Promise<BranchCheckoutResult>;
   /** Holds navigation until the checkout settles and its route is released. */

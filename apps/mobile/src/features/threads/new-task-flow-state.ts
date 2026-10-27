@@ -32,6 +32,7 @@ export interface NewTaskFlowState {
   readonly submitting: boolean;
   readonly editingPendingTask: QueuedThreadMessage | null;
   readonly expandedProvider: string | null;
+  readonly switchingToEnvironmentId: EnvironmentId | null;
 }
 
 export const INITIAL_NEW_TASK_FLOW_STATE: NewTaskFlowState = {
@@ -41,6 +42,7 @@ export const INITIAL_NEW_TASK_FLOW_STATE: NewTaskFlowState = {
   submitting: false,
   editingPendingTask: null,
   expandedProvider: null,
+  switchingToEnvironmentId: null,
 };
 
 // Every draft route on the stack keeps its flow, not just the one the provider
@@ -61,7 +63,10 @@ export function readNewTaskFlowState(flowKey: string): NewTaskFlowState {
   return appAtomRegistry.get(flowStatesAtom)[flowKey] ?? INITIAL_NEW_TASK_FLOW_STATE;
 }
 
+let liveFlowKeys: ReadonlySet<string> | null = null;
+
 export function updateNewTaskFlowState(flowKey: string, patch: Partial<NewTaskFlowState>): void {
+  if (liveFlowKeys !== null && flowKey !== INACTIVE_FLOW_KEY && !liveFlowKeys.has(flowKey)) return;
   const flows = appAtomRegistry.get(flowStatesAtom);
   appAtomRegistry.set(flowStatesAtom, {
     ...flows,
@@ -164,6 +169,7 @@ export function liveNewTaskFlowKeys(state: NavigationRoutes): ReadonlySet<string
 export function pruneNewTaskFlowStates(state: NavigationRoutes): void {
   const flows = appAtomRegistry.get(flowStatesAtom);
   const live = liveNewTaskFlowKeys(state);
+  liveFlowKeys = live;
   const kept = Object.entries(flows).filter(([flowKey]) => live.has(flowKey));
   if (kept.length === Object.keys(flows).length) return;
   appAtomRegistry.set(flowStatesAtom, Object.fromEntries(kept));

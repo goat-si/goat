@@ -21,6 +21,7 @@ describe("new task flow state", () => {
   it("keeps a covered draft route's flow while another draft route is pushed above it", () => {
     const routeA = draftRoute("route-a", "draft-a");
     const routeB = draftRoute("route-b", "draft-b");
+    pruneNewTaskFlowStates({ routes: [routeA, routeB] });
     const flowA = newTaskFlowKey(routeA)!;
     const flowB = newTaskFlowKey(routeB)!;
 
@@ -46,6 +47,7 @@ describe("new task flow state", () => {
   it("drops a flow when its route is popped or promoted to a live thread", () => {
     const routeA = draftRoute("route-a", "draft-a");
     const routeB = draftRoute("route-b", "draft-b");
+    pruneNewTaskFlowStates({ routes: [routeA, routeB] });
     updateNewTaskFlowState(newTaskFlowKey(routeA)!, { projectKey: "env:project-a" });
     updateNewTaskFlowState(newTaskFlowKey(routeB)!, { projectKey: "env:project-b" });
 
@@ -53,6 +55,10 @@ describe("new task flow state", () => {
       routes: [{ key: "route-a", name: "Thread", params: { environmentId: "env", threadId: "t" } }],
     });
 
+    updateNewTaskFlowState(newTaskFlowKey(routeA)!, {
+      submitting: false,
+      draftKey: "stale-completion",
+    });
     expect(readNewTaskFlowState(newTaskFlowKey(routeA)!)).toBe(INITIAL_NEW_TASK_FLOW_STATE);
     expect(readNewTaskFlowState(newTaskFlowKey(routeB)!)).toBe(INITIAL_NEW_TASK_FLOW_STATE);
   });
