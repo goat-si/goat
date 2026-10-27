@@ -51,6 +51,38 @@ layer("ComputerUseLeases controls", (it) => {
       });
     }),
   );
+  it.effect(
+    "stamps when the agent's cursor last changed, and not on a repeat of the same cursor",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const owner = ThreadId.make("thread-cursor-at");
+          yield* Effect.addFinalizer(() => leases.stop(owner));
+          const control = yield* leases.control(owner, Option.none());
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { pid: 7, windowId: 3 }));
+          const cursorAt = Effect.map(
+            leases.sessions,
+            (entries) =>
+              entries.find((entry) => entry.control.controlId === control.controlId)?.control
+                .cursorAt,
+          );
+          const cursor = { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" } as const;
+          yield* TestClock.adjust("1 second");
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor }));
+          const placed = yield* cursorAt;
+          assert.isNumber(placed);
+          yield* TestClock.adjust("1 second");
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor }));
+          assert.equal(yield* cursorAt, placed);
+          const moved = { ...cursor, point: { fx: 0.5, fy: 0.5 } };
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor: moved }));
+          assert.equal(yield* cursorAt, placed! + 1_000);
+        }),
+      ),
+  );
+
   it.effect("tells session lists about a control minted for a thread that had none", () =>
     Effect.scoped(
       Effect.gen(function* () {

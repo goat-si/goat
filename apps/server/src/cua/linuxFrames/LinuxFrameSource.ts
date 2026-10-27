@@ -20,6 +20,7 @@ import {
   type PreviewSessionNoPicture,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
@@ -63,7 +64,15 @@ const QUALITIES = [70, 45] as const;
 
 /** One capture's outcome: a frame, a reason there is none, or nothing to say this time. */
 export type FrameOutcome =
-  | { readonly frame: { readonly width: number; readonly height: number; readonly data: string } }
+  | {
+      readonly frame: {
+        readonly width: number;
+        readonly height: number;
+        readonly data: string;
+        /** When the window's pixels were read, epoch ms: before encoding, not after. */
+        readonly capturedAt: number;
+      };
+    }
   | { readonly unavailable: PreviewSessionNoPicture }
   | { readonly skip: true };
 
@@ -193,6 +202,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
       });
       if (verdict._tag !== "allow") return { unavailable: "appNotApproved" } satisfies FrameOutcome;
     }
+    const capturedAt = yield* Clock.currentTimeMillis;
     const shot = yield* Effect.promise(() => io.capture(env, target));
     if ("refused" in shot) return refusalOutcome(shot.refused, shot.transient === true);
     const data = yield* frameJpeg(shot.rgb, shot.width, shot.height);
@@ -200,7 +210,9 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     // A password field focused while the window was read or encoded keeps the frame back.
     if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
       return { unavailable: "private" } satisfies FrameOutcome;
-    return { frame: { width: shot.width, height: shot.height, data } } satisfies FrameOutcome;
+    return {
+      frame: { width: shot.width, height: shot.height, data, capturedAt },
+    } satisfies FrameOutcome;
   });
 
   const loop = (seq: number, target: Target) =>

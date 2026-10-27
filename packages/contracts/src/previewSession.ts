@@ -167,6 +167,22 @@ export const PreviewSessionFrameEvent = Schema.Union([
     mime: Schema.Literal("image/jpeg"),
     /** Base64. */
     data: Schema.String,
+    /**
+     * When the server took the frame from the capturing helper, epoch ms on the server's clock: the
+     * capture happened no later. Absent from servers that pair no cursor with their frames.
+     */
+    capturedAt: Schema.optionalKey(Schema.Number),
+    /**
+     * How old the pixels were when the server sent them, ms, so a viewer on another clock can tell
+     * a picture that keeps arriving late from a live one. Absent when the capture time is unknown.
+     */
+    ageMs: Schema.optionalKey(Schema.Number),
+    /**
+     * The agent's cursor as it was at capturedAt, so a viewer draws the cursor these pixels go
+     * with, never a newer one from the session list. Absent when no cursor was drawn then.
+     */
+    cursor: Schema.optionalKey(PreviewSessionLegacyCursor),
+    cursorState: Schema.optionalKey(AgentCursorSnapshot),
   }),
   Schema.Struct({ type: Schema.Literal("unavailable"), reason: PreviewSessionNoPicture }),
 ]);

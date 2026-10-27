@@ -59,6 +59,7 @@ const HelperFrame = Schema.Union([
     width: Schema.Int,
     height: Schema.Int,
     data: Schema.String,
+    capturedAt: Schema.optionalKey(Schema.Number),
   }),
   Schema.Struct({
     type: Schema.Literal("frameUnavailable"),

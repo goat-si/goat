@@ -145,6 +145,11 @@ export const DesktopCuaFrame = Schema.Union([
     height: Schema.Int,
     mime: Schema.Literal("image/jpeg"),
     data: Schema.String,
+    /**
+     * When the capture of these pixels began, epoch ms on the capturing host. A cursor that moved
+     * after it is not drawn over them. Absent from helpers that predate it.
+     */
+    capturedAt: Schema.optionalKey(Schema.Number),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
