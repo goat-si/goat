@@ -32,6 +32,8 @@ const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 const tokens = (n: number) => Math.ceil(n / 4);
 
 const json = (value: unknown) => (value === undefined ? "" : JSON.stringify(value));
+/** Codex compacts an MCP tool's input schema above this size (mcp_servers.<name>.tool_input_schema_max_bytes). */
+const CODEX_SCHEMA_COMPACTION_BYTES = 5_000;
 /** What a harness hands the model per tool: name, description, input schema, annotations. */
 const modelFacing = (tool: ListedTool) =>
   bytes(tool.name) +
@@ -317,6 +319,10 @@ const listing = {
   outputSchemaBytes: listed.reduce((sum, tool) => sum + bytes(json(tool.outputSchema)), 0),
   toolsListBytes: bytes(JSON.stringify(listed)),
   largest: perTool.slice(0, 10),
+  overCodexSchemaLimit: listed
+    .map((tool) => ({ name: tool.name, bytes: bytes(json(tool.inputSchema)) }))
+    .filter((tool) => tool.bytes > CODEX_SCHEMA_COMPACTION_BYTES)
+    .toSorted((a, b) => b.bytes - a.bytes),
 };
 const coreClientListing = {
   tools: clientListed.map((tool) => tool.name).toSorted(),
@@ -426,6 +432,14 @@ if (argv.includes("--json")) {
     "",
     "Largest tools (model-facing bytes): " +
       listing.largest.map((tool) => tool.name + " " + n(tool.bytes)).join(", "),
+    "",
+    "Input schemas Codex compacts (over " +
+      n(CODEX_SCHEMA_COMPACTION_BYTES) +
+      " B): " +
+      (listing.overCodexSchemaLimit.length === 0
+        ? "none."
+        : listing.overCodexSchemaLimit.map((tool) => tool.name + " " + n(tool.bytes)).join(", ") +
+          "."),
     "",
     "Budget per harness: instructions " +
       n(BUDGET.instructionBytes) +
