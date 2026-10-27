@@ -30,6 +30,7 @@ const steering = (
       readonly createdAt: number;
       readonly scheduledTaskId?: string;
       readonly senderThreadId?: string;
+      readonly senderRunId?: string;
     }
   >,
 ) => {
@@ -66,6 +67,9 @@ const steering = (
                 ...(message.senderThreadId === undefined
                   ? {}
                   : { senderThreadId: ThreadId.make(message.senderThreadId) }),
+                ...(message.senderRunId === undefined
+                  ? {}
+                  : { senderRunId: RunId.make(message.senderRunId) }),
               },
             ];
       }),
@@ -114,7 +118,8 @@ it.effect(
         },
         {
           "m-typed": { createdAt: 1 },
-          "m-peer": { createdAt: 3, senderThreadId: "peer" },
+          // The cron run wrote it, as the server recorded then.
+          "m-peer": { createdAt: 3, senderThreadId: "peer", senderRunId: "cron" },
           "p-cron": { createdAt: 2, scheduledTaskId: "task-1" },
           "p-typed": { createdAt: 5 },
         },

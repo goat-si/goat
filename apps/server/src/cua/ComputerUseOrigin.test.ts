@@ -54,13 +54,12 @@ const run = (id: string, message: string, from: number, to: number | null = null
   id: RunId.make(id),
   userMessageId: MessageId.make(message),
   requestedAt: at(from),
-  startedAt: at(from),
   completedAt: to === null ? null : at(to),
 });
 /** A run requested at `from` that waits in the queue and has not started. */
 const waiting = (id: string, message: string, from: number): OriginRun => ({
   ...run(id, message, from),
-  startedAt: null,
+  status: "queued",
 });
 const typed = (createdAt = 0): OriginMessage => ({ createdAt: at(createdAt) });
 
@@ -123,6 +122,16 @@ describe("computerUseOrigin", () => {
           botChild: {
             createdAt: at(2),
             lineage: { parentThreadId: ThreadId.make("bot"), relationshipToParent: "subagent" },
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make("bot"),
+              environmentId: null,
+              runId: RunId.make("bot-run"),
+            },
+          },
+          // Launched before launches recorded their run: nothing to trace, so unknown.
+          olderChild: {
+            lineage: { parentThreadId: ThreadId.make("mine"), relationshipToParent: "subagent" },
           },
           grandchild: {
             createdAt: at(3),
@@ -130,15 +139,26 @@ describe("computerUseOrigin", () => {
               kind: "launch",
               threadId: ThreadId.make("botChild"),
               environmentId: null,
+              runId: RunId.make("child-run"),
             },
           },
           fromCron: {
             createdAt: at(11),
-            launchedBy: { kind: "launch", threadId: ThreadId.make("mine"), environmentId: null },
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make("mine"),
+              environmentId: null,
+              runId: RunId.make("cron"),
+            },
           },
           fromTyped: {
             createdAt: at(2),
-            launchedBy: { kind: "launch", threadId: ThreadId.make("mine"), environmentId: null },
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make("mine"),
+              environmentId: null,
+              runId: RunId.make("typed"),
+            },
           },
           promoted: {
             createdAt: at(2),
@@ -153,11 +173,18 @@ describe("computerUseOrigin", () => {
           },
           remoteChild: {
             createdAt: at(2),
-            launchedBy: { kind: "launch", threadId: ThreadId.make("remote"), environmentId: null },
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make("remote"),
+              environmentId: null,
+              runId: RunId.make("remote-run"),
+            },
           },
         },
         runs: {
           mine: [run("typed", "m1", 1, 5), run("cron", "m2", 10)],
+          botChild: [run("child-run", "bc1", 2)],
+          remote: [run("remote-run", "r0", 1)],
           remoteChild: [run("launch", "m3", 2)],
         },
         messages: {
@@ -167,12 +194,19 @@ describe("computerUseOrigin", () => {
           m3: {
             createdAt: at(2),
             senderThreadId: ThreadId.make("remote"),
+            senderRunId: RunId.make("remote-run"),
           },
+          bc1: typed(2),
+          r0: { createdAt: at(1), createdBy: "agent", creationSource: "mcp" },
         },
       };
       const launched = { _tag: "unattended", reason: "launched_by_unattended" } as const;
       assert.deepEqual(yield* classify(world, "botChild"), launched);
       assert.deepEqual(yield* classify(world, "grandchild"), launched);
+      assert.deepEqual(yield* classify(world, "olderChild"), {
+        _tag: "unattended",
+        reason: "unknown",
+      });
       // Launched while the person's thread ran a scheduled turn, not while they typed.
       assert.deepEqual(yield* classify(world, "fromCron"), launched);
       assert.deepEqual(yield* classify(world, "fromTyped"), { _tag: "interactive" });
@@ -191,12 +225,22 @@ describe("computerUseOrigin", () => {
         bot: ["bot"],
         threads: { bot: {}, mine: {}, peer: {} },
         runs: {
-          mine: [run("fromBot", "m1", 1), run("fromPeer", "m2", 2)],
+          mine: [run("fromBot", "m1", 1), run("fromPeer", "m2", 2), run("older", "m3", 3)],
           peer: [run("p1", "pm", 0)],
         },
         messages: {
-          m1: { createdAt: at(1), senderThreadId: ThreadId.make("bot") },
-          m2: { createdAt: at(2), senderThreadId: ThreadId.make("peer") },
+          m1: {
+            createdAt: at(1),
+            senderThreadId: ThreadId.make("bot"),
+            senderRunId: RunId.make("bot-run"),
+          },
+          m2: {
+            createdAt: at(2),
+            senderThreadId: ThreadId.make("peer"),
+            senderRunId: RunId.make("p1"),
+          },
+          // Sent before messages recorded their sender's run: nothing to trace, so unknown.
+          m3: { createdAt: at(3), senderThreadId: ThreadId.make("peer") },
           pm: typed(0),
         },
       };
@@ -205,6 +249,10 @@ describe("computerUseOrigin", () => {
         reason: "sent_by_unattended",
       });
       assert.deepEqual(yield* classify(world, "mine", "fromPeer"), { _tag: "interactive" });
+      assert.deepEqual(yield* classify(world, "mine", "older"), {
+        _tag: "unattended",
+        reason: "unknown",
+      });
     }),
   );
 
@@ -543,8 +591,16 @@ describe("directedRun", () => {
             p1: person(1),
             // A launch watch or handoff wake: server written, with no approval behind it.
             p2: wake(3),
-            m1: { createdAt: at(2), senderThreadId: ThreadId.make("peer") },
-            m2: { createdAt: at(4), senderThreadId: ThreadId.make("peer") },
+            m1: {
+              createdAt: at(2),
+              senderThreadId: ThreadId.make("peer"),
+              senderRunId: RunId.make("typed"),
+            },
+            m2: {
+              createdAt: at(4),
+              senderThreadId: ThreadId.make("peer"),
+              senderRunId: RunId.make("woken"),
+            },
           },
         };
         assert.isTrue(yield* decide(world, {}, "fromTyped"));
@@ -603,7 +659,11 @@ describe("a sender's run is the one executing when it wrote", () => {
         messages: {
           p1: { createdAt: at(1), createdBy: "user", creationSource: "web" },
           p2: { createdAt: at(2), scheduledTaskId: "task-1" },
-          m1: { createdAt: at(3), senderThreadId: ThreadId.make("peer") },
+          m1: {
+            createdAt: at(3),
+            senderThreadId: ThreadId.make("peer"),
+            senderRunId: RunId.make("cron"),
+          },
         },
       };
       assert.deepEqual(yield* classify(world, "mine", "fromCron"), {
@@ -616,6 +676,68 @@ describe("a sender's run is the one executing when it wrote", () => {
           { threadId: ThreadId.make("mine"), runId: RunId.make("fromCron") },
         ),
       );
+    }),
+  );
+});
+
+describe("provenance recorded when the message or the launch happened", () => {
+  // A person's run ended (2); a scheduled run started (3), wrote or launched (4), and was
+  // restarted (5), which moved its startedAt past the moment it acted.
+  const peer = [run("typed", "p1", 1, 2), run("cron", "p2", 3)];
+  const peerMessages = {
+    p1: { createdAt: at(1), createdBy: "user", creationSource: "web" },
+    p2: { createdAt: at(3), scheduledTaskId: "task-1" },
+  } as const;
+
+  it.effect("a message a scheduled run wrote before it restarted stays the scheduled run's", () =>
+    Effect.gen(function* () {
+      const world: World = {
+        threads: { mine: {}, peer: {} },
+        runs: { peer, mine: [run("queued", "m1", 4)] },
+        messages: {
+          ...peerMessages,
+          m1: {
+            createdAt: at(4),
+            senderThreadId: ThreadId.make("peer"),
+            senderRunId: RunId.make("cron"),
+          },
+        },
+      };
+      assert.deepEqual(yield* classify(world, "mine", "queued"), {
+        _tag: "unattended",
+        reason: "sent_by_unattended",
+      });
+      assert.isFalse(
+        yield* directedRun(
+          { ...reads(world), grantRun: () => Effect.undefined },
+          { threadId: ThreadId.make("mine"), runId: RunId.make("queued") },
+        ),
+      );
+    }),
+  );
+
+  it.effect("a thread a scheduled run launched before it restarted stays the scheduled run's", () =>
+    Effect.gen(function* () {
+      const world: World = {
+        threads: {
+          peer: {},
+          child: {
+            createdAt: at(4),
+            launchedBy: {
+              kind: "launch",
+              threadId: ThreadId.make("peer"),
+              environmentId: null,
+              runId: RunId.make("cron"),
+            },
+          },
+        },
+        runs: { peer, child: [run("first", "c1", 4)] },
+        messages: { ...peerMessages, c1: { createdAt: at(4) } },
+      };
+      assert.deepEqual(yield* classify(world, "child", "first"), {
+        _tag: "unattended",
+        reason: "launched_by_unattended",
+      });
     }),
   );
 });

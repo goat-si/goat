@@ -55,6 +55,8 @@ export interface OriginThread {
         readonly kind: "launch" | "promotion";
         readonly threadId: ThreadId;
         readonly environmentId: string | null;
+        /** The launcher's run, recorded at the launch. */
+        readonly runId?: RunId | undefined;
       }
     | undefined;
 }
@@ -63,8 +65,6 @@ export interface OriginRun {
   readonly id: RunId;
   readonly userMessageId: MessageId;
   readonly requestedAt: DateTime.Utc;
-  /** Null while the run waits in the queue. */
-  readonly startedAt: DateTime.Utc | null;
   readonly completedAt: DateTime.Utc | null;
   /** Read only to find the run a thread sends from (senderOrigin). */
   readonly status?: string | undefined;
@@ -74,6 +74,8 @@ export interface OriginMessage {
   readonly createdAt: DateTime.Utc;
   readonly scheduledTaskId?: string | undefined;
   readonly senderThreadId?: ThreadId | undefined;
+  /** The sender's run that wrote it, recorded at the time. */
+  readonly senderRunId?: RunId | undefined;
   readonly channel?: unknown;
   readonly createdBy?: OrchestrationV2Actor | undefined;
   readonly creationSource?: OrchestrationV2CreationSource | undefined;
@@ -146,20 +148,12 @@ const reach = (origin: ComputerUseOrigin, runtimeMode: string | undefined, unkno
 // Lineage longer than this is not a person's thread tree; stop and treat it as unattended.
 const MAX_DEPTH = 8;
 
-const millis = DateTime.toEpochMillis;
-
 /**
- * The run that was executing at `at`, else the last one that had started by then. A run still
- * waiting in the queue never sent anything, even when it was requested first.
+ * Picks exactly the recorded run. With none recorded, or one this host does not have, the run is
+ * missing and only a thread known by itself (GOAT Bot, a channel worker) keeps its reason.
  */
-const runAt = (runs: ReadonlyArray<OriginRun>, at: DateTime.Utc): OriginRun | undefined => {
-  const time = millis(at);
-  const started = runs.filter((run) => run.startedAt !== null && millis(run.startedAt) <= time);
-  return (
-    started.find((run) => run.completedAt === null || millis(run.completedAt) >= time) ??
-    started.at(-1)
-  );
-};
+const exactRun = (runId: RunId | undefined) => (runs: ReadonlyArray<OriginRun>) =>
+  runs.find((run) => runId !== undefined && run.id === runId) ?? ("missing" as const);
 
 const classify: (
   reads: OriginReads,
@@ -186,10 +180,11 @@ const classify: (
     if (message.channel !== undefined) return unattended("channel_message");
     if (message.foreignAnswer === true) return unattended("launched_remotely");
     if (message.senderThreadId !== undefined) {
+      // The run that wrote it, recorded when it did.
       const sender = yield* classify(
         reads,
         message.senderThreadId,
-        (runs) => runAt(runs, message.createdAt),
+        exactRun(message.senderRunId),
         depth + 1,
       );
       if (sender._tag === "unattended") return unattendedVia(sender, "sent_by_unattended");
@@ -202,16 +197,12 @@ const classify: (
     thread.launchedBy?.kind === "launch"
       ? thread.launchedBy
       : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId
-        ? { threadId: thread.lineage.parentThreadId, environmentId: null }
+        ? { threadId: thread.lineage.parentThreadId, environmentId: null, runId: undefined }
         : undefined;
   if (launcher !== undefined) {
     if (launcher.environmentId !== null) return unattended("launched_remotely");
-    const parent = yield* classify(
-      reads,
-      launcher.threadId,
-      (runs) => runAt(runs, thread.createdAt),
-      depth + 1,
-    );
+    // The launcher's run, recorded at the launch.
+    const parent = yield* classify(reads, launcher.threadId, exactRun(launcher.runId), depth + 1);
     if (parent._tag === "unattended") return unattendedVia(parent, "launched_by_unattended");
   }
   return INTERACTIVE;
@@ -272,11 +263,10 @@ export const directedRun = Effect.fn("ComputerUse.directedRun")(
       )
         return false;
       if (message.senderThreadId !== undefined) {
-        // An agent's message carries what the run that sent it had.
-        const sender = runAt(yield* reads.runs(message.senderThreadId), message.createdAt);
-        if (sender === undefined) return false;
+        // An agent's message carries what the run that sent it, recorded then, had.
+        if (message.senderRunId === undefined) return false;
         threadId = message.senderThreadId;
-        runId = sender.id;
+        runId = message.senderRunId;
         continue;
       }
       if (fromPersonClient(message) || message.foreignAnswer === true) return true;

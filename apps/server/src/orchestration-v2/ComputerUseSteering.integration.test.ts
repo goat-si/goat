@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { CommandId, EnvironmentId, MessageId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { computerUseOrigin, projectionOriginReads } from "../cua/ComputerUseOrigin.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -7,6 +7,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
   threadId,
+  projectId,
+  modelSelection,
   harness,
   reportRunning,
   startTarget,
@@ -142,6 +144,68 @@ it.effect.each([
             _tag: "unattended",
             reason: origin,
           });
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect(
+  "records the running turn that sent a message or launched a thread, whatever the command claimed",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { cwd, events, started, layer } = yield* harness("provenance", {
+          supportsActiveSteering: true,
+        });
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          yield* startTarget(cwd, started);
+          yield* reportRunning(events, started[0]!);
+          yield* worker.drain();
+          const running = started[0]!.runId;
+          const forged = RunId.make("run:forged");
+
+          // The running turn launches a thread and messages it.
+          const launched = ThreadId.make("thread:provenance:launched");
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("provenance-launch"),
+            threadId: launched,
+            projectId,
+            title: "Launched",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: cwd,
+            createdBy: "agent",
+            creationSource: "mcp",
+            launchedBy: {
+              kind: "launch",
+              threadId,
+              environmentId: null,
+              environmentLabel: null,
+              threadTitle: "Target",
+              runId: forged,
+            },
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("provenance-send"),
+            threadId: launched,
+            messageId: MessageId.make("message:provenance"),
+            text: "work on this",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "agent",
+            creationSource: "mcp",
+            senderThreadId: threadId,
+            senderRunId: forged,
+          });
+          const projection = yield* orchestrator.getThreadProjection(launched);
+          assert.equal(projection.thread.launchedBy?.runId, running);
+          assert.equal(projection.messages[0]?.senderRunId, running);
         }).pipe(Effect.provide(layer));
       }),
     ),

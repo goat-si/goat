@@ -451,6 +451,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   path); an answer names the one turn it may join, which
   the orchestrator checks again under its lock. Another computer's agent's answer counts as remote
   work, and its queued turn keeps that origin through its runtime request's responder.
+  Provenance is recorded once, when it happens: the orchestrator writes the sender's executing
+  run on every message that names a sender (`senderRunId`) and the launcher's executing run on a
+  local launch (`launchedBy.runId`), replacing any value a command carried
+  (`orchestration-v2/senderProvenance.ts`). Classification follows exactly that run, so a restart
+  or a reordered queue cannot move authority; a message or launch recorded without one counts as
+  `unknown`, except a sender known by itself (GOAT Bot, a channel worker).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
