@@ -18,6 +18,8 @@ import * as Config from "../config.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as Runner from "../processRunner.ts";
+import { assertClaudeHomeEnforceable, CLAUDE_HOME_ROUTE_MARKER } from "./ClaudeHomeSettings.ts";
+import { resolveClaudeHomePath } from "./Drivers/ClaudeHome.ts";
 import { normalizeOpenCodexBaseUrl } from "./OpenCodexRoute.ts";
 import type { ProviderHomeOverlayDriver } from "./ProviderHomeAdapters.ts";
 
@@ -246,6 +248,13 @@ export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare
       environment,
       yield* HostProcess.Environment,
     );
+    if (driver === "claudeAgent") {
+      const home = yield* resolveClaudeHomePath(
+        { homePath: typeof raw.homePath === "string" ? raw.homePath : "" },
+        merged,
+      );
+      yield* assertClaudeHomeEnforceable(home).pipe(Effect.mapError(({ detail }) => fail(detail)));
+    }
     const document = yield* exportDocument(driver, baseUrl, merged);
     let exported: ExportedModels;
     let overlay: Record<string, string>;
@@ -283,6 +292,7 @@ export const prepareProviderHomeRuntime = Effect.fn("ProviderHomeRuntime.prepare
               CLAUDE_CODE_USE_BEDROCK: "",
               CLAUDE_CODE_USE_VERTEX: "",
               CLAUDE_CODE_USE_FOUNDRY: "",
+              [CLAUDE_HOME_ROUTE_MARKER]: "1",
             }
           : {
               OPENCODE_CONFIG_CONTENT: yield* Effect.try({

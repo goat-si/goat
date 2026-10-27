@@ -203,6 +203,7 @@ import { providerMessageTextWithAttachmentPaths } from "@goat/provider-core/serv
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { claudeFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { claudeFileChangePatch } from "../fileChangePatch.ts";
+import { pinClaudeHomeSettings } from "../../provider/ClaudeHomeSettings.ts";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
@@ -10059,7 +10060,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             .open({
               threadId: turnInput.threadId,
               providerSessionId: input.providerSessionId,
-              options: queryOptions,
+              options: pinClaudeHomeSettings(queryOptions),
             })
             .pipe(
               Effect.onError(() =>
