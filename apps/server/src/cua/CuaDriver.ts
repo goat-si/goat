@@ -14,15 +14,9 @@ import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cu
 import {
   CUA_DRIVER_PROBED_SESSION_NAMES,
   cuaDriverHostOptions,
-  cuaDriverListingEnvironment,
   withCuaDriverPrivacyEnvironment,
 } from "@goat/shared/cuaDriverRelease";
-import {
-  cuaDriverSessionListingEnvironment,
-  isCuaDriverStartupRefusal,
-  listCuaRequestableApplications,
-  prepareCuaDriverCapabilityManifest,
-} from "@goat/shared/cuaDriverManifest";
+import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -36,6 +30,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -48,6 +43,7 @@ import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import { honoredSignals } from "./ComputerUsePrivateMode.ts";
+import * as StandaloneCuaManifest from "./StandaloneCuaManifest.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
 import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
 
@@ -138,6 +134,9 @@ export interface CuaDriverHost {
 export class CuaDriver extends Context.Service<
   CuaDriver,
   {
+    readonly refreshManifest?: (
+      apps: ReadonlyArray<string>,
+    ) => Effect.Effect<void, CuaDriverHostError>;
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
     readonly listedApps: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
@@ -237,6 +236,9 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  readonly refreshManifest?: (
+    apps: ReadonlyArray<string>,
+  ) => Effect.Effect<boolean, CuaDriverHostError>;
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   /** A desktop host's named listing; servers without one name each app by its id. */
   readonly appCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
@@ -279,6 +281,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   // Status is read on every focus and host-status fan-out; starts and enables probe fresh.
   const [cachedProbe, invalidateProbe] = yield* Effect.cachedInvalidateWithTTL(probe, "10 seconds");
   const freshProbe = invalidateProbe.pipe(Effect.andThen(cachedProbe));
+  const lifecycle = yield* Semaphore.make(1);
   let active: Acquisition | undefined;
   let closed = false;
   let failure = Option.none<CuaDriverError>();
@@ -427,7 +430,9 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         revoked: false,
       };
       active = entry;
-      yield* start(entry).pipe(Effect.forkDetach);
+      yield* (options.refreshManifest ? lifecycle.withPermit(start(entry)) : start(entry)).pipe(
+        Effect.forkDetach,
+      );
     }
     return yield* Deferred.await(entry.result);
   });
@@ -470,7 +475,20 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       return Option.map(command, (command) => ({ command, display: display.environment }));
     }),
   });
+  const refresh = options.refreshManifest;
+  const refreshManifest = Effect.fn("CuaDriver.refreshManifest")(function* (
+    apps: ReadonlyArray<string>,
+  ) {
+    const entry = active;
+    if (!entry?.running || !refresh) return;
+    if (yield* refresh(apps)) {
+      if (active !== entry || !entry.running) return;
+      failure = Option.none();
+      yield* revoke(entry);
+    }
+  }, lifecycle.withPermit);
   return CuaDriver.of({
+    ...(refresh ? { refreshManifest } : {}),
     acquire,
     x11Display: Effect.sync(() =>
       active?.running && active.displayEnvironment !== undefined
@@ -873,7 +891,7 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install, helperReadiness, binary, requestListing } =
+    const { factory, install, helperReadiness, binary, requestListing, refreshManifest } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
           {
@@ -882,24 +900,16 @@ export const layer = Layer.effect(
             helperReadiness: yield* desktopHelperReadiness,
             binary: undefined,
             requestListing: undefined,
+            refreshManifest: undefined,
           }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
             });
-            const path = yield* Path.Path;
+            const manifest = yield* StandaloneCuaManifest.make(config.stateDir);
             const factory = yield* makeStandaloneHostFactory(
               installation.executable,
-              (binaryPath) =>
-                Effect.tryPromise(() =>
-                  prepareCuaDriverCapabilityManifest({
-                    binaryPath,
-                    platform,
-                    environment: cuaDriverListingEnvironment(environment),
-                    hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
-                    path: path.join(config.stateDir, "cua-driver", "capability-manifest.yaml"),
-                  }),
-                ),
+              manifest.prepare,
             );
             const install = environment.GOAT_CUA_DRIVER_PATH?.trim()
               ? undefined
@@ -930,33 +940,17 @@ export const layer = Layer.effect(
                 );
             // The Linux check before the first turn (#1542) runs it.
             const binary = Option.isSome(linuxHelper) ? startBinary : undefined;
-            // Requests are judged against a fresh listing of that binary on the probed screen
-            // (#1561), the same listing and identities the manifest is built from.
-            const requestListing = (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
-              startBinary.pipe(
-                Effect.flatMap((binaryPath) =>
-                  // Interrupting the request (its deadline, or the server stopping) ends the
-                  // listing's driver as well.
-                  Effect.tryPromise({
-                    try: (signal) =>
-                      listCuaRequestableApplications({
-                        binaryPath,
-                        platform,
-                        environment: cuaDriverSessionListingEnvironment(
-                          environment,
-                          display,
-                          platform,
-                        ),
-                        hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
-                        signal,
-                      }),
-                    catch: (cause) => new CuaDriverHostError({ operation: "start", cause }),
-                  }),
+            const requestListing = manifest.requestListing(startBinary);
+            const refreshManifest = Effect.fn("CuaDriver.refreshStandaloneManifest")(
+              (apps: ReadonlyArray<string>) =>
+                startBinary.pipe(
+                  Effect.flatMap((binaryPath) => manifest.refresh(binaryPath, apps)),
+                  Effect.mapError(
+                    (cause) => new CuaDriverHostError({ operation: "restart", cause }),
+                  ),
                 ),
-                Effect.map((apps) => Option.some(apps)),
-                Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
-              );
-            return { factory, install, helperReadiness, binary, requestListing };
+            );
+            return { factory, install, helperReadiness, binary, requestListing, refreshManifest };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -981,6 +975,7 @@ export const layer = Layer.effect(
       ...(helperReadiness ? { helperReadiness } : {}),
       ...(binary ? { binary } : {}),
       ...(requestListing ? { requestListing } : {}),
+      ...(refreshManifest ? { refreshManifest } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
       ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });

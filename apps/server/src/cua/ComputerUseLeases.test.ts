@@ -7,9 +7,13 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as CuaDriver from "./CuaDriver.ts";
+import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import {
   database,
@@ -613,4 +617,67 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       ),
     );
   }),
+);
+
+it.effect(
+  "refreshes a standalone driver for changed approvals without blocking the lease watcher",
+  () =>
+    Effect.gen(function* () {
+      const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
+      const watched = yield* Queue.unbounded<boolean>();
+      const driver = Layer.effect(
+        CuaDriver.CuaDriver,
+        Effect.gen(function* () {
+          const service = yield* CuaDriver.make(
+            () => Effect.die("watching approvals must not start a driver"),
+            Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+          );
+          return CuaDriver.CuaDriver.of({
+            ...service,
+            refreshManifest: (apps) =>
+              Queue.offer(refreshed, apps).pipe(Effect.andThen(Effect.never)),
+          });
+        }),
+      ).pipe(Layer.provide(ServerSettings.layerTest()));
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        assert.isFalse(yield* Queue.take(watched));
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(watched));
+        yield* grant(thread, "handoff:standalone-first", ["editor"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+        assert.isTrue(yield* Queue.take(watched));
+        yield* leases.changed;
+        assert.isTrue(yield* Queue.take(watched));
+        assert.equal(yield* Queue.size(refreshed), 0);
+        yield* grant(thread, "handoff:standalone-second", ["browser"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["browser", "editor"]);
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(refreshed), []);
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                driver,
+                Layer.succeed(
+                  LinuxHelperHost.LinuxHelperHost,
+                  LinuxHelperHost.LinuxHelperHost.of({
+                    readiness: Effect.succeedNone,
+                    liveReadiness: Effect.succeedNone,
+                    safety: Stream.empty,
+                    setWatch: (active) => Queue.offer(watched, active).pipe(Effect.asVoid),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
 );
