@@ -154,6 +154,7 @@ import { isTelemetryIdHash } from "@goat/shared/telemetryId";
 import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import * as AttachmentFileLeases from "./assets/AttachmentFileLeases.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import {
   attachmentRelativePath,
@@ -1272,6 +1273,7 @@ export const layerWsRpc = (
         | ChannelGateway.ChannelGateway
         | ServerSettings.ServerSettingsService
         | DocumentText.DocumentText
+        | AttachmentFileLeases.AttachmentFileLeases
       >();
       const channelGateway = yield* ChannelGateway.ChannelGateway;
       const channelLedger = yield* ChannelLedger.ChannelLedger;
