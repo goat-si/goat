@@ -6,7 +6,7 @@ import {
   type ProviderInteractionMode,
   type TurnCapability,
 } from "@goat/contracts";
-import { TURN_CAPABILITY_LABEL } from "@goat/shared/turnCapabilities";
+import { appIdFitsContextId, TURN_CAPABILITY_LABEL } from "@goat/shared/turnCapabilities";
 
 /**
  * Whether a capability can run on the next turn. `checking` is not an answer yet, so picking
@@ -168,10 +168,16 @@ export function matchComposerAppItems(
       capability: "computer-use" as const,
       label: app.name,
       description: `Use ${app.name} with computer use for this turn`,
-      availability,
+      availability: appIdFitsContextId(app.id) ? availability : APP_ID_TOO_LONG,
       app,
     }));
 }
+
+const APP_ID_TOO_LONG: ComposerCapabilityAvailability = {
+  state: "unavailable",
+  reason: "This app's id is too long to mention. Use @computer and name the app instead.",
+  setup: false,
+};
 
 /** The line an entry shows under its name. */
 export function composerCapabilityDetail(item: ComposerCapabilityItem): string {

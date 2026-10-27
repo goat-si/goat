@@ -2,7 +2,6 @@ import {
   TURN_CAPABILITIES,
   type CapabilityContextApp,
   type CapabilityContextRecord,
-  type ComposerContextId,
   type ComposerContextRecord,
   type OrchestrationMessageContext,
   type ScreenBindingHints,
@@ -14,6 +13,14 @@ import {
   formatComposerContextReference,
   toKindScopedComposerContextId,
 } from "./composerContextReferences.ts";
+import { appContextId, appIdForContextId, capabilityRecordApp } from "./appContextId.ts";
+
+export {
+  APP_CONTEXT_ID_MAX_BYTES,
+  appIdFitsContextId,
+  appIdForContextId,
+  capabilityRecordApp,
+} from "./appContextId.ts";
 
 /** The chip text for `@computer` and `@browser`, the same on every client. */
 export const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
@@ -68,7 +75,8 @@ export function screenBindingHintsFromOrigin(input: {
     if (record.kind === "capability" && "capability" in record) {
       if (record.capability === "browser") browserRequested = true;
       if (record.capability === "computer-use") computerRequested = true;
-      if (record.app) appIds.add(record.app.id);
+      const app = capabilityRecordApp(record);
+      if (app) appIds.add(app.id);
     }
     if (record.kind === "preview-tab" && "tabId" in record) {
       const tab = {
@@ -120,7 +128,7 @@ export function withTurnCapabilities(
 /**
  * The chip for `@Finder`: computer use for this turn, aimed at one app. The app travels in the
  * context id itself (`app_<hex id>`), so a draft keeps no record for it and the chip survives a
- * copy or a reload like `@computer` does.
+ * copy or a reload like `@computer` does. Throws for an id that does not fit.
  */
 export function appCapabilityContextRecord(app: CapabilityContextApp): CapabilityContextRecord {
   return {
@@ -131,31 +139,6 @@ export function appCapabilityContextRecord(app: CapabilityContextApp): Capabilit
     capability: "computer-use",
     app: { id: app.id, name: app.name.slice(0, 200) },
   };
-}
-
-const APP_CONTEXT_PREFIX = "app_";
-/** Longest app id an id-encoded chip carries; context ids hold at most 128 characters. */
-const APP_CONTEXT_ID_MAX_BYTES = (128 - APP_CONTEXT_PREFIX.length) / 2;
-
-function appContextId(id: string): ComposerContextId {
-  const bytes = new TextEncoder().encode(id).slice(0, APP_CONTEXT_ID_MAX_BYTES);
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${APP_CONTEXT_PREFIX}${hex}` as ComposerContextId;
-}
-
-/** The app id an app chip's context id carries, or undefined for any other id. */
-export function appIdForContextId(contextId: string): string | undefined {
-  if (!contextId.startsWith(APP_CONTEXT_PREFIX)) return undefined;
-  const hex = contextId.slice(APP_CONTEXT_PREFIX.length);
-  if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return undefined;
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < bytes.length; index++)
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
 }
 
 /** The capability a chip's context id names, or undefined for any other id. */

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { projectComposerContextForProvider } from "./composerContextReferences.ts";
 import {
+  APP_CONTEXT_ID_MAX_BYTES,
   appCapabilityContextRecord,
   appIdForContextId,
+  appIdFitsContextId,
   capabilityContextRecordsInText,
   requestedTurnCapabilities,
   screenBindingHintsFromOrigin,
@@ -110,6 +112,31 @@ describe("app chips", () => {
     expect(appIdForContextId(record.contextId)).toBe("C:\\Apps\\Editor.exe");
     expect(record.contextId.length).toBeLessThanOrEqual(128);
   });
+
+  it("regression #1698: a long id is refused instead of cut, so two apps never share a chip", () => {
+    const windows =
+      "C:\\Users\\someone\\AppData\\Local\\Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe";
+    const linux =
+      "/home/someone/.local/share/JetBrains/Toolbox/apps/intellij-idea-ultimate/bin/idea";
+    for (const id of [windows, linux, `${linux}.sh`]) {
+      expect(() => appCapabilityContextRecord({ id, name: "Editor" })).toThrow();
+      expect(appIdFitsContextId(id)).toBe(false);
+    }
+    const fits = "a".repeat(APP_CONTEXT_ID_MAX_BYTES);
+    expect(appIdForContextId(appCapabilityContextRecord({ id: fits, name: "A" }).contextId)).toBe(
+      fits,
+    );
+    expect(appIdFitsContextId(`${fits}a`)).toBe(false);
+  });
+
+  it("regression #1698: a chip already cut to the full context id width no longer names an app", () => {
+    const cut = `app_${"61".repeat(62)}`;
+    expect(cut).toHaveLength(128);
+    expect(appIdForContextId(cut)).toBeUndefined();
+    expect(capabilityContextRecordsInText(`[A](goat-context://v1/capability/${cut}) go`)).toEqual(
+      [],
+    );
+  });
 });
 
 describe("app chip provider note", () => {
@@ -122,5 +149,30 @@ describe("app chip provider note", () => {
     expect(projected).toContain("capability: computer-use");
     expect(projected).toContain("app: KakaoTalk");
     expect(projected).toContain("appId: com.kakao.KakaoTalkMac");
+  });
+
+  it("regression #1698: a saved record whose app differs from its chip's id names no app", () => {
+    const prefix = "C:\\Users\\someone\\AppData\\Local\\Programs\\Vendor Tools\\";
+    const cut = `app_${[...new TextEncoder().encode(prefix + "xxxxxxxxxxxxxxxxxxxxxxxxxx")]
+      .slice(0, 62)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")}` as import("@goat/contracts").ComposerContextId;
+    // An older build saved app A's record under the id it cut, then showed app B's chip there.
+    const saved = {
+      version: 1 as const,
+      kind: "capability" as const,
+      contextId: cut,
+      label: "Beta",
+      capability: "computer-use" as const,
+      app: { id: `${prefix}Alpha\\alpha.exe`, name: "Alpha" },
+    };
+    const text = `${formatComposerContextReference(saved)} open it`;
+    expect(screenBindingHintsFromOrigin({ text, records: [saved] })).toMatchObject({
+      computerRequested: true,
+      appIds: [],
+    });
+    const projected = projectComposerContextForProvider({ text, records: [saved] });
+    expect(projected).toContain("capability: computer-use");
+    expect(projected).not.toContain("Alpha");
   });
 });

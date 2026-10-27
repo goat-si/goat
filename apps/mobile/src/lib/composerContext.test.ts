@@ -11,6 +11,10 @@ import {
 } from "@goat/contracts";
 import { collectComposerInlineTokens } from "@goat/shared/composerInlineTokens";
 import {
+  appCapabilityContextRecord,
+  screenBindingHintsFromOrigin,
+} from "@goat/shared/turnCapabilities";
+import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -267,6 +271,26 @@ describe("mobile composer context", () => {
       screenshotContextId: "copy-2",
     });
     expect(annotation.contextId).toBe("preview-1");
+  });
+
+  it("regression #1698: a pasted app chip still targets its app at send", () => {
+    const finder = appCapabilityContextRecord({ id: "com.apple.finder", name: "Finder" });
+    const text = `${formatComposerContextReference(finder)} open Downloads`;
+    const imported = reidentifyComposerContext(text, [finder], () => "copy-1");
+    expect(
+      screenBindingHintsFromOrigin({ text: imported.text, records: imported.context.records }),
+    ).toMatchObject({ computerRequested: true, appIds: ["com.apple.finder"] });
+  });
+
+  it("regression #1698: a pasted record that differs from its app chip cannot replace that chip", () => {
+    const finder = appCapabilityContextRecord({ id: "com.apple.finder", name: "Finder" });
+    const forged = { ...finder, capability: "browser" as const };
+    const text = formatComposerContextReference(forged);
+    const imported = reidentifyComposerContext(text, [forged], () => "copy-1");
+    expect(imported.context.records[0]?.contextId).toBe("copy-1");
+    expect(
+      screenBindingHintsFromOrigin({ text: imported.text, records: imported.context.records }),
+    ).toMatchObject({ computerRequested: false, browserRequested: true, appIds: [] });
   });
 
   it("binds uploaded files to their wire ids and preserves terminal payloads for every provider", () => {
