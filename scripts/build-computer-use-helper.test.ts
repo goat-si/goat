@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Reads the checked-in Info.plist template the build renders.
 import * as NodeFS from "node:fs";
+import * as NodeChildProcess from "node:child_process";
+import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -20,6 +22,11 @@ import {
 } from "./build-computer-use-helper.ts";
 import type { CommandResult, ReleaseCommandRunner } from "./lib/release-verify.ts";
 import { packagedHelperChannel } from "./lib/desktop-computer-use-helper.ts";
+
+const helperDir = NodePath.join(import.meta.dirname, "../apps/desktop/native/computer-use-helper");
+const macWithSwift =
+  HostProcess.Platform.defaultValue() === "darwin" &&
+  NodeChildProcess.spawnSync("xcrun", ["--find", "swiftc"], { encoding: "utf8" }).status === 0;
 
 const FIND_IDENTITY = [
   '  1) D92256BFF6CC21ABD4275A89CA418AAF8B484B00 "Apple Development: Someone (QQ4ZRC9P5J)"',
@@ -46,6 +53,27 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
+  it.skipIf(!macWithSwift)(
+    "typechecks the complete native helper with its macOS deployment target",
+    () => {
+      const sources = NodeFS.readdirSync(helperDir)
+        .filter((file) => file.endsWith(".swift"))
+        .map((file) => NodePath.join(helperDir, file));
+      const result = NodeChildProcess.spawnSync(
+        "xcrun",
+        [
+          "swiftc",
+          "-typecheck",
+          "-target",
+          `${HostProcess.Architecture.defaultValue() === "arm64" ? "arm64" : "x86_64"}-apple-macos13.0`,
+          ...sources,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.strictEqual(result.status, 0, result.stdout + result.stderr);
+    },
+  );
+
   it.effect("parses a default build without --ad-hoc (#1349)", () =>
     Effect.gen(function* () {
       // Off macOS the build stops at its platform check, so reaching it proves the flags parsed.
