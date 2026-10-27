@@ -3399,16 +3399,16 @@ it.effect("ProviderSessionManagerV2 retries failed release records with bounded 
       yield* eventSink.write({ events: pendingRequest.events });
       yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
       assert.isTrue(Exit.isFailure(yield* Effect.exit(manager.close(providerSessionId))));
-      yield* Queue.take(flaky.failures);
+      assert.equal((yield* Queue.takeAll(flaky.failures)).length, 1);
       const afterClose = yield* projectionStore.getThreadProjection(threadId);
       assert.equal(afterClose.runtimeRequests.at(-1)?.responseCapability.type, "not_resumable");
       assert.equal(afterClose.providerSessions.at(-1)?.status, "ready");
       yield* TestClock.adjust("1 second");
-      yield* Queue.take(flaky.failures);
+      assert.equal((yield* Queue.takeAll(flaky.failures)).length, 1);
       yield* TestClock.adjust("499 millis");
       assert.equal(yield* Queue.size(flaky.failures), 0);
       yield* TestClock.adjust("251 millis");
-      assert.equal((yield* Queue.takeAll(flaky.failures)).length, 1);
+      const retries = (yield* Queue.takeAll(flaky.failures)).length;
       yield* Ref.set(flaky.failing, "none");
       const stopped = yield* eventSink
         .stream({
@@ -3416,11 +3416,11 @@ it.effect("ProviderSessionManagerV2 retries failed release records with bounded 
           afterSequence: yield* eventSink.latestSequence({ threadId }),
           eventType: "provider-session.updated",
         })
-        .pipe(Stream.runHead, Effect.forkScoped);
+        .pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }));
       yield* TestClock.adjust("2 seconds");
       yield* Fiber.join(stopped);
       const afterRetry = yield* projectionStore.getThreadProjection(threadId);
-      assert.equal(afterRetry.providerSessions.at(-1)?.status, "stopped");
+      assert.deepEqual([afterRetry.providerSessions.at(-1)?.status, retries], ["stopped", 1]);
     }).pipe(
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, flakyReleaseWrites: flaky })),
       Effect.provideService(Random.Random, {
