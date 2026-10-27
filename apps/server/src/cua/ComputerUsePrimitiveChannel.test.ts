@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ComputerUseControlEnd,
+  type ComputerUsePrimitiveRequest,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -66,10 +71,15 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
   };
 });
 
+/** The control-state fields the channel reads. */
+type TurnState =
+  | { readonly _tag: "active"; readonly idle?: true }
+  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
+
 /** One thread whose control state a test moves between turns, Stop and revocation. */
 const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
   const signals = yield* PubSub.unbounded<void>();
-  let state: ComputerUseLeases.ComputerUseControlState = { _tag: "active", idle: false };
+  let state: TurnState = { _tag: "active" };
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     currentControl: () => Effect.succeedSome({ controlId }),
     controlState: () => Effect.sync(() => state),
@@ -88,7 +98,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* () {
   return {
     channel,
     registration,
-    setState: (next: ComputerUseLeases.ComputerUseControlState) =>
+    setState: (next: TurnState) =>
       Effect.sync(() => {
         state = next;
       }).pipe(Effect.andThen(PubSub.publish(signals, undefined))),
@@ -225,7 +235,7 @@ describe("ComputerUsePrimitiveChannel", () => {
         );
         assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
 
-        yield* t.setState({ _tag: "active", idle: false });
+        yield* t.setState({ _tag: "active" });
         const next = { ...authority, attachmentGeneration: "attachment:two" };
         yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
         assert.equal(
@@ -254,29 +264,28 @@ describe("ComputerUsePrimitiveChannel", () => {
       }).pipe(Effect.scoped),
   );
 
-  for (const reason of ["stopped", "stopped_all", "revoked", "disabled"] as const)
-    it.effect(
-      `a control ended as ${reason} closes the channel and quarantines in-flight input`,
-      () =>
-        Effect.gen(function* () {
-          const t = yield* turnFixture();
-          assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
-          const pending = yield* t.request().pipe(Effect.forkChild);
-          yield* Stream.runHead(t.registration.requests);
-          yield* t.setState({ _tag: "ended", reason });
-          assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
-          assert.isUndefined(
-            yield* t.channel.authenticate({
-              threadId,
-              proxyChannelToken: authority.proxyChannelToken,
-            }),
-          );
-          const next = { ...authority, attachmentGeneration: "attachment:two" };
-          yield* t.setState({ _tag: "active", idle: false });
-          yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
-          assert.isFalse(yield* t.channel.reportControlReady(t.report(next, 1)));
-        }).pipe(Effect.scoped),
-    );
+  it.effect.each(["stopped", "stopped_all", "revoked", "disabled"] as const)(
+    "a control ended as %s closes the channel and quarantines in-flight input",
+    (reason) =>
+      Effect.gen(function* () {
+        const t = yield* turnFixture();
+        assert.isTrue(yield* t.channel.reportControlReady(t.report(authority, 0)));
+        const pending = yield* t.request().pipe(Effect.forkChild);
+        yield* Stream.runHead(t.registration.requests);
+        yield* t.setState({ _tag: "ended", reason });
+        assert.equal((yield* Fiber.join(pending)).status, "unknown_outcome");
+        assert.isUndefined(
+          yield* t.channel.authenticate({
+            threadId,
+            proxyChannelToken: authority.proxyChannelToken,
+          }),
+        );
+        const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.setState({ _tag: "active" });
+        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        assert.isFalse(yield* t.channel.reportControlReady(t.report(next, 1)));
+      }).pipe(Effect.scoped),
+  );
 
   it.effect(
     "an explicit revoke closes the channel even when the next attachment reuses the token",
