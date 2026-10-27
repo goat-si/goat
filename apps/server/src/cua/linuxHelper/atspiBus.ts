@@ -67,7 +67,7 @@ function typeEnd(signature: string, at: number): number {
 }
 
 /** The complete types of a signature in order: "a(so)u" is ["a(so)", "u"]. */
-export function completeTypes(signature: string): ReadonlyArray<string> {
+function completeTypes(signature: string): ReadonlyArray<string> {
   const types: string[] = [];
   for (let at = 0; at < signature.length;) {
     const end = typeEnd(signature, at);
