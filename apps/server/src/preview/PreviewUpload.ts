@@ -3,7 +3,7 @@
 import type { PreviewAutomationUploadInput } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
-import type { CDPSession, ElementHandle, Page } from "playwright-core";
+import type { CDPSession, ElementHandle, Frame, Page } from "playwright-core";
 
 import {
   DEFAULT_TIMEOUT_MS,
@@ -14,17 +14,28 @@ import {
 } from "./ServerBrowserPage.ts";
 
 /**
- * The input stashed under `key` in a child frame's page world, on the session that owns that
- * frame: its own for an out-of-process frame, else a fresh one for the page. The page's frames are
- * listed by turning Runtime on in that session alone, so no session the tab keeps changes state.
+ * A fresh session on the process that runs `frame`: its own when it is out of process, else the
+ * nearest ancestor's that is, else the page's. A same-site child of a cross-site frame shares that
+ * frame's process, so the page's session cannot see it.
+ */
+const sessionFor = async (frame: Frame): Promise<CDPSession> => {
+  const context = frame.page().context();
+  for (let current: Frame | null = frame; current !== null; current = current.parentFrame()) {
+    const session = await context.newCDPSession(current).catch(() => null);
+    if (session !== null) return session;
+  }
+  return context.newCDPSession(frame.page());
+};
+
+/**
+ * The input stashed under `key` in a child frame's page world, on a session for the process that
+ * runs that frame. Its frames are listed by turning Runtime on in that session alone, so no
+ * session the tab keeps changes state.
  */
 const framedInput = async (handle: ElementHandle, key: string) => {
   const frame = await handle.ownerFrame();
   if (frame === null) return undefined;
-  const context = frame.page().context();
-  const session = await context
-    .newCDPSession(frame)
-    .catch(() => context.newCDPSession(frame.page()));
+  const session = await sessionFor(frame);
   try {
     const worlds: Array<number> = [];
     const onContext = (event: {

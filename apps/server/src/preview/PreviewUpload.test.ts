@@ -43,32 +43,44 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
     await page.route("https://frame.test/**", (route) =>
       route.fulfill({ contentType: "text/html", body: FRAMED }),
     );
+    // A same-site child inside the cross-site frame shares that frame's process, not the page's.
+    await page.route("https://frame.test/host", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<iframe src="https://frame.test/child"></iframe>',
+      }),
+    );
     await page.route("https://outer.test/", (route) =>
       route.fulfill({
         contentType: "text/html",
-        body: '<iframe id="same" src="https://outer.test/inner"></iframe><iframe id="cross" src="https://frame.test/"></iframe>',
+        body: '<iframe id="same" src="https://outer.test/inner"></iframe><iframe id="cross" src="https://frame.test/"></iframe><iframe id="nested" src="https://frame.test/host"></iframe>',
       }),
     );
     await page.goto("https://outer.test/");
-    for (const frame of ["#same", "#cross"]) {
-      const inside = page.frameLocator(frame);
+    const enter = " >> internal:control=enter-frame >> ";
+    const cases = [
+      { path: `#same${enter}`, inside: page.frameLocator("#same"), ownSession: false },
+      { path: `#cross${enter}`, inside: page.frameLocator("#cross"), ownSession: true },
+      {
+        path: `#nested${enter}iframe${enter}`,
+        inside: page.frameLocator("#nested").frameLocator("iframe"),
+        ownSession: false,
+      },
+    ];
+    for (const { path, inside, ownSession } of cases) {
       await inside.locator("#h").waitFor({ state: "attached" });
-      const owner = await (await page.locator(frame).elementHandle())!.contentFrame();
-      const ownSession = await context.newCDPSession(owner!).then(
-        (session) => session.detach().then(() => true),
-        () => false,
-      );
-      // The frames take both paths: the page's own session, and the frame's separate one.
-      expect(ownSession).toBe(frame === "#cross");
+      const owner = await (await inside.locator("#h").elementHandle())!.ownerFrame();
+      // The frames take every path: the page's session, a frame's own, and an ancestor frame's.
+      expect(
+        await context.newCDPSession(owner!).then(
+          (session) => session.detach().then(() => true),
+          () => false,
+        ),
+      ).toBe(ownSession);
       let gates = 0;
-      await PreviewUpload.setInputFiles(
-        page,
-        cdp,
-        { locator: `${frame} >> internal:control=enter-frame >> #g`, paths: [file] },
-        () => {
-          gates++;
-        },
-      );
+      await PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#g`, paths: [file] }, () => {
+        gates++;
+      });
       expect(gates).toBe(1);
       const state = (id: string) =>
         inside
@@ -79,14 +91,9 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
           ]);
       expect(await state("#g")).toEqual(["note.txt", 1]);
       await expect(
-        PreviewUpload.setInputFiles(
-          page,
-          cdp,
-          { locator: `${frame} >> internal:control=enter-frame >> #h`, paths: [file] },
-          () => {
-            throw new Error("stopped");
-          },
-        ),
+        PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#h`, paths: [file] }, () => {
+          throw new Error("stopped");
+        }),
       ).rejects.toThrow("stopped");
       expect(await state("#h")).toEqual([null, 1]);
     }

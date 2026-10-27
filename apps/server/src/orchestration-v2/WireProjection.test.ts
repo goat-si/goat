@@ -148,6 +148,32 @@ describe("orchestration V2 wire projection", () => {
     });
   });
 
+  it("keeps a batch's typed values out of its result, and catches every step form the driver runs", () => {
+    const item = {
+      ...base,
+      toolName: "cua-driver.run_steps",
+      input: {
+        steps: [
+          { noop: null, type: { text: "hunter2" } },
+          { click: { name: "Sign in" }, expect: { name: "Password", value: "hunter2" } },
+          { press_key: { key: "a" } },
+        ],
+      },
+      output: {
+        structuredContent: {
+          steps: [{ index: 1, tool: "click", message: 'expected value "hunter2" but saw ""' }],
+        },
+      },
+    } as OrchestrationV2TurnItem;
+    const row = projectTranscriptRowForClient({ position: 0, item });
+    for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), row])
+      expect(JSON.stringify(sent)).not.toContain("hunter2");
+    const detail = projectTurnItemForDetail(item);
+    expect(JSON.stringify(detail.type === "dynamic_tool" ? detail.output : null)).toContain(
+      'expected value \\"[typed text]\\" but saw',
+    );
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,

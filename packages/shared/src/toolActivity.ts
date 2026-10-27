@@ -110,49 +110,57 @@ const STEP_ALIASES: Readonly<Record<string, string>> = { type: "type_text", set:
 /** A wait_for or expect check names a field's value, which can be what a step typed into it. */
 const CHECK_VALUE_FIELDS = ["value", "value_contains"] as const;
 
-type Replace = (length: number) => unknown;
+/** Receives each typed value, raw or already a marker, and returns what takes its place. */
+type ReplaceValue = (value: unknown) => unknown;
 
 /** A copy of `record` with `fields` replaced, or undefined when it has none of them. */
-function replaceFields(record: unknown, fields: ReadonlyArray<string>, replace: Replace) {
+function replaceFields(record: unknown, fields: ReadonlyArray<string>, replace: ReplaceValue) {
   const object = asRecord(record);
   const present = fields.filter((field) => object?.[field] !== undefined);
   if (object === undefined || present.length === 0) return undefined;
   return {
     ...object,
-    ...Object.fromEntries(present.map((field) => [field, replace(typedLength(object[field]))])),
+    ...Object.fromEntries(present.map((field) => [field, replace(object[field])])),
   };
 }
 
+const replaceChecks = (checks: unknown, replace: ReplaceValue) =>
+  Array.isArray(checks)
+    ? checks.map((check) => replaceFields(check, CHECK_VALUE_FIELDS, replace) ?? check)
+    : replaceFields(checks, CHECK_VALUE_FIELDS, replace);
+
 /**
  * One run_steps step, `{tool, args}` or `{<tool>: args}` as the driver reads it, with its typed
- * text and the field values its checks name replaced.
+ * text and the field values its checks name replaced. The driver skips a null key, so every other
+ * key that names a typing tool is treated as the action.
  */
-function replaceStep(step: unknown, replace: Replace): unknown {
+function replaceStep(step: unknown, replace: ReplaceValue): unknown {
   const object = asRecord(step);
   if (object === undefined) return step;
-  const named = typeof object.tool === "string" ? object.tool : undefined;
-  const key =
-    named === undefined ? Object.keys(object).find((each) => !STEP_KEYS.has(each)) : "args";
-  const tool = named ?? key;
-  const field = tool === undefined ? undefined : TYPED_TEXT_FIELDS[STEP_ALIASES[tool] ?? tool];
-  const args =
-    key === undefined || field === undefined
-      ? undefined
-      : replaceFields(object[key], [field], replace);
+  const fieldOf = (tool: unknown) =>
+    typeof tool === "string" ? TYPED_TEXT_FIELDS[STEP_ALIASES[tool] ?? tool] : undefined;
+  const actions: ReadonlyArray<readonly [string, string | undefined]> =
+    object.tool !== undefined
+      ? [["args", fieldOf(object.tool)]]
+      : Object.keys(object)
+          .filter((key) => !STEP_KEYS.has(key) && object[key] !== null)
+          .map((key) => [key, fieldOf(key)]);
+  const replaced = actions.flatMap(([key, field]) => {
+    const args = field === undefined ? undefined : replaceFields(object[key], [field], replace);
+    return args === undefined ? [] : [[key, args] as const];
+  });
   const waitFor = replaceFields(object.wait_for, CHECK_VALUE_FIELDS, replace);
-  const expect = Array.isArray(object.expect)
-    ? object.expect.map((check) => replaceFields(check, CHECK_VALUE_FIELDS, replace) ?? check)
-    : undefined;
+  const expect = replaceChecks(object.expect, replace);
   return {
     ...object,
-    ...(args === undefined || key === undefined ? {} : { [key]: args }),
+    ...Object.fromEntries(replaced),
     ...(waitFor === undefined ? {} : { wait_for: waitFor }),
     ...(expect === undefined ? {} : { expect }),
   };
 }
 
 /** A call's arguments with what it types replaced, or undefined when it types nothing. */
-function replaceArguments(tool: string, args: unknown, replace: Replace): unknown {
+function replaceArguments(tool: string, args: unknown, replace: ReplaceValue): unknown {
   const field = TYPED_TEXT_FIELDS[tool];
   if (field !== undefined) return replaceFields(args, [field], replace);
   // A script's literals can hold what it types, and no parse can tell which; it shows as a length.
@@ -162,14 +170,10 @@ function replaceArguments(tool: string, args: unknown, replace: Replace): unknow
   return { ...asRecord(args), steps: steps.map((step) => replaceStep(step, replace)) };
 }
 
-/**
- * The input with its typed text, raw or redacted, replaced by what `replace` makes of its length:
- * a type_text or set_value call's own, every one inside a run_steps batch, and a run_script source.
- */
-export function replaceComputerUseTypedText(
+function replaceTypedValues(
   toolName: string | null | undefined,
   input: unknown,
-  replace: Replace,
+  replace: ReplaceValue,
 ): unknown {
   const record = asRecord(input);
   if (record === undefined) return input;
@@ -184,6 +188,18 @@ export function replaceComputerUseTypedText(
 }
 
 /**
+ * The input with its typed text, raw or redacted, replaced by what `replace` makes of its length:
+ * a type_text or set_value call's own, every one inside a run_steps batch, and a run_script source.
+ */
+export function replaceComputerUseTypedText(
+  toolName: string | null | undefined,
+  input: unknown,
+  replace: (length: number) => unknown,
+): unknown {
+  return replaceTypedValues(toolName, input, (value) => replace(typedLength(value)));
+}
+
+/**
  * A computer-use call's input with its typed text replaced by a ComputerUseRedactedText (#1186).
  * The text can be a password, so nothing a client receives or exports carries it.
  */
@@ -194,6 +210,44 @@ export function redactComputerUseTypedText(
   return replaceComputerUseTypedText(toolName, input, (redactedCharacters) => ({
     redactedCharacters,
   }));
+}
+
+/** What a call's output shows in place of a value its input typed. */
+export const COMPUTER_USE_TYPED_OUTPUT = "[typed text]";
+/** Shorter typed values are masked only as a whole output string, so "a" leaves other text alone. */
+const MIN_EMBEDDED_TYPED_LENGTH = 4;
+
+/**
+ * A computer-use call's output with every value its input typed masked, since a batch report can
+ * echo a checked value. A script's own results are page reads, which private mode governs.
+ */
+export function redactComputerUseTypedOutput(
+  toolName: string | null | undefined,
+  input: unknown,
+  output: unknown,
+): unknown {
+  const typed = new Set<string>();
+  replaceTypedValues(toolName, input, (value) => {
+    if (typeof value === "string" && value.length > 0) typed.add(value);
+    return value;
+  });
+  if (typed.size === 0 || output === undefined) return output;
+  const embedded = [...typed]
+    .filter((value) => value.length >= MIN_EMBEDDED_TYPED_LENGTH)
+    .toSorted((a, b) => b.length - a.length);
+  const mask = (text: string) =>
+    typed.has(text)
+      ? COMPUTER_USE_TYPED_OUTPUT
+      : embedded.reduce((each, value) => each.split(value).join(COMPUTER_USE_TYPED_OUTPUT), text);
+  const walk = (value: unknown): unknown => {
+    if (typeof value === "string") return mask(value);
+    if (Array.isArray(value)) return value.map(walk);
+    const object = asRecord(value);
+    return object === undefined
+      ? value
+      : Object.fromEntries(Object.entries(object).map(([key, each]) => [key, walk(each)]));
+  };
+  return walk(output);
 }
 
 export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {

@@ -11,7 +11,10 @@ import type {
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
-import { redactComputerUseTypedText } from "@goat/shared/toolActivity";
+import {
+  redactComputerUseTypedOutput,
+  redactComputerUseTypedText,
+} from "@goat/shared/toolActivity";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import {
   dedupeSubagentBodies,
@@ -141,7 +144,9 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
-      const output = compactDynamicToolOutput(rawOutput);
+      const output = compactDynamicToolOutput(
+        redactComputerUseTypedOutput(item.toolName, item.input, rawOutput),
+      );
       const input = redactComputerUseTypedText(item.toolName, item.input);
       return {
         ...projected,
@@ -231,7 +236,9 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
       return {
         ...item,
         input: boundDynamicValue(redactComputerUseTypedText(item.toolName, item.input)),
-        output: boundToolOutput(item.output),
+        output: boundToolOutput(
+          redactComputerUseTypedOutput(item.toolName, item.input, item.output),
+        ),
       };
     case "subagent":
       return {
@@ -261,7 +268,10 @@ export function projectTranscriptRowForClient<R extends { readonly item: Orchest
   const item = row.item;
   if (item.type !== "dynamic_tool") return row;
   const input = redactComputerUseTypedText(item.toolName, item.input);
-  return input === item.input ? row : { ...row, item: { ...item, input } };
+  const output = redactComputerUseTypedOutput(item.toolName, item.input, item.output);
+  return input === item.input && output === item.output
+    ? row
+    : { ...row, item: { ...item, input, output } };
 }
 
 export function projectContextHandoffForWire(
