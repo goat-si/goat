@@ -11,6 +11,7 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -83,6 +84,10 @@ interface Machine {
   capturedHub: { readonly enabled: boolean; readonly autoJoin: boolean } | undefined;
   /** Runs while OpenCodex is being prepared on the machine. */
   duringPrepare: Effect.Effect<void>;
+  /** Whether GOAT's runtime is usable there once the Home ensured it. */
+  runtime: boolean;
+  /** Runs while the Home ensures GOAT's runtime on the machine. */
+  duringEnsure: Effect.Effect<void>;
 }
 
 const PERSON = { kind: "client" as const, sessionId: AuthSessionId.make("person") };
@@ -140,6 +145,8 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       Layer.provide(
         Layer.mock(HubOcx)({
           devicePlatform: () => Effect.sync(() => machine.platform),
+          ensureDeviceRuntime: () =>
+            Effect.suspend(() => machine.duringEnsure).pipe(Effect.as(machine.runtime)),
           prepareDevice: (alias, version) =>
             Effect.sync(() => {
               calls.push(`prepare ${alias} ${version}`);
@@ -298,6 +305,8 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     duringRevisionRead: undefined,
     capturedHub: undefined,
     duringPrepare: Effect.void,
+    runtime: true,
+    duringEnsure: Effect.void,
     ...overrides,
   };
   const calls: string[] = [];
@@ -374,21 +383,81 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
-  it.effect("a machine without npm is blocked with that reason and retried after ten minutes", () =>
+  it.effect(
+    "compiled installer failure is blocked with install_failed and retried after ten minutes",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ prepareExit: PREPARE_EXIT.installFailed });
+        expect(yield* home.bootstrap.ensure("boat-builder")).toMatchObject({
+          state: "blocked",
+          reason: "install_failed",
+        });
+        expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
+        yield* home.ready("boat-builder");
+        expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("blocked");
+        home.machine.prepareExit = 0;
+        yield* TestClock.adjust(10 * MINUTE);
+        yield* home.ready("boat-builder");
+        expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("running");
+        expect((yield* home.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+      }),
+  );
+
+  it.effect("ensures GOAT before preparing a fresh Child", () =>
     Effect.gen(function* () {
-      const home = yield* setup({ prepareExit: PREPARE_EXIT.npmMissing });
+      const home = yield* setup();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      home.machine.duringEnsure = Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const job = yield* home.bootstrap.ensure("boat-builder").pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      expect(home.calls).toEqual([]);
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(job))?.state).toBe("child");
+      expect(home.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
+    }),
+  );
+
+  it.effect("blocks with goat_runtime_missing when runtime provisioning remains pending", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ runtime: false });
       expect(yield* home.bootstrap.ensure("boat-builder")).toMatchObject({
         state: "blocked",
-        reason: "npm_missing",
+        reason: "goat_runtime_missing",
+        message: "GOAT's runtime is not available there. Finish SSH setup and retry.",
       });
-      expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
-      yield* home.ready("boat-builder");
-      expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("blocked");
-      home.machine.prepareExit = 0;
-      yield* TestClock.adjust(10 * MINUTE);
-      yield* home.ready("boat-builder");
-      expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("running");
-      expect((yield* home.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+      expect(home.calls).toEqual([]);
+      // The new reason and a legacy npm one both read back after a restart.
+      const fs = yield* FileSystem.FileSystem;
+      const file = `${home.stateDir}/opencodex-child-bootstrap.json`;
+      const saved = JSON.parse(yield* fs.readFileString(file));
+      yield* fs.writeFileString(
+        file,
+        JSON.stringify({
+          ...saved,
+          "boat-legacy": { state: "blocked", checkedAt: 1, reason: "npm_missing" },
+        }),
+      );
+      const restarted = yield* build(home.baseDir, home.machine, home.calls);
+      expect((yield* restarted.bootstrap.status("boat-builder"))?.reason).toBe(
+        "goat_runtime_missing",
+      );
+      expect((yield* restarted.bootstrap.status("boat-legacy"))?.reason).toBe("npm_missing");
+    }),
+  );
+
+  it.effect("withdrawn consent during runtime provisioning prevents OpenCodex preparation", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringEnsure = home.bootstrap
+        .setSshOptIn("lidge-ts", false, PERSON)
+        .pipe(Effect.orDie);
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual([]);
+      expect(yield* home.bootstrap.status("lidge-ts")).toBeUndefined();
     }),
   );
 
@@ -727,11 +796,12 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
 
   it.effect("a withdrawal or Forget during the last consent read before linking wins", () =>
     Effect.gen(function* () {
-      // Authority is read when consent is given, before the setup, after preparing, and last by
-      // the join itself under the hub permit; the change lands inside that last read.
+      // Authority is read when consent is given, before the setup, around ensuring GOAT's
+      // runtime, after preparing, and last by the join itself under the hub permit; the change
+      // lands inside that last read.
       const opted = yield* setup();
       opted.machine.duringSessionRead = {
-        at: 4,
+        at: 8,
         run: opted.bootstrap.setSshOptIn("lidge-ts", false, PERSON).pipe(Effect.orDie),
       };
       yield* opted.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
@@ -740,7 +810,7 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
 
       const forgotten = yield* setup();
       forgotten.machine.duringSessionRead = {
-        at: 4,
+        at: 8,
         run: Effect.sync(() => void forgotten.machine.generations.set("lidge-ts", 1)).pipe(
           Effect.andThen(forgotten.ssh("lidge-ts", "forgotten")),
           Effect.orDie,
@@ -817,8 +887,9 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       ];
       for (const end of endings) {
         const home = yield* setup();
-        // Hub state is read before the setup, after preparing, and last by the join itself.
-        home.machine.duringSettingsRead = { at: 3, run: Effect.sync(() => end(home.machine)) };
+        // Hub state is read before the setup, around ensuring GOAT's runtime, after preparing,
+        // and last by the join itself.
+        home.machine.duringSettingsRead = { at: 5, run: Effect.sync(() => end(home.machine)) };
         yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
         expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
           state: "blocked",
@@ -832,9 +903,10 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
   it.effect("a hub turned off while the alias's files are read last still stops the join", () =>
     Effect.gen(function* () {
       const home = yield* setup();
-      // Read when consent is given, before the setup, after preparing, and last by the join.
+      // Read when consent is given, before the setup, around ensuring GOAT's runtime, after
+      // preparing, and last by the join.
       home.machine.duringRevisionRead = {
-        at: 4,
+        at: 6,
         run: Effect.sync(() => void (home.machine.hub = false)),
       };
       yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);

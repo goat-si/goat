@@ -33,6 +33,7 @@ import { extendConnectionAttemptTimeout, keepOutboundFetchOnHttp1 } from "./outb
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { providerCommand } from "./cli/provider.ts";
+import { opencodexCommand } from "./cli/opencodex.ts";
 import { threadCommand } from "./cli/thread.ts";
 import { runDefaultServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { updateCommand } from "./cli/update.ts";
@@ -117,6 +118,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       browserCommand,
       projectCommand,
       providerCommand,
+      opencodexCommand,
       threadCommand,
       serviceCommand,
       updateCommand,

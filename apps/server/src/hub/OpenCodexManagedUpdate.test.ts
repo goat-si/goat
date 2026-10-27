@@ -16,10 +16,13 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import * as Installation from "../opencodex/OpenCodexInstallation.ts";
+import { installedWorld, urlOf } from "../opencodex/OpenCodexInstallation.testkit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
@@ -689,6 +692,7 @@ it.effect(
           Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
           Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
           Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+          Layer.provide(Layer.mock(Installation.OpenCodexInstallation)({})),
           Layer.provide(FetchHttpClient.layer),
           Layer.provide(Layer.succeed(HostProcess.Environment, {})),
           Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/")),
@@ -705,4 +709,86 @@ it.effect(
       });
       expect(member.runningTurns).toBe(1);
     }),
+);
+
+it.live("managed update and rollback use only retained compiled release pins", () =>
+  Effect.gen(function* () {
+    const world = yield* installedWorld();
+    const restarts: Array<string> = [];
+    const remoteScripts: Array<string> = [];
+    const context = yield* Layer.build(
+      UpdateHost.layerHost.pipe(
+        Layer.provide(Layer.mock(HubParity.HubParity)({})),
+        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+        Layer.provide(Layer.mock(RuntimeAdmission.RuntimeAdmission)({})),
+        Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+        Layer.provide(
+          Layer.mock(Dispatch.SshRemoteDispatch)({
+            provisionedRuntimeExecutable: () => Effect.sync((): string | undefined => undefined),
+            runHostScript: ({ script }) =>
+              Effect.sync(() => {
+                remoteScripts.push(script);
+                return { stdout: "\n__goat_ocx_exit=0\n", stderr: "" };
+              }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProcessRunner.ProcessRunner)({
+            run: (input) =>
+              Effect.sync(() => {
+                restarts.push(`${input.command} ${input.args.join(" ")}`);
+                return {
+                  stdout: "",
+                  stderr: "",
+                  code: ChildProcessSpawner.ExitCode(0),
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
+          }),
+        ),
+        Layer.provide(Layer.succeed(Installation.OpenCodexInstallation, world.service)),
+        Layer.provide(Layer.succeed(Installation.ReleaseCatalog, world.catalog)),
+        Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
+        Layer.provide(Layer.succeed(HostProcess.Architecture, "x64")),
+        Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+        Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/")),
+      ),
+    );
+    const host = yield* UpdateHost.OpenCodexUpdateHost.pipe(Effect.provideContext(context));
+    // The newest release GOAT can install is its compiled pin, never a registry's latest.
+    expect(yield* host.latestRelease).toEqual({
+      version: "2.92.0",
+      publishedAt: "2026-10-24T00:00:00Z",
+    });
+    const release = (version: string) =>
+      world.path.join(world.prefix, `${version}-bun-linux-x64`, "ocx");
+    expect(yield* host.install(null, "2.93.0")).toBe(true);
+    expect(yield* world.fs.realPath(world.launcher)).toBe(release("2.93.0"));
+    // Rollback reuses the retained release directory without downloading it again.
+    expect(yield* host.install(null, "2.92.0")).toBe(true);
+    expect(yield* world.fs.realPath(world.launcher)).toBe(release("2.92.0"));
+    expect(world.downloads).toEqual([urlOf("2.92.0"), urlOf("2.93.0")]);
+    expect(restarts).toEqual([
+      `${world.path.join(world.home, ".local", "bin", "ocx")} restart`,
+      `${world.path.join(world.home, ".local", "bin", "ocx")} restart`,
+    ]);
+    // An unpinned version, an install GOAT does not own, or a remote without a provisioned
+    // runtime changes nothing.
+    expect(yield* host.install(null, "2.94.0")).toBe(false);
+    yield* world.fs.remove(
+      world.path.join(world.prefix, "2.92.0-bun-linux-x64", ".goat-install.json"),
+    );
+    expect(yield* host.install(null, "2.93.0")).toBe(false);
+    expect(yield* world.fs.realPath(world.launcher)).toBe(release("2.92.0"));
+    expect(yield* host.install("lidge-ts", "2.93.0")).toBe(false);
+    expect(remoteScripts).toEqual([]);
+    expect(restarts).toHaveLength(2);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
 );

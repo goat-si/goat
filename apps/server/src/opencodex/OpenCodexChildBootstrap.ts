@@ -38,7 +38,7 @@ import { makeSshChildConsent } from "./sshChildConsent.ts";
 
 const STATE_FILE = "opencodex-child-bootstrap.json";
 const CONSENT_FILE = "opencodex-child-ssh-consent.json";
-// npm downloads OpenCodex and its bundled Bun runtime, then the service gets 40 seconds to answer.
+// GOAT downloads OpenCodex's compiled archive, then the service gets 40 seconds to answer.
 const PREPARE_TIMEOUT_MS = 15 * 60_000;
 /** A blocked machine is tried again on a later readying, but not on every one. */
 const RETRY_AFTER_MS = 10 * 60_000;
@@ -49,12 +49,17 @@ const Records = Schema.Record(Schema.String, OpenCodexChildBootstrapStatus);
 const decodeRecords = Schema.decodeUnknownOption(Schema.fromJsonString(Records));
 const encodeRecords = Schema.encodeSync(Schema.fromJsonString(Records));
 
+const RUNTIME_MISSING = "GOAT's runtime is not available there. Finish SSH setup and retry.";
 const PREPARE_REASONS: Readonly<Record<number, readonly [Reason, string]>> = {
   [PREPARE_EXIT.npmMissing]: [
-    "npm_missing",
-    "npm is not installed there. OpenCodex installs with npm (Node 18 or later).",
+    "install_failed",
+    "The remote installer is outdated. Update GOAT there and retry.",
   ],
-  [PREPARE_EXIT.installFailed]: ["install_failed", "npm could not install OpenCodex there."],
+  [PREPARE_EXIT.installFailed]: [
+    "install_failed",
+    "GOAT could not install OpenCodex there. Check its provisioned runtime and retry.",
+  ],
+  [PREPARE_EXIT.goatRuntimeMissing]: ["goat_runtime_missing", RUNTIME_MISSING],
   [PREPARE_EXIT.ocxUnusable]: [
     "ocx_unusable",
     `After installing, the first ocx there still is not OpenCodex ${CHILD_MINIMUM_VERSION} or later.`,
@@ -213,10 +218,22 @@ const make = Effect.gen(function* () {
     )
       return yield* blocked(
         "home_unavailable",
-        `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to install the same release there.`,
+        `This Home needs OpenCodex ${CHILD_MINIMUM_VERSION} or later to prepare a Child.`,
       );
     if ((yield* ocx.devicePlatform(alias)) === "windows")
       return yield* blocked("platform_unsupported", "Remote Link refuses Windows Children.");
+    // GOAT's own runtime installs OpenCodex there, so it is ensured first; that can wait on
+    // provisioning, and the switch or the consent may change meanwhile.
+    const admitted = yield* gate.admission;
+    if (admitted.state !== "allowed") return yield* stopped(alias, admitted);
+    const runtime = yield* ocx.ensureDeviceRuntime(alias).pipe(
+      Effect.map((ready) => ({ ok: true as const, ready })),
+      Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
+    );
+    if (!runtime.ok) return yield* blocked("unreachable", runtime.error.message);
+    if (!runtime.ready) return yield* blocked("goat_runtime_missing", RUNTIME_MISSING);
+    const provisioned = yield* gate.admission;
+    if (provisioned.state !== "allowed") return yield* stopped(alias, provisioned);
     const prepared = yield* ocx.prepareDevice(alias, home, PREPARE_TIMEOUT_MS).pipe(
       Effect.map((output) => ({ ok: true as const, output })),
       Effect.catch((error) => Effect.succeed({ ok: false as const, error })),

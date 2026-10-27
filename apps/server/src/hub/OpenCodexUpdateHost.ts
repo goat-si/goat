@@ -1,17 +1,17 @@
 import { GoatHostStatusResult } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { OPEN_CODEX_PINNED_VERSION, resolveOpenCodexRelease } from "@goat/shared/opencodexRelease";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import { countHostThreads, interruptibleTurns, runningSubagents } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { quoteGoatExecutable } from "../opencodex/childPrepare.ts";
+import * as Installation from "../opencodex/OpenCodexInstallation.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
@@ -20,16 +20,8 @@ import * as HubParity from "./HubParity.ts";
 import { isStableOpenCodexVersion, type OpenCodexUpdateMember } from "./opencodexUpdatePlan.ts";
 
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
-const PACKAGE = "@bitkyc08/opencodex";
-const REGISTRY_URL = "https://registry.npmjs.org/@bitkyc08%2fopencodex";
-const MAX_REGISTRY_BYTES = 8 * 1024 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
-const Packument = Schema.Struct({
-  "dist-tags": Schema.Struct({ latest: Schema.optional(Schema.String) }),
-  time: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-});
-const decodePackument = Schema.decodeUnknownOption(Schema.fromJsonString(Packument));
 
 export interface OpenCodexRelease {
   readonly version: string;
@@ -37,7 +29,7 @@ export interface OpenCodexRelease {
 }
 
 /**
- * The only seam to devices and the registry; tests replace it with a scripted fake. `member`
+ * The only seam to devices and the installer; tests replace it with a scripted fake. `member`
  * always reads fresh evidence, because a health check must not see a cached pre-update answer.
  */
 export class OpenCodexUpdateHost extends Context.Service<
@@ -48,7 +40,7 @@ export class OpenCodexUpdateHost extends Context.Service<
       alias: string | null,
       scope: McpInvocationScope,
     ) => Effect.Effect<OpenCodexUpdateMember>;
-    /** Installs exactly `version` with OpenCodex's npm installer and restarts the service. */
+    /** Installs only a GOAT-pinned managed release and restarts its service. */
     readonly install: (alias: string | null, version: string) => Effect.Effect<boolean>;
     /**
      * Stops new turns on the member before it restarts, as ADR-0019 activation does. False when
@@ -60,14 +52,13 @@ export class OpenCodexUpdateHost extends Context.Service<
 >()("goat/hub/OpenCodexUpdateHost") {}
 
 /** Script-safe by construction: the version passed `isStableOpenCodexVersion`. */
-const installScript = (version: string) => {
+const installScript = (version: string, goatExecutable: string) => {
   if (!isStableOpenCodexVersion(version)) throw new TypeError("Unsafe OpenCodex version.");
   return [
-    'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"',
-    `if ! npm install -g '${PACKAGE}@${version}' </dev/null >/dev/null 2>&1; then printf '\\n__goat_ocx_exit=1\\n'; exit 0; fi`,
-    "goat_prefix=$(npm prefix -g 2>/dev/null) || goat_prefix=",
-    "if [ -z \"$goat_prefix\" ]; then printf '\\n__goat_ocx_exit=1\\n'; exit 0; fi",
-    '"$goat_prefix/bin/ocx" restart </dev/null >/dev/null 2>&1',
+    `goat_cli=${quoteGoatExecutable(goatExecutable)}`,
+    "[ -x \"$goat_cli\" ] || { printf '\\n__goat_ocx_exit=1\\n'; exit 0; }",
+    `goat_ocx=$("$goat_cli" opencodex install --managed-version '${version}' --print-path </dev/null) || { printf '\\n__goat_ocx_exit=1\\n'; exit 0; }`,
+    '"$goat_ocx" restart </dev/null >/dev/null 2>&1',
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",
     "",
   ].join("\n");
@@ -81,36 +72,17 @@ const makeHost = Effect.gen(function* () {
   const dispatch = yield* Dispatch.SshRemoteDispatch;
   const runner = yield* ProcessRunner.ProcessRunner;
   const admission = yield* RuntimeAdmission.RuntimeAdmission;
-  const http = HttpClient.withScope(yield* HttpClient.HttpClient);
+  const installation = yield* Installation.OpenCodexInstallation;
+  const catalog = yield* Installation.ReleaseCatalog;
+  const platform = yield* HostProcess.Platform;
+  const arch = yield* HostProcess.Architecture;
   const environment = yield* HostProcess.Environment;
   const cwd = yield* HostProcess.WorkingDirectory;
 
-  const latestRelease = Effect.scoped(
-    Effect.gen(function* () {
-      const response = yield* http.execute(HttpClientRequest.get(REGISTRY_URL));
-      if (response.status !== 200) return undefined;
-      let size = 0;
-      const text = yield* response.stream.pipe(
-        Stream.tap((chunk) => {
-          size += chunk.byteLength;
-          return size > MAX_REGISTRY_BYTES ? Effect.fail("too-large" as const) : Effect.void;
-        }),
-        Stream.decodeText(),
-        Stream.runFold(
-          () => "",
-          (body, chunk) => body + chunk,
-        ),
-      );
-      const packument = Option.getOrUndefined(decodePackument(text));
-      const version = packument?.["dist-tags"].latest;
-      return version === undefined
-        ? undefined
-        : { version, publishedAt: packument?.time?.[version] };
-    }),
-  ).pipe(
-    Effect.timeout("30 seconds"),
-    Effect.orElseSucceed(() => undefined),
-    Effect.withSpan("OpenCodexUpdateHost.latestRelease"),
+  // GOAT installs only what it pins, so the newest release it offers is its compiled pin.
+  const pinned = resolveOpenCodexRelease(platform, arch, OPEN_CODEX_PINNED_VERSION, catalog);
+  const latestRelease = Effect.succeed(
+    pinned === undefined ? undefined : { version: pinned.version, publishedAt: pinned.publishedAt },
   );
 
   const member = Effect.fn("OpenCodexUpdateHost.member")(function* (
@@ -161,12 +133,15 @@ const makeHost = Effect.gen(function* () {
     alias: string | null,
     version: string,
   ) {
-    const script = installScript(version);
     if (alias === null) {
+      const installed = yield* installation
+        .install({ managedVersion: version })
+        .pipe(Effect.option);
+      if (Option.isNone(installed)) return false;
       const output = yield* runner
         .run({
-          command: "/bin/sh",
-          args: ["-c", script],
+          command: installed.value.path,
+          args: ["restart"],
           env: environment,
           cwd,
           timeout: INSTALL_TIMEOUT_MS,
@@ -174,10 +149,19 @@ const makeHost = Effect.gen(function* () {
           timeoutBehavior: "timedOutResult",
         })
         .pipe(Effect.option);
-      return Option.isSome(output) && !output.value.timedOut && succeeded(output.value.stdout);
+      return Option.isSome(output) && output.value.code === 0 && !output.value.timedOut;
     }
+    // Only the alias's own provisioned GOAT installs there; nothing looks up a public command.
+    const goatExecutable = yield* dispatch
+      .provisionedRuntimeExecutable(alias)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (goatExecutable === undefined || !isStableOpenCodexVersion(version)) return false;
     const output = yield* dispatch
-      .runHostScript({ host: alias, script, timeoutMs: INSTALL_TIMEOUT_MS })
+      .runHostScript({
+        host: alias,
+        script: installScript(version, goatExecutable),
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      })
       .pipe(Effect.option);
     return Option.isSome(output) && succeeded(output.value.stdout);
   });

@@ -21,6 +21,8 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { openCodexCandidates } from "@goat/shared/opencodexRelease";
+import * as Installation from "./OpenCodexInstallation.ts";
 
 const MAX_BYTES = 256 * 1024;
 const PROBE_TIMEOUT = "2 seconds";
@@ -141,11 +143,6 @@ class InventoryReadError extends Schema.TaggedError<InventoryReadError>()("Inven
   stage: Schema.Literals(["http", "size"]),
 }) {}
 
-/** The installer may supply this only for an install GOAT created; discovery never adopts ownership. */
-export const ManagedInstall = Context.Reference<boolean>("goat/opencodex/ManagedInstall", {
-  defaultValue: () => false,
-});
-
 export class OpenCodexInventory extends Context.Service<
   OpenCodexInventory,
   {
@@ -162,7 +159,7 @@ const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const cwd = yield* HostProcess.WorkingDirectory;
   const hostname = yield* HostProcess.Hostname;
-  const managed = yield* ManagedInstall;
+  const installation = yield* Installation.OpenCodexInstallation;
   const runner = yield* ProcessRunner.ProcessRunner;
   const http = HttpClient.withScope(yield* HttpClient.HttpClient);
   const crypto = yield* Crypto.Crypto;
@@ -270,31 +267,7 @@ const make = Effect.gen(function* () {
         ? readyBody
         : undefined;
 
-    // Match remoteOcxArgv: Desktop and system installs win over interactive PATH shims.
-    const directories = [
-      ...(environment.PATH ?? "").split(platform === "win32" ? ";" : ":"),
-      path.join(home, ".bun", "bin"),
-      path.join(home, ".local", "bin"),
-      "/opt/homebrew/bin",
-      "/usr/local/bin",
-    ];
-    const candidates = [
-      ...new Set([
-        path.join(home, ".opencodex-desktop", "bin", "ocx"),
-        "/Applications/OpenCodex.app/Contents/MacOS/ocx",
-        "/usr/bin/ocx",
-        ...directories.flatMap((directory) =>
-          platform === "win32"
-            ? [
-                path.resolve(cwd, directory || ".", "ocx.exe"),
-                path.resolve(cwd, directory || ".", "ocx.cmd"),
-                path.resolve(cwd, directory || ".", "ocx.bat"),
-                path.resolve(cwd, directory || ".", "ocx"),
-              ]
-            : [path.resolve(cwd, directory || ".", "ocx")],
-        ),
-      ]),
-    ];
+    const candidates = openCodexCandidates(platform, home, cwd, environment, path);
     const verified = new Map<string, string>();
     yield* Effect.forEach(
       candidates,
@@ -466,7 +439,13 @@ const make = Effect.gen(function* () {
     return {
       installed,
       binaries,
-      ownership: installed ? (managed ? "managed" : "adopted") : "none",
+      // Managed only when the selected executable is the one GOAT's install marker vouches for.
+      ownership: installed
+        ? binaries[0] !== undefined &&
+          (yield* installation.inspect(binaries[0].path, binaries[0].version))
+          ? "managed"
+          : "adopted"
+        : "none",
       service: { available: service !== undefined, ...service },
       runtime: {
         ...protocols,

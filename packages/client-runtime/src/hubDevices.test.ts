@@ -94,6 +94,23 @@ describe("presentChildSetup", () => {
     expect(presentChildSetup({ state: "child", checkedAt: 1 })).toBeNull();
     expect(presentChildSetup(undefined)).toBeNull();
   });
+
+  it("explains that GOAT installs its runtime before retrying Child setup", () => {
+    expect(
+      presentChildSetup({
+        state: "blocked",
+        reason: "goat_runtime_missing",
+        message: "GOAT's runtime is not available there. Finish SSH setup and retry.",
+        checkedAt: 2,
+      }),
+    ).toMatchObject({
+      state: "blocked",
+      tone: "destructive",
+      label:
+        "OpenCodex Child setup blocked: GOAT isn't installed there yet; GOAT installs it first, then retries",
+      detail: "GOAT's runtime is not available there. Finish SSH setup and retry.",
+    });
+  });
 });
 
 describe("hubDeviceList", () => {

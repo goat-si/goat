@@ -60,6 +60,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexInstallation from "../opencodex/OpenCodexInstallation.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
@@ -1231,6 +1232,8 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
+  // One installer for inventory ownership and managed updates, so its lock is shared too.
+  Layer.provideMerge(OpenCodexInstallation.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),

@@ -247,6 +247,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               }),
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             prepareDevice: () => Effect.die("unused"),
+            ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),

@@ -92,6 +92,8 @@ export const OpenCodexChildBootstrapStatus = Schema.Struct({
     Schema.Literals([
       "home_unavailable",
       "platform_unsupported",
+      "goat_runtime_missing",
+      // Legacy: an npm installer's failure, kept so older stored records still decode.
       "npm_missing",
       "install_failed",
       "ocx_unusable",

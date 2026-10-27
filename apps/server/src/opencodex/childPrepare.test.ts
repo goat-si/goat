@@ -18,12 +18,16 @@ const layout: OcxLayout = {
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
 /**
- * A fresh Linux machine as GOAT finds it: npm, no OpenCodex. The fake npm installs a fake ocx
- * under --prefix; that ocx answers healthy only once `service` (or `start`) ran.
+ * A fresh Linux machine as GOAT finds it: GOAT's provisioned runtime in its versioned directory,
+ * no OpenCodex, and no public `goat` command. The fake runtime installs a fake ocx in
+ * ~/.local/bin; that ocx answers healthy only once `service` (or `start`) ran. A `goat` and an
+ * `npm` on PATH are decoys that record a call if anything reaches for them.
  */
 const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
-  readonly npm?: boolean;
+  readonly goat?: boolean;
   readonly serviceWorks?: boolean;
+  /** An ocx already installed, as a Desktop install, before preparing. */
+  readonly adopted?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -43,17 +47,34 @@ const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
     "",
   ].join("\n");
   yield* fs.writeFileString(path.join(home, "ocx-template"), ocx);
-  if (options.npm !== false)
+  if (options.adopted === true) {
+    yield* fs.makeDirectory(path.join(home, ".opencodex-desktop", "bin"), { recursive: true });
+    yield* fs.writeFileString(path.join(home, ".opencodex-desktop", "bin", "ocx"), ocx, {
+      mode: 0o755,
+    });
+    yield* fs.writeFileString(path.join(home, "running"), "");
+  }
+  const runtime = path.join(home, "runtime with ' quote $(touch pwned)", "selected", "goat");
+  if (options.goat !== false) {
+    yield* fs.makeDirectory(path.dirname(runtime), { recursive: true });
     yield* fs.writeFileString(
-      path.join(bin, "npm"),
+      runtime,
       [
         "#!/bin/sh",
-        `printf 'npm %s\\n' "$*" >> '${log}'`,
-        'while [ $# -gt 0 ]; do [ "$1" = --prefix ] && goat_prefix=$2; shift; done',
-        'mkdir -p "$goat_prefix/bin"',
-        `cp '${home}/ocx-template' "$goat_prefix/bin/ocx"; chmod 755 "$goat_prefix/bin/ocx"`,
+        `printf 'goat %s\\n' "$*" >> '${log}'`,
+        '[ "$1 $2" = "opencodex install" ] || exit 1',
+        'mkdir -p "$HOME/.local/bin"',
+        `cp '${home}/ocx-template' "$HOME/.local/bin/ocx"; chmod 755 "$HOME/.local/bin/ocx"`,
+        'echo "$HOME/.local/bin/ocx"',
         "",
       ].join("\n"),
+      { mode: 0o755 },
+    );
+  }
+  for (const decoy of ["goat", "npm"])
+    yield* fs.writeFileString(
+      path.join(bin, decoy),
+      `#!/bin/sh\nprintf 'decoy ${decoy} %s\\n' "$*" >> '${log}'\nexit 1\n`,
       { mode: 0o755 },
     );
   // The script waits up to 20 seconds for the runtime; a test host has no reason to.
@@ -67,12 +88,13 @@ const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
         break;
       }
   }
-  const run = (version = "2.91.0") =>
+  /** `null` runs the script with no provisioned runtime resolved. */
+  const run = (supplied: string | null = runtime) =>
     Effect.gen(function* () {
       const output = yield* (yield* ProcessRunner.ProcessRunner).run({
         command: "/bin/sh",
         args: ["-s"],
-        stdin: prepareScript(version, layout),
+        stdin: prepareScript("2.91.0", supplied ?? undefined, layout),
         env: { HOME: home, PATH: bin },
       });
       return parseDeviceOutput(output.stdout);
@@ -81,20 +103,20 @@ const prepareHost = Effect.fn("HubOcxTest.prepareHost")(function* (options: {
     Effect.map((text) => text.trim().split("\n")),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
-  return { run, calls };
+  return { run, calls, runtime, home, fs };
 });
 
 it.live(
-  "prepares a fresh machine once: installs this Home's release for the user, then starts it",
+  "prepares a fresh machine through the supplied provisioned GOAT executable without npm",
   () =>
     Effect.gen(function* () {
       const host = yield* prepareHost({});
       expect(yield* host.run()).toEqual({ code: 0, stdout: "2.91.0" });
       const first = yield* host.calls;
-      expect(first.filter((call) => call.startsWith("npm"))).toHaveLength(1);
-      expect(first.find((call) => call.startsWith("npm"))).toMatch(
-        /^npm install -g --prefix \S+\/\.local @bitkyc08\/opencodex@2\.91\.0$/u,
-      );
+      expect(first.filter((call) => call.startsWith("goat"))).toEqual([
+        "goat opencodex install --print-path",
+      ]);
+      expect(first.filter((call) => call.startsWith("decoy"))).toEqual([]);
       expect(first).toContain("ocx service");
       // Prepared again: the healthy install is left alone.
       expect(yield* host.run()).toEqual({ code: 0, stdout: "2.91.0" });
@@ -110,14 +132,29 @@ it.live("starts OpenCodex directly where no service manager works", () =>
   }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
-it.live("reports a machine without npm instead of installing anything", () =>
-  Effect.gen(function* () {
-    const host = yield* prepareHost({ npm: false });
-    expect((yield* host.run())?.code).toBe(PREPARE_EXIT.npmMissing);
-    expect(yield* host.calls).toEqual([]);
-  }).pipe(Effect.scoped, Effect.provide(services)),
+it.live(
+  "reports goat_runtime_missing before changing OpenCodex when the supplied executable is absent",
+  () =>
+    Effect.gen(function* () {
+      // No runtime was resolved: even a healthy adopted ocx is not touched.
+      const unresolved = yield* prepareHost({ adopted: true });
+      expect((yield* unresolved.run(null))?.code).toBe(PREPARE_EXIT.goatRuntimeMissing);
+      expect(yield* unresolved.calls).toEqual([]);
+      // A resolved runtime that disappeared before the script ran.
+      const removed = yield* prepareHost({ goat: false });
+      expect((yield* removed.run())?.code).toBe(PREPARE_EXIT.goatRuntimeMissing);
+      expect(yield* removed.calls).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
-it.effect("refuses a version the install script could not quote", () =>
-  Effect.sync(() => expect(() => prepareScript("2.91.0'; id; '")).toThrow(TypeError)),
+it.live("keeps spaces and apostrophes in the supplied executable path inert", () =>
+  Effect.gen(function* () {
+    const host = yield* prepareHost({});
+    expect((yield* host.run())?.code).toBe(0);
+    expect(yield* host.fs.exists(`${host.home}/pwned`)).toBe(false);
+    expect(yield* host.fs.exists(`${process.cwd()}/pwned`)).toBe(false);
+    for (const unsafe of ["relative/goat", "/goat\nid", "/goat\0id"])
+      expect(() => prepareScript("2.91.0", unsafe)).toThrow(TypeError);
+    expect(() => prepareScript("2.91.0'; id; '", host.runtime)).toThrow(TypeError);
+  }).pipe(Effect.scoped, Effect.provide(services)),
 );

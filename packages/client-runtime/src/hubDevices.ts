@@ -23,6 +23,7 @@ export interface ChildSetup {
 const CHILD_REASON_LABEL: Record<ChildSetupReason, string> = {
   home_unavailable: "the hub's OpenCodex cannot install it",
   platform_unsupported: "platform not supported",
+  goat_runtime_missing: "GOAT isn't installed there yet; GOAT installs it first, then retries",
   npm_missing: "npm missing",
   install_failed: "install failed",
   ocx_unusable: "OpenCodex does not run there",
