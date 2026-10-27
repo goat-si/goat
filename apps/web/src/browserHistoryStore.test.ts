@@ -346,6 +346,39 @@ describe("thread project resolution", () => {
     expect(useBrowserHistoryStore.getState().pendingVisitsByThreadKey).toEqual({});
   });
 
+  it("shares history across environments grouped under the same repository", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/sample-tools/app",
+      displayName: "App",
+    };
+    const remoteEnvironmentId = EnvironmentId.make("env-2");
+    entities.projects = [
+      { ...repoProject, title: "App", repositoryIdentity },
+      {
+        ...repoProject,
+        environmentId: remoteEnvironmentId,
+        workspaceRoot: "/remote/app",
+        title: "App",
+        repositoryIdentity,
+      },
+    ];
+    entities.shellProjectId = "project-1";
+
+    recordVisitForThread(threadRef, "https://docs.example.test/", 1);
+    recordVisitForThread(
+      { ...threadRef, environmentId: remoteEnvironmentId },
+      "https://app.example.test/",
+      2,
+    );
+
+    expect(useBrowserHistoryStore.getState().byProjectKey).toEqual({
+      "github.com/sample-tools/app": [
+        { url: "https://app.example.test/", lastVisitedAt: 2 },
+        { url: "https://docs.example.test/", lastVisitedAt: 1 },
+      ],
+    });
+  });
+
   it("waits for client settings before filing a thread under its project", async () => {
     entities.projects = [repoProject];
     entities.shellProjectId = "project-1";
