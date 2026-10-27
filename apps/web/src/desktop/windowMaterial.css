@@ -47,6 +47,10 @@ html[data-desktop-client]:is(
     backdrop-filter: none;
   }
 
+  .workspace-content-frame::before {
+    background: none;
+  }
+
   :is(
     [data-native-material-band],
     :has(> [data-chat-column] > [data-chat-header]),

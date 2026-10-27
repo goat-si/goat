@@ -97,6 +97,13 @@
       background-color: transparent;
     }
 
+    /* The framed sidebar's titlebar strip and the frame's corner wedge carry the pane tint as a
+       gradient, which background-color leaves in place; native material is the frame here. */
+    [data-app-sidebar] [data-slot="sidebar-inner"],
+    .workspace-content-frame::before {
+      background-image: none;
+    }
+
     :is(
       [data-native-material-band],
       :has(> [data-chat-column] > [data-chat-header]),
