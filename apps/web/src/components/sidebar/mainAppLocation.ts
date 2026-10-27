@@ -2,13 +2,20 @@ import { useNavigate, type AnyRouter } from "@tanstack/react-router";
 
 import { GUEST_PAGE_PATH } from "../../guestPage";
 
-/** Settings and Usage open as modals over the last main-app view. */
+/** Usage opens as a modal over the last main-app view. */
 export function isAppModalPage(pathname: string) {
-  return pathname === "/settings" || pathname.startsWith("/settings/") || pathname === "/usage";
+  return pathname === "/usage";
+}
+
+/** GOAT keeps Settings a full page that replaces the main view (fork delta `settings-page`). */
+export function isSettingsPage(pathname: string) {
+  return pathname === "/settings" || pathname.startsWith("/settings/");
 }
 
 export function isSidebarUtilityPage(pathname: string) {
-  return pathname.startsWith("/projects/") || pathname === "/pull-requests";
+  return (
+    isSettingsPage(pathname) || pathname.startsWith("/projects/") || pathname === "/pull-requests"
+  );
 }
 
 // Pages the root route always renders without the app shell, so they are never
@@ -23,7 +30,9 @@ let appModalReturnHref: string | null = null;
 export function startMainAppLocationTracking(router: AnyRouter): () => void {
   const record = () => {
     const { pathname, href } = router.state.location;
-    if (isAppModalPage(pathname) || SHELL_LESS_PATHS.has(pathname)) return;
+    if (isAppModalPage(pathname) || isSettingsPage(pathname) || SHELL_LESS_PATHS.has(pathname)) {
+      return;
+    }
     appModalReturnHref = href;
     if (!isSidebarUtilityPage(pathname)) mainAppHref = href;
   };
@@ -36,8 +45,16 @@ export function useNavigateToMainApp() {
   return () => navigate({ href: mainAppHref ?? "/" });
 }
 
+function appPageReturnHref() {
+  return appModalReturnHref ?? mainAppHref ?? "/";
+}
+
 /** Leaves Settings or Usage for the page that opened it. */
 export function useCloseAppModal() {
   const navigate = useNavigate();
-  return () => navigate({ href: appModalReturnHref ?? mainAppHref ?? "/" });
+  return () => navigate({ href: appPageReturnHref() });
+}
+
+export function closeAppPage(router: AnyRouter) {
+  return router.navigate({ href: appPageReturnHref() });
 }

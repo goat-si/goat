@@ -64,7 +64,7 @@ describe("thread find store", () => {
     detach();
   });
 
-  it("keeps find over Settings and Usage, and closes it on any other route", () => {
+  it("keeps find over the Usage modal, and closes it on any other route", () => {
     setup();
     openThreadFindOnQuery(threadKey, { query: "x" });
     retainThreadFindForRoute({ modalPage: false, threadRef });
