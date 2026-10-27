@@ -109,6 +109,40 @@ const crashAt = (pattern: RegExp, nth = 1): Statement.Transformer => {
       : Effect.succeed(statement);
 };
 
+it.effect("closes archive observation exactly once when interrupted during acquisition", () =>
+  Effect.gen(function* () {
+    const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+    let active = 0;
+    let started = 0;
+    let pages = 0;
+    const ended: boolean[] = [];
+    const fiber = yield* Effect.withFiber((current) =>
+      archive.runPass(policy).pipe(
+        Effect.provideService(ThreadHistoryArchive.ThreadHistoryArchiveObserver, {
+          onStart: () => {
+            active++;
+            started++;
+            current.interruptUnsafe();
+            return {
+              onPage: () => pages++,
+              onEnd: (succeeded) => {
+                active--;
+                ended.push(succeeded);
+              },
+            };
+          },
+        }),
+      ),
+    ).pipe(Effect.forkChild);
+    const exit = yield* Fiber.await(fiber);
+    assert.isTrue(Exit.isFailure(exit));
+    assert.equal(started, 1);
+    assert.equal(active, 0);
+    assert.equal(pages, 0);
+    assert.deepEqual(ended, [false]);
+  }).pipe(Effect.provide(layer())),
+);
+
 it.effect("reports archive pass pages and closes observation on interruption", () =>
   Effect.gen(function* () {
     const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;

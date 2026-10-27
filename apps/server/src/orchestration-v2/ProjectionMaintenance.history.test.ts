@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -110,6 +111,40 @@ it.effect.each([200, 800])(
         [],
       );
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("closes compaction observation exactly once when interrupted during acquisition", () =>
+  Effect.gen(function* () {
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    let active = 0;
+    let started = 0;
+    let pages = 0;
+    const ended: boolean[] = [];
+    const fiber = yield* Effect.withFiber((current) =>
+      maintenance.compactEventStore().pipe(
+        Effect.provideService(ProjectionMaintenance.ProjectionMaintenanceObserver, {
+          onStart: () => {
+            active++;
+            started++;
+            current.interruptUnsafe();
+            return {
+              onPage: () => pages++,
+              onEnd: (succeeded) => {
+                active--;
+                ended.push(succeeded);
+              },
+            };
+          },
+        }),
+      ),
+    ).pipe(Effect.forkChild);
+    const exit = yield* Fiber.await(fiber);
+    assert.isTrue(Exit.isFailure(exit));
+    assert.equal(started, 1);
+    assert.equal(active, 0);
+    assert.equal(pages, 0);
+    assert.deepEqual(ended, [false]);
+  }).pipe(Effect.provide(layer)),
 );
 
 it.effect("reports compaction pages and closes observation on interruption", () =>
