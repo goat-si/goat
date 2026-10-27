@@ -63,6 +63,7 @@ import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as OpenCodexInstallation from "../opencodex/OpenCodexInstallation.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as OpenCodexChildReady from "../opencodex/OpenCodexChildReady.ts";
+import * as ChildReadyDispatch from "../opencodex/ChildReadyDispatch.ts";
 import * as ChildReadyJournal from "../opencodex/ChildReadyJournal.ts";
 import * as ChildSetupAuthority from "../opencodex/ChildSetupAuthority.ts";
 import * as CodexReadyProbe from "../opencodex/CodexReadyProbe.ts";
@@ -1222,6 +1223,7 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   // The cloud machine service is the runtime's shared reference, so readiness reaches it.
   Layer.provideMerge(
     OpenCodexChildBootstrap.layer.pipe(
+      Layer.provide(ChildReadyDispatch.layer),
       Layer.provide(HubOcx.layer),
       Layer.provide(SshRemoteDispatchLive.layerCloudMachines),
     ),

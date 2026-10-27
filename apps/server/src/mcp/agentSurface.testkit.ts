@@ -42,6 +42,7 @@ import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as ChildReady from "../opencodex/OpenCodexChildReady.ts";
+import * as ChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
@@ -197,6 +198,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(ChildReady.OpenCodexChildReady)({}),
+  Layer.mock(ChildBootstrap.OpenCodexChildBootstrap)({}),
   Layer.mock(OpenCodexSync.OpenCodexSync)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),

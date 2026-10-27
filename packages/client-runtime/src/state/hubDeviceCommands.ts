@@ -30,5 +30,10 @@ export function createHubDeviceCommands<R, E>(
       label: "environment-data:hub:device-child-opt-in",
       tag: WS_METHODS.hubDeviceChildOptIn,
     }),
+    /** Retries or finishes a Child's setup; "Continue setup" on a Child linked before it. */
+    setupOpenCodexChild: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-setup",
+      tag: WS_METHODS.hubDeviceSetup,
+    }),
   };
 }

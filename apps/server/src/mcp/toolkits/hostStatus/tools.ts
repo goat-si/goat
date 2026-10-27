@@ -12,6 +12,7 @@ import {
   GoatHubOpenCodexSyncInput,
   GoatHubDeviceVerifyInput,
   GoatHubDeviceVerifyResult,
+  HubDeviceSetupInput,
   HubDeviceOperationInput,
   hubDeviceToolResult,
   OpenCodexSyncReport,
@@ -27,6 +28,7 @@ import * as HubParity from "../../../hub/HubParity.ts";
 import * as HubMembership from "../../../hub/HubMembership.ts";
 import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
 import * as ChildReady from "../../../opencodex/OpenCodexChildReady.ts";
+import * as ChildBootstrap from "../../../opencodex/OpenCodexChildBootstrap.ts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -117,6 +119,19 @@ const ChildStatusTool = Tool.make(agentSurfaceRegistry["hub.child_status"].name,
   dependencies: [McpInvocationContext.McpInvocationContext, ChildReady.OpenCodexChildReady],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.child_status"]));
 
+const DeviceSetupTool = Tool.make(agentSurfaceRegistry["hub.device_setup"].name, {
+  description: agentSurfaceRegistry["hub.device_setup"].description,
+  parameters: HubDeviceSetupInput,
+  success: ChildReadyResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ChildBootstrap.OpenCodexChildBootstrap,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_setup"]));
+
 export const HostStatusToolkit = Toolkit.make(
   HostStatusTool,
   VerifyTool,
@@ -126,5 +141,6 @@ export const HostStatusToolkit = Toolkit.make(
   ChildPrepareTool,
   ChildConnectionTool,
   ChildStatusTool,
+  DeviceSetupTool,
   OpenCodexSyncTool,
 );
