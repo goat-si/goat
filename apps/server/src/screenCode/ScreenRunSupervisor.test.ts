@@ -490,7 +490,9 @@ it.live("Stop kills only the child owned by the cut turn", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const asset = yield* resolveScreenRuntimeAsset("dev");
-      const limits = screenRunLimits({ cellWallMs: 5000 });
+      // The default wall limit lies far beyond the Stop, so only the Stop ends the spinning cell
+      // while the other turn's child boots.
+      const limits = screenRunLimits();
       const supervisor = fixtureSupervisor({ asset, limits, hostBridge: new ScreenHostBridge() });
       yield* Effect.addFinalizer(() =>
         Effect.all(
