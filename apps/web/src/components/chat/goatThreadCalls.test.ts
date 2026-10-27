@@ -177,6 +177,62 @@ describe("findSendingCall", () => {
     expect(sendingCallRowIndex(rows, inSecond, () => undefined)).toBe(1);
   });
 
+  it("skips an open turn and finds the closed attempt fold inside it", () => {
+    const runId = RunId.make("run-1");
+    const attemptFold = (id: string) => ({
+      kind: "attempt-fold" as const,
+      id: "fold-" + id,
+      createdAt: "",
+      runId,
+      attemptId: RunAttemptId.make(id),
+      label: "Superseded attempt",
+      expanded: false,
+    });
+    const rows: MessagesTimelineRow[] = [
+      { kind: "turn-fold", id: "turn", createdAt: "", runId, label: "", expanded: true },
+      attemptFold("attempt-1"),
+      attemptFold("attempt-2"),
+    ];
+    const inSecond = {
+      ...secondSend,
+      attempt: {
+        id: RunAttemptId.make("attempt-2"),
+        runId,
+        attemptOrdinal: 2,
+        rootNodeId: NodeId.make("node-2"),
+        status: "interrupted",
+        completedAt: null,
+      },
+    } satisfies typeof secondSend;
+    expect(sendingCallRowIndex(rows, inSecond, () => "run-1")).toBe(2);
+  });
+
+  it("picks the collapsed tool group the call falls in, not an earlier one", () => {
+    const runId = RunId.make("run-1");
+    const toggle = (id: string, createdAt: string) => ({
+      kind: "work-toggle" as const,
+      id,
+      createdAt,
+      runId,
+      groupId: id,
+      hiddenCount: 2,
+      expanded: false,
+      summary: "",
+      summaryKind: "dynamic-tool" as const,
+      hasFailure: false,
+    });
+    const rows: MessagesTimelineRow[] = [
+      toggle("early", "2026-10-27T00:00:00.000Z"),
+      toggle("late", "2026-10-27T00:00:00.000Z"),
+      toggle("after", "2026-10-28T00:00:00.000Z"),
+    ];
+    const call = {
+      ...secondSend,
+      entry: { ...secondSend.entry, runId },
+    } satisfies typeof secondSend;
+    expect(sendingCallRowIndex(rows, call, () => undefined)).toBe(1);
+  });
+
   it("points a call folded after a steer at its own segment, not the turn's first fold", () => {
     const runId = RunId.make("run-1");
     const rows: MessagesTimelineRow[] = [

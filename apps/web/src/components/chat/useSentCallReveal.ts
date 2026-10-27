@@ -29,7 +29,8 @@ export function findSendingCall(
 
 /**
  * The row showing the call, else the collapsed turn or segment that holds it (post-steer segments
- * fold under their own key, which `foldKeyOf` gives), else its own superseded attempt, else the collapsed tool group it starts after.
+ * fold under their own key, which `foldKeyOf` gives), else its own superseded attempt, else the collapsed tool group it starts after. An
+ * already open fold is skipped, since the call is somewhere inside it.
  */
 export function sendingCallRowIndex(
   rows: ReadonlyArray<MessagesTimelineRow>,
@@ -45,7 +46,9 @@ export function sendingCallRowIndex(
   if (shown >= 0) return shown;
   const foldKey = foldKeyOf(call.id);
   if (foldKey !== undefined) {
-    const fold = rows.findIndex((row) => row.kind === "turn-fold" && row.runId === foldKey);
+    const fold = rows.findIndex(
+      (row) => row.kind === "turn-fold" && !row.expanded && row.runId === foldKey,
+    );
     if (fold >= 0) return fold;
   }
   // A superseded attempt folds its calls under its own row while the replacement runs.
@@ -60,6 +63,7 @@ export function sendingCallRowIndex(
   return rows.findLastIndex(
     (row) =>
       row.kind === "work-toggle" &&
+      !row.expanded &&
       row.runId === (entry.runId ?? null) &&
       row.createdAt <= call.createdAt,
   );
