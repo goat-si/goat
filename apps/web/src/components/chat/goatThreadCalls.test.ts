@@ -1,59 +1,9 @@
-import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import { goatThreadCallOf } from "./goatThreadCalls";
+import { callEntry, callTimelineEntry } from "./goatThreadCalls.fixtures";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import { findSendingCall, sendingCallRowIndex } from "./useSentCallReveal";
-
-const at = DateTime.makeUnsafe("2026-10-27T00:00:00.000Z");
-
-function callTimelineEntry(
-  toolName: string,
-  input: unknown,
-  output: unknown,
-  status: OrchestrationV2TurnItem["status"] = "completed",
-  id = "tool",
-) {
-  const item: OrchestrationV2TurnItem = {
-    id: TurnItemId.make(id),
-    threadId: ThreadId.make("thread-sender"),
-    runId: null,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal: 1,
-    status,
-    title: null,
-    startedAt: at,
-    completedAt: at,
-    updatedAt: at,
-    type: "dynamic_tool",
-    toolName,
-    input,
-    output,
-  };
-  const [entry] = deriveTimelineEntriesFromVisibleTurnItems({
-    visibleTurnItems: [
-      {
-        item,
-        position: 0,
-        visibility: "local",
-        sourceThreadId: item.threadId,
-        sourceItemId: item.id,
-      },
-    ],
-    optimisticMessages: [],
-  });
-  if (entry?.kind !== "work") throw new Error("expected a work entry");
-  return entry;
-}
-
-const callEntry = (...args: Parameters<typeof callTimelineEntry>) =>
-  callTimelineEntry(...args).entry;
 
 describe("goatThreadCallOf", () => {
   it("reads the thread and message a named thread.send delivered", () => {
@@ -110,6 +60,20 @@ describe("goatThreadCallOf", () => {
     ).toMatchObject({ kind: "ssh_launch", host: "mini", threadIds: ["thread-r"] });
   });
 
+  it("reads the GOAT tool names every provider spells", () => {
+    for (const toolName of [
+      "goat:goat_thread_send",
+      "mcp_goat_goat_thread_send",
+      "mcp__goat__goat_thread_send",
+      "goat-thread1_goat_thread_send",
+    ]) {
+      expect(
+        goatThreadCallOf(callEntry(toolName, {}, { threadId: "thread-lane", messageId: "m" }))
+          ?.kind,
+      ).toBe("send");
+    }
+  });
+
   it("ignores other tools, calls still running and failed results", () => {
     expect(
       goatThreadCallOf(callEntry("goat_thread_read", { threadId: "t" }, { thread: {} })),
@@ -153,10 +117,14 @@ describe("findSendingCall", () => {
     );
   });
 
-  it("falls back to the launch for the message that opened the launched thread", () => {
-    expect(findSendingCall(entries, { threadId: "thread-lane", messageId: "message-0" })?.id).toBe(
-      launch.entry.id,
-    );
+  it("matches the launch only for the opening prompt, whose id is the thread's", () => {
+    expect(
+      findSendingCall(entries, { threadId: "thread-lane", messageId: "thread-lane" })?.id,
+    ).toBe(launch.entry.id);
+    // A later message whose send is still running or unreadable is not the launch.
+    expect(
+      findSendingCall(entries, { threadId: "thread-lane", messageId: "message-9" }),
+    ).toBeNull();
     expect(
       findSendingCall(entries, { threadId: "thread-other", messageId: "message-1" }),
     ).toBeNull();

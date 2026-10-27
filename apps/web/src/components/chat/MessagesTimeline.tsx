@@ -763,6 +763,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     rows,
     listRef,
     listReady: findListReady,
+    threadId: citationThreadRef?.threadId ?? null,
     history: historyControls,
     onNavigate: navigateTimeline,
   });

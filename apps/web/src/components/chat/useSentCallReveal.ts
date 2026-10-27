@@ -10,7 +10,7 @@ import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 
 type Entry = Extract<TimelineEntry, { kind: "work" }>["entry"];
 
-/** The call that delivered the message: its thread.send, or the launch whose first prompt it is. */
+/** The call that delivered the message: its thread.send, or the launch that opened the thread with it. */
 export function findSendingCall(
   entries: ReadonlyArray<TimelineEntry>,
   target: { readonly threadId: string; readonly messageId: string },
@@ -23,7 +23,8 @@ export function findSendingCall(
     if (call.kind === "send" && call.messageId === target.messageId) return timelineEntry.entry;
     if (call.kind !== "send") launch ??= timelineEntry.entry;
   }
-  return launch;
+  // A launched thread's opening prompt carries the launch's id as both thread and message id.
+  return target.messageId === target.threadId ? launch : null;
 }
 
 /** The row showing the call, or the collapsed group or turn that holds it. */
@@ -64,32 +65,50 @@ export function useSentCallReveal(input: {
   readonly rows: ReadonlyArray<MessagesTimelineRow>;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly listReady: boolean;
+  /** The thread this timeline shows. */
+  readonly threadId: string | null;
   readonly history: MessagesTimelineHistoryControls | undefined;
   readonly onNavigate: () => void;
 }) {
   const target = useSentFromState();
   const [handled, setHandled] = useState<string | null>(null);
-  const [paging, setPaging] = useState({ activation: "", count: 0, atLength: -1 });
+  const [paging, setPaging] = useState({
+    activation: "",
+    count: 0,
+    atLength: -1,
+    sawLoading: false,
+  });
   // Right after navigating, the list can still hold the previous thread's entries.
-  const showsSender = input.entries.some(
-    (entry) =>
-      entry.kind === "work" && entry.entry.structuredPayload?.threadId === target?.senderThreadId,
-  );
+  const showsSender =
+    target !== undefined &&
+    input.threadId === target.senderThreadId &&
+    !input.entries.some(
+      (entry) =>
+        entry.kind === "work" &&
+        entry.entry.structuredPayload !== undefined &&
+        entry.entry.structuredPayload.threadId !== target.senderThreadId,
+    );
   const pending =
     target !== undefined &&
     target.activation !== handled &&
     showsSender &&
     input.listReady &&
-    input.entries.length > 0 &&
     input.history?.loading !== true;
   const entry = pending ? findSendingCall(input.entries, target) : null;
   const rowIndex = entry === null ? -1 : sendingCallRowIndex(input.rows, entry);
-  const own = pending && paging.activation === target.activation;
+  const paged = target !== undefined && paging.activation === target.activation;
+  const own = pending && paged;
   const pages = own ? paging.count : 0;
-  // Wait for the page asked for to land before asking for the next one.
-  const awaitingPage = own && paging.atLength === input.entries.length;
+  // A page asked for has landed once entries changed or a load ran and ended.
+  if (paged && input.history?.loading === true && !paging.sawLoading)
+    setPaging({ ...paging, sawLoading: true });
+  const awaitingPage = own && paging.atLength === input.entries.length && !paging.sawLoading;
   const loadEarlier =
-    pending && rowIndex < 0 && input.history?.hasMoreHistory === true && pages < MAX_HISTORY_PAGES
+    pending &&
+    rowIndex < 0 &&
+    input.history?.hasMoreHistory === true &&
+    input.history.error === null &&
+    pages < MAX_HISTORY_PAGES
       ? input.history.onLoadEarlier
       : null;
   const { listRef, onNavigate } = input;
@@ -99,7 +118,12 @@ export function useSentCallReveal(input: {
     if (!pending || awaitingPage) return;
     if (loadEarlier !== null) {
       // oxlint-disable-next-line react/set-state-in-effect -- A page is asked for only after the previous one landed; the count bounds the walk.
-      setPaging({ activation: target.activation, count: pages + 1, atLength: entryCount });
+      setPaging({
+        activation: target.activation,
+        count: pages + 1,
+        atLength: entryCount,
+        sawLoading: false,
+      });
       loadEarlier();
       return;
     }

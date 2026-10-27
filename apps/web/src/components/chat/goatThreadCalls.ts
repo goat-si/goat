@@ -1,4 +1,7 @@
-import { resolveGoatMcpItemCall } from "@goat/shared/goatMcpToolPresentation";
+import {
+  resolveGoatMcpItemCall,
+  resolveGoatMcpShippedToolId,
+} from "@goat/shared/goatMcpToolPresentation";
 
 import type { WorkLogEntry } from "../../session-logic";
 
@@ -19,7 +22,6 @@ export interface GoatThreadCall {
 const KIND_BY_TOOL: Record<string, GoatThreadCall["kind"]> = {
   goat_thread_launch: "launch",
   create_threads: "create_many",
-  goat_thread_create_many: "create_many",
   goat_ssh_thread_launch: "ssh_launch",
   goat_thread_send: "send",
 };
@@ -48,9 +50,10 @@ function resultValue(output: unknown): unknown {
   return output;
 }
 
+// Providers spell GOAT tools differently (goat.x, goat:x, mcp__goat__x, goat-<id>_x).
 function toolKind(toolName: string | null | undefined): GoatThreadCall["kind"] | null {
-  const name = toolName?.split(/[./]|__/).at(-1);
-  return name === undefined ? null : (KIND_BY_TOOL[name] ?? null);
+  const id = resolveGoatMcpShippedToolId(toolName);
+  return id === null ? null : (KIND_BY_TOOL[id] ?? null);
 }
 
 /** The thread call a work entry made, or null when it is another tool or has no result yet. */
