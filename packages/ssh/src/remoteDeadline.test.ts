@@ -54,8 +54,8 @@ describe.skipIf(process.platform === "win32")("remote deadline wrapper", () => {
         'cat "$1/block"',
         "echo unreachable",
       ].join("\n");
-      const result = await runShell(withRemoteDeadline(body, 1_000), [dir], {
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+      const clock = NodePath.join(bin, "sleep");
+      const result = await runShell(withRemoteDeadline(body, 1_000, clock), [dir], {
         GOAT_TEST_GATE: NodePath.join(dir, "gate"),
       });
       expect(result.stdout).toBe("");

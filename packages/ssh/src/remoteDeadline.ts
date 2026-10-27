@@ -13,13 +13,18 @@ export function isRemoteShellScript(args: ReadonlyArray<string> | undefined) {
   return options.includes("-s") && options.every((option) => option === "-s" || option === "-l");
 }
 
-export function withRemoteDeadline(script: string, timeoutMs: number) {
+export function withRemoteDeadline(
+  script: string,
+  timeoutMs: number,
+  // `command -p` bypasses PATH, so a script's own sleep shim cannot speed up the deadline.
+  sleep = "command -p sleep",
+) {
   const seconds = Math.ceil(timeoutMs / 1000) + GRACE_SECONDS;
   return `(
   trap '' HUP
   goat_deadline_left=${seconds}
   while [ "$goat_deadline_left" -gt 0 ]; do
-    sleep ${CHECK_SECONDS}
+    ${sleep} ${CHECK_SECONDS}
     kill -0 $$ 2>/dev/null || exit 0
     goat_deadline_left=$((goat_deadline_left - ${CHECK_SECONDS}))
   done
