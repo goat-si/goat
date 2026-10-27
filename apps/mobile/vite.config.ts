@@ -119,7 +119,8 @@ export default defineConfig({
                   name: "metro",
                   bundler: "metro",
                   platform: "ios",
-                  isDev: false,
+                  // Permission tests vary Platform.OS; production inlining would erase that branch.
+                  isDev: normalizePath(id).endsWith("/lib/useNotificationPermissionStatus.ts"),
                   isServer: false,
                   isNodeModule: false,
                   supportsStaticESM: true,

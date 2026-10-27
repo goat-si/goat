@@ -1,5 +1,4 @@
 import { expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
@@ -13,13 +12,13 @@ import { checkEnvironmentUpdate } from "./environmentUpdateCheck";
 
 it.effect("aborts a hung release lookup and reports an explicit timeout", () =>
   Effect.gen(function* () {
-    const started = yield* Deferred.make<AbortSignal>();
+    const started = Promise.withResolvers<AbortSignal>();
     vi.mocked(findEnvironmentUpdate).mockImplementation((_version, signal) => {
-      Effect.runSync(Deferred.succeed(started, signal));
+      started.resolve(signal);
       return new Promise(() => {});
     });
     const lookup = yield* checkEnvironmentUpdate("1.0.0").pipe(Effect.result, Effect.forkChild);
-    const signal = yield* Deferred.await(started);
+    const signal = yield* Effect.promise(() => started.promise);
     yield* TestClock.adjust("20 seconds");
     const result = yield* Fiber.join(lookup);
     expect(signal.aborted).toBe(true);
@@ -42,13 +41,13 @@ it.effect("propagates a release lookup failure instead of saying the environment
 
 it.effect("aborts the release lookup when its screen interrupts it", () =>
   Effect.gen(function* () {
-    const started = yield* Deferred.make<AbortSignal>();
+    const started = Promise.withResolvers<AbortSignal>();
     vi.mocked(findEnvironmentUpdate).mockImplementation((_version, signal) => {
-      Effect.runSync(Deferred.succeed(started, signal));
+      started.resolve(signal);
       return new Promise(() => {});
     });
     const lookup = yield* checkEnvironmentUpdate("1.0.0").pipe(Effect.forkChild);
-    const signal = yield* Deferred.await(started);
+    const signal = yield* Effect.promise(() => started.promise);
     yield* Fiber.interrupt(lookup);
     expect(signal.aborted).toBe(true);
   }),

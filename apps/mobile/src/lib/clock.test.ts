@@ -23,7 +23,6 @@ function SnoozeClock(props: { deadlineMs: number; latestUserMessageAt: string })
   );
 }
 
-// Regression: #1959 left the snooze gate closed when React Compiler cached the render clock.
 it("advances the compiled clock and enables snooze after the queued-start grace expires", async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();

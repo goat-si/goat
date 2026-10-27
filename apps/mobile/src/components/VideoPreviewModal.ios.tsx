@@ -109,7 +109,7 @@ function NativeVideoPreview(props: {
       const presentation = await loadPresentation(controller.signal);
       if (presentation === null) return;
       const { file, uri, name, sourceIdentifier } = presentation;
-      try {
+      await (async () => {
         if (controller.signal.aborted) return;
         const current = acquire();
         if (!current || !(await activateAudioSession(current, true)) || controller.signal.aborted) {
@@ -124,10 +124,10 @@ function NativeVideoPreview(props: {
         release();
         if (AsyncResult.isFailure(presented)) throw squashAtomCommandFailure(presented);
         if (!controller.signal.aborted) onRequestClose();
-      } finally {
+      })().finally(() => {
         // Native completion follows dismissal; keep the lease until playback closes.
         file?.dispose();
-      }
+      });
     })().catch((error: unknown) => {
       release();
       if (controller.signal.aborted) return;
