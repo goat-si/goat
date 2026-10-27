@@ -191,6 +191,34 @@ describe("Linux live frames (#1370)", () => {
     }),
   );
 
+  it.effect(
+    "keeps a frame back when a password field had focus before the read, even if it left before the check after it",
+    () =>
+      Effect.gen(function* () {
+        let secure = false;
+        let reads = 0;
+        const { source, sent } = yield* sourceWith({
+          focus: async () => ({ known: true, secure }),
+          capture: async () => {
+            reads++;
+            // Focus leaves the password field while the window is read.
+            secure = false;
+            return SHOT;
+          },
+        });
+        yield* source.setTargets(1, [TARGET]);
+        assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
+        // Between frames, after the last frame's checks, a password field takes focus.
+        secure = true;
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          reason: "private",
+        });
+        assert.strictEqual(reads, 1);
+      }),
+  );
+
   it.effect("sends nothing from a capture still running when its targets are cleared", () =>
     Effect.gen(function* () {
       const started = Promise.withResolvers<void>();
