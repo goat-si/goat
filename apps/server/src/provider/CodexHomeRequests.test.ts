@@ -10,6 +10,7 @@ import {
   handoffSummary,
   Handoff,
   ProviderDriverKind,
+  ProviderHomeRouteConfig,
   ThreadId,
   TurnItemId,
   type ProviderHomeRequestAction,
@@ -27,7 +28,10 @@ import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import * as HomeRequests from "./CodexHomeRequests.ts";
+import * as Inventory from "../opencodex/OpenCodexInventory.ts";
+import * as Runner from "../processRunner.ts";
+import * as Installation from "./CodexInstallation.ts";
+import * as HomeRequests from "./ProviderHomeRequests.ts";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import * as Routes from "./CodexRouteService.ts";
 import {
@@ -39,14 +43,30 @@ import {
   sessionId,
 } from "./CodexRouteService.testkit.ts";
 const decode = Schema.decodeUnknownSync(CodexSettings);
-const approval = (action: ProviderHomeRequestAction) =>
+const decodeRoute = Schema.decodeUnknownSync(ProviderHomeRouteConfig);
+const approval = (
+  action: ProviderHomeRequestAction,
+  driver = "codex",
+  options: {
+    readonly config?: Readonly<Record<string, unknown>>;
+    readonly installation?: {
+      readonly managedDirectory: string;
+      readonly acquire: Installation.CodexInstallation["Service"]["acquire"];
+    };
+    readonly homeRoute?: HomeRoute.OpenCodexRoute["Service"];
+  } = {},
+) =>
   Effect.gen(function* () {
     const routes = yield* Routes.CodexRouteService;
     const settings = yield* Settings.ServerSettingsService;
     yield* settings.start;
-    const config = decode({ modelRoute: action === "disconnect" ? "opencodex" : "default" });
+    const route = {
+      modelRoute: action === "disconnect" ? "opencodex" : "default",
+      ...options.config,
+    };
+    const config = driver === "codex" ? decode(route) : route;
     const instance = {
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make(driver),
       displayName: "Approved A",
       config,
     };
@@ -112,6 +132,11 @@ const approval = (action: ProviderHomeRequestAction) =>
       ],
     };
     const dependencies = Layer.mergeAll(
+      Layer.mock(Inventory.OpenCodexInventory)({}),
+      Layer.mock(Runner.ProcessRunner)({}),
+      Layer.mock(Installation.CodexInstallation)(
+        options.installation ?? { managedDirectory: "unused-approval-installation" },
+      ),
       Layer.succeed(Environment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(environmentId),
       }),
@@ -140,19 +165,37 @@ const approval = (action: ProviderHomeRequestAction) =>
             finished++;
           }),
       }),
-      Layer.succeed(HomeRoute.OpenCodexRoute, {
-        inspect: () => Effect.die("Not used by approval executor"),
-        launchArgs: () => Effect.die("Not used by approval executor"),
-        requireAvailable: () =>
-          Deferred.succeed(read, undefined).pipe(Effect.andThen(Deferred.await(resume))),
-      }),
+      Layer.succeed(
+        HomeRoute.OpenCodexRoute,
+        options.homeRoute ?? {
+          inspect: () => Effect.die("Not used by approval executor"),
+          launchArgs: () => Effect.die("Not used by approval executor"),
+          requireAvailable: () =>
+            Deferred.succeed(read, undefined).pipe(Effect.andThen(Deferred.await(resume))),
+        },
+      ),
     );
     const requests = Context.get(
-      yield* Layer.build(HomeRequests.layer.pipe(Layer.provide(dependencies))),
-      HomeRequests.CodexHomeRequests,
+      yield* Layer.build(HomeRequests.layerWithoutInventory.pipe(Layer.provide(dependencies))),
+      HomeRequests.ProviderHomeRequests,
     );
     return { routes, requests, read, resume, instance, created, finished: () => finished };
   });
+const liveThread = (requestNamespace: string) => ({
+  environmentId,
+  readOnly: false,
+  capabilities: new Set(["orchestration" as const]),
+  issuedAt: 0,
+  requestNamespace,
+  thread: {
+    threadId: ThreadId.make("owner-thread"),
+    providerInstanceId: instanceId,
+    providerSessionId: "source-session",
+  },
+  client: undefined,
+  grantedScopes: ["orchestration:read" as const],
+  reauthorize: () => Effect.void,
+});
 it.effect(
   "preserves a competing UI edit when approval admission resumes after the executor read",
   () =>
@@ -261,7 +304,7 @@ it.effect.each(["connect", "disconnect"] as const)(
       assert.equal(
         f.created[0]?.human.location,
         action === "connect"
-          ? "Approved A on vps-1 will send model requests through OpenCodex Home and use its accounts. If Home is unavailable, it stops instead of switching accounts."
+          ? "Approved A on vps-1 will send model requests through OpenCodex Home and use its accounts and shared quota. If Home is unavailable, it stops instead of switching accounts."
           : "Approved A on vps-1 goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on vps-1 to disconnect it.",
       );
       assert.deepStrictEqual(yield* f.routes.capture(instanceId), before);
@@ -309,4 +352,207 @@ it.effect("refuses a read-only thread and a thread whose turn is no longer live"
     if (dead.kind === "error") assert.equal(dead.code, "capability_denied");
     assert.equal(f.created.length, 0);
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["codex", "claudeAgent", "opencode", "pi"])(
+  "creates a Home approval for a captured %s instance without changing its configuration",
+  (driver) =>
+    Effect.gen(function* () {
+      const f = yield* approval("connect", driver);
+      const fs = yield* FileSystem.FileSystem;
+      const server = yield* Config.ServerConfig;
+      const before = yield* f.routes.capture(instanceId);
+      const bytes = yield* fs.readFileString(server.settingsPath);
+      const result = yield* f.requests
+        .request({ instanceId, action: "connect" }, liveThread("driver-approval"))
+        .pipe(Effect.provideService(HostProcess.Hostname, "test-child"));
+      assert.equal(result.kind, "needs_human");
+      const label = { codex: "Codex", claudeAgent: "Claude Code", opencode: "OpenCode", pi: "Pi" }[
+        driver
+      ];
+      assert.equal(
+        f.created[0]?.reason,
+        `An agent asked to route this ${label} instance through OpenCodex Home.`,
+      );
+      assert.equal(
+        f.created[0]?.human.location.includes("existing Pi credentials, settings and extensions"),
+        driver === "pi",
+      );
+      assert.deepStrictEqual(yield* f.routes.capture(instanceId), before);
+      assert.equal(yield* fs.readFileString(server.settingsPath), bytes);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["claudeAgent", "opencode", "pi"])(
+  "applies an approved %s disconnect without probing Home or touching its other settings",
+  (driver) =>
+    Effect.gen(function* () {
+      const f = yield* approval("disconnect", driver, {
+        config: { opencodexBaseUrl: "http://127.0.0.1:10101/v1" },
+      });
+      yield* commitAndApply(f.requests.resumeContinuations);
+      const after = (yield* f.routes.capture(instanceId)).instance;
+      assert.equal(after.driver, driver);
+      assert.deepStrictEqual(decodeRoute(after.config), {
+        modelRoute: "default",
+        opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+      });
+      assert.isFalse(yield* Deferred.isDone(f.read));
+      assert.equal(f.finished(), 1);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  { name: "absent auth", config: { setupMode: "managed" }, accepted: false },
+  {
+    name: "openai auth",
+    config: { setupMode: "managed", opencodexAuth: "openai" },
+    accepted: false,
+  },
+  { name: "none auth", config: { setupMode: "managed", opencodexAuth: "none" }, accepted: true },
+])("names the managed-instance auth repair before connect: $name", ({ config, accepted }) =>
+  Effect.gen(function* () {
+    const f = yield* approval("connect", "codex", { config });
+    const before = yield* f.routes.capture(instanceId);
+    const fs = yield* FileSystem.FileSystem;
+    const server = yield* Config.ServerConfig;
+    const bytes = yield* fs.readFileString(server.settingsPath);
+    const result = yield* f.requests
+      .request({ instanceId, action: "connect" }, liveThread("managed-connect-recovery"))
+      .pipe(Effect.provideService(HostProcess.Hostname, "test-child"));
+    if (accepted) {
+      assert.equal(result.kind, "needs_human");
+      assert.equal(f.created.length, 1);
+    } else {
+      assert.deepStrictEqual(result, {
+        kind: "error",
+        code: "unsupported",
+        message:
+          "Set opencodexAuth to none for this instance in Settings or with provider.update, then connect again.",
+      });
+      assert.equal(f.created.length, 0);
+    }
+    assert.deepStrictEqual(yield* f.routes.capture(instanceId), before);
+    assert.equal(yield* fs.readFileString(server.settingsPath), bytes);
+    assert.isFalse(yield* Deferred.isDone(f.read));
+    assert.equal(f.finished(), 0);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live.each([
+  { name: "clean", retained: {}, accepted: true },
+  {
+    name: "profile bearer",
+    retained: { experimental_bearer_token: "synthetic-inherited" },
+    accepted: false,
+  },
+  {
+    name: "user header",
+    retained: { http_headers: { Authorization: "Bearer synthetic" } },
+    accepted: false,
+  },
+])(
+  "preflights managed Home with the acquired executable and effective shadow before committing: $name",
+  ({ retained, accepted }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "approval-managed-runtime-" });
+      const shared = `${directory}/shared`;
+      const shadow = `${directory}/shadow`;
+      const binary = `${directory}/selected-codex`;
+      const catalog = `${shadow}/opencodex-catalog.json`;
+      const observed = `${directory}/requests.jsonl`;
+      const base = "http://127.0.0.1:10100/v1";
+      const effective = {
+        model_provider: "opencodex",
+        model_catalog_json: catalog,
+        model_providers: {
+          opencodex: {
+            name: "OpenCodex",
+            base_url: base,
+            wire_api: "responses",
+            requires_openai_auth: false,
+            ...retained,
+          },
+        },
+      };
+      // A scripted app-server peer at the stdio boundary: it answers initialize and config/read
+      // with a retained effective configuration and records the home each request ran in.
+      const peer = `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const config = ${JSON.stringify(effective)};
+const observed = ${JSON.stringify(observed)};
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  fs.appendFileSync(observed, JSON.stringify({ method, home: process.env.CODEX_HOME }) + "\\n");
+  const result = method === "initialize"
+    ? { userAgent: "codex/0.156.1", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs: "linux" }
+    : method === "config/read" ? { config, origins: {} } : null;
+  process.stdout.write(JSON.stringify({ id, result }) + "\\n");
+});`;
+      yield* fs.writeFileString(binary, peer);
+      yield* fs.chmod(binary, 0o755);
+      const executable = {
+        executablePath: binary,
+        version: "0.156.1",
+        source: "managed" as const,
+        managedVersionDirectory: directory,
+      };
+      let leases = 0;
+      const f = yield* approval("connect", "codex", {
+        config: {
+          setupMode: "managed",
+          opencodexAuth: "none",
+          binaryPath: "",
+          homePath: shared,
+          shadowHomePath: shadow,
+          opencodexBaseUrl: base,
+        },
+        installation: {
+          managedDirectory: directory,
+          acquire: (options) =>
+            Effect.gen(function* () {
+              assert.equal(options?.managedOnly, true);
+              leases++;
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  leases--;
+                }),
+              );
+              return executable;
+            }),
+        },
+        homeRoute: {
+          inspect: () => Effect.die("Approval does not publish status"),
+          requireAvailable: () => Effect.void,
+          launchArgs: () => Effect.succeed(["-c", `model_catalog_json=${JSON.stringify(catalog)}`]),
+        },
+      });
+      const before = yield* f.routes.capture(instanceId);
+      const server = yield* Config.ServerConfig;
+      const bytes = yield* fs.readFileString(server.settingsPath);
+      // A refused preflight commits nothing, so only an accepted one has a revision to apply.
+      yield* accepted
+        ? commitAndApply(f.requests.resumeContinuations)
+        : f.requests.resumeContinuations;
+      const after = yield* f.routes.capture(instanceId);
+      assert.equal(decode(after.instance.config).modelRoute, accepted ? "opencodex" : "default");
+      if (!accepted) {
+        assert.deepStrictEqual(after, before);
+        assert.equal(yield* fs.readFileString(server.settingsPath), bytes);
+      }
+      const requests = (yield* fs.readFileString(observed))
+        .trim()
+        .split("\n")
+        .map((line): { readonly method: string; readonly home: string } => JSON.parse(line));
+      assert.deepEqual(
+        requests.map((entry) => entry.method),
+        ["initialize", "config/read"],
+      );
+      assert.isTrue(requests.every((entry) => entry.home === shadow));
+      assert.equal(leases, 0);
+      assert.equal(f.finished(), 1);
+    }).pipe(Effect.provide(layer), Effect.scoped),
 );
