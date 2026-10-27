@@ -339,16 +339,20 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           drivers.delete(child);
           send(watch.exited(code ?? undefined));
         });
-        child.stdout.once("data", () => send(watch.answered()));
-        return { child, watch };
+        const lines = NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+        // Keep early replies buffered for the proxy while the watch observes the same frames.
+        const incoming = lines[Symbol.asyncIterator]();
+        lines.on("line", (line) => send(watch.received(line)));
+        return { child, watch, lines, incoming };
       }),
-      ({ child, watch }) =>
+      ({ child, watch, lines }) =>
         Effect.sync(() => {
           watch.stopping();
+          lines.close();
           killDriverGroup(platform, child, "SIGTERM");
         }),
     ).pipe(
-      Effect.flatMap(({ child, watch }) =>
+      Effect.flatMap(({ child, watch, incoming }) =>
         Effect.gen(function* () {
           // Ownership is released only after both the process and its pipes close.
           const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
@@ -374,10 +378,13 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               : {}),
             send: (line: string) =>
               Effect.sync(() => {
-                if (child.stdin.writable) child.stdin.write(line + "\n");
+                if (child.stdin.writable) {
+                  watch.sent(line);
+                  child.stdin.write(line + "\n");
+                }
               }),
             lines: Stream.fromAsyncIterable(
-              NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+              { [Symbol.asyncIterator]: () => incoming },
               () => undefined,
             ).pipe(Stream.catchCause(() => Stream.empty)),
             // Stdout closes just before the exit is reported; a child still running after a
