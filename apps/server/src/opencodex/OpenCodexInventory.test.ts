@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { OpenCodexInventorySnapshot } from "@goat/contracts";
+import { GoatHostStatusResult, OpenCodexInventorySnapshot } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -22,6 +22,7 @@ import parityFixture from "../hub/fixtures/parity.json" with { type: "json" };
 import fleet from "./fixtures/fleet.json" with { type: "json" };
 
 const decodeSnapshot = Schema.decodeUnknownEffect(OpenCodexInventorySnapshot);
+const encodeHostStatus = Schema.encodeUnknownEffect(GoatHostStatusResult);
 
 // Sanitized projections of the approved 2026-10-21 fleet observations (§1.2), in the
 // CLI shapes from OpenCodex src/link/status-projection.ts and src/cli/status.ts.
@@ -541,14 +542,14 @@ it.effect.each(["missing Home", "invalid timestamp", "unknown document field"])(
 );
 
 it.effect(
-  "unknown optional uptime and apply metadata skip freshness without erasing core health/link evidence",
+  "null lastApplyAt from a home link is omitted, so host status can encode the snapshot",
   () =>
     Effect.gen(function* () {
       const { inventory } = yield* setup({
         fixture: fleet.home,
         link: {
           ...fleet.home.link,
-          links: fleet.home.link.links.map((link) => ({ ...link, lastApplyAt: "unknown" })),
+          links: fleet.home.link.links.map((link) => ({ ...link, lastApplyAt: null })),
         },
         response: (url) =>
           new Response(
@@ -560,8 +561,28 @@ it.effect(
       const snapshot = yield* inventory.readParity;
       expect(snapshot.runtime.healthy).toBe(true);
       expect(snapshot.link.links).toHaveLength(5);
-      expect(snapshot.link.links.every(({ lastApplyAt }) => lastApplyAt === undefined)).toBe(true);
+      expect(snapshot.link.links.every((link) => !("lastApplyAt" in link))).toBe(true);
       expect(snapshot.parityEvidence?.startedAt).toBeUndefined();
+      yield* encodeHostStatus({
+        hosts: [
+          {
+            host: null,
+            reachability: "ok",
+            metrics: {
+              sampledAt: 1,
+              cpuUtilization: 0,
+              cpuCount: 1,
+              availableMemoryBytes: 1,
+              totalMemoryBytes: 1,
+              loadAvg: { oneMinute: 0, fiveMinutes: 0, fifteenMinutes: 0 },
+              disk: { path: "/", availableBytes: 1, totalBytes: 1 },
+              threads: { running: 0, waiting: 0, queued: 0 },
+              quotas: [],
+              opencodex: snapshot,
+            },
+          },
+        ],
+      });
     }),
 );
 

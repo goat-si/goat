@@ -45,6 +45,7 @@ import {
   isUnsupportedHostStatusMessage,
   LOCAL_HOST_COMPATIBILITY,
   markHostCompatibility,
+  omitUnencodableMetrics,
   quotaRefreshDue,
   tagRemoteHostStatus,
   unreachableHostStatus,
@@ -78,11 +79,8 @@ export interface HostStatusMcpServiceShape {
     options?: { readonly requireReady?: true },
   ) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
   /**
-   * The same read for a signed-in GOAT client, such as the web Hosts panel.
-   * Connected SSH hosts are reached only with `reachHosts`, which the caller
-   * grants to sessions that may operate threads: like the MCP tool's fan-out,
-   * it uses this machine's SSH keys. Without it, or with `local`, only this
-   * machine is read.
+   * The same read for a signed-in client. Connected SSH hosts are reached only with `reachHosts`,
+   * which uses this machine's SSH keys. Without it, or with `local`, only this machine is read.
    */
   readonly readForClient: (client: {
     readonly environmentId: EnvironmentId;
@@ -208,7 +206,7 @@ const make = Effect.gen(function* () {
       : Option.none();
     const updateStatus =
       opencodexUpdate._tag === "Some" ? yield* opencodexUpdate.value.status : undefined;
-    const entry = {
+    const raw = {
       host: null,
       reachability: "ok" as const,
       serverVersion: packageJson.version,
@@ -237,6 +235,7 @@ const make = Effect.gen(function* () {
       ...(pressure === undefined ? {} : { pressure }),
       ...(updateStatus === undefined ? {} : { opencodexUpdate: updateStatus }),
     } satisfies HostStatusEntry;
+    const entry = omitUnencodableMetrics(raw);
     yield* remember(null, entry);
     return entry;
   });
@@ -276,6 +275,7 @@ const make = Effect.gen(function* () {
             .latest(host)
             .pipe(Effect.map((result) => (result ? { ...entry, parity: result } : entry))),
         ),
+        Effect.map(omitUnencodableMetrics),
         Effect.tap((entry) => (entry.reachability === "ok" ? remember(host, entry) : Effect.void)),
         Effect.catch((error) => {
           if (callerFailure(error) || (failInvalid && error.code === "invalid_request")) {

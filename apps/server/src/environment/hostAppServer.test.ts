@@ -13,10 +13,11 @@ const appServerLive = Effect.fn("test.appServerLive")(function* (input: {
   readonly home: string;
   readonly baseDir: string;
   readonly pid?: number;
+  readonly stateDir?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   if (input.pid !== undefined) {
-    const userdata = `${input.home}/.goat/desktop/userdata`;
+    const userdata = `${input.home}/${input.stateDir ?? ".goat/desktop/userdata"}`;
     yield* fs.makeDirectory(userdata, { recursive: true });
     yield* fs.writeFileString(
       `${userdata}/server-runtime.json`,
@@ -59,6 +60,24 @@ it.layer(NodeServices.layer)("app server presence", (it) => {
         expect(yield* appServerLive({ home, baseDir: sshHome, pid: Number(exited.pid) })).toBe(
           false,
         );
+        // A dead nightly record does not hide the stable app server.
+        yield* appServerLive({
+          home,
+          baseDir: sshHome,
+          pid: Number(exited.pid),
+          stateDir: ".goat/desktop-nightly/userdata",
+        });
+        expect(yield* appServerLive({ home, baseDir: sshHome, pid: process.ppid })).toBe(true);
+
+        const nightlyHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-host-app-nightly-" });
+        expect(
+          yield* appServerLive({
+            home: nightlyHome,
+            baseDir: `${nightlyHome}/.goat`,
+            pid: process.ppid,
+            stateDir: ".goat/desktop-nightly/userdata",
+          }),
+        ).toBe(true);
       }).pipe(Effect.scoped),
   );
 });

@@ -63,12 +63,13 @@ from authentication milestones, so local mux requests do not imply new handshake
 ### App server
 
 A host user has one GOAT server that remote hubs and desktops reach. When the packaged GOAT app
-runs there, that is the app's own server on `~/.goat/desktop`, which holds the threads the person
-starts in the app. For runners with `attachAppServer` (the desktop app and the server's SSH
+runs there, that is the app's own server, which holds the threads the person starts in the app.
+Nightly and dated preview keep it under `~/.goat/desktop-nightly`; stable keeps `~/.goat/desktop`. For runners with `attachAppServer` (the desktop app and the server's SSH
 dispatch set it), `launchOrReuseRemoteServer` asks `probeAppServer`
-(`packages/ssh/src/appServer.ts`) first: it reads `~/.goat/desktop/userdata/server-runtime.json`,
-requires a live PID, a loopback answer on the recorded port, and the control token beside the
-record, then reads the descriptor. A server that advertises `capabilities.runtimeSessions` and
+(`packages/ssh/src/appServer.ts`) first. The probe reads `server-runtime.json` in each directory
+from `desktopAppServerStateDirs` (`packages/shared/src/desktopAppServer.ts`): nightly, then stable,
+then a hand-launched dev build. The first live record wins. It requires a live PID, a loopback
+answer on the recorded port, and the control token beside the record, then reads the descriptor. A server that advertises `capabilities.runtimeSessions` and
 whose protocol ranges are compatible is attached as `remoteServerKind: "app"`. GOAT never starts,
 stops, drains, updates or adopts it, and writes none of its launch records for it. Only when no
 app server runs, or it cannot serve this client (an older app, incompatible protocols, no `curl`,

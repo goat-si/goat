@@ -20,6 +20,8 @@ import type { ChildProcessSpawner } from "effect/process";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+import { desktopAppServerStateDirWords } from "@goat/shared/desktopAppServer";
+
 import type * as SshAuth from "./auth.ts";
 import { runSshCommand } from "./command.ts";
 import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./errors.ts";
@@ -32,14 +34,12 @@ import {
   sshTargetLogFields,
 } from "./remoteRuntime.ts";
 
-// The packaged GOAT app runs its own server on ~/.goat/desktop (resolveDesktopBaseDir), beside the
-// server SSH clients start on ~/.goat. A host user should have one server their remote hubs reach,
-// and the app's holds the person's own threads, so an SSH client attaches to it whenever it runs
-// and can be attached. Only otherwise does it start or reuse the managed server. Windows hosts are
-// skipped: these POSIX scripts cannot reach the app there.
-const serverPreamble = (kind: "app" | "managed") => String.raw`set -eu
+// The app server's directory depends on the channel (`desktopAppServerStateDirs`). Attach to the
+// first live one; otherwise start the managed server. A probe that cannot run stays fail-open
+// (`declined`), so the managed server still serves the host. Windows hosts are skipped.
+const managedPreamble = String.raw`set -eu
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
-app_userdata="$HOME/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}"
+app_userdata="$HOME/.goat/userdata"
 app_record="$app_userdata/server-runtime.json"
 app_token="$app_userdata/runtime-control.token"
 app_none() { printf 'GOAT_APP_SERVER=%s\n' "$1"; exit 0; }
@@ -55,15 +55,54 @@ command -v curl >/dev/null 2>&1 || app_none no-curl
 [ -f "$app_token" ] && [ ! -L "$app_token" ] && [ -s "$app_token" ] || app_none no-token
 `;
 
-const appServerProbeScript = (
-  kind: "app" | "managed",
-) => String.raw`${serverPreamble(kind)}app_descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || app_none unreachable
-printf 'GOAT_APP_SERVER=live %s %s\n%s\n' "$app_pid" "$app_port" "$app_descriptor"
+// First live, reachable app server wins. A missing or dead record is skipped. A live one that
+// cannot be attached is remembered, and a later directory can still be used.
+const appServerSelect = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
+app_declined=""
+app_found=0
+app_note() { if [ -z "$app_declined" ]; then app_declined="$1"; fi; }
+app_consider() {
+  app_userdata="$1"
+  app_record="$app_userdata/server-runtime.json"
+  app_token="$app_userdata/runtime-control.token"
+  if [ ! -f "$app_record" ] || [ -L "$app_record" ]; then return 0; fi
+  app_line="$(tr '\n' ' ' <"$app_record" 2>/dev/null || true)"
+  app_pid="$(printf '%s\n' "$app_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  app_port="$(printf '%s\n' "$app_line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  case "$app_pid:$app_port" in *[!0-9:]* | :* | *:) return 0 ;; esac
+  if [ "$app_pid" -le 0 ] || [ "$app_port" -lt 1 ] || [ "$app_port" -gt 65535 ]; then return 0; fi
+  if ! kill -0 "$app_pid" 2>/dev/null; then return 0; fi
+  if ! command -v curl >/dev/null 2>&1; then app_note no-curl; return 0; fi
+  if [ ! -f "$app_token" ] || [ -L "$app_token" ] || [ ! -s "$app_token" ]; then
+    app_note no-token
+    return 0
+  fi
+  app_descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || true
+  if [ -z "$app_descriptor" ]; then app_note unreachable; return 0; fi
+  app_found=1
+}
+for app_dir in ${desktopAppServerStateDirWords}; do
+  app_consider "$app_dir"
+  if [ "$app_found" = 1 ]; then break; fi
+done
+if [ "$app_found" != 1 ]; then
+  if [ -n "$app_declined" ]; then printf 'GOAT_APP_SERVER=%s\n' "$app_declined"
+  else printf 'GOAT_APP_SERVER=none\n'; fi
+  exit 0
+fi
 `;
 
-const existingServerProbeScript = (kind: "app" | "managed") => String.raw`set -eu
+const serverPreamble = (kind: "app" | "managed") =>
+  kind === "app" ? appServerSelect : managedPreamble;
+
+const appServerProbeScript =
+  () => String.raw`${appServerSelect}printf 'GOAT_APP_SERVER=live %s %s\n%s\n' "$app_pid" "$app_port" "$app_descriptor"
+`;
+
+const managedExistingServerProbeScript = String.raw`set -eu
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
-home="$HOME/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}"
+home="$HOME/.goat/userdata"
 record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
 fail() { printf 'GOAT_EXISTING=%s\n' "$1"; exit 0; }
 # A clean shutdown removes the record but keeps the identity and database, which may own a
@@ -87,6 +126,41 @@ command -v curl >/dev/null 2>&1 || fail unusable
 descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || fail unusable
 printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
 `;
+
+const appExistingServerProbeScript = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
+found_unusable=0
+try_app_home() {
+  home="$1"
+  record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
+  if [ ! -f "$record" ]; then
+    if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then found_unusable=1; fi
+    return 0
+  fi
+  if [ -L "$record" ] || [ ! -f "$identity" ] || [ -L "$identity" ]; then found_unusable=1; return 0; fi
+  if [ ! -f "$token" ] || [ -L "$token" ] || [ ! -s "$token" ]; then found_unusable=1; return 0; fi
+  line="$(tr '\n' ' ' <"$record" 2>/dev/null || true)"
+  pid="$(printf '%s\n' "$line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  port="$(printf '%s\n' "$line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  case "$pid:$port" in *[!0-9:]* | :* | *:) found_unusable=1; return 0 ;; esac
+  if [ "$pid" -le 0 ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then found_unusable=1; return 0; fi
+  if [ "$origin" != "http://127.0.0.1:$port" ]; then found_unusable=1; return 0; fi
+  if ! kill -0 "$pid" 2>/dev/null; then found_unusable=1; return 0; fi
+  if ! command -v curl >/dev/null 2>&1; then found_unusable=1; return 0; fi
+  descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || true
+  if [ -z "$descriptor" ]; then found_unusable=1; return 0; fi
+  printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
+  exit 0
+}
+for app_dir in ${desktopAppServerStateDirWords}; do
+  try_app_home "$app_dir"
+done
+if [ "$found_unusable" = 1 ]; then printf 'GOAT_EXISTING=unusable\n'; else printf 'GOAT_EXISTING=absent\n'; fi
+`;
+
+const existingServerProbeScript = (kind: "app" | "managed") =>
+  kind === "app" ? appExistingServerProbeScript : managedExistingServerProbeScript;
 
 // The token reaches curl through its config on stdin, never argv. The record must still name the
 // port the probe saw, so a credential request never goes to whatever replaced that server.
@@ -234,7 +308,7 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
   const result = yield* runSshCommand(target, {
     // The trailing word is only $1 to the script; it names this call in traces and tests.
     remoteCommandArgs: ["sh", "-s", APP_SERVER_PROBE_COMMAND],
-    stdin: applyScriptPlaceholders(appServerProbeScript("app"), {
+    stdin: applyScriptPlaceholders(appServerProbeScript(), {
       GOAT_ENVIRONMENT_PATH: GOAT_ENVIRONMENT_PATH,
     }),
     timeoutMs: 20_000,
@@ -343,11 +417,9 @@ const decodeActivity = Schema.decodeUnknownEffect(
 );
 
 /**
- * Whether an attachment to the managed server should move to the host's GOAT app server, which
- * the managed server reports as `appServerLive` in its descriptor. Only an idle managed server is
- * left, so threads already running there finish where they started and their watchers can still
- * read them. An attachment whose launch found the app server unusable stays, and so does one that
- * cannot learn the managed server's activity.
+ * Whether a managed attachment should move to the app server (`appServerLive`). Only an idle
+ * managed server is left, so threads already running there finish where they started. One whose
+ * launch found the app unusable stays, as does one that cannot read the managed server's activity.
  */
 export const shouldMoveToAppServer = Effect.fn("ssh/appServer.shouldMove")(function* (input: {
   readonly descriptor: { readonly appServerLive?: boolean } | undefined;
@@ -468,18 +540,30 @@ export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
 export const hostEnvironmentIdScript = (attached: "app" | "external" | "managed" | null) =>
   `attached=${attached ?? "none"}` +
   String.raw`
-home="$HOME/.goat/userdata"; app="$HOME/.goat/desktop/userdata"
+home="$HOME/.goat/userdata"
 case "$attached" in
-  app) home="$app" ;;
-  none)
-    rec="$(tr '\n' ' ' <"$app/server-runtime.json" 2>/dev/null || true)"
-    pid="$(printf '%s\n' "$rec" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-    port="$(printf '%s\n' "$rec" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-    if [ -n "$pid" ] && [ -n "$port" ] && kill -0 "$pid" 2>/dev/null && [ -s "$app/runtime-control.token" ] &&
-      command -v curl >/dev/null 2>&1 &&
-      curl -fsS --max-time 5 "http://127.0.0.1:$port${GOAT_ENVIRONMENT_PATH}" 2>/dev/null | grep -q '"runtimeSessions":true'; then
-      home="$app"
-    fi ;;
+  app | none)
+    app_home=""
+    app_attachable=""
+    for app_dir in ${desktopAppServerStateDirWords}; do
+      if [ -z "$app_home" ] && [ -f "$app_dir/environment-id" ]; then app_home="$app_dir"; fi
+      rec="$(tr '\n' ' ' <"$app_dir/server-runtime.json" 2>/dev/null || true)"
+      pid="$(printf '%s\n' "$rec" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+      port="$(printf '%s\n' "$rec" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+      if [ -n "$pid" ] && [ -n "$port" ] && kill -0 "$pid" 2>/dev/null && [ -s "$app_dir/runtime-control.token" ] &&
+        command -v curl >/dev/null 2>&1 &&
+        curl -fsS --max-time 5 "http://127.0.0.1:$port${GOAT_ENVIRONMENT_PATH}" 2>/dev/null | grep -q '"runtimeSessions":true'; then
+        app_attachable="$app_dir"
+        break
+      fi
+    done
+    case "$attached" in
+      app)
+        if [ -n "$app_attachable" ]; then home="$app_attachable"
+        elif [ -n "$app_home" ]; then home="$app_home"
+        else home=""; fi ;;
+      none) if [ -n "$app_attachable" ]; then home="$app_attachable"; fi ;;
+    esac ;;
 esac
-if [ -f "$home/environment-id" ]; then cat "$home/environment-id"; fi
+if [ -n "$home" ] && [ -f "$home/environment-id" ]; then cat "$home/environment-id"; fi
 `;
