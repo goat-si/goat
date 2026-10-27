@@ -10,7 +10,7 @@ import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 import { isEntrypoint } from "./entrypoint.ts";
 
 // Effect CLI built-ins describe the whole command tree, so they need the full CLI.
-const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--help", "-h"]);
+const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--no-wizard", "--help", "-h"]);
 
 if (
   isEntrypoint({
