@@ -11,6 +11,7 @@ import { useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@goat/client-runtime/connection";
 import { safeErrorLogAttributes } from "@goat/client-runtime/errors";
+import { supportsProviderHome } from "@goat/client-runtime/state/provider-instance-display";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1463,15 +1464,17 @@ function ProviderInstanceRow({
       }
       canWriteSettings={canWriteSettings}
       homeRoute={
-        mode === "editor" && driver === "codex" ? (
+        mode === "editor" && supportsProviderHome(driver) ? (
           <ProviderCodexHomeRouteSection
             environmentId={environmentId}
             environmentLabel={environmentLabel}
             instanceId={instanceId}
+            driver={driver}
+            providerLabel={resetLabel}
             instance={instance}
             expectedInstance={explicitInstance ?? null}
             writesSupported={supportsInstancePreconditions}
-            status={liveProvider?.codexRoute}
+            status={driver === "codex" ? liveProvider?.codexRoute : liveProvider?.homeRoute}
             readOnly={readOnly}
             active={active}
             canRefresh={canRefreshProviders}

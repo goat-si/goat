@@ -2,6 +2,7 @@ import {
   defaultInstanceIdForDriver,
   HandoffError,
   PROVIDER_DISPLAY_NAMES,
+  type CodexRouteStatus,
   type ProviderDriverKind,
   type ServerProvider,
 } from "@goat/contracts";
@@ -123,19 +124,47 @@ export function openCodexRouteSummary(route: ServerProvider["codexRoute"]): stri
   }
 }
 
+/** The four adapters with an explicit Home route; every other provider keeps its own sign-in. */
+export function supportsProviderHome(driver: string): boolean {
+  return driver === "codex" || driver === "claudeAgent" || driver === "opencode" || driver === "pi";
+}
+
+/** A provider's observed Home route. It reports configuration, never a verified request. */
+export function providerHomeRouteSummary(
+  provider: Pick<ServerProvider, "driver" | "homeRoute" | "codexRoute">,
+): string | undefined {
+  if (provider.driver === "codex") return openCodexRouteSummary(provider.codexRoute);
+  if (!supportsProviderHome(provider.driver) || provider.homeRoute === undefined) return undefined;
+  return provider.homeRoute.modelRoute === "opencodex"
+    ? `Uses OpenCodex Home · ${provider.homeRoute.effectiveBaseUrl ?? "Endpoint not verified"}`
+    : "Uses the provider's own settings";
+}
+
+/**
+ * Whether a routed instance's machine still needs its Home link set up from Home's Hub devices:
+ * Codex reports a missing or failed link, and the other adapters report a route only once their
+ * Home runtime was prepared.
+ */
+export function providerHomeNeedsSetup(
+  driver: string,
+  route: Pick<CodexRouteStatus, "modelRoute" | "state"> | undefined,
+): boolean {
+  if (driver === "codex") return route?.state === "not_linked" || route?.state === "failed";
+  return supportsProviderHome(driver) && route?.modelRoute !== "opencodex";
+}
+
 export function openCodexHomeHandoff(input: {
   readonly environmentLabel: string;
   readonly action: "connect" | "disconnect";
-}): { readonly title: string; readonly instruction: string; readonly command?: string } {
+}): { readonly title: string; readonly instruction: string } {
   return input.action === "connect"
     ? {
-        title: "Connect to Home",
-        instruction: `On ${input.environmentLabel}, open a terminal and complete OpenCodex's Remote Link setup for this host. Then return here and check status.`,
+        title: "Set up from Home",
+        instruction: `Open Hub devices on your Home and add ${input.environmentLabel}. GOAT installs OpenCodex there, links it, and verifies one request through Home.`,
       }
     : {
         title: "Stop using OpenCodex Home",
-        instruction: `This instance goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on ${input.environmentLabel} to disconnect it.`,
-        command: "ocx disconnect",
+        instruction: `This instance goes back to its provider's own settings and may need its own sign-in on ${input.environmentLabel}. OpenCodex stays linked to Home; remove the device in Home's Hub devices to end the link.`,
       };
 }
 

@@ -89,38 +89,32 @@ function confirmation() {
 }
 
 describe("OpenCodex Home routing", () => {
-  it("hands Connect to the person without changing settings", async () => {
-    await render({ status: { modelRoute: "opencodex", state: "not_linked" } });
-    await click("Connect to Home");
-    expect(container.textContent).toContain(
-      "On vps-1, open a terminal and complete OpenCodex's Remote Link setup for this host. Then return here and check status.",
-    );
+  it("sends an unlinked machine to Home's Hub devices instead of terminal steps", async () => {
+    const onOpenHubSetup = vi.fn();
+    await render({ status: { modelRoute: "opencodex", state: "not_linked" }, onOpenHubSetup });
+    expect(container.textContent).toContain("Open Hub devices on your Home and add vps-1.");
+    expect(container.textContent).not.toContain("terminal");
+    await click("Open Hub devices");
+    expect(onOpenHubSetup).toHaveBeenCalledOnce();
     expect(onChange).not.toHaveBeenCalled();
   });
   it.each(["connected", "home", "reconnecting", "not_running"] as const)(
-    "does not offer Connect for %s",
+    "does not offer Hub setup for %s",
     async (state) => {
-      await render({ status: { modelRoute: "opencodex", state } });
-      expect(button("Connect to Home")).toBeUndefined();
+      await render({ status: { modelRoute: "opencodex", state }, onOpenHubSetup: vi.fn() });
+      expect(button("Open Hub devices")).toBeUndefined();
       if (state === "reconnecting") {
         expect(container.textContent).toContain("Reconnecting to Home…");
         expect(container.textContent).not.toContain("Check OpenCodex and try again.");
       }
     },
   );
-  it.each(["not_linked", "failed"] as const)("offers Connect for %s", async (state) => {
-    await render({ status: { modelRoute: "opencodex", state } });
-    await click("Connect to Home");
-    expect(container.textContent).toContain("On vps-1, open a terminal");
-    expect(onChange).not.toHaveBeenCalled();
-  });
   it("saves default only after confirming that OpenCodex stays linked", async () => {
     await render();
     await click("Stop using OpenCodex Home");
     expect(onChange).not.toHaveBeenCalled();
-    expect(confirmation().textContent).toContain(
-      "This instance goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on vps-1 to disconnect it.",
-    );
+    expect(confirmation().textContent).toContain("OpenCodex stays linked to Home");
+    expect(confirmation().textContent).toContain("may need its own sign-in on vps-1");
     await click("Stop using OpenCodex Home", confirmation());
     expect(onChange).toHaveBeenCalledExactlyOnceWith({
       modelRoute: "default",
@@ -229,5 +223,47 @@ describe("OpenCodex Home routing", () => {
     await click("Check status");
     expect(onRefresh).toHaveBeenCalledOnce();
     expect(onChange).not.toHaveBeenCalled();
+  });
+  it.each(["claudeAgent", "opencode", "pi"])(
+    "routes a %s instance from its settings action without Codex authentication or a dialog",
+    async (driver) => {
+      await render({
+        driver,
+        providerLabel: "Agent",
+        settings: {
+          setupMode: "existing",
+          modelRoute: "default",
+          opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+        },
+      });
+      expect(container.textContent).not.toContain("Home authentication");
+      expect(container.textContent).toContain("Agent runs on vps-1.");
+      await click("Use OpenCodex Home");
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(onChange).toHaveBeenCalledExactlyOnceWith({
+        modelRoute: "opencodex",
+        opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+      });
+      expect(onRefresh).toHaveBeenCalledOnce();
+    },
+  );
+  it("reports another adapter's route without calling it verified, and stops it directly", async () => {
+    await render({
+      driver: "pi",
+      status: { modelRoute: "opencodex", effectiveBaseUrl: "http://127.0.0.1:10100/v1" },
+    });
+    expect(container.textContent).toContain("Uses OpenCodex Home · http://127.0.0.1:10100/v1");
+    expect(container.textContent).not.toContain("Ready");
+    await click("Stop using OpenCodex Home");
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({
+      modelRoute: "default",
+      opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+    });
+  });
+  it("keeps every adapter's route read-only on a server without write preconditions", async () => {
+    await render({ driver: "opencode", writesSupported: false });
+    expect(button("Stop using OpenCodex Home")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Update GOAT on this machine");
   });
 });

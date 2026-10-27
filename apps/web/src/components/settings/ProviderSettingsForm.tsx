@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { supportsProviderHome } from "@goat/client-runtime/state/provider-instance-display";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -24,6 +25,8 @@ export type SettingsFormDefinition = Pick<ProviderClientDefinition, "settingsSch
   readonly driverKind?: ProviderClientDefinition["driverKind"];
 };
 import { SettingsRow } from "./settingsLayout";
+
+const HOME_ROUTE_FIELDS: ReadonlySet<string> = new Set(["modelRoute", "opencodexBaseUrl"]);
 
 export interface ProviderSettingsFieldModel {
   readonly key: string;
@@ -566,7 +569,14 @@ export function ProviderSettingsForm({
   variant,
   onChange,
 }: ProviderSettingsFormProps) {
-  const fields = deriveProviderSettingsFields(definition, value);
+  // Settings shows the Home route in its own section; the add-instance forms keep these fields.
+  const fields = deriveProviderSettingsFields(definition, value).filter(
+    (field) =>
+      variant !== "settings" ||
+      definition.driverKind === undefined ||
+      !supportsProviderHome(definition.driverKind) ||
+      !HOME_ROUTE_FIELDS.has(field.key),
+  );
   const isLocalAcp =
     definition.driverKind === "acpRegistry" &&
     readProviderConfigString(value, "source") === "local";

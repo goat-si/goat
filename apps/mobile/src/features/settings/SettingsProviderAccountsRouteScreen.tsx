@@ -1,5 +1,13 @@
-import { resolveProviderInstanceDisplayName } from "@goat/client-runtime/state/provider-instance-display";
-import { CodexHomeRouteStatus, includesProviderAccount } from "./CodexHomeRouteStatus";
+import {
+  resolveProviderInstanceDisplayName,
+  supportsProviderHome,
+} from "@goat/client-runtime/state/provider-instance-display";
+import {
+  CodexHomeRouteStatus,
+  includesProviderAccount,
+  routesThroughHome,
+  signsInHere,
+} from "./CodexHomeRouteStatus";
 import * as Dialog from "../../components/ui/Dialog";
 import {
   isAtomCommandInterrupted,
@@ -149,12 +157,16 @@ export function SettingsProviderAccountsRouteScreen({
                             key={provider.instanceId}
                             highlighted={highlighted?.instanceId === provider.instanceId}
                           >
-                            {provider.driver === "codex" &&
-                            provider.codexRoute?.modelRoute === "opencodex" ? (
-                              <CodexHomeRouteStatus environment={environment} provider={provider} />
-                            ) : (
+                            {routesThroughHome(provider) || !signsInHere(provider) ? null : (
                               <ProviderAccount environment={environment} provider={provider} />
                             )}
+                            {supportsProviderHome(provider.driver) ? (
+                              <CodexHomeRouteStatus
+                                environment={environment}
+                                provider={provider}
+                                titled={routesThroughHome(provider) || !signsInHere(provider)}
+                              />
+                            ) : null}
                           </ProviderAccountFrame>
                         ))}
                         {accounts.length === 0 && !prompt ? (

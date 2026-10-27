@@ -3,6 +3,8 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  providerHomeRouteSummary,
+  supportsProviderHome,
   resolveProviderInstanceDisplayName,
   openCodexRouteSummary,
   openCodexHomeHandoff,
@@ -139,17 +141,36 @@ describe("OpenCodex Home routing", () => {
     );
     expect(openCodexRouteSummary(undefined)).toBeUndefined();
   });
-  it("hands connection setup to the named execution host", () => {
+  it("sends machine setup to Home's Hub devices instead of a terminal on the Child", () => {
+    const connect = openCodexHomeHandoff({ environmentLabel: "vps-1", action: "connect" });
+    expect(connect.instruction).toContain("Open Hub devices on your Home and add vps-1.");
+    expect(connect.instruction).not.toContain("terminal");
     expect(
-      openCodexHomeHandoff({ environmentLabel: "vps-1", action: "connect" }).instruction,
-    ).toContain("On vps-1, open a terminal");
-    expect(openCodexHomeHandoff({ environmentLabel: "vps-1", action: "disconnect" })).toMatchObject(
-      {
-        command: "ocx disconnect",
-        instruction:
-          "This instance goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on vps-1 to disconnect it.",
-      },
-    );
+      openCodexHomeHandoff({ environmentLabel: "vps-1", action: "disconnect" }).instruction,
+    ).toContain("may need its own sign-in on vps-1");
+  });
+  it("offers Home routing only to the four adapters and never reports a route as verified", () => {
+    expect(["codex", "claudeAgent", "opencode", "pi", "cursor"].map(supportsProviderHome)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+    ]);
+    const pi = ProviderDriverKind.make("pi");
+    expect(
+      providerHomeRouteSummary({
+        driver: pi,
+        homeRoute: { modelRoute: "opencodex", effectiveBaseUrl: "http://127.0.0.1:10100/v1" },
+      }),
+    ).toBe("Uses OpenCodex Home · http://127.0.0.1:10100/v1");
+    expect(providerHomeRouteSummary({ driver: pi })).toBeUndefined();
+    expect(
+      providerHomeRouteSummary({
+        driver: ProviderDriverKind.make("cursor"),
+        homeRoute: { modelRoute: "opencodex" },
+      }),
+    ).toBeUndefined();
   });
   it("shows the recovery line for a server busy rejection", () => {
     expect(codexRouteErrorMessage({ code: "provider_instance_busy" })).toBe(

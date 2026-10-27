@@ -3,7 +3,10 @@ import {
   codexRouteErrorMessage,
   openCodexHomeHandoff,
   openCodexRouteSummary,
+  providerHomeNeedsSetup,
+  providerHomeRouteSummary,
   resolveProviderInstanceDisplayName,
+  supportsProviderHome,
 } from "@goat/client-runtime/state/provider-instance-display";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
@@ -15,6 +18,7 @@ import {
   type ProviderInstanceId,
   type ServerProvider,
 } from "@goat/contracts";
+import { useNavigation } from "@react-navigation/native";
 import { useRef, useState } from "react";
 import { Alert, View } from "react-native";
 import * as Option from "effect/Option";
@@ -28,19 +32,32 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import type { SettingsTarget } from "./settings-environment-filter";
 
-/** Home instances remain visible even when native account sign-in is unavailable. */
-export function includesProviderAccount(
-  provider: Pick<ServerProvider, "driver" | "codexRoute" | "setup" | "installed">,
-) {
-  return (
-    provider.setup?.canAuthenticate ||
-    (provider.driver === "acpRegistry" && provider.installed) ||
-    (provider.driver === "codex" && provider.codexRoute?.modelRoute === "opencodex")
+type AccountProvider = Pick<
+  ServerProvider,
+  "driver" | "codexRoute" | "homeRoute" | "setup" | "installed"
+>;
+
+/** The provider signs in from this app. */
+export function signsInHere(provider: AccountProvider) {
+  return Boolean(
+    provider.setup?.canAuthenticate || (provider.driver === "acpRegistry" && provider.installed),
   );
+}
+
+/** Whether the provider's model requests go through OpenCodex Home, as its snapshot reports. */
+export function routesThroughHome(provider: AccountProvider) {
+  const route = provider.driver === "codex" ? provider.codexRoute : provider.homeRoute;
+  return route?.modelRoute === "opencodex";
+}
+
+/** Home routing stays reachable for the four adapters that support it, sign-in or not. */
+export function includesProviderAccount(provider: AccountProvider) {
+  return signsInHere(provider) || supportsProviderHome(provider.driver);
 }
 
 type CodexRouteChange =
   | { readonly modelRoute: "default" }
+  | { readonly modelRoute: "opencodex"; readonly opencodexAuth?: CodexHomeAuth }
   | { readonly opencodexAuth: CodexHomeAuth };
 
 export function buildDefaultCodexRouteMutation(
@@ -112,10 +129,14 @@ export async function confirmCodexRouteChange(input: {
 export function CodexHomeRouteStatus({
   environment,
   provider,
+  titled = true,
 }: {
   readonly environment: SettingsTarget;
   readonly provider: ServerProvider;
+  /** False when the provider's account row above already names the instance. */
+  readonly titled?: boolean;
 }) {
+  const navigation = useNavigation();
   const environmentId = environment.environmentId;
   const configAtom = serverEnvironment.configProjection({ environmentId, input: {} });
   const config = useEnvironmentQuery(configAtom);
@@ -140,15 +161,21 @@ export function CodexHomeRouteStatus({
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [instructions, setInstructions] = useState(false);
-  const handoff = openCodexHomeHandoff({ environmentLabel: environment.label, action: "connect" });
+  const codex = provider.driver === "codex";
+  const route = codex ? provider.codexRoute : provider.homeRoute;
   const settings = config.data?.config.settings;
   const instance = settings?.providerInstances[provider.instanceId];
   const supportsPreconditions =
     config.data?.config.environment.capabilities.providerInstancePreconditions === true;
-  const managed = configValue(instance, "setupMode") === "managed";
+  const managed = codex && configValue(instance, "setupMode") === "managed";
   const homeAuth: CodexHomeAuth =
-    configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
+    managed || configValue(instance, "opencodexAuth") === "none" ? "none" : "openai";
+  const usesHome =
+    instance === undefined
+      ? route?.modelRoute === "opencodex"
+      : configValue(instance, "modelRoute") === "opencodex";
+  const canWrite =
+    canManage && instance !== undefined && !config.isPending && config.error === null;
   /** The instance and capabilities as the environment reports them now, read when a confirmation is accepted. */
   const readLatestInstance = () => {
     const latest = Option.getOrNull(AsyncResult.value(appAtomRegistry.get(configAtom)))?.config;
@@ -159,8 +186,8 @@ export function CodexHomeRouteStatus({
     };
   };
   /**
-   * Without a change this only refreshes. A change confirmed in an Alert is checked against the
-   * instance captured when that Alert opened, then written to the selected environment.
+   * Without a change this only refreshes. A change is checked against the instance captured when
+   * it was chosen, then written to the selected environment.
    */
   async function run(change?: CodexRouteChange, opened?: ProviderInstanceConfig) {
     if (pendingRef.current) return;
@@ -193,35 +220,83 @@ export function CodexHomeRouteStatus({
       setPending(false);
     }
   }
-  const summary =
-    provider.codexRoute?.state === "not_running"
+  const changeRoute = () => {
+    const change: CodexRouteChange = usesHome
+      ? { modelRoute: "default" }
+      : { modelRoute: "opencodex", ...(codex ? { opencodexAuth: homeAuth } : {}) };
+    // Codex confirms a route change; for the other adapters this action is the consent.
+    if (!codex) return void run(change, instance);
+    const disconnect = openCodexHomeHandoff({
+      environmentLabel: environment.label,
+      action: "disconnect",
+    });
+    Alert.alert(
+      usesHome ? disconnect.title : "Use OpenCodex Home",
+      usesHome
+        ? disconnect.instruction
+        : `Codex on ${environment.label} will send model requests through OpenCodex Home and use its accounts and shared quota${homeAuth === "none" ? ", without a sign-in on this machine" : ""}. If Home is unavailable, this instance stops working instead of switching accounts.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: usesHome ? disconnect.title : "Use OpenCodex Home",
+          onPress: () => void run(change, instance),
+        },
+      ],
+    );
+  };
+  const summary = codex
+    ? provider.codexRoute?.state === "not_running"
       ? `OpenCodex isn't running on ${environment.label}.`
-      : openCodexRouteSummary(provider.codexRoute);
+      : (openCodexRouteSummary(route) ??
+        (usesHome ? "OpenCodex Home status not checked. Check status." : undefined))
+    : (providerHomeRouteSummary(provider) ??
+      (usesHome ? "OpenCodex Home route not checked. Check status." : undefined));
+  // A default route with no action here adds nothing below the provider's own account row.
+  if (!titled && !usesHome && !canManage) return null;
   return (
     <View className="gap-3 p-4">
-      <Text className="font-goat-bold text-base text-foreground">
-        {resolveProviderInstanceDisplayName(provider)}
-      </Text>
-      <Text className="text-sm text-foreground-muted">{summary}</Text>
+      {titled ? (
+        <Text className="font-goat-bold text-base text-foreground">
+          {resolveProviderInstanceDisplayName(provider)}
+        </Text>
+      ) : null}
+      {summary === undefined ? null : (
+        <Text className="text-sm text-foreground-muted">{summary}</Text>
+      )}
       {canManage ? (
         <SettingsActionRow
-          icon="globe"
-          label="Connect to Home"
-          disabled={pending}
-          onPress={() => setInstructions(true)}
+          icon={usesHome ? "xmark" : "globe"}
+          label={usesHome ? "Stop using OpenCodex Home" : "Use OpenCodex Home"}
+          description={
+            !supportsPreconditions && instance !== undefined
+              ? UPDATE_GOAT_FOR_HOME
+              : usesHome
+                ? undefined
+                : "Uses Home's accounts and shared quota."
+          }
+          disabled={pending || !canWrite || !supportsPreconditions}
+          onPress={changeRoute}
         />
       ) : null}
-      {instructions ? (
-        <Text className="text-sm text-foreground-muted">{handoff.instruction}</Text>
+      {usesHome && providerHomeNeedsSetup(provider.driver, route) ? (
+        <SettingsActionRow
+          icon="desktopcomputer"
+          label="Open Hub devices"
+          description={
+            openCodexHomeHandoff({ environmentLabel: environment.label, action: "connect" })
+              .instruction
+          }
+          onPress={() => navigation.navigate("SettingsHubNodes")}
+        />
       ) : null}
-      {canManage && instance ? (
+      {codex && usesHome && canManage && instance ? (
         <SettingsActionRow
           icon="person.crop.circle"
           label="Home authentication"
           description={
             supportsPreconditions ? (homeAuth === "none" ? "None" : "OpenAI") : UPDATE_GOAT_FOR_HOME
           }
-          disabled={pending || config.isPending || config.error !== null || !supportsPreconditions}
+          disabled={pending || !canWrite || !supportsPreconditions}
           onPress={() =>
             Alert.alert(
               "Home authentication",
@@ -244,42 +319,15 @@ export function CodexHomeRouteStatus({
           }
         />
       ) : null}
-      <SettingsActionRow
-        icon="arrow.clockwise"
-        label="Check status"
-        loading={pending}
-        disabled={pending || !canRefresh}
-        onPress={() => void run()}
-      />
-      {canManage ? (
+      {usesHome ? (
         <SettingsActionRow
-          icon="xmark"
-          label="Stop using OpenCodex Home"
-          disabled={
-            pending ||
-            !instance ||
-            config.isPending ||
-            config.error !== null ||
-            !supportsPreconditions
-          }
-          onPress={() => {
-            const disconnect = openCodexHomeHandoff({
-              environmentLabel: environment.label,
-              action: "disconnect",
-            });
-            Alert.alert(disconnect.title, disconnect.instruction, [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: disconnect.title,
-                onPress: () => void run({ modelRoute: "default" }, instance),
-              },
-            ]);
-          }}
+          icon="arrow.clockwise"
+          label="Check status"
+          loading={pending}
+          disabled={pending || !canRefresh}
+          onPress={() => void run()}
         />
       ) : null}
-      <Text className="text-sm text-foreground-muted">
-        Add a Codex · OpenCodex Home instance in web or desktop Settings.
-      </Text>
       {error || config.error ? (
         <Text accessibilityRole="alert" className="text-danger-foreground">
           {error ?? config.error}

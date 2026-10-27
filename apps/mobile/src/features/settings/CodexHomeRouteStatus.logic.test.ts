@@ -16,6 +16,7 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: vi.fn() }));
 vi.mock("./components/SettingsActionRow", () => ({ SettingsActionRow: "SettingsActionRow" }));
+vi.mock("@react-navigation/native", () => ({ useNavigation: vi.fn() }));
 import {
   buildDefaultCodexRouteMutation,
   confirmCodexRouteChange,
@@ -24,22 +25,21 @@ import {
 
 const codex = ProviderDriverKind.make("codex");
 describe("OpenCodex Home routing", () => {
-  it("includes Home without in-app sign-in capability", () => {
+  it("keeps Home routing reachable for the four adapters without in-app sign-in", () => {
+    const noSignIn = { installed: false, setup: { canAuthenticate: false, canInstall: false } };
     expect(
       includesProviderAccount({
+        ...noSignIn,
         driver: codex,
-        installed: false,
-        setup: { canAuthenticate: false, canInstall: false },
         codexRoute: { modelRoute: "opencodex" },
       }),
     ).toBe(true);
+    for (const driver of ["codex", "claudeAgent", "opencode", "pi"])
+      expect(
+        includesProviderAccount({ ...noSignIn, driver: ProviderDriverKind.make(driver) }),
+      ).toBe(true);
     expect(
-      includesProviderAccount({
-        driver: codex,
-        installed: false,
-        setup: { canAuthenticate: false, canInstall: false },
-        codexRoute: { modelRoute: "default" },
-      }),
+      includesProviderAccount({ ...noSignIn, driver: ProviderDriverKind.make("cursor") }),
     ).toBe(false);
   });
   it("builds a default mutation for the selected environment without unlinking Home", () => {
