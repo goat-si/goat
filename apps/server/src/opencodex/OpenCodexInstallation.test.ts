@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -67,6 +68,7 @@ it.live(
       expect(yield* world.fs.exists(npmLog)).toBe(false);
       expect(world.downloads).toEqual([urlOf("2.92.0")]);
       // Asked again, the supported install it now selects is kept.
+      expect(yield* world.fs.readDirectory(world.path.dirname(world.launcher))).toEqual(["ocx"]);
       expect((yield* service.install()).realPath).toBe(executable.realPath);
       expect(world.downloads).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(services)),
@@ -215,30 +217,159 @@ it.live(
       });
       expect(both.map((executable) => executable.ownership)).toEqual(["managed", "managed"]);
       expect(world.downloads).toHaveLength(1);
-      // pid 1 is always alive: its lock is never taken over.
-      const lock = world.path.join(world.prefix, ".install-lock");
-      yield* world.fs.makeDirectory(lock);
-      yield* world.fs.writeFileString(world.path.join(lock, "owner"), "1\nother-process\n");
-      expect(yield* reasonOf(service.install({ managedVersion: "2.92.0" }))).toBe("busy");
-      expect(yield* world.fs.readFileString(world.path.join(lock, "owner"))).toBe(
-        "1\nother-process\n",
-      );
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
-it.live("reclaims an install lock whose owner process is gone", () =>
+const lockRecord = (pid: number, startTime: string | null, nonce: string) =>
+  JSON.stringify({ pid, startTime, nonce });
+/** The lock and every reclaim leftover in the install prefix. */
+const lockEntries = (world: { readonly prefix: string; readonly fs: FileSystem.FileSystem }) =>
+  world.fs
+    .readDirectory(world.prefix)
+    .pipe(Effect.map((names) => names.filter((name) => name.startsWith(".install-lock"))));
+
+it.live(
+  "a live owner with the same pid and start time is never reclaimed, while a reused pid is",
+  () =>
+    Effect.gen(function* () {
+      const world = yield* installedWorld();
+      const lock = world.path.join(world.prefix, ".install-lock");
+      const downloading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* world.installer(world.catalog, world.served, {
+        beforeDownload: Deferred.succeed(downloading, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        ),
+      });
+      const other = yield* world.installer(world.catalog, world.served);
+      const held = yield* holder.install({ managedVersion: "2.93.0" }).pipe(Effect.forkChild);
+      yield* Deferred.await(downloading);
+      // Another installer in this process: the same pid and start time, so its owner is live.
+      expect(yield* reasonOf(other.install({ managedVersion: "2.93.0" }))).toBe("busy");
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(held)).version).toBe("2.93.0");
+      // This pid again, started at another time: a reused pid, so the record is stale.
+      yield* world.fs.writeFileString(
+        lock,
+        lockRecord(process.pid, "Thu Jan  1 00:00:00 1970", "reused"),
+      );
+      expect((yield* other.install({ managedVersion: "2.92.0" })).version).toBe("2.92.0");
+      expect(yield* lockEntries(world)).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("a new owner that takes the lock between the stale read and the reclaim keeps it", () =>
+  Effect.gen(function* () {
+    const world = yield* installedWorld();
+    const lock = world.path.join(world.prefix, ".install-lock");
+    const newOwner = lockRecord(1, "started later", "new-owner");
+    yield* world.fs.writeFileString(lock, lockRecord(2147483646, null, "crashed"));
+    let raced = false;
+    const service = yield* world.installer(world.catalog, world.served, {
+      fs: {
+        beforeRename: (from) =>
+          from !== lock || raced
+            ? Effect.void
+            : Effect.sync(() => void (raced = true)).pipe(
+                Effect.andThen(world.fs.remove(lock)),
+                Effect.andThen(world.fs.writeFileString(lock, newOwner)),
+                Effect.orDie,
+              ),
+      },
+    });
+    expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("busy");
+    expect(raced).toBe(true);
+    expect(yield* world.fs.readFileString(lock)).toBe(newOwner);
+    expect(yield* lockEntries(world)).toEqual([".install-lock"]);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("a dead owner's lock and an orphaned reclaim tombstone do not block the next install", () =>
   Effect.gen(function* () {
     const world = yield* makeWorld();
     const built = yield* world.archive("2.92.0");
-    const lock = world.path.join(world.prefix, ".install-lock");
-    yield* world.fs.makeDirectory(lock, { recursive: true });
-    yield* world.fs.writeFileString(world.path.join(lock, "owner"), "2147483646\ncrashed\n");
+    yield* world.fs.makeDirectory(world.prefix, { recursive: true });
+    const dead = lockRecord(2147483646, null, "crashed");
+    yield* world.fs.writeFileString(world.path.join(world.prefix, ".install-lock"), dead);
+    // A reclaimer that crashed after moving a stale lock aside.
+    yield* world.fs.writeFileString(
+      world.path.join(world.prefix, ".install-lock.stale-crashed-reclaimer"),
+      lockRecord(2147483645, null, "older"),
+    );
     const service = yield* world.installer(world.pin("2.92.0", built), {
       [urlOf("2.92.0")]: built.bytes,
     });
     expect((yield* service.install()).ownership).toBe("managed");
-    expect(yield* world.fs.exists(lock)).toBe(false);
+    expect(yield* lockEntries(world)).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live(
+  "an adopted launcher inserted at the activation boundary survives and install fails not-managed",
+  () =>
+    Effect.gen(function* () {
+      for (const boundary of ["moving the old launcher", "publishing the new one"] as const) {
+        const world = yield* installedWorld();
+        const next = world.path.join(world.prefix, `2.93.0-${TARGET}`, "ocx");
+        let inserted = false;
+        const insert = Effect.suspend(() => {
+          if (inserted) return Effect.void;
+          inserted = true;
+          return world.fs
+            .remove(world.launcher)
+            .pipe(
+              Effect.ignore,
+              Effect.andThen(world.userOcx(world.launcher, "2.80.0")),
+              Effect.orDie,
+            );
+        });
+        const service = yield* world.installer(world.catalog, world.served, {
+          fs:
+            boundary === "moving the old launcher"
+              ? { beforeRename: (from) => (from === world.launcher ? insert : Effect.void) }
+              : { beforeSymlink: (target) => (target === next ? insert : Effect.void) },
+        });
+        expect([boundary, yield* reasonOf(service.install({ managedVersion: "2.93.0" }))]).toEqual([
+          boundary,
+          "not-managed",
+        ]);
+        expect(inserted).toBe(true);
+        expect(yield* world.fs.readFileString(world.launcher)).toBe(fakeOcx("2.80.0"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live(
+  "a retained release that reports another version is refused and the previous launcher stays",
+  () =>
+    Effect.gen(function* () {
+      const world = yield* installedWorld();
+      expect((yield* world.service.install({ managedVersion: "2.93.0" })).version).toBe("2.93.0");
+      expect((yield* world.service.install({ managedVersion: "2.92.0" })).version).toBe("2.92.0");
+      const retained = world.path.join(world.prefix, `2.93.0-${TARGET}`, "ocx");
+      yield* world.fs.writeFileString(retained, fakeOcx("9.99.0"), { mode: 0o755 });
+      expect(yield* reasonOf(world.service.install({ managedVersion: "2.93.0" }))).toBe("verify");
+      expect(yield* world.fs.realPath(world.launcher)).toBe(world.installed.realPath);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live(
+  "a launcher whose new release disappears after publishing is restored to the previous one",
+  () =>
+    Effect.gen(function* () {
+      const world = yield* installedWorld();
+      const next = world.path.join(world.prefix, `2.93.0-${TARGET}`, "ocx");
+      const service = yield* world.installer(world.catalog, world.served, {
+        fs: {
+          afterSymlink: (target) =>
+            target === next ? world.fs.remove(next).pipe(Effect.orDie) : Effect.void,
+        },
+      });
+      expect(yield* reasonOf(service.install({ managedVersion: "2.93.0" }))).toBe("activation");
+      // Restored, not left dangling at the missing release.
+      expect(yield* world.fs.realPath(world.launcher)).toBe(world.installed.realPath);
+      expect(yield* world.fs.readDirectory(world.path.dirname(world.launcher))).toEqual(["ocx"]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
 );
 
 it.live(

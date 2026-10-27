@@ -24,6 +24,13 @@ interface Archive {
   readonly sha256: string;
 }
 
+/** Runs inside the installer's own filesystem calls, to land a race at that exact boundary. */
+export interface FileSystemHooks {
+  readonly beforeRename?: (from: string, to: string) => Effect.Effect<void>;
+  readonly beforeSymlink?: (target: string, link: string) => Effect.Effect<void>;
+  readonly afterSymlink?: (target: string, link: string) => Effect.Effect<void>;
+}
+
 /**
  * A home behind a symlink, as macOS temp directories are, plus a user bin on PATH. The filesystem
  * answers `exists` only inside the test root, so this machine's own OpenCodex is never selected.
@@ -96,14 +103,25 @@ export const makeWorld = Effect.fn("OpenCodexInstallationTest.world")(function* 
     hooks: {
       readonly beforeDownload?: Effect.Effect<void>;
       readonly extract?: Effect.Effect<never>;
+      readonly fs?: FileSystemHooks;
     } = {},
   ) =>
     Effect.gen(function* () {
       const real = yield* FileSystem.FileSystem;
       const realRunner = yield* ProcessRunner.ProcessRunner;
+      const fsHooks = hooks.fs ?? {};
       const sandboxed: FileSystem.FileSystem = {
         ...real,
         exists: (file) => (file.startsWith(root) ? real.exists(file) : Effect.succeed(false)),
+        rename: (from, to) =>
+          (fsHooks.beforeRename?.(from, to) ?? Effect.void).pipe(
+            Effect.andThen(real.rename(from, to)),
+          ),
+        symlink: (target, link) =>
+          (fsHooks.beforeSymlink?.(target, link) ?? Effect.void).pipe(
+            Effect.andThen(real.symlink(target, link)),
+            Effect.tap(() => fsHooks.afterSymlink?.(target, link) ?? Effect.void),
+          ),
       };
       const http = HttpClient.make((request) =>
         Effect.gen(function* () {

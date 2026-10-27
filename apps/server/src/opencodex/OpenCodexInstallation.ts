@@ -1,5 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest or random token.
+// @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest or lstat.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
@@ -19,16 +20,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { isProcessAlive } from "../serverRuntimeState.ts";
+import { makeInstallLock } from "./installLock.ts";
 
 const MARKER = ".goat-install.json";
-const LOCK = ".install-lock";
 const MAX_MARKER_BYTES = 8192;
 const MAX_MEMBERS = 20_000;
 const Marker = Schema.Struct({
@@ -88,6 +89,14 @@ export class OpenCodexInstallationError extends Schema.TaggedError<OpenCodexInst
 const fail = (reason: OpenCodexInstallationError["reason"], cause?: unknown) =>
   new OpenCodexInstallationError({ reason, ...(cause === undefined ? {} : { cause }) });
 const isInstallationError = Schema.is(OpenCodexInstallationError);
+
+/** A directory entry as lstat sees it, so a replaced or recreated launcher never compares equal. */
+interface EntryIdentity {
+  readonly dev: string;
+  readonly ino: string;
+  readonly file: boolean;
+  readonly link: string | undefined;
+}
 
 export interface OpenCodexExecutable {
   /** The command OpenCodex's own resolution selects. */
@@ -155,7 +164,7 @@ const make = Effect.gen(function* () {
   const cwd = yield* HostProcess.WorkingDirectory;
   const catalog = yield* ReleaseCatalog;
   const gate = yield* Semaphore.make(1);
-  const lockToken = `${process.pid}\n${NodeCrypto.randomUUID()}\n`;
+  const installLock = yield* makeInstallLock;
 
   /** Resolved, so a symlinked home or ~/.local still yields one canonical install root. */
   const resolvedDirectory = Effect.fn("OpenCodexInstallation.resolvedDirectory")(function* (
@@ -173,14 +182,6 @@ const make = Effect.gen(function* () {
     fs
       .realPath(path.dirname(file))
       .pipe(Effect.map((directory) => path.join(directory, path.basename(file))));
-  const present = (file: string) =>
-    fs.exists(file).pipe(
-      Effect.flatMap((exists) =>
-        exists ? Effect.succeed(true) : fs.readLink(file).pipe(Effect.as(true)),
-      ),
-      Effect.orElseSucceed(() => false),
-    );
-
   const command = Effect.fn("OpenCodexInstallation.command")(function* (
     binary: string,
     args: ReadonlyArray<string>,
@@ -243,55 +244,52 @@ const make = Effect.gen(function* () {
     return undefined;
   });
 
-  /**
-   * One installer per machine: the lock directory names its owner process. A lock whose owner
-   * is gone is reclaimed under a second, exclusive directory; any other lock is `busy`.
-   */
-  const lock = Effect.fn("OpenCodexInstallation.lock")(function* (prefix: string) {
-    const lockPath = path.join(prefix, LOCK);
-    const owner = path.join(lockPath, "owner");
-    const claim = Effect.gen(function* () {
-      const staged = yield* fs.makeTempDirectory({ directory: prefix, prefix: ".lock-" });
-      yield* fs.writeFileString(path.join(staged, "owner"), lockToken);
-      return yield* fs.rename(staged, lockPath).pipe(
-        Effect.as(true),
-        Effect.catch(() => fs.remove(staged, { recursive: true }).pipe(Effect.as(false))),
-      );
-    });
-    const release = fs.readFileString(owner).pipe(
-      Effect.flatMap((text) =>
-        text === lockToken ? fs.remove(lockPath, { recursive: true }) : Effect.void,
+  /** The entry itself, never its target: a symlink is named by its inode and link text. */
+  const identify = (file: string) =>
+    Effect.tryPromise(() => NodeFSP.lstat(file, { bigint: true })).pipe(
+      Effect.flatMap((stat) =>
+        (stat.isSymbolicLink()
+          ? fs.readLink(file).pipe(Effect.asSome)
+          : Effect.succeed(Option.none<string>())
+        ).pipe(
+          Effect.map((link) => ({
+            dev: String(stat.dev),
+            ino: String(stat.ino),
+            file: stat.isFile(),
+            link: Option.getOrUndefined(link),
+          })),
+        ),
       ),
-      Effect.ignore,
+      Effect.option,
     );
-    const take = Effect.gen(function* () {
-      if (yield* claim) return;
-      const holder = Number(
-        (yield* fs.readFileString(owner).pipe(Effect.orElseSucceed(() => ""))).split("\n")[0],
-      );
+  const same = (left: Option.Option<EntryIdentity>, right: Option.Option<EntryIdentity>) =>
+    Option.isSome(left) &&
+    Option.isSome(right) &&
+    left.value.dev === right.value.dev &&
+    left.value.ino === right.value.ino &&
+    left.value.link === right.value.link;
+
+  /** A complete release: its own executable answers its version beside its GUI and keyring. */
+  const verifyRelease = Effect.fn("OpenCodexInstallation.verifyRelease")(
+    function* (root: string, asset: OpenCodexRelease) {
+      const executable = path.join(root, asset.layout.executable);
+      const own = yield* identify(executable);
+      const stat = yield* fs.stat(executable);
+      const gui = yield* fs.stat(path.join(root, asset.layout.gui));
+      const keyring = yield* fs.readDirectory(path.join(root, asset.layout.keyring));
       if (
-        !Number.isInteger(holder) ||
-        holder <= 0 ||
-        holder === process.pid ||
-        isProcessAlive(holder)
+        Option.isNone(own) ||
+        !own.value.file ||
+        Number(stat.size) === 0 ||
+        (stat.mode & 0o111) === 0 ||
+        gui.type !== "File" ||
+        !keyring.some((name) => name.endsWith(".node")) ||
+        parseOpenCodexVersion(yield* command(executable, ["--version"])) !== asset.version
       )
-        return yield* fail("busy");
-      const reclaim = `${lockPath}.reclaim`;
-      const reclaiming = yield* fs.makeDirectory(reclaim).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
-      if (!reclaiming) return yield* fail("busy");
-      const still = yield* fs.readFileString(owner).pipe(Effect.orElseSucceed(() => ""));
-      const reclaimed =
-        Number(still.split("\n")[0]) === holder
-          ? yield* fs.remove(lockPath, { recursive: true }).pipe(Effect.andThen(claim))
-          : false;
-      yield* fs.remove(reclaim, { recursive: true });
-      if (!reclaimed) return yield* fail("busy");
-    });
-    yield* Effect.acquireRelease(take, () => release);
-  });
+        return yield* fail("verify");
+    },
+    Effect.mapError((cause) => (isInstallationError(cause) ? cause : fail("verify", cause))),
+  );
 
   /** Downloads, checks and unpacks a pinned release into its final, immutable directory. */
   const acquire = Effect.fn("OpenCodexInstallation.acquire")(function* (
@@ -336,15 +334,7 @@ const make = Effect.gen(function* () {
     yield* command(tar, ["-xf", archive, "-C", runtime]).pipe(
       Effect.mapError(() => fail("archive")),
     );
-    const staged = path.join(runtime, asset.layout.executable);
-    const stat = yield* fs.stat(staged);
-    if (
-      stat.type !== "File" ||
-      Number(stat.size) === 0 ||
-      (stat.mode & 0o111) === 0 ||
-      parseOpenCodexVersion(yield* command(staged, ["--version"])) !== asset.version
-    )
-      return yield* fail("verify");
+    yield* verifyRelease(runtime, asset);
     yield* fs.writeFileString(
       path.join(runtime, MARKER),
       encodeMarker({
@@ -359,34 +349,80 @@ const make = Effect.gen(function* () {
     yield* fs.rename(runtime, destination);
   });
 
-  /** Points the launcher at `executable`, then confirms OpenCodex's resolution selects it. */
+  const created = (effect: Effect.Effect<void, PlatformError.PlatformError>) =>
+    effect.pipe(
+      Effect.as(true),
+      Effect.catchIf(
+        (error) => error.reason._tag === "AlreadyExists",
+        () => Effect.succeed(false),
+      ),
+    );
+  /** Puts a moved-aside entry back at `launcher` without ever replacing what is there now. */
+  const restoreExclusively = (
+    moved: string,
+    identity: Option.Option<EntryIdentity>,
+    launcher: string,
+  ) =>
+    created(
+      Option.isSome(identity) && identity.value.link !== undefined
+        ? fs.symlink(identity.value.link, launcher)
+        : fs.link(moved, launcher),
+    ).pipe(Effect.orElseSucceed(() => false));
+
+  /**
+   * Swaps the launcher only if it is still the entry selected under the lock, then confirms
+   * OpenCodex's resolution selects this managed release. A displaced entry that is not ours is
+   * kept aside under bin/.ocx-* when it cannot be put back.
+   */
   const activate = Effect.fn("OpenCodexInstallation.activate")(function* (
     executable: string,
+    version: string,
     bin: string,
     launcher: string,
-    before: OpenCodexExecutable | undefined,
+    selectedLauncher: Option.Option<EntryIdentity>,
   ) {
-    const activation = yield* fs.makeTempDirectoryScoped({ directory: bin, prefix: ".ocx-" });
-    const next = path.join(activation, "ocx");
-    yield* fs.symlink(executable, next);
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
-        yield* fs.rename(next, launcher);
-        const checked = yield* selected().pipe(Effect.option);
-        if (Option.isSome(checked) && checked.value?.realPath === executable) return checked.value;
-        // Undo only what this activation did: a launcher someone changed since stays theirs.
-        const stillOurs = yield* fs.realPath(launcher).pipe(
-          Effect.map((value) => value === executable),
-          Effect.orElseSucceed(() => false),
-        );
-        if (stillOurs && before !== undefined) {
-          const restore = path.join(activation, "restore");
-          yield* fs.symlink(before.realPath, restore);
-          yield* fs.rename(restore, launcher);
-        } else if (stillOurs) {
-          yield* fs.remove(launcher);
+        const activation = yield* fs.makeTempDirectory({ directory: bin, prefix: ".ocx-" });
+        const done = fs.remove(activation, { recursive: true }).pipe(Effect.ignore);
+        const backup = path.join(activation, "previous");
+        let previous = Option.none<EntryIdentity>();
+        if (Option.isSome(selectedLauncher)) {
+          const moved = yield* fs.rename(launcher, backup).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!moved) {
+            yield* done;
+            return yield* fail("not-managed");
+          }
+          previous = yield* identify(backup);
+          if (!same(previous, selectedLauncher)) {
+            if (yield* restoreExclusively(backup, previous, launcher)) yield* done;
+            return yield* fail("not-managed");
+          }
         }
-        return yield* fail("activation");
+        // Exclusive: an entry someone created after the move stays theirs.
+        if (!(yield* created(fs.symlink(executable, launcher)))) return yield* fail("not-managed");
+        const published = yield* identify(launcher);
+        const checked = yield* selected().pipe(Effect.option);
+        const selection = Option.isSome(checked) ? checked.value : undefined;
+        if (
+          selection?.realPath === executable &&
+          selection.version === version &&
+          selection.ownership === "managed"
+        ) {
+          yield* done;
+          return selection;
+        }
+        // Undo only this activation's own symlink, even when its target has disappeared.
+        const current = yield* identify(launcher);
+        if (same(current, published) && Option.getOrUndefined(current)?.link === executable) {
+          yield* fs.rename(launcher, path.join(activation, "rejected"));
+          if (Option.isNone(previous) || (yield* restoreExclusively(backup, previous, launcher)))
+            yield* done;
+        }
+        return yield* fail(selection?.realPath === executable ? "verify" : "activation");
       }),
     );
   });
@@ -412,7 +448,7 @@ const make = Effect.gen(function* () {
             const prefix = yield* prefixOf(true);
             const bin = yield* resolvedDirectory(true, ".local", "bin");
             const launcher = path.join(bin, "ocx");
-            yield* lock(prefix);
+            yield* installLock.acquire(prefix, () => fail("busy"));
             // Selected again under the lock: this identity is what activation may replace.
             const before = yield* selected();
             if (
@@ -428,16 +464,19 @@ const make = Effect.gen(function* () {
               return yield* fail(input.managedVersion === undefined ? "shadowed" : "not-managed");
             const destination = path.join(prefix, `${version}-${asset.target}`);
             const executable = path.join(destination, asset.layout.executable);
+            // A retained release is checked like a fresh one: the directory may have changed.
             if (!(yield* fs.exists(destination))) yield* acquire(asset, prefix, destination);
+            else yield* verifyRelease(destination, asset);
             if (!(yield* inspect(executable, version))) return yield* fail("verify");
+            const selectedLauncher = yield* identify(launcher);
             if (
-              (yield* present(launcher)) &&
+              Option.isSome(selectedLauncher) &&
               (before === undefined ||
                 (yield* fs.realPath(launcher).pipe(Effect.orElseSucceed(() => ""))) !==
                   before.realPath)
             )
               return yield* fail("not-managed");
-            return yield* activate(executable, bin, launcher, before);
+            return yield* activate(executable, version, bin, launcher, selectedLauncher);
           }),
         ),
       );
