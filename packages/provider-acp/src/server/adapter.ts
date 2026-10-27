@@ -84,6 +84,7 @@ import {
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
+  sessionUpdateIsReplay,
   toolCallVisibleOutputChanged,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
@@ -3873,10 +3874,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* rearmDeferredFinalize(context);
         });
 
-        /**
-         * Notices have no id; each is its own item, numbered by the turn's item count.
-         * A notice is not conversation content, so an open message keeps streaming across it.
-         */
+        // Notices share the enclosing turn's span and leave its open message streaming.
         const emitNotice = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           notice: { readonly title: string; readonly description?: string },
@@ -5059,7 +5057,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 } else if (event._tag === "PlanUpdated") {
                   yield* emitPlan(context, event.payload);
                 } else if (event._tag === "NoticeReceived") {
-                  yield* emitNotice(context, event);
+                  if (!sessionUpdateIsReplay(notification)) yield* emitNotice(context, event);
                 } else if (event._tag === "UnknownUpdate") {
                   yield* emitTool(context, {
                     toolCallId: `${context.nativeTurnId}:unsupported:${event.updateType}`,

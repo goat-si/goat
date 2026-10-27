@@ -18,6 +18,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, assert } from "@effect/vitest";
 
 import * as AcpClient from "./client.ts";
+import { expectedNoticeUpdates, noticeUpdates } from "./notice.testkit.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import * as AcpError from "./errors.ts";
@@ -1447,35 +1448,31 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
     }),
   );
 
-  it.effect("delivers ACP v1 session notices, which the pinned v1 schema predates", () =>
+  it.effect.each([1, 2])("validates session notices with ACP version %s", (protocolVersion) =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const scope = yield* Scope.make();
       const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
       const initializeFiber = yield* acp.agent
-        .initialize({ protocolVersion: 1, clientCapabilities: { session: { notices: {} } } })
+        .initialize({ protocolVersion, clientCapabilities: { session: { notices: {} } } })
         .pipe(Effect.forkScoped);
       const initializeRequest = yield* Queue.take(output).pipe(
         Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(InitializeRequestV1))),
       );
       yield* Queue.offer(
         input,
-        yield* encodeJsonl(InitializeResponseV1, {
+        yield* encodeJsonl(jsonRpcResponse(Schema.Unknown), {
           jsonrpc: "2.0",
           id: initializeRequest.id,
-          result: { protocolVersion: 1 },
+          result: {
+            protocolVersion,
+            ...(protocolVersion === 2 ? { info: { name: "notice-agent", version: "0.0.0" } } : {}),
+          },
         }),
       );
       yield* Fiber.join(initializeFiber);
 
-      const notice = {
-        sessionUpdate: "notice",
-        severity: "warning",
-        title: "MCP server unavailable",
-        description: "Continuing without it.",
-      } as const;
-      const untitled = { sessionUpdate: "notice", severity: "info" } as const;
-      for (const update of [notice, untitled]) {
+      for (const update of noticeUpdates) {
         yield* Queue.offer(
           input,
           yield* encodeJsonl(SessionUpdateNotification, {
@@ -1485,12 +1482,15 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           }),
         );
       }
-      const received = yield* acp.raw.notifications.pipe(Stream.take(2), Stream.runCollect);
+      const received = yield* acp.raw.notifications.pipe(
+        Stream.take(noticeUpdates.length),
+        Stream.runCollect,
+      );
       assert.deepEqual(
         Array.from(received, (event) =>
           event._tag === "SessionUpdate" ? event.params.update : undefined,
         ),
-        [notice, { sessionUpdate: "_t3_unknown", originalSessionUpdate: "notice", raw: untitled }],
+        expectedNoticeUpdates,
       );
       yield* Scope.close(scope, Exit.void);
     }),

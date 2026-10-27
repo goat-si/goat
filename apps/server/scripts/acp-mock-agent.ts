@@ -15,6 +15,7 @@ import * as AcpError from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
 
+import { mockSessionNotices } from "./acpMockNotices.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
@@ -1193,14 +1194,9 @@ const program = Effect.gen(function* () {
             },
           });
         chunk("before the notice, ");
-        writeJsonRpcNotification("session/update", {
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "notice",
-            severity: "info",
-            title: "skill discovery warning: candidate was skipped because its metadata is invalid",
-          },
-        });
+        for (const notice of mockSessionNotices) {
+          writeJsonRpcNotification("session/update", { sessionId: requestedSessionId, ...notice });
+        }
         chunk("after the notice");
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }

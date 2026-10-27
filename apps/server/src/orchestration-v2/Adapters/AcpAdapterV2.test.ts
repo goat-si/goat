@@ -1865,7 +1865,7 @@ describe("AcpAdapterV2", () => {
         "skill discovery warning: candidate was skipped because its metadata is invalid";
       assert.deepEqual(
         items.flatMap((item) => (item.type === "system_notice" ? [item.message] : [])),
-        [title],
+        [title, "Optional integration unavailable\n\nContinuing without the integration."],
       );
       const replies = new Map(
         items.flatMap((item) => (item.type === "assistant_message" ? [[item.id, item.text]] : [])),
