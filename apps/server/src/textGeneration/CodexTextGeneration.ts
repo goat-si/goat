@@ -1,4 +1,6 @@
 import * as HomeRoute from "../provider/OpenCodexRoute.ts";
+import { withCodexAppServerClient } from "../provider/CodexProvider.ts";
+import { usesAuthlessCodexHome } from "../provider/CodexHomeRouteConfig.ts";
 import { ProviderDriverKind } from "@goat/contracts";
 import {
   withMemoryExecution,
@@ -117,8 +119,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
 
   /**
    * Reception gets a Codex home of its own, because `--ignore-user-config` still loads the user's
-   * global AGENTS.md from `CODEX_HOME`. Its only file is a symlink to the user's auth.json. Codex
-   * rewrites auth.json in place, so a token refresh lands in the user's file through the link. If a
+   * global AGENTS.md from `CODEX_HOME`. A Home route gets a pointer to the selected catalog; Home
+   * with None gets nothing else. Other routes link the user's auth.json, which Codex rewrites in
+   * place, so a token refresh lands in the user's file through the link. If a
    * Codex build ever replaces the link with a file of its own, the finalizer copies that file back,
    * so the user never keeps a refresh token the refresh already rotated away. When the link cannot
    * be made, reception falls back to the user's home; memory generation fails before spawning.
@@ -126,6 +129,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const makeReceptionCodexHome = Effect.fn("makeReceptionCodexHome")(function* (
     operation: TextGenerationOperations.Operation,
     userHome: string,
+    route: { readonly settings: CodexSettings; readonly environment: NodeJS.ProcessEnv },
   ) {
     const receptionHome = yield* fileSystem
       .makeTempDirectoryScoped({ prefix: "goat-codex-reception-home-" })
@@ -134,6 +138,39 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           normalizeCliError("codex", operation, cause, "Failed to create reception Codex home"),
         ),
       );
+    if (route.settings.modelRoute === "opencodex") {
+      const pointer = yield* Effect.gen(function* () {
+        if (Option.isNone(homeRoute))
+          return yield* new HomeRoute.OpenCodexRouteUnavailable({
+            detail: "Could not read OpenCodex status",
+          });
+        const source = yield* HomeRoute.resolveCodexRouteContext({
+          settings: route.settings,
+          binaryPath: route.settings.binaryPath || "codex",
+          home: userHome,
+          cwd: receptionHome,
+          environment: route.environment,
+          configArgv: [],
+        }).pipe(Effect.provideService(Path.Path, path));
+        const args = yield* homeRoute.value.launchArgs(source);
+        const arg = args.find((value) => value.startsWith("model_catalog_json="));
+        if (arg === undefined)
+          return yield* new HomeRoute.OpenCodexRouteUnavailable({
+            detail: "Could not find OpenCodex's model catalog",
+          });
+        return arg;
+      }).pipe(
+        Effect.mapError((cause) => new TextGenerationError({ operation, detail: cause.message })),
+      );
+      yield* fileSystem
+        .writeFileString(path.join(receptionHome, "config.toml"), `${pointer}\n`)
+        .pipe(
+          Effect.mapError((cause) =>
+            normalizeCliError("codex", operation, cause, "Failed to prepare reception Codex home"),
+          ),
+        );
+      if (usesAuthlessCodexHome(route.settings)) return receptionHome;
+    }
     const userAuth = path.join(userHome, "auth.json");
     const receptionAuth = path.join(receptionHome, "auth.json");
     if (!(yield* fileSystem.exists(userAuth).pipe(Effect.orElseSucceed(() => false)))) {
@@ -371,6 +408,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         ? yield* makeReceptionCodexHome(
             operation,
             configuredHome ?? effectiveEnvironment.CODEX_HOME ?? path.join(homeDirectory, ".codex"),
+            { settings: effectiveConfig, environment: effectiveEnvironment },
           )
         : configuredHome;
       const launchArgs = resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
@@ -401,26 +439,43 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
                 return yield* new HomeRoute.OpenCodexRouteUnavailable({
                   detail: "Could not read OpenCodex status",
                 });
-              yield* homeRoute.value.requireAvailable(routeInput);
-              yield* homeRoute.value.launchArgs(routeInput);
-              // No installed Codex version has a primary-source certified exec/profile
-              // precedence proof yet. A mock app-server cannot certify the exec loader.
-              return yield* new HomeRoute.OpenCodexRouteUnavailable({
-                detail: "Could not verify the effective Codex endpoint.",
-              });
+              const args = yield* homeRoute.value.launchArgs(routeInput);
+              // The effective native config decides, whatever the version. Pinned Codex 0.156.1
+              // was checked to give exec the same provider as app-server config/read.
+              yield* withCodexAppServerClient({
+                binaryPath: binary,
+                homePath: routeInput.execution.home,
+                launchArgs: isChannelReception ? "" : launchArgs,
+                route: routeInput,
+                cwd: workingDirectory,
+                environment: routeInput.execution.environment,
+              }).pipe(
+                Effect.scoped,
+                Effect.provideService(HomeRoute.OpenCodexRoute, homeRoute.value),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
+                Effect.mapError(
+                  () =>
+                    new HomeRoute.OpenCodexRouteUnavailable({
+                      detail: "Could not verify the effective Codex endpoint.",
+                    }),
+                ),
+              );
+              return args;
             }).pipe(
               Effect.mapError(
                 (cause) => new TextGenerationError({ operation, detail: cause.message }),
               ),
             )
           : [];
+      const execEnvironment =
+        effectiveConfig.modelRoute === "opencodex" ? routeInput.execution.environment : env;
       const execLaunchArgs = isChannelReception
         ? [...CODEX_CHANNEL_RECEPTION_ARGS, ...routeArgs]
         : codexExecLaunchArgs(launchArgs, routeArgs);
       const mcpServersOff = yield* listEnabledMcpServers({
         binary,
         cwd: workingDirectory,
-        env,
+        env: execEnvironment,
         // `codex mcp` rejects --strict-config; the overrides still apply.
         launchArgs: execLaunchArgs.filter((arg) => arg !== "--strict-config"),
       }).pipe(Effect.map(codexMcpServersOff));
@@ -452,7 +507,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         { env: effectiveEnvironment },
       );
       const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env,
+        env: execEnvironment,
         cwd: workingDirectory,
         shell: spawnCommand.shell,
         stdin: {
