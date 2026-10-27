@@ -810,7 +810,7 @@
   "packages/shared/src/imageDimensions.ts": { "nonNull": 11 },
   "packages/shared/src/mcpApp.ts": { "nonNull": 1 },
   "packages/shared/src/mobileAppIdentity.ts": { "nonNull": 1 },
-  "packages/shared/src/nodeSqliteClient.test.ts": { "lines": 1247 },
+  "packages/shared/src/nodeSqliteClient.test.ts": { "lines": 1239 },
   "packages/shared/src/nodeSqliteClient.ts": { "lines": 1443, "nonNull": 1, "asAny": 2 },
   "packages/shared/src/observability.ts": { "nonNull": 2 },
   "packages/shared/src/opencodexCompat.ts": { "nonNull": 3 },
