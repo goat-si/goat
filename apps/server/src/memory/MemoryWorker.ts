@@ -80,6 +80,12 @@ const strict = { onExcessProperty: "error" } as const;
 const terminal = new Set(["completed", "failed", "interrupted", "cancelled"]);
 export const memoryRetryDelay = (attempt: number) =>
   [5000, 30000, 120000][Math.max(0, attempt - 1)] ?? 600000;
+/**
+ * A model output that keeps failing validation fails the same way on every retry, and each retry
+ * rereads the source. After this many attempts the work fails; the thread's next finished run
+ * queues fresh work.
+ */
+export const MEMORY_GENERATION_MAX_ATTEMPTS = 5;
 // Internal ownership deadline for local work rows; this is not the hub resolution lease.
 const workClaimMs = 600000;
 /**
@@ -818,14 +824,16 @@ const make = Effect.gen(function* () {
                 environmentId,
                 failureCode: code,
                 now,
-                retryAt: [
-                  "generation_failed",
-                  "unavailable",
-                  "route_unavailable",
-                  "storage_failed",
-                ].includes(code)
-                  ? now + memoryRetryDelay(work.attempt)
-                  : null,
+                retryAt:
+                  [
+                    "generation_failed",
+                    "unavailable",
+                    "route_unavailable",
+                    "storage_failed",
+                  ].includes(code) &&
+                  !(code === "generation_failed" && work.attempt >= MEMORY_GENERATION_MAX_ATTEMPTS)
+                    ? now + memoryRetryDelay(work.attempt)
+                    : null,
               });
               // A lapsed claim cannot record a report, but while no one reclaimed the row it
               // still gets a backoff instead of being picked up again immediately.
