@@ -43,9 +43,7 @@ export type ComputerUseRefusal =
   | "not-granted"
   | "needs-approval"
   /** Another thread holds the screen for unattended work; one does at a time. */
-  | "held"
-  /** Unattended work needs a helper that reports secret fields (#1235). */
-  | "detection-unsupported";
+  | "held";
 
 /**
  * Every provider session's computer use comes from this one decision, so the
@@ -142,12 +140,6 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
     if (Option.isSome(held)) return none("held", true);
   }
-  if (unattended && Option.isSome(leases)) {
-    const detection = yield* leases.value.detection;
-    // Admitted work continues while a person uses the machine; secret-field detection still
-    // protects unattended turns. Supported human-input signals never become an admission gate.
-    if (!detection.privateMode) return none("detection-unsupported", true);
-  }
   // Without its proxy nothing could stop the driver, so there is no computer use at all.
   if (Option.isNone(leases) || leases.value.proxy === undefined)
     return none("unavailable", unattended);
@@ -172,13 +164,6 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     // The session list shows the turn as waiting for the grant while it runs.
     yield* leases.value.blocked(input.threadId, block);
     return { ...none("not-granted", unattended), block };
-  }
-  if (unattended) {
-    // Acquisition may have started another helper build than the one readiness described (an
-    // update between a check and this turn); the desktop reports the started one's signals before
-    // it reports the driver ready, so this reads the helper the agent will actually get (#1553).
-    const detection = yield* leases.value.detection;
-    if (!detection.privateMode) return none("detection-unsupported", true);
   }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;

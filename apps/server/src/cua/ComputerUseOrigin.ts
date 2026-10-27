@@ -3,8 +3,9 @@
  *
  * Unattended turns come from GOAT Bot, channel tasks, scheduled and webhook tasks, messages
  * another unattended thread sent, and threads such a turn launched or delegated to. They get the
- * driver only through an approved lease (ComputerUseLeases). Every read that fails or runs out of
- * lineage counts as unattended, so a lookup error never hands out the screen.
+ * driver only through an approved lease or full access (ComputerUseLeases). A thread launched
+ * from another environment counts as interactive: its launcher cannot be read here. Every read
+ * that fails or runs out of lineage counts as unattended.
  *
  * @module ComputerUseOrigin
  */
@@ -39,7 +40,6 @@ export type UnattendedReason =
   | "scheduled_task"
   | "sent_by_unattended"
   | "launched_by_unattended"
-  | "launched_remotely"
   | "unknown";
 
 export type ComputerUseOrigin =
@@ -164,8 +164,7 @@ const classify: (
       : thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId
         ? { threadId: thread.lineage.parentThreadId, environmentId: null }
         : undefined;
-  if (launcher !== undefined) {
-    if (launcher.environmentId !== null) return unattended("launched_remotely");
+  if (launcher !== undefined && launcher.environmentId === null) {
     const parent = yield* classify(
       reads,
       launcher.threadId,

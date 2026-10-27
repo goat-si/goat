@@ -157,10 +157,9 @@ describe("computerUseOrigin", () => {
       assert.deepEqual(yield* classify(world, "fromTyped"), { _tag: "interactive" });
       // A person promoting a delegated task takes it over.
       assert.deepEqual(yield* classify(world, "promoted"), { _tag: "interactive" });
-      assert.deepEqual(yield* classify(world, "remote"), {
-        _tag: "unattended",
-        reason: "launched_remotely",
-      });
+      // Another environment's launcher cannot be read here; its thread is treated like one a
+      // person's thread launched on this host.
+      assert.deepEqual(yield* classify(world, "remote"), { _tag: "interactive" });
     }),
   );
 

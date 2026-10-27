@@ -160,14 +160,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     }),
     { threadId: input.threadId, ...(run === undefined ? {} : { runId: run.id }) },
   );
-  const detection = yield* leases.detection;
-  if (origin._tag === "unattended" && !detection.privateMode)
-    return {
-      kind: "refused",
-      reason: "detection_unsupported",
-      message:
-        "This host cannot yet tell when a person types a secret, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
-    } satisfies ComputerUseRequestResult;
   // This run's own control, while an agent can act through it.
   const current = Option.filter(
     yield* leases.attached(input.threadId),

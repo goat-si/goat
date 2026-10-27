@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type CuaDriverMcpConfiguration,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -20,6 +21,7 @@ import * as PubSub from "effect/PubSub";
 
 import * as ComputerUse from "./ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ComputerUseOrigin from "./ComputerUseOrigin.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -44,8 +46,6 @@ const fakeLeases = (input: {
   readonly grant?: ComputerUseLeases.ComputerUseLease;
   readonly proxy?: typeof proxy | undefined;
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
-  /** What detection reads once the driver has started, when its helper said something else. */
-  readonly detectionOnceStarted?: ComputerUseLeases.ComputerUseDetection;
   /** Another thread holding the screen for unattended work. */
   readonly holder?: ComputerUseHolder;
   /** The screen was claimed between the holder check and the claim. */
@@ -55,7 +55,6 @@ const fakeLeases = (input: {
   const blocked: Array<{ readonly threadId: string; readonly block: unknown }> = [];
   /** Every control on every app asked for, by whether it was for unattended work. */
   const everyApp: Array<boolean> = [];
-  let detectionReads = 0;
   const service = ComputerUseLeases.ComputerUseLeases.of({
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
@@ -107,10 +106,9 @@ const fakeLeases = (input: {
     grants: Effect.die("unused"),
     release: () => Effect.die("unused"),
     pause: () => Effect.die("unused"),
-    detection: Effect.sync(() => {
-      const first = input.detection ?? { humanInput: true, privateMode: true, frames: false };
-      return detectionReads++ === 0 ? first : (input.detectionOnceStarted ?? first);
-    }),
+    detection: Effect.succeed(
+      input.detection ?? { humanInput: true, privateMode: true, frames: false },
+    ),
     resume: Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
@@ -370,7 +368,6 @@ describe("computerUseAttachment", () => {
         "scheduled_task",
         "sent_by_unattended",
         "launched_by_unattended",
-        "launched_remotely",
         "unknown",
       ] as const
     ).map((reason) => ({
@@ -385,9 +382,7 @@ describe("computerUseAttachment", () => {
     ({ origin, personStarted }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
-        const leases = fakeLeases({
-          detection: { humanInput: false, privateMode: true, frames: false },
-        });
+        const leases = fakeLeases({});
         const attached = yield* decide(driver, {
           origin,
           runtimeMode: "full-access",
@@ -436,44 +431,89 @@ describe("computerUseAttachment", () => {
       }),
   );
 
-  it.effect(
-    "refuses unattended work when the helper that started cannot detect a secret field, though readiness said it could",
-    () =>
+  it.effect.each([
+    { humanInput: false, privateMode: false, frames: false },
+    { humanInput: true, privateMode: false, frames: false },
+  ])(
+    "admits approved and full access unattended work on a host that does not detect secret fields (%o)",
+    (detection) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
-        // Readiness came from an earlier helper; the one acquisition started has no watch (#1553).
-        const leases = fakeLeases({
-          grant: lease,
-          detection: { humanInput: false, privateMode: true, frames: false },
-          detectionOnceStarted: { humanInput: false, privateMode: false, frames: false },
+        const leased = fakeLeases({ grant: lease, detection });
+        const approved = yield* decide(driver, { origin: unattended, leases: leased.leases });
+        assert.equal(
+          approved._tag === "proxied" ? approved.control.controlId : approved._tag,
+          "control:unattended",
+        );
+        const full = fakeLeases({ detection });
+        const everyApp = yield* decide(driver, {
+          origin: unattended,
+          runtimeMode: "full-access",
+          leases: full.leases,
         });
-        const attached = yield* decide(driver, { origin: unattended, leases: leases.leases });
-        assert.deepEqual(attached, {
-          _tag: "none",
-          reason: "detection-unsupported",
-          blockUserConfig: true,
-        });
-        assert.deepEqual(leases.minted, []);
+        assert.equal(
+          everyApp._tag === "proxied" ? everyApp.control.controlId : everyApp._tag,
+          "control:every-app",
+        );
+        assert.deepEqual(full.everyApp, [true]);
       }),
   );
 
-  it.effect("requires private-field detection even for full-access unattended work", () =>
-    Effect.gen(function* () {
-      const driver = fakeDriver({ enabled: true, running: true });
-      const attached = yield* decide(driver, {
-        origin: unattended,
-        runtimeMode: "full-access",
-        leases: fakeLeases({
+  it.effect(
+    "a full access thread launched from another environment uses every app on a host that does not detect secret fields",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-cua");
+        const runId = RunId.make("run:remote");
+        const at = DateTime.makeUnsafe("2026-10-21T12:00:00.000Z");
+        const reads = {
+          channelOrigin: () => Effect.succeed(undefined),
+          thread: () =>
+            Effect.succeed({
+              createdAt: at,
+              lineage: { parentThreadId: null, relationshipToParent: null },
+              launchedBy: {
+                kind: "launch" as const,
+                threadId: ThreadId.make("thread-on-another-host"),
+                environmentId: "environment-elsewhere",
+              },
+            }),
+          runs: () =>
+            Effect.succeed([
+              {
+                id: runId,
+                userMessageId: MessageId.make("message:launch"),
+                requestedAt: at,
+                completedAt: null,
+              },
+            ]),
+          message: () =>
+            Effect.succeed({
+              createdAt: at,
+              createdBy: "agent" as const,
+              creationSource: "mcp" as const,
+            }),
+          grantRun: () => Effect.succeed(undefined),
+        };
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({
           detection: { humanInput: false, privateMode: false, frames: false },
-        }).leases,
-      }).pipe(Effect.provide(allowFullAccess(true)));
-      assert.deepEqual(attached, {
-        _tag: "none",
-        reason: "detection-unsupported",
-        blockUserConfig: true,
-      });
-      assert.equal(driver.calls.acquire, 0);
-    }),
+        });
+        const attached = yield* decide(driver, {
+          origin: yield* ComputerUseOrigin.computerUseOrigin(reads, { threadId, runId }),
+          runtimeMode: "full-access",
+          runId,
+          personStarted: yield* ComputerUseOrigin.personStarted(reads, { threadId, runId }),
+          leases: leases.leases,
+        });
+        assert.equal(
+          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+          "control:every-app",
+        );
+        // It works beside other threads instead of holding the screen alone.
+        assert.deepEqual(leases.everyApp, [false]);
+        assert.deepEqual(leases.minted, []);
+      }),
   );
 
   it.effect("refuses full access unattended work while another thread holds the screen", () =>
@@ -523,35 +563,6 @@ describe("computerUseAttachment", () => {
           );
         assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use", "screen-code"]);
         assert.deepEqual(yield* skillsFor(["browser"]), ["screen-code"]);
-      }),
-  );
-
-  it.effect(
-    "refuses unattended work without private-field detection, regardless of human-input detection",
-    () =>
-      Effect.gen(function* () {
-        const driver = fakeDriver({ enabled: true, running: true });
-        for (const detection of [
-          { humanInput: false, privateMode: false, frames: false },
-          { humanInput: true, privateMode: false, frames: false },
-        ])
-          assert.deepEqual(
-            yield* decide(driver, {
-              origin: unattended,
-              leases: fakeLeases({ grant: lease, detection }).leases,
-            }),
-            { _tag: "none", reason: "detection-unsupported", blockUserConfig: true },
-          );
-        // A person directing the thread can watch and stop it, so interactive turns still attach.
-        assert.equal(
-          (yield* decide(driver, {
-            leases: fakeLeases({
-              detection: { humanInput: false, privateMode: false, frames: false },
-            }).leases,
-          }))._tag,
-          "proxied",
-        );
-        assert.equal(driver.calls.acquire, 1);
       }),
   );
 

@@ -2,7 +2,7 @@
  * Whether full access admits a control on every app. Any run whose thread is in full access gets
  * one, whatever started it (ADR-0023 D16); the host setting `cuaFullAccessAutoAdmit` decides
  * nothing. The kind keeps what still differs by origin: unattended work holds the screen alone
- * and needs private-mode detection, and only a person's run takes the foreground without asking.
+ * and only a person's run takes the foreground without asking.
  *
  * @module ComputerUseFullAccess
  */

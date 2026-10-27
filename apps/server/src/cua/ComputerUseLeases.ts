@@ -263,7 +263,7 @@ export class ComputerUseLeases extends Context.Service<
     /** Every live grant on this host, released ones too, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
     readonly release: (handoffIds: ReadonlyArray<string>) => Effect.Effect<void>; // #1521
-    /** Which safety reports this host's helper sends; unattended turns need private mode. */
+    /** Which safety reports this host's helper sends. */
     readonly detection: Effect.Effect<ComputerUseDetection>;
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
@@ -661,7 +661,7 @@ const make = Effect.gen(function* () {
 
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
   // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
-  // them only with privateModeOn in ComputerUsePrivateMode.ts, which admits unattended work.
+  // them only with privateModeOn in ComputerUsePrivateMode.ts.
   const privateHost = false;
 
   // The helper watches for secret fields and a person's input only while an agent controls this
