@@ -460,6 +460,8 @@ type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** The tab's filled-secret mask, run before the text limits cut a value into a start. */
+  readonly diagnostics?: { readonly mask: (text: string, limit?: number) => string };
   /** What remains of the request's deadline, the one its timeout error names. */
   readonly timeoutMs: number;
 };
@@ -568,12 +570,18 @@ const capture = async (
   if (hidden) tree = "";
   screenshot ??= capturedImage;
   if (state.generation !== generation) throw pageChanged();
-  const mask = maskSecrets(dotted, cookies);
+  const filled = input.diagnostics?.mask ?? ((text: string) => text);
+  const secrets = maskSecrets(dotted, cookies);
+  const mask = (text: string, limit?: number) => filled(secrets(text), limit).slice(0, limit);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
   const narrowed = narrowTree(
-    maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted),
+    // An interactive-only tree keeps lines from past the cut, so it is masked in full.
+    filled(
+      maskTree(redacted, dotted, cookies),
+      input.interactiveOnly ? undefined : MAX_VISIBLE_TEXT_LENGTH,
+    ),
     input.interactiveOnly,
   );
   const { accessibilityTree, ...treeFields } = screenTree(`${mask(layersLine)}\n${narrowed}`, {
@@ -589,14 +597,14 @@ const capture = async (
       url: mask(page.url),
       title: mask(page.title),
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
-      visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
+      visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
       accessibilityTree,
       ...treeFields,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
     },
     input,
-    mask(page.visibleText).length,
+    page.visibleText.length,
     unread.length,
     narrowed.length + layersLine.length + 1,
   );

@@ -57,6 +57,19 @@ describe("redactCookieValues", () => {
     );
   });
   it("masks every kind of match against the original text, so no kind hides another", () => {
+    // A filled secret is a substring wherever it stands, whatever cookie it overlaps.
+    expect(
+      redactCookieValues("prefixABCDEF-omega-secret", [
+        { name: "x", value: "prefixABCDEF" },
+        { name: "", value: "ABCDEF-omega-secret", filled: true },
+      ]),
+    ).toBe(REDACTED);
+    expect(
+      redactCookieValues("x=qab cd", [
+        { name: "x", value: "qab" },
+        { name: "", value: "ab cd", filled: true },
+      ]),
+    ).toBe(`x=${REDACTED}`);
     // A full short match inside a value cut off at the end.
     expect(
       redactCookieValues("sid=SessionSecret77", [

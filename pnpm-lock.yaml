@@ -365,7 +365,7 @@ patchedDependencies:
   '@ubjs/node@0.31.0-3': e97d224c08570d77cb1dbac63fbcde2cc62ec45e6466b508272bb174a6ad75d0
   alchemy@2.0.0-beta.80: bea1b6c0c0b23157fd5f439a1d7feff430f28ac1621ba135d8a13eeec60ccacd
   app-builder-lib@26.16.1: f753066f669a33e556c64c851a56859dd1fdcbc220119a1c6acbb03d23c423d4
-  dbus-next@0.10.2: cfff57561b0ee59b5addb3b2e6c6f20906e967507a530ab67e8db8108e520ba4
+  dbus-next@0.10.2: cf7266337af5726f6cbdf2cfda94bc74cd959e2cc629df04ebea079f23e39bb9
   expo-audio@58.0.9: 530af071088a809fe1a97ce2b2269c78335fbb5dcd3893d6937ff5c304c85a0a
   expo-modules-core@58.0.22: 78812dcdef2c07aabb5e0d66b9762618cc4f7dae5e2b1cd4e06918027034473b
   expo-network@58.0.3: cd09b6d1744dde4efa081b5619ebcff38877d98f7502a51cab121629dece8237
@@ -444,7 +444,7 @@ importers:
         version: 0.37.0
       dbus-next:
         specifier: 0.10.2
-        version: 0.10.2(patch_hash=cfff57561b0ee59b5addb3b2e6c6f20906e967507a530ab67e8db8108e520ba4)
+        version: 0.10.2(patch_hash=cf7266337af5726f6cbdf2cfda94bc74cd959e2cc629df04ebea079f23e39bb9)
       effect:
         specifier: 4.0.5
         version: 4.0.5
@@ -570,6 +570,9 @@ importers:
       '@goat/provider-devin-cloud':
         specifier: workspace:*
         version: link:../../packages/provider-devin-cloud
+      '@goat/provider-fx':
+        specifier: workspace:*
+        version: link:../../packages/provider-fx
       '@goat/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
@@ -874,6 +877,9 @@ importers:
       '@goat/provider-devin-cloud':
         specifier: workspace:*
         version: link:../../packages/provider-devin-cloud
+      '@goat/provider-fx':
+        specifier: workspace:*
+        version: link:../../packages/provider-fx
       '@goat/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
@@ -934,6 +940,9 @@ importers:
       character-entities:
         specifier: 2.0.2
         version: 2.0.2
+      dbus-next:
+        specifier: 0.10.2
+        version: 0.10.2(patch_hash=cf7266337af5726f6cbdf2cfda94bc74cd959e2cc629df04ebea079f23e39bb9)
       effect:
         specifier: 4.0.5
         version: 4.0.5
@@ -1100,6 +1109,9 @@ importers:
       '@goat/provider-devin-cloud':
         specifier: workspace:*
         version: link:../../packages/provider-devin-cloud
+      '@goat/provider-fx':
+        specifier: workspace:*
+        version: link:../../packages/provider-fx
       '@goat/provider-grok':
         specifier: workspace:*
         version: link:../../packages/provider-grok
@@ -1736,6 +1748,40 @@ importers:
       '@goat/shared':
         specifier: workspace:*
         version: link:../shared
+      '@types/node':
+        specifier: 24.12.4
+        version: 24.12.4
+      effect-acp:
+        specifier: workspace:*
+        version: link:../effect-acp
+      vite-plus:
+        specifier: 1.4.0
+        version: 1.4.0(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+
+  packages/provider-fx:
+    dependencies:
+      '@goat/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@goat/provider-acp':
+        specifier: workspace:*
+        version: link:../provider-acp
+      '@goat/provider-core':
+        specifier: workspace:*
+        version: link:../provider-core
+      '@goat/shared':
+        specifier: workspace:*
+        version: link:../shared
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.0.5
+        version: 4.0.5(bufferutil@4.1.0)(effect@4.0.5)(redis@6.2.1)(utf-8-validate@6.0.6)
+      '@effect/vitest':
+        specifier: 4.0.5
+        version: 4.0.5(patch_hash=2731c9c3761c595f25ddc625a7d61ca376b389d5b3049ecb837c8940f21cfa02)(@astrojs/compiler-rs@0.5.1)(@tsc-rs/typescript@0.8.0)(@types/node@24.12.4)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(@volar/typescript@2.4.28(@tsc-rs/typescript@0.8.0))(bufferutil@4.1.0)(effect@4.0.5)(esbuild@0.28.2)(jiti@2.7.0)(jsdom@30.1.0(@noble/hashes@1.8.0))(playwright@1.60.0)(terser@5.48.0)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
@@ -18368,7 +18414,7 @@ snapshots:
 
   date-fns@4.4.0: {}
 
-  dbus-next@0.10.2(patch_hash=cfff57561b0ee59b5addb3b2e6c6f20906e967507a530ab67e8db8108e520ba4):
+  dbus-next@0.10.2(patch_hash=cf7266337af5726f6cbdf2cfda94bc74cd959e2cc629df04ebea079f23e39bb9):
     dependencies:
       '@nornagon/put': 0.0.8
       event-stream: 3.3.4

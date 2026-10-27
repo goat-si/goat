@@ -160,6 +160,8 @@ export const pageRead = (
   cdp: CDPSession,
   control: Pick<SessionControl, "observe">,
   input: PreviewAutomationReadInput,
+  /** The tab's filled-secret mask, applied to the whole text before it is paged. */
+  filled: (text: string) => string = (text) => text,
 ): Promise<PreviewAutomationRead> =>
   control.observe(async () => {
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
@@ -206,7 +208,11 @@ export const pageRead = (
         if (network.documentId !== documentId || page.url() !== initialUrl)
           throw readFailure("pageChanged");
         const cookies = [...cookiesBefore, ...(await tabCookies(page))];
-        const mask = maskSecrets(dottedPattern(after.flatMap((values) => values ?? [])), cookies);
+        const secrets = maskSecrets(
+          dottedPattern(after.flatMap((values) => values ?? [])),
+          cookies,
+        );
+        const mask = (text: string) => filled(secrets(text));
         const fullText = mask(normalizeText(rendered.text));
         const format = input.format ?? "markdown";
         const revision = NodeCrypto.createHash("sha256")

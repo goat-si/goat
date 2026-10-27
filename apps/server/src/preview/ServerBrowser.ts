@@ -688,7 +688,7 @@ const make = Effect.gen(function* () {
       ServerBrowserPage.invalidateRefs(page),
     );
     control.onDispatchCut(inputFence(cdp));
-    const diagnostics = new ServerBrowserDiagnostics(page);
+    const diagnostics = new ServerBrowserDiagnostics(page, secretFill.maskText(snapshot.threadId));
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
       tabId: snapshot.tabId,
@@ -1940,6 +1940,7 @@ const make = Effect.gen(function* () {
           tab.cdp,
           tab.control,
           input as import("@goat/contracts").PreviewAutomationReadInput,
+          (text) => tab.diagnostics.mask(text),
         ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
         return withScreencastsPaused(
