@@ -55,7 +55,13 @@ const SHOWN =
 const UNCONFIRMED =
   "GOAT cannot confirm the password it filled is gone. Navigate or reload the page first.";
 
-const refused = (message: string) => new ServerBrowserOperationError(REFUSED, message);
+/** A refusal before anything was typed; only UNCERTAIN may have typed the value. */
+const refused = (message: string) =>
+  new ServerBrowserOperationError(
+    REFUSED,
+    message,
+    message === UNCERTAIN ? undefined : { beforeInput: true },
+  );
 const decodeInput = Schema.decodeUnknownOption(PreviewAutomationFillSecretInput);
 
 /** Playwright's protocol log would carry the CDP arguments, so any pattern that could enable it refuses. */

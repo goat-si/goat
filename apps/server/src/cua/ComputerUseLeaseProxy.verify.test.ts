@@ -58,6 +58,36 @@ const clickDarkThenDiff = Effect.fn(function* (since: object, diffText: string) 
   return ((yield* h.nextToProvider) as unknown as Answer).result;
 });
 
+describe("read-back stays inside the call's own control boundaries", () => {
+  it.effect("a click by element token alone is read back on the window that token came from", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ verifyInputByTreeDiff: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { ...window, session: "s" }));
+      yield* h.nextToDriver;
+      yield* h.reply(result(1, { snapshot_id: "s1" }, settingsTree));
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "click", { element_token: "s1:3", session: "s" }));
+      yield* h.nextToDriver;
+      yield* h.reply(result(2, { effect: "unverifiable" }, "Pressed."));
+      const reread = (yield* h.nextToDriver) as { params: { name: string; arguments: object } };
+      assert.equal(reread.params.name, "get_window_state");
+      assert.deepInclude(reread.params.arguments, { ...window, since: "latest" });
+    }),
+  );
+
+  it.effect("a private pause during the read-back answers the click as cut off", () =>
+    Effect.gen(function* () {
+      const h = yield* readThenClick();
+      yield* h.nextToDriver;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+      const answer = (yield* h.nextToProvider) as unknown as Answer;
+      assert.equal(answer.id, 2);
+      assert.deepInclude(answer.result.structuredContent, { code: "interrupted" });
+    }),
+  );
+});
+
 describe("read-back confirms only a change around the element the input aimed at", () => {
   it.effect("a clock that ticked elsewhere in the window is no confirmation", () =>
     Effect.gen(function* () {

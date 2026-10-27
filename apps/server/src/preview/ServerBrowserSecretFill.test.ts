@@ -125,9 +125,10 @@ const expired = 0;
 it.live("keeps the fence when the fill's reply is lost after the page may have typed it", () => {
   const { tab, field } = makeTab({ fillReply: true });
   return withFill(async (fill) => {
-    await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow(
-      "could not confirm whether the password was typed",
-    );
+    const uncertain = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    expect(String(uncertain.message)).toContain("could not confirm whether the password was typed");
+    // It may have typed, so it does not say nothing was sent.
+    expect(uncertain.detail).toBeUndefined();
     expect(field.value).toBe(PASSWORD);
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
@@ -176,7 +177,9 @@ it.live("a Stop that lands while the ref is consumed leaves the field empty", ()
   const { tab, field } = makeTab();
   return withFill(
     async (fill, state) => {
-      await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow("used up");
+      const usedUp = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+      expect(String(usedUp.message)).toContain("used up");
+      expect(usedUp.detail).toEqual({ beforeInput: true });
       expect(state.consumed).toBe(1);
       expect(field.value).toBe("");
     },

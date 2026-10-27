@@ -226,6 +226,10 @@ export const makeInputVerifier = (input: {
   readonly nextId: () => string;
   readonly scope: Scope.Scope;
   readonly live: (child: Running) => boolean;
+  /** The provider call a driver reply answers, while it is still outstanding. */
+  readonly request: (
+    id: unknown,
+  ) => { readonly method: string; readonly tool?: string; readonly args?: unknown } | undefined;
 }) => {
   /** Each window's last tree read, with the driver child that holds its snapshot. */
   const reads = new Map<
@@ -237,6 +241,13 @@ export const makeInputVerifier = (input: {
       readonly snapshotId: string | undefined;
     }
   >();
+  /** The window an element token's snapshot was read from, for a call that names no window. */
+  const tokenWindow = (args: unknown): number | undefined => {
+    const token = record(args)?.element_token;
+    const snapshot = typeof token === "string" ? /^(.+):\d+$/u.exec(token)?.[1] : undefined;
+    for (const [windowId, entry] of reads) if (entry.snapshotId === snapshot) return windowId;
+    return undefined;
+  };
   const ask = Effect.fn("ComputerUseInputVerify.ask")(function* (child: Running, read: TreeRead) {
     const id = input.nextId();
     const answered = yield* Deferred.make<Envelope | undefined>();
@@ -251,13 +262,11 @@ export const makeInputVerifier = (input: {
   });
   return {
     /**
-     * Records a tree read as its window's baseline, and re-reads after unverified input. A
-     * screen-run cell is left alone: it keeps its own observation and its tokens, which a re-read
-     * would retire mid-script.
+     * Records a tree read the agent receives as its window's baseline. A screen-run cell is left
+     * alone: it keeps its own observation and its tokens, which a re-read would retire mid-script.
      */
     wrap: (sink: ReplySink, message: Envelope | undefined, child: Running): ReplySink => {
       const tool = message?.params?.name;
-      const windowId = targetOf(message?.params?.arguments)?.windowId;
       const primitive = typeof message?.id === "string" && message.id.startsWith(PRIMITIVE_ID);
       if (!input.enabled || primitive || typeof tool !== "string") return sink;
       const treeRead =
@@ -279,27 +288,48 @@ export const makeInputVerifier = (input: {
             return sink.answer(line, status, context);
           },
         };
-      if (!VERIFIABLE_INPUT_TOOLS.has(tool) || windowId === undefined) return sink;
-      return {
-        answer: (line, status, context) => {
-          const baseline = reads.get(windowId);
-          if (baseline?.child !== child || !replyUnverified(line) || !input.live(child))
-            return sink.answer(line, status, context);
-          return ask(child, baseline.read).pipe(
-            Effect.map((diff) => {
-              // A pause, end or dropped lease stream during the read-back withholds what it saw.
-              if (diff === undefined || !input.live(child)) return line;
-              const target = targetIndex(message?.params?.arguments, baseline.snapshotId);
-              const around =
-                target === undefined ? undefined : neighbourhood(baseline.rows, target);
-              return withTreeDiff(line, diff, around);
-            }),
-            Effect.catchCause(() => Effect.succeed(line)),
-            Effect.flatMap((final) => sink.answer(final, status, context)),
-            Effect.forkIn(input.scope),
+      return sink;
+    },
+    /**
+     * Handles a driver reply, re-reading first after unverified input. The call stays outstanding
+     * and reserved meanwhile, so a pause, Stop or cancel answers it as any call with the driver.
+     * The re-read's answer comes through the same driver output, so both run apart from that loop.
+     */
+    beforeReply: <E, R>(
+      line: string,
+      child: Running,
+      handle: (line: string) => Effect.Effect<void, E, R>,
+    ): Effect.Effect<void, E, R> => {
+      const id = parse(line)?.id;
+      const call = input.enabled && typeof id !== "object" ? input.request(id) : undefined;
+      const primitive = typeof id === "string" && id.startsWith(PRIMITIVE_ID);
+      if (
+        call?.method !== "tools/call" ||
+        primitive ||
+        call.tool === undefined ||
+        !VERIFIABLE_INPUT_TOOLS.has(call.tool)
+      )
+        return handle(line);
+      const windowId = targetOf(call.args)?.windowId ?? tokenWindow(call.args);
+      const baseline = windowId === undefined ? undefined : reads.get(windowId);
+      if (baseline?.child !== child || !replyUnverified(line) || !input.live(child))
+        return handle(line);
+      return ask(child, baseline.read).pipe(
+        // A pause, end or dropped lease stream during the read-back withholds what it saw.
+        Effect.map((diff) => {
+          if (diff === undefined || !input.live(child)) return line;
+          const target = targetIndex(call.args, baseline.snapshotId);
+          return withTreeDiff(
+            line,
+            diff,
+            target === undefined ? undefined : neighbourhood(baseline.rows, target),
           );
-        },
-      };
+        }),
+        Effect.catchCause(() => Effect.succeed(line)),
+        Effect.flatMap(handle),
+        Effect.forkIn(input.scope),
+        Effect.asVoid,
+      );
     },
   };
 };

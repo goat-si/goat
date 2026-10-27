@@ -794,6 +794,7 @@ const PreviewAutomationRequestErrorFields = {
   requestId: TrimmedNonEmptyString,
   tabId: Schema.optional(PreviewTabId),
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
+  dispatched: Schema.optional(Schema.Boolean),
 };
 
 const PreviewAutomationRemoteDiagnosticFields = {
@@ -876,7 +877,6 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationRemoteDiagnosticFields,
     reason: Schema.optional(PreviewAutomationControlReason),
-    dispatched: Schema.optional(Schema.Boolean),
   },
 ) {
   override get message(): string {

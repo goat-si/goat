@@ -190,8 +190,9 @@ function resolveKey(key: string, modifiers: ReadonlyArray<string>, keypad: boole
   const folded = name.length > 1 ? canonical(name) : name;
   // A driver with keypad key codes gets the keypad key as named; its own pass reads it the same.
   if (keypad && KEYPAD.has(folded)) return { key: name, modifiers: resolved };
-  // xdotool's Prior and Next are spelled as the driver knows them; other names pass as written.
-  const spelled = folded === "pageup" || folded === "pagedown" ? folded : name;
+  // A spelling folded onto another name (Prior, ArrowLeft, KP_Enter) is sent as that name.
+  const aliased = name.length > 1 && ALIASES.has(name.toLowerCase().replace(/[ _-]/gu, ""));
+  const spelled = aliased ? folded : name;
   const character = KEYSYMS.get(folded) ?? KEYPAD.get(folded) ?? spelled;
   const base = SHIFTED.get(character);
   if (base !== undefined) add("shift");
@@ -276,6 +277,14 @@ export function resolveKeyCall(
     const isModifier = (key: string) => MODIFIERS.has(key.trim().toLowerCase());
     const last = keys.findLast((key) => !isModifier(key));
     if (last === undefined) return { line };
+    // Only modifiers come before the one plain key; anything else would be dropped silently.
+    if (keys.at(-1) !== last || keys.slice(0, -1).some((key) => !isModifier(key)))
+      return {
+        answer: keyRefusal(
+          id,
+          `A hotkey is modifiers (cmd, shift, option, ctrl or fn) followed by one key, and ${JSON.stringify(keys)} is not. Nothing was pressed.`,
+        ),
+      };
     const resolved = resolveKey(last, keys.filter(isModifier), keypad);
     if ("error" in resolved) return { answer: keyRefusal(id, resolved.error) };
     const next = [...resolved.modifiers, resolved.key];

@@ -115,10 +115,30 @@ describe("key names before a call reaches the driver", () => {
       const line = call("press_key", { ...window, key });
       assert.deepEqual(resolveKeyCall(line, { keypad: true }), { line }, key);
     }
-    // KP_Enter is the Return key on both sides.
-    const enter = resolveKeyCall(call("press_key", { ...window, key: "KP_Enter" }), {
-      keypad: true,
-    });
-    assert.isTrue("line" in enter && enter.line.includes('"key":"KP_Enter"'));
+  });
+
+  it("refuses a hotkey with an unknown modifier or more than one plain key", () => {
+    for (const keys of [
+      ["ctl", "w"],
+      ["cmd", "k", "c"],
+      ["CommandOrControl", "q"],
+    ]) {
+      const result = resolveKeyCall(call("hotkey", { ...window, keys }));
+      assert.isTrue("answer" in result, keys.join("+"));
+    }
+  });
+
+  it("sends a spelled-out key name as the key the driver knows", () => {
+    for (const [key, sentKey] of [
+      ["ArrowLeft", "left"],
+      ["KP_Enter", "enter"],
+      ["Bksp", "backspace"],
+      ["fwd_delete", "forward_delete"],
+    ])
+      for (const keypad of [false, true]) {
+        const result = resolveKeyCall(call("press_key", { ...window, key }), { keypad });
+        assert.isTrue("line" in result, key);
+        assert.include((result as { line: string }).line, '"key":"' + sentKey + '"', key);
+      }
   });
 });
