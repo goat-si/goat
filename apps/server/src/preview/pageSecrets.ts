@@ -32,12 +32,9 @@ export const frameUrls = (page: CookiePage) => [
 ];
 
 /**
- * Cookies sent to any of the tab's frames or to URLs it showed earlier, and every cookie in its
- * browser context long enough to be a credential. A cookie for a path the page only fetched, one
- * a service worker sent, or one sent before GOAT watched the tab can come back in what the page
- * shows; a short one from elsewhere, such as consent=true, leaves page text alone.
- * Values a context held before are kept too: a log written with a cookie that was replaced since
- * still holds the old value.
+ * Cookies sent to the tab's frames or earlier URLs, every credential-length cookie its context
+ * holds (one it only fetched with, a service worker's, one from before GOAT watched), and values
+ * the context held before, so a log written with a replaced cookie stays masked.
  */
 export const tabCookies = async (page: CookiePage, earlier: ReadonlyArray<string> = []) => {
   const urls = [...new Set([...earlier, ...frameUrls(page)])].filter((url) =>
