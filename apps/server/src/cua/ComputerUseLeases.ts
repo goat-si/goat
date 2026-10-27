@@ -15,7 +15,6 @@
  * @module ComputerUseLeases
  */
 import {
-  COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
   type ComputerUseControlEnd,
@@ -37,12 +36,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
+import * as CuaDriver from "./CuaDriver.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import {
@@ -62,20 +61,14 @@ import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseF
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
 import { IMPLIED_RECHECK_MS, makeRunEnd } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
+import { ComputerUseLeaseError, makeLeaseQueries } from "./ComputerUseLeaseQueries.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import { makeLeaseSafety } from "./ComputerUseLeaseSafety.ts";
+import { startHelperWatch } from "./ComputerUseLeaseWatch.ts";
 
-export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
-  "ComputerUseLeaseError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not read computer use admissions.";
-  }
-}
+export { ComputerUseLeaseError } from "./ComputerUseLeaseQueries.ts";
 
 export interface ComputerUseLease {
   readonly threadId: ThreadId;
@@ -105,7 +98,6 @@ export type {
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
-const WATCH_RETRY_MS = 1_000;
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
@@ -158,9 +150,9 @@ export class ComputerUseLeases extends Context.Service<
       run?: { readonly person?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
-     * Apps a full access run named in a request. The desktop adds them to the driver's manifest,
-     * which otherwise holds only the apps open when the driver started, such as a dev build of
-     * GOAT launched by this turn. The manifest still leaves out the host GOAT and credential stores.
+     * Apps a run with every app or the whole screen named in a request. The host adds them to the
+     * driver's manifest, which otherwise holds only the apps open when the driver started, such
+     * as a dev build of GOAT launched by this turn. It still leaves out GOAT and credential stores.
      */
     readonly nameApps: (
       threadId: ThreadId,
@@ -263,11 +255,13 @@ export class ComputerUseLeases extends Context.Service<
     /** Every live grant on this host, released ones too, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
     readonly release: (handoffIds: ReadonlyArray<string>) => Effect.Effect<void>; // #1521
-    /** Which safety reports this host's helper sends; unattended turns need private mode. */
+    /** Which safety reports this host's helper sends. */
     readonly detection: Effect.Effect<ComputerUseDetection>;
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
     readonly resume: Effect.Effect<void>;
+    /** Holds one control for the person its agent asked; the others keep acting. */
+    readonly hold: (controlId: string, held: boolean) => Effect.Effect<void>;
     /** Every thread's latest control with where it stands, for the preview session list. */
     readonly sessions: Effect.Effect<
       ReadonlyArray<{
@@ -305,7 +299,7 @@ interface ControlRecord extends ComputerUseControl {
   readonly uses: number;
   /** Admitted by full access rather than a grant; see everyAppControl. */
   readonly everyApp?: EveryAppKind;
-  /** Apps this full access control named for the driver's manifest; see nameApps. */
+  /** Apps this control named for the driver's manifest; see nameApps. */
   readonly named?: ReadonlyArray<string>;
   /** The run whose attachment last took this control up. */
   readonly runId?: RunId;
@@ -345,67 +339,19 @@ const make = Effect.gen(function* () {
   const blockedTurns = new Map<ThreadId, CuaAgentBlock>();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
+  const forPerson = new Set<string>();
+  const holdFor = (id: string, on: boolean) => void forPerson[on ? "add" : "delete"](id);
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
   const { settle, openWork, turnEnded } = makeRunEnd({
     sql,
     foreground,
     controls,
     changed,
+    idled: (threadId, controlId, now) => reservations.markStopped(threadId, controlId, now),
     error: (cause) => new ComputerUseLeaseError({ cause }),
   });
 
-  const live = Effect.fn("ComputerUseLeases.live")(function* (
-    threadId?: ThreadId,
-    withReleased = false,
-  ) {
-    // SQLite uses a partial index only when the query repeats its predicate. Without the IN
-    // clause this read scans every turn item on the writer, and it runs on every lease check.
-    const rows = yield* sql<{ handoff_json: string | null }>`
-      SELECT json_extract(payload_json, '$.handoff') AS handoff_json
-      FROM orchestration_v2_projection_turn_items
-      WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff'
-        AND status = 'completed'
-        AND json_extract(payload_json, '$.handoff.target.path') = ${COMPUTER_USE_GRANT_HANDOFF_PATH}
-        ${threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`}
-    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    const now = yield* DateTime.now;
-    const leases: Array<ComputerUseLease> = [];
-    for (const row of rows) {
-      if (row.handoff_json === null) continue;
-      const handoff = yield* decodeHandoff(row.handoff_json).pipe(
-        Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
-      );
-      const lease = leaseOf(handoff, now);
-      if (Option.isSome(lease) && (withReleased || !stoppedCards.isReleased(lease.value.handoffId)))
-        leases.push(lease.value);
-    }
-    return [...leases].sort(
-      (a, b) => DateTime.toEpochMillis(b.expiresAt) - DateTime.toEpochMillis(a.expiresAt),
-    );
-  });
-
-  const state = Effect.fn("ComputerUseLeases.state")(function* (
-    threadId: ThreadId,
-    handoffId: string,
-  ) {
-    const rows = yield* sql<{ handoff_json: string | null }>`
-      SELECT json_extract(payload_json, '$.handoff') AS handoff_json
-      FROM orchestration_v2_projection_turn_items
-      WHERE thread_id = ${threadId} AND turn_item_id = ${handoffId} AND type = 'human_handoff'
-    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    const json = rows[0]?.handoff_json;
-    if (json == null || stoppedCards.isReleased(handoffId))
-      return { _tag: "ended", reason: "revoked" } as const;
-    const handoff = yield* decodeHandoff(json).pipe(
-      Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
-    );
-    const lease = leaseOf(handoff, yield* DateTime.now);
-    if (Option.isSome(lease)) return { _tag: "active", lease: lease.value } as const;
-    return {
-      _tag: "ended",
-      reason: handoff.state === "completed" || handoff.state === "expired" ? "expired" : "revoked",
-    } as const;
-  });
+  const { live, state } = makeLeaseQueries(sql, stoppedCards.isReleased);
 
   /** Another thread acting on the screen for unattended work admitted by full access. */
   const unattendedEveryApp = (except: ThreadId | undefined, now: DateTime.Utc) =>
@@ -472,6 +418,7 @@ const make = Effect.gen(function* () {
         };
         if (existing !== undefined) {
           reservations.forgetClosed(threadId, existing.controlId);
+          reservations.markStopped(threadId, existing.controlId, DateTime.toEpochMillis(now));
           foreground.revokeControl(threadId, existing.controlId);
           stoppedCards.replaced(existing);
         }
@@ -532,7 +479,7 @@ const make = Effect.gen(function* () {
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
     if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
-      if (end(threadId, "revoked", controlId)) yield* changed;
+      if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     const grants = yield* live(undefined, true);
@@ -540,12 +487,13 @@ const make = Effect.gen(function* () {
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
     if (record.everyApp === "unattended" && others.length > 0) {
-      if (end(threadId, "revoked", controlId)) yield* changed;
+      if (end(threadId, "revoked", DateTime.toEpochMillis(now), controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    if (forPerson.has(controlId)) return { _tag: "paused", reason: "takeover" };
     const own = stoppedCards.own(grants, threadId);
     yield* settle(threadId);
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
@@ -594,7 +542,12 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const end = (threadId: ThreadId, reason: ComputerUseControlEnd, expectedId?: string) => {
+  const end = (
+    threadId: ThreadId,
+    reason: ComputerUseControlEnd,
+    now: number,
+    expectedId?: string,
+  ) => {
     const record = controls.get(threadId);
     if (
       expectedId !== undefined &&
@@ -605,6 +558,7 @@ const make = Effect.gen(function* () {
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
+    reservations.markStopped(threadId, record.controlId, now);
     notifyAuthority({
       kind: reason === "revoked" ? "credentialRevoked" : "stop",
       threadId,
@@ -659,99 +613,25 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
+  const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
   // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
-  // them only with privateModeOn in ComputerUsePrivateMode.ts, which admits unattended work.
+  // them only with privateModeOn in ComputerUsePrivateMode.ts.
   const privateHost = false;
 
-  // The helper watches for secret fields and a person's input only while an agent controls this
-  // host (D7): from the first live control until the last one ends or expires. The desktop's
-  // helper hears it over the control pipe; the server's own Linux helper directly.
-  if (Option.isSome(desktop) || Option.isSome(linuxHelper)) {
-    const kicks = yield* PubSub.subscribe(watchKick);
-    const receiver = Option.getOrUndefined(desktop);
-    yield* Effect.gen(function* () {
-      // What the desktop last heard; it starts out not watching. After a failed write it may
-      // have heard either value, so the current one goes out until a write succeeds.
-      let delivered = false;
-      let deliveredApps: ReadonlyArray<string> = [];
-      let unsure = false;
-      for (;;) {
-        // A grant cancelled or expired under a control ends it, though nothing here ended it.
-        let endedAny = false;
-        for (const record of Array.from(controls.values())) {
-          if (record.ended !== undefined || record.handoffId === undefined) continue;
-          const grant = yield* state(record.threadId, record.handoffId).pipe(Effect.option);
-          // The lookup yields: a newer control for the thread is not judged by this grant.
-          if (
-            Option.isSome(grant) &&
-            grant.value._tag === "ended" &&
-            controls.get(record.threadId)?.controlId === record.controlId
-          )
-            endedAny = end(record.threadId, grant.value.reason) || endedAny;
-        }
-        // Proxies waiting on a pause hear their control ended.
-        if (endedAny) yield* PubSub.publish(signals, undefined);
-        // Read approvals independently of pause state: a paused helper must keep watching. A
-        // failed read never holds back whether the desktop watches (secret fields, #1235): the
-        // apps it last heard stand, and the read is tried again.
-        const listed = yield* live().pipe(Effect.option);
-        const grants = Option.getOrElse(listed, () => []);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const current = [...controls.values()].filter(
-          (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
-        );
-        const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
-        const approved = new Set<string>();
-        for (const record of current) {
-          if (record.everyApp !== undefined) {
-            for (const app of record.named ?? []) approved.add(app);
-            continue;
-          }
-          const held = grants.filter(
-            (grant) =>
-              grant.threadId === record.threadId &&
-              (record.handoffId === undefined || grant.handoffId === record.handoffId),
-          );
-          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
-          for (const app of rememberScope(controls, record, appsOf(held)) ?? []) approved.add(app);
-        }
-        const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
-        const appsChanged =
-          apps.length !== deliveredApps.length ||
-          apps.some((app, index) => app !== deliveredApps[index]);
-        const active = current.length > 0;
-        let retry = false;
-        // The server's own helper takes the wanted state as is, so it cannot fall behind.
-        if (Option.isSome(linuxHelper)) yield* linuxHelper.value.setWatch(active);
-        if (active !== delivered || appsChanged || unsure) {
-          const sent =
-            receiver === undefined
-              ? true
-              : yield* receiver.setCuaWatch(active, apps).pipe(
-                  Effect.as(true),
-                  Effect.orElseSucceed(() => false),
-                );
-          if (sent) {
-            delivered = active;
-            deliveredApps = apps;
-            unsure = false;
-          } else {
-            unsure = true;
-            retry = true;
-          }
-        }
-        const waits = [
-          ...(active ? [Math.min(...expiries) - now] : []),
-          // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
-          // So is a failed approval read.
-          ...(retry || Option.isNone(listed) ? [WATCH_RETRY_MS] : []),
-        ];
-        const woken = PubSub.take(kicks);
-        yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
-      }
-    }).pipe(Effect.forkScoped);
-  }
+  if (Option.isSome(desktop) || Option.isSome(linuxHelper))
+    yield* startHelperWatch({
+      controls,
+      acting,
+      grantState: state,
+      end,
+      signals,
+      watchKick,
+      live: live(),
+      receiver: Option.getOrUndefined(desktop),
+      linuxHelper,
+      driver,
+    });
 
   const calls = makeCallReservation({
     admission,
@@ -789,8 +669,7 @@ const make = Effect.gen(function* () {
       apps: ReadonlyArray<string>,
     ) {
       const record = controls.get(threadId);
-      if (record?.controlId !== controlId || record.everyApp === undefined || !acting(record))
-        return;
+      if (record?.controlId !== controlId || !acting(record)) return;
       const named = [...new Set([...(record.named ?? []), ...apps])].sort();
       if (named.length === (record.named?.length ?? 0)) return;
       controls.set(threadId, { ...record, named });
@@ -824,7 +703,8 @@ const make = Effect.gen(function* () {
     releaseApps: calls.releaseApps,
     streamOpened: calls.streamOpened,
     stop: (threadId) =>
-      Effect.sync(() => end(threadId, "stopped")).pipe(
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) => end(threadId, "stopped", now)),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
@@ -837,7 +717,8 @@ const make = Effect.gen(function* () {
       if ("report" in target && staleCursorReport(record, target.report)) return false;
       const next = targeted(record, target);
       if (next === undefined) return true;
-      controls.set(threadId, next);
+      const moved = next.cursor !== record.cursor || next.cursorReport !== record.cursorReport;
+      controls.set(threadId, moved ? { ...next, cursorAt: yield* Clock.currentTimeMillis } : next);
       yield* changed;
       return true;
     }),
@@ -893,9 +774,9 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.sync(() => {
+    stopAll: Effect.map(Clock.currentTimeMillis, (now) => {
       foreground.clear();
-      return [...controls.keys()].filter((id) => end(id, "stopped_all"));
+      return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
     }).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
@@ -931,12 +812,15 @@ const make = Effect.gen(function* () {
         ),
       ),
     ),
-    disable: Effect.sync(() => {
+    disable: Effect.map(Clock.currentTimeMillis, (now) => {
       foreground.clear();
       const listed = blockedTurns.size > 0;
       blockedTurns.clear();
-      const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
-      return listed || ended.length > 0;
+      const ended = [...controls.keys()].filter((id) => end(id, "disabled", now));
+      // Turning computer use off outranks Stop, so the channel closes a stopped thread's proxy.
+      const stopped = [...controls].filter(([, r]) => r.ended?.startsWith("stopped") === true);
+      for (const [id, record] of stopped) controls.set(id, { ...record, ended: "disabled" });
+      return listed || ended.length > 0 || stopped.length > 0;
     }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
     grants: live(undefined, true),
     release: (handoffIds) =>
@@ -946,6 +830,7 @@ const make = Effect.gen(function* () {
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),
+    hold: (id, on) => Effect.sync(() => holdFor(id, on)).pipe(Effect.andThen(changed)),
     // Suspended: the controls are read each time it runs, never once when the service is built.
     sessions: Effect.suspend(() =>
       Effect.forEach([...controls.values()], (record) =>

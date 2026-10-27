@@ -317,6 +317,41 @@ it.live("later cells may lower limits while preserving turn values", () =>
   ),
 );
 
+it.live("a later cell that lowers turnWasmBytes runs under that cap in a fresh child", () =>
+  Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const request = {
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation,
+    };
+    const allocate =
+      "const parts = []; for (let i = 0; i < 12; i++) parts.push('x'.repeat(1024 * 1024) + i); return parts.length;";
+    const first = yield* service.runCell({ ...request, source: allocate });
+    const lowered = yield* service.runCell({
+      ...request,
+      limits: { turnWasmBytes: 16 * 1024 * 1024 },
+      source: allocate,
+    });
+    expect(first.value).toBe(12);
+    expect(lowered.status).toBe("resource_exhausted");
+    expect(lowered.truncated).toContain("context_reset");
+    yield* service.finishTurn({ ...request, reason: "test" });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  ),
+);
+
 it.live("a thrown guest error is a failed cell and leaves values for the next cell", () =>
   Effect.gen(function* () {
     const service = yield* ScreenRunService;

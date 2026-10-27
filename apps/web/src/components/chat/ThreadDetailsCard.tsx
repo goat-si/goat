@@ -52,6 +52,16 @@ export function ThreadDetailsCard({
   const popoverOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "popover"),
   );
+  const { environmentId, threadId } = threadRef;
+  // oxlint-disable-next-line goat/react-effect-budget -- Clear transient popover state when its thread leaves the mounted card.
+  useLayoutEffect(
+    () => () => {
+      useRightPanelStore
+        .getState()
+        .setThreadPanelOpen({ environmentId, threadId }, "popover", false);
+    },
+    [environmentId, threadId],
+  );
   const [contentElement, setContentElement] = useState<HTMLDivElement | null>(null);
   const measurementKey = `${threadRef.environmentId}:${threadRef.threadId}:${preferredPlacement?.width ?? "popup"}`;
   const [measurements, setMeasurements] = useState({
@@ -153,45 +163,44 @@ export function ThreadDetailsCard({
         useRightPanelStore.getState().setThreadPanelOpen(threadRef, "popover", open);
       }}
     >
-      {placement ? (
-        inlineOpen ? (
-          <aside
-            aria-label="Thread details"
-            // Skip the return transition to avoid overlapping the rising preview.
-            className={cn(
-              "absolute z-20",
-              topInset > 0 &&
-                "transition-[top] duration-150 ease-out motion-reduce:transition-none",
-            )}
-            style={{
-              right: placement.right,
-              top: placement.y,
-              width: placement.width,
-              maxHeight: height,
-            }}
-            data-density={density}
-            data-thread-details-panel="inline"
-          >
-            {card}
-          </aside>
-        ) : null
-      ) : (
-        <PopoverPopup
-          anchor={anchor}
-          align="end"
-          // Account for the find panel's 8px card padding.
-          alignOffset={THREAD_DETAILS_CARD_GAP - 8}
-          collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
-          side="bottom"
-          sideOffset={topInset}
-          variant="panel"
-          padding="none"
+      {placement && inlineOpen ? (
+        <aside
+          aria-label="Thread details"
+          // Skip the return transition to avoid overlapping the rising preview.
+          className={cn(
+            "absolute z-20",
+            topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
+          )}
+          style={{
+            right: placement.right,
+            top: placement.y,
+            width: placement.width,
+            maxHeight: height,
+          }}
+          data-density={density}
+          data-thread-details-panel="inline"
         >
+          {card}
+        </aside>
+      ) : null}
+      {/* Base UI needs the popup to stay mounted to complete closing when the card moves inline. */}
+      <PopoverPopup
+        anchor={anchor}
+        align="end"
+        // Account for the find panel's 8px card padding.
+        alignOffset={THREAD_DETAILS_CARD_GAP - 8}
+        collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
+        side="bottom"
+        sideOffset={topInset}
+        variant="panel"
+        padding="none"
+      >
+        {mode === "popover" ? (
           <div data-density={density} data-thread-details-panel="popover">
             {card}
           </div>
-        </PopoverPopup>
-      )}
+        ) : null}
+      </PopoverPopup>
     </Popover>
   );
 }

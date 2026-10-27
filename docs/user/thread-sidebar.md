@@ -12,6 +12,11 @@ Its workspace starts from the project's configured default, which falls back to
 A draft with text or attachments stays saved with its selection. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
+On mobile, when you pick a project that is on more than one machine, the thread
+starts on a connected one if any is connected. **Settings → Thread behavior → Use last
+project** reuses the current or last project for new threads. Turn it off to choose a
+project each time. Shared content stays available if you cancel project selection.
+
 When you change a new thread's project, GOAT stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
@@ -383,6 +388,17 @@ A thread an agent launched sends its questions to the thread that launched it.
 That agent may answer itself or ask you; its answer shows which thread answered
 and why. You can still answer in the asking thread, and the first answer counts.
 Approvals always wait for you.
+
+On web and desktop, threads an agent launched (with thread launch, create threads, or an SSH
+launch) fold under the thread that launched them, as one line such as **8 threads · 5 running**.
+Choose it to list them as ordinary rows; the sidebar remembers that per thread, and opening a
+launched thread expands its group. While the group is folded, a launched thread that is working
+keeps its launcher in **Priority**, and one waiting for an approval or an answer shows on the
+launcher row. The group counts once in Priority and on the activity bell. A launched thread you
+pinned, one whose launcher is archived, deleted, or on a machine this app is not connected to,
+one still working under a snoozed launcher, and finished work you have not settled under a settled
+launcher keep their own rows. Search lists launched threads
+like any other. In **Projects**, a thread folds only under a launcher in the same project.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it

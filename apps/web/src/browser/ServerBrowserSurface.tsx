@@ -59,7 +59,6 @@ export interface ServerBrowserHandle {
 }
 
 const RESIZE_THROTTLE_MS = 150;
-const ACCESS_RETRY_MS = 10_000;
 // Reuse nearby probes when a slow link would return the tap's answer after it ends.
 const PROBE_REUSE_PX = 24;
 const PROBE_REUSE_MS = 10_000;
@@ -191,7 +190,6 @@ export function ServerBrowserSurface(props: {
   const privateRef = useRef(false);
   const thumbnailFrameMs = thumbnail?.frameIntervalMs;
   const thumbnailWidth = thumbnail?.maxWidth;
-  const access = usePreviewStreamAccess(environmentId);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const keySentRef = useRef(false);
@@ -219,6 +217,7 @@ export function ServerBrowserSurface(props: {
   };
   const unauthorizedRef = useRef(0);
   const [accessDenied, setAccessDenied] = useState(false);
+  const access = usePreviewStreamAccess(environmentId, { retry: visible && !accessDenied });
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const pendingMoveRef = useRef<MouseInput | null>(null);
   const pendingWheelRef = useRef<WheelInput | null>(null);
@@ -517,12 +516,6 @@ export function ServerBrowserSurface(props: {
     threadId,
     visible,
   ]);
-
-  useEffect(() => {
-    if (!visible || accessDenied || access !== null) return;
-    const timer = setInterval(() => refreshPreviewStreamAccess(environmentId), ACCESS_RETRY_MS);
-    return () => clearInterval(timer);
-  }, [access, accessDenied, environmentId, visible]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

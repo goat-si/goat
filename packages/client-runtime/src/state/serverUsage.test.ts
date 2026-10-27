@@ -11,8 +11,9 @@ import {
   type UsageSource,
   type UsageSummary,
   type UsageSummaryInput,
+  type AcpRegistrySearchInput,
 } from "@goat/contracts";
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -86,7 +87,13 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   let settings = DEFAULT_SERVER_SETTINGS;
   let requests = 0;
   const inputs: UsageSummaryInput[] = [];
+  const registrySearches: AcpRegistrySearchInput[] = [];
   const client = {
+    [WS_METHODS.serverSearchAcpRegistry]: (input: AcpRegistrySearchInput) =>
+      Effect.sync(() => {
+        registrySearches.push(input);
+        return { agents: [] };
+      }),
     [WS_METHODS.serverRefreshUsageRates]: () => Effect.succeed(PRICING),
     [WS_METHODS.subscribeServerConfig]: () =>
       Stream.concat(
@@ -135,6 +142,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
@@ -204,6 +212,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     atoms,
     requests: () => requests,
     inputs: () => inputs,
+    registrySearches,
     updateSettings,
     summary: (input = INPUT) => atoms.usageSummary({ environmentId: TARGET.environmentId, input }),
   };
@@ -300,4 +309,62 @@ it.effect("keeps the cached usage summary when the awaited refresh fails", () =>
       unmount();
     }),
   ),
+);
+
+it.effect(
+  "reuses registry searches for five minutes, refreshes on demand, and isolates cache keys",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        const { registry, atoms, registrySearches } = yield* makeHarness();
+        const search = atoms.searchAcpRegistry({
+          environmentId: TARGET.environmentId,
+          input: { query: "review" },
+        });
+        const read = AtomRegistry.getResult(registry, search, { suspendOnWaiting: true });
+        let unmount = registry.mount(search);
+        yield* Effect.addFinalizer(() => Effect.sync(() => unmount()));
+        expect(yield* read).toEqual({ agents: [] });
+        unmount();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(60_000));
+
+        unmount = registry.mount(search);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(yield* read).toEqual({ agents: [] });
+        expect(registrySearches).toEqual([{ query: "review" }]);
+
+        registry.refresh(search);
+        expect(yield* read).toEqual({ agents: [] });
+        expect(registrySearches).toEqual([{ query: "review" }, { query: "review" }]);
+
+        unmount();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(301_001));
+        unmount = registry.mount(search);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(yield* read).toEqual({ agents: [] });
+        expect(registrySearches).toHaveLength(3);
+
+        const anotherQuery = atoms.searchAcpRegistry({
+          environmentId: TARGET.environmentId,
+          input: { query: "deploy" },
+        });
+        const anotherEnvironment = atoms.searchAcpRegistry({
+          environmentId: EnvironmentId.make("another-environment"),
+          input: { query: "review" },
+        });
+        yield* AtomRegistry.getResult(registry, anotherQuery, { suspendOnWaiting: true });
+        yield* AtomRegistry.getResult(registry, anotherEnvironment, { suspendOnWaiting: true });
+        expect(registrySearches).toEqual([
+          { query: "review" },
+          { query: "review" },
+          { query: "review" },
+          { query: "deploy" },
+          { query: "review" },
+        ]);
+        expect(yield* read).toEqual({ agents: [] });
+        expect(registrySearches).toHaveLength(5);
+      }),
+    ),
 );

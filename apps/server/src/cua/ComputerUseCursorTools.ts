@@ -10,6 +10,8 @@
 import * as Effect from "effect/Effect";
 
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import type { OverlayEvent } from "./ComputerUseOverlay.ts";
+import { movesPointer, targetOf } from "./computerUseTarget.ts";
 
 export interface HelperCursor {
   readonly view: () => { readonly enabled: boolean; readonly visible: boolean };
@@ -28,7 +30,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   set_agent_cursor_theme: FIXED_STYLE,
 };
 
-export const AGENT_CURSOR_TOOLS: ReadonlySet<string> = new Set(Object.keys(DESCRIPTIONS));
+const AGENT_CURSOR_TOOLS: ReadonlySet<string> = new Set(Object.keys(DESCRIPTIONS));
 
 /** Every answer, including the proxy's and the driver's refusals, matches the listed schema. */
 export const CURSOR_OUTPUT_SCHEMA = {
@@ -95,7 +97,7 @@ const reply = (id: JsonRpcId, text: string, structuredContent: object, isError =
   });
 
 /** Answers one cursor tool call from the helper's cursor, toggling it first when asked. */
-export const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(function* (
+const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(function* (
   id: JsonRpcId,
   name: string,
   args: unknown,
@@ -123,4 +125,71 @@ export const answerCursorTool = Effect.fn("ComputerUseCursorTools.answer")(funct
     `GOAT's agent cursor is ${state.enabled ? "enabled" : "disabled"} and ${shown}.`,
     state,
   );
+});
+
+const finite = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+/**
+ * A move_cursor that only moves the agent cursor over one window. The driver runs without an
+ * overlay under the helper and refuses it (facility_unavailable), so the proxy moves GOAT's cursor
+ * instead. A desktop move, which moves the person's pointer, still goes to the driver.
+ */
+function isWindowCursorMove(name: unknown, args: unknown): boolean {
+  const input = record(args);
+  return (
+    name === "move_cursor" &&
+    targetOf(args) !== undefined &&
+    !movesPointer(args) &&
+    input?.scope !== "desktop" &&
+    finite(input?.x) &&
+    finite(input?.y)
+  );
+}
+
+/** The answer to a window move_cursor the helper's cursor carried out. */
+function windowCursorMoveAnswer(
+  id: JsonRpcId,
+  args: unknown,
+  view: { readonly enabled: boolean; readonly visible: boolean },
+): string {
+  const input = record(args);
+  const target = targetOf(args);
+  const shown = view.enabled
+    ? "It is on screen there."
+    : "It is disabled, so nothing is drawn until set_agent_cursor_enabled turns it on.";
+  return reply(
+    id,
+    `GOAT moved its agent cursor to (${String(input?.x)}, ${String(input?.y)}) in window ${String(target?.windowId)}. The person's pointer did not move. ${shown}`,
+    {
+      effect: "confirmed",
+      drawn_by: "goat_helper",
+      pointer_moved: false,
+      pid: target?.pid,
+      window_id: target?.windowId,
+      x: input?.x,
+      y: input?.y,
+      enabled: view.enabled,
+      visible: view.enabled && view.visible,
+    },
+  );
+}
+
+/** Whether the proxy answers this call from the helper's cursor instead of the driver. */
+export const answeredByHelperCursor = (name: unknown, args: unknown): boolean =>
+  (typeof name === "string" && AGENT_CURSOR_TOOLS.has(name)) || isWindowCursorMove(name, args);
+
+/** Answers a cursor tool or a window move_cursor from the helper's cursor. */
+export const answerHelperCursorCall = Effect.fn("ComputerUseCursorTools.answerCall")(function* (
+  id: JsonRpcId,
+  name: string,
+  args: unknown,
+  cursor: HelperCursor,
+  draw: (event: OverlayEvent) => Effect.Effect<unknown>,
+) {
+  if (!isWindowCursorMove(name, args)) return yield* answerCursorTool(id, name, args, cursor);
+  const key = JSON.stringify(id);
+  yield* draw({ type: "call", id: key, name, args });
+  yield* draw({ type: "reply", id: key });
+  return windowCursorMoveAnswer(id, args, cursor.view());
 });

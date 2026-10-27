@@ -7,6 +7,98 @@ const apply = (path: string, text: string) =>
   applyTextRules(path, text, TEXT_RULES, KEEP_RULES).text;
 
 describe("sample names", () => {
+  it("renames multiline GitHub identities while preserving nested GitLab owners (#1923)", () => {
+    const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
+    const source = [
+      'canonicalKey: "github.com/pingdotgg/t3code",',
+      'owner: "pingdotgg",',
+      'name: "t3code",',
+    ].join("\n");
+    const renamed = [
+      'canonicalKey: "github.com/goat-si/goat",',
+      'owner: "goat-si",',
+      'name: "goat",',
+    ].join("\n");
+    expect(apply(path, source)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    const nested = 'owner: "t3tools",\nname: "t3code",';
+    expect(apply(path, nested)).toBe('owner: "t3tools",\nname: "goat",');
+    const unrelated = 'owner: "pingdotgg",\nname: "t3code",';
+    expect(apply("a/b.test.ts", unrelated)).toBe(unrelated);
+  });
+
+  it("keeps fork head names aligned with their renamed expectations (#1923)", () => {
+    const path = "packages/source-control-github/src/server/gitHubPullRequests.test.ts";
+    const source = [
+      'headRepository: { id: "R_1", name: "t3code" },',
+      'headRepositoryOwner: { login: "binbandit" },',
+      'headRepositoryNameWithOwner: "binbandit/t3code",',
+    ].join("\n");
+    const renamed = [
+      'headRepository: { id: "R_1", name: "goat" },',
+      'headRepositoryOwner: { login: "binbandit" },',
+      'headRepositoryNameWithOwner: "binbandit/goat",',
+    ].join("\n");
+    expect(apply(path, source)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    const unrelated = 'headRepository: { id: "R_1", name: "t3code" },';
+    expect(apply("a/b.test.ts", unrelated)).toBe(unrelated);
+    expect(apply(path, 'headRepository: { name: "t3code-fork" },')).toBe(
+      'headRepository: { name: "t3code-fork" },',
+    );
+  });
+
+  it("keeps palette reference queries aligned with renamed repository fixtures", () => {
+    const source = '"pingdotgg/t3code#22889" "t3code#22889" "t3code#2288"';
+    expect(apply("packages/shared/src/paletteSearch.test.ts", source)).toBe(
+      '"goat-si/goat#22889" "goat#22889" "goat#2288"',
+    );
+    expect(apply("src/legacy.ts", '"t3code#22889"')).toBe('"t3code#22889"');
+  });
+
+  it("renames the upstream worktree setup fixture without changing legacy fixtures elsewhere", () => {
+    const input = 'branch: "t3/feature", worktreePath: "/repo/.t3/worktrees/feature"';
+    const path = "apps/web/src/components/chat/WorktreeSetupCard.browser.test.tsx";
+    const renamed = 'branch: "goat/feature", worktreePath: "/repo/.goat/worktrees/feature"';
+    expect(apply(path, input)).toBe(renamed);
+    expect(apply(path, renamed)).toBe(renamed);
+    expect(apply("apps/web/src/legacy.test.ts", input)).toBe(input);
+  });
+
+  it.each([
+    ["packages/shared/src/paletteSearch.test.ts", '"t3code#22889"', '"goat#22889"'],
+    [
+      "packages/source-control-github/src/server/gitHubPullRequests.test.ts",
+      'headRepository: { id: "R_1", name: "t3code" }',
+      'headRepository: { id: "R_1", name: "goat" }',
+    ],
+  ])("keeps repository fixture fields consistent in %s", (path, input, expected) => {
+    expect(apply(path, input)).toBe(expected);
+  });
+
+  it("keeps split change-request identities consistent with their repository keys", () => {
+    const input = `canonicalKey: "github.com/pingdotgg/t3code",
+owner: "pingdotgg",
+name: "t3code",
+canonicalKey: "gitlab.com/t3tools/platform/t3code",
+displayName: "t3tools/platform/t3code",
+owner: "t3tools",
+name: "t3code",`;
+    const expected = `canonicalKey: "github.com/goat-si/goat",
+owner: "goat-si",
+name: "goat",
+canonicalKey: "gitlab.com/t3tools/platform/goat",
+displayName: "t3tools/platform/goat",
+owner: "t3tools",
+name: "goat",`;
+    const path = "packages/client-runtime/src/changeRequestLinks.test.ts";
+    expect(apply(path, input)).toBe(expected);
+    expect(apply(path, expected)).toBe(expected);
+    expect(apply("other.test.ts", 'owner: "pingdotgg",\nname: "t3code",')).toBe(
+      'owner: "pingdotgg",\nname: "t3code",',
+    );
+  });
+
   it("renames maintainer samples in tests", () => {
     expect(
       apply(

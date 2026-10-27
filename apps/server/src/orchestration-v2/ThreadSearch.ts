@@ -689,7 +689,7 @@ export const make = Effect.gen(function* () {
       updatedAfter: input.updatedAfter ?? null,
       updatedBefore: input.updatedBefore ?? null,
       limit: input.limit,
-    }).pipe(Effect.mapError(mapError));
+    }).pipe(NodeSqliteClient.readOnly, Effect.mapError(mapError));
     return rows.map((row): ThreadMatch => {
       const base = {
         threadId: row.threadId,

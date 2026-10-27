@@ -1016,10 +1016,13 @@ type ThreadStatusInput = Pick<
  */
 export function useThreadJumpHintsVisible(shouldShow: boolean): boolean {
   const [showAt, setShowAt] = React.useState<number | null>(null);
-  let nextShowAt = shouldShow ? showAt : null;
-  if (shouldShow && showAt === null) nextShowAt = deadlineAfter(THREAD_JUMP_HINT_SHOW_DELAY_MS);
-  if (nextShowAt !== showAt) setShowAt(nextShowAt);
-  return useDeadlinePassed(nextShowAt);
+  // The clock is read inside the updater: the compiler caches a bare clock read
+  // in render once per instance, so a second hold would reuse the first deadline.
+  // React discards this render and re-runs with the update.
+  if (shouldShow !== (showAt !== null)) {
+    setShowAt(shouldShow ? () => deadlineAfter(THREAD_JUMP_HINT_SHOW_DELAY_MS) : null);
+  }
+  return useDeadlinePassed(showAt);
 }
 
 export function resolveThreadLastVisitedAt(
@@ -1138,16 +1141,19 @@ export function isSidebarPriorityMember(input: {
   readonly now: string;
   readonly localLastVisitedAt: string | undefined;
   readonly hasChildAttention: boolean;
+  /** A folded launched thread is working (rank 1, like the row's own work). */
+  readonly hasChildWork?: boolean;
   readonly supportsSnooze: boolean;
   readonly supportsSettlement: boolean;
 }): boolean {
   if (input.thread.deletedAt != null) return false;
-  const rank = resolveSidebarPriorityRank({
+  const ownRank = resolveSidebarPriorityRank({
     thread: input.thread,
     localLastVisitedAt: input.localLastVisitedAt,
     wokeAt: threadWokeAt(input.thread, { now: input.now }),
     hasChildAttention: input.hasChildAttention,
   });
+  const rank = input.hasChildWork === true && (ownRank === null || ownRank === 2) ? 1 : ownRank;
   return (
     resolveSidebarThreadSection({
       snoozed: input.supportsSnooze && effectiveSnoozed(input.thread, { now: input.now }),
@@ -1165,6 +1171,7 @@ export function countVisibleSidebarPriorityThreads<
   readonly now: string;
   readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
   readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
+  readonly childWorkKeys?: ReadonlySet<string>;
   readonly supportsSnooze: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
   readonly supportsSettlement: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
 }): number {
@@ -1177,6 +1184,7 @@ export function countVisibleSidebarPriorityThreads<
         now: input.now,
         localLastVisitedAt: input.localLastVisitedAtByKey[key],
         hasChildAttention: input.attentionByOwnerKey.has(key),
+        hasChildWork: input.childWorkKeys?.has(key) === true,
         supportsSnooze: input.supportsSnooze(thread.environmentId),
         supportsSettlement: input.supportsSettlement(thread.environmentId),
       })

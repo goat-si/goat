@@ -32,6 +32,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
+import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
@@ -387,7 +388,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       let touched = cut;
-      if (cut && cellId) bridge.cutCellNow(runId, turnId, cellId, change.kind);
+      if (cut && cellId) {
+        bridge.cutCellNow(runId, turnId, cellId, change.kind);
+        supervisor?.cutCellNow(runId, turnId, cellId);
+      }
       for (const [targetId, route] of routes) {
         if (route.runId !== runId || route.turnId !== turnId) continue;
         if (!cut && change.tabId !== undefined && route.tabId !== change.tabId) continue;
@@ -460,8 +464,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       // Stop fences the tracked cell, so a second cell must never replace the one still running.
       if (activeCells.has(id)) return yield* Effect.fail(fail("pending_limit"));
       activeCells.set(id, cellId);
+      // A child's WASM memory cannot shrink, so a lower cap needs a fresh child.
+      const liveWasmBytes = running.turnWasmBytes(input.runId, input.turnId);
+      const lowered = liveWasmBytes !== undefined && cellLimits.turnWasmBytes < liveWasmBytes;
+      if (lowered) yield* running.finishTurn(input.runId, input.turnId, "turnWasmBytes");
       // A cutoff or new message killed the child, so values the agent stored are gone; say so.
-      const contextReset = input.resetValues !== true && resetNext.delete(id);
+      const contextReset = input.resetValues !== true && (resetNext.delete(id) || lowered);
       return yield* running
         .runCell(
           {
@@ -484,7 +492,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         .pipe(
           Effect.mapError((cause) => ({
             ...fail(cause.code),
-            effectStarted: cause.effectStarted === true,
+            ...cellErrorSafety(
+              { effectStarted: cause.effectStarted === true },
+              cause.receipts ?? [],
+            ),
             ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
             ...(cause.code === "wall_limit"
               ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
@@ -504,13 +515,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 sequence: result.journal.length + index + 1,
               })),
             ].slice(-64);
-            return result.error && isScreenRunErrorSchema(result.error)
+            const classified = cellResultSafety(result);
+            return classified.error && isScreenRunErrorSchema(classified.error)
               ? Effect.fail({
-                  ...result.error,
+                  ...classified.error,
                   receipts: journal.slice(-16).map((entry) => entry.receipt),
                 })
               : Effect.succeed({
-                  ...result,
+                  ...classified,
                   journal,
                   ...(contextReset
                     ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }

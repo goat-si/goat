@@ -1,31 +1,40 @@
 import type { CodeViewScrollTarget } from "@pierre/diffs";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 interface FileRevealHandle {
   getInstance(): object | undefined;
+  getItem(id: string): object | undefined;
   scrollTo(target: CodeViewScrollTarget): void;
 }
 
-export function useCodeViewFileReveal<TScope>(
-  viewer: FileRevealHandle | null,
-  scope: TScope,
-  readyFileKeys?: ReadonlyArray<string>,
-) {
-  const [request, setRequest] = useState<{ fileKey: string; scope: TScope } | null>(null);
-  const handledRequest = useRef<typeof request>(null);
+// Ref attachment and post-render flushes keep requests pending until the viewer holds the file.
+export function createCodeViewFileReveal() {
+  let viewer: FileRevealHandle | null = null;
+  let pending: string | null = null;
+  const flush = () => {
+    if (pending === null || viewer === null) return;
+    if (!viewer.getInstance() || viewer.getItem(pending) === undefined) return;
+    viewer.scrollTo({ type: "item", id: pending, align: "start" });
+    pending = null;
+  };
+  return {
+    attach(next: FileRevealHandle | null) {
+      if (viewer !== null && next !== viewer) pending = null;
+      viewer = next;
+      flush();
+    },
+    request(fileKey: string) {
+      pending = fileKey;
+      flush();
+    },
+    flush,
+  };
+}
 
-  useEffect(() => {
-    if (request === null || handledRequest.current === request) return;
-    if (request.scope !== scope) {
-      handledRequest.current = request;
-      return;
-    }
-    if (!viewer?.getInstance() || (readyFileKeys && !readyFileKeys.includes(request.fileKey)))
-      return;
-
-    viewer.scrollTo({ type: "item", id: request.fileKey, align: "start" });
-    handledRequest.current = request;
-  }, [request, scope, viewer, readyFileKeys]);
-
-  return (fileKey: string) => setRequest({ fileKey, scope });
+export function useCodeViewFileReveal(scope: string) {
+  const [current, setCurrent] = useState(() => ({ scope, reveal: createCodeViewFileReveal() }));
+  if (current.scope === scope) return current.reveal;
+  const next = { scope, reveal: createCodeViewFileReveal() };
+  setCurrent(next);
+  return next.reveal;
 }

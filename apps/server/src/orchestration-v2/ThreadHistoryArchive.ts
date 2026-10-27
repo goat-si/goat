@@ -7,6 +7,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -74,6 +75,16 @@ export interface ThreadHistoryArchiveStats {
   readonly threads: number;
   readonly fileBytes: number;
 }
+
+type ArchivePassObservation = {
+  readonly onPage: (kind: "threads" | "items" | "events", processedRows: number) => void;
+  readonly onEnd: (succeeded: boolean) => void;
+};
+
+/** Optional synchronous, nonthrowing callbacks; each pass owns its observation. */
+export class ThreadHistoryArchiveObserver extends Context.Reference<
+  { readonly onStart: () => ArchivePassObservation } | undefined
+>("goat/orchestration-v2/ThreadHistoryArchiveObserver", { defaultValue: () => undefined }) {}
 
 export class ThreadHistoryArchive extends Context.Service<
   ThreadHistoryArchive,
@@ -201,7 +212,10 @@ const make = Effect.gen(function* () {
       FROM orchestration_v2_thread_history_archives WHERE thread_id = ${threadId}
     `.pipe(Effect.map((rows) => rows[0]));
 
-  const itemKeys = Effect.fn("ThreadHistoryArchive.itemKeys")(function* (threadId: string) {
+  const itemKeys = Effect.fn("ThreadHistoryArchive.itemKeys")(function* (
+    threadId: string,
+    observation?: ArchivePassObservation,
+  ) {
     const keys: ItemKey[] = [];
     let afterOrdinal = Number.MIN_SAFE_INTEGER;
     let afterId = "";
@@ -217,6 +231,7 @@ const make = Effect.gen(function* () {
         WHERE thread_id = ${threadId} AND (ordinal, turn_item_id) > (${afterOrdinal}, ${afterId})
         ORDER BY ordinal, turn_item_id LIMIT ${PAGE_ROWS}
       `;
+      observation?.onPage("items", page.length);
       for (const row of page) {
         if (LIVE_ITEM_STATUSES.has(row.status) && LIVE_ITEM_TYPES.has(row.type)) return undefined;
         keys.push({ id: row.turn_item_id, updatedAt: row.updated_at });
@@ -228,7 +243,10 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const eventKeys = Effect.fn("ThreadHistoryArchive.eventKeys")(function* (threadId: string) {
+  const eventKeys = Effect.fn("ThreadHistoryArchive.eventKeys")(function* (
+    threadId: string,
+    observation?: ArchivePassObservation,
+  ) {
     const keys: number[] = [];
     let after = 0;
     while (true) {
@@ -238,6 +256,7 @@ const make = Effect.gen(function* () {
           AND stream_id = ${threadId} AND sequence > ${after}
         ORDER BY sequence LIMIT ${PAGE_ROWS}
       `;
+      observation?.onPage("events", page.length);
       if (page.length === 0) return keys;
       const matching = yield* sql<{ readonly sequence: number }>`
         SELECT sequence FROM orchestration_events
@@ -356,12 +375,13 @@ const make = Effect.gen(function* () {
   const archiveThread = Effect.fn("ThreadHistoryArchive.archiveThread")(function* (
     threadId: string,
     now: number,
+    observation?: ArchivePassObservation,
   ) {
     const existing = yield* readArchiveRow(threadId);
     if (existing !== undefined) return undefined;
-    const items = yield* itemKeys(threadId);
+    const items = yield* itemKeys(threadId, observation);
     if (items === undefined) return undefined;
-    const events = yield* eventKeys(threadId);
+    const events = yield* eventKeys(threadId, observation);
     if (items.length === 0 && events.length === 0) return undefined;
     const fileName = fileNameFor(threadId);
     const finalPath = path.join(directory, fileName);
@@ -586,6 +606,14 @@ const make = Effect.gen(function* () {
     return yield* lock
       .withPermits(1)(
         Effect.gen(function* () {
+          const observer = yield* ThreadHistoryArchiveObserver;
+          const observation =
+            observer === undefined
+              ? undefined
+              : yield* Effect.acquireRelease(
+                  Effect.sync(() => observer.onStart()),
+                  (observation, exit) => Effect.sync(() => observation.onEnd(Exit.isSuccess(exit))),
+                );
           yield* recover();
           yield* removeStrayFiles();
           let archivedThreads = 0;
@@ -603,8 +631,9 @@ const make = Effect.gen(function* () {
               WHERE updated_at < ${idleBefore} AND (updated_at, thread_id) > (${afterAt}, ${afterId})
               ORDER BY updated_at, thread_id LIMIT ${PAGE_ROWS}
             `;
+              observation?.onPage("threads", page.length);
               for (const thread of page) {
-                const result = yield* archiveThread(thread.thread_id, policy.now);
+                const result = yield* archiveThread(thread.thread_id, policy.now, observation);
                 if (result === undefined) continue;
                 archivedThreads++;
                 archivedRawBytes += result.rawBytes;
@@ -626,7 +655,7 @@ const make = Effect.gen(function* () {
           return { archivedThreads, archivedRawBytes, archiveFileBytes, deletedArchives };
         }),
       )
-      .pipe(Effect.mapError(fail("pass")));
+      .pipe(Effect.scoped, Effect.mapError(fail("pass")));
   });
 
   const stats = sql<{ readonly threads: number; readonly bytes: number | null }>`

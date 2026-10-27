@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
+import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
 
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
@@ -4082,6 +4083,10 @@ export const validateWindowsPackagedPayload = Effect.fn(
   return { packagedAppDir, fileCount, unpackedFiles } as const;
 });
 
+export const validateMacPackagedPayload = makeMacPackagedPayloadValidator(
+  verifyPackagedBundleIsSelfContained,
+);
+
 const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -4647,6 +4652,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       }),
       verbose: options.verbose,
     });
+  }
+  // x64 builds on arm64 runners; the arm64 check covers the shared JS bundle.
+  if (options.platform === "mac" && options.arch === "arm64" && hostPlatform === "darwin") {
+    yield* validateMacPackagedPayload({ stageDistDir, verbose: options.verbose });
   }
 
   if (options.sshRuntimeArchiveDir !== undefined) {

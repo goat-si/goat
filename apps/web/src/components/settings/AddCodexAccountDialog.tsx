@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup } from "../ui/wizard";
+import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { SettingsRow } from "./settingsLayout";
 
 export function AddCodexAccountDialog({
@@ -119,6 +120,10 @@ export function AddCodexAccountDialog({
                     placeholder="e.g. Personal or Work"
                   />
                 }
+              />
+              <MultipleAccountsNote
+                environmentId={environmentId}
+                driver={ProviderDriverKind.make("codex")}
               />
             </form>
           )}

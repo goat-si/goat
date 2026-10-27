@@ -330,4 +330,34 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         yield* Deferred.succeed(held, undefined);
       }),
   );
+
+  it.effect("a driver whose screen capture stalled is replaced before the next call", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ manifestStamp: () => "v1" });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "capture_backend_stalled: restart the driver" }],
+          },
+        }),
+      );
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+      yield* h.killed;
+      yield* h.restarted;
+      assert.equal((yield* h.nextToDriver).id, 2);
+      // The fresh child is not stalled: the call after it reaches the same child.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      yield* h.nextToProvider;
+      yield* h.send(call(3, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 3);
+      assert.equal(yield* h.startedQueued, 0);
+    }),
+  );
 });

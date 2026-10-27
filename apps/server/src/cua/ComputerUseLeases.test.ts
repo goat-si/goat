@@ -7,9 +7,13 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as CuaDriver from "./CuaDriver.ts";
+import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import {
   database,
@@ -51,6 +55,38 @@ layer("ComputerUseLeases controls", (it) => {
       });
     }),
   );
+  it.effect(
+    "stamps when the agent's cursor last changed, and not on a repeat of the same cursor",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const owner = ThreadId.make("thread-cursor-at");
+          yield* Effect.addFinalizer(() => leases.stop(owner));
+          const control = yield* leases.control(owner, Option.none());
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { pid: 7, windowId: 3 }));
+          const cursorAt = Effect.map(
+            leases.sessions,
+            (entries) =>
+              entries.find((entry) => entry.control.controlId === control.controlId)?.control
+                .cursorAt,
+          );
+          const cursor = { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" } as const;
+          yield* TestClock.adjust("1 second");
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor }));
+          const placed = yield* cursorAt;
+          assert.isNumber(placed);
+          yield* TestClock.adjust("1 second");
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor }));
+          assert.equal(yield* cursorAt, placed);
+          const moved = { ...cursor, point: { fx: 0.5, fy: 0.5 } };
+          assert.isTrue(yield* leases.setTarget(owner, control.controlId, { cursor: moved }));
+          assert.equal(yield* cursorAt, placed! + 1_000);
+        }),
+      ),
+  );
+
   it.effect("tells session lists about a control minted for a thread that had none", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -321,6 +357,30 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
       }),
   );
+
+  it.effect(
+    "holds only the control whose agent asked a person, while others keep acting (#1218)",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.stopAll;
+        const mine = yield* leases.control(thread, Option.none());
+        const bots = yield* leases.control(other, Option.none());
+        yield* leases.hold(mine.controlId, true);
+        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+          _tag: "paused",
+          reason: "takeover",
+        });
+        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
+        // A person's own takeover and its hand back leave the request's hold in place.
+        yield* leases.pause("takeover");
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "paused");
+        yield* leases.hold(mine.controlId, false);
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
+      }),
+  );
 });
 
 it.effect(
@@ -581,4 +641,96 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       ),
     );
   }),
+);
+
+/** A standalone server's leases whose driver records each manifest refresh it is asked for. */
+const standaloneLeases = (
+  refreshed: Queue.Queue<ReadonlyArray<string>>,
+  watched: Queue.Queue<boolean>,
+) =>
+  ComputerUseLeases.layer.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        database,
+        NodeServices.layer,
+        Layer.effect(
+          CuaDriver.CuaDriver,
+          Effect.gen(function* () {
+            const service = yield* CuaDriver.make(
+              () => Effect.die("watching approvals must not start a driver"),
+              Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+            );
+            return CuaDriver.CuaDriver.of({
+              ...service,
+              refreshManifest: (apps) =>
+                Queue.offer(refreshed, apps).pipe(Effect.andThen(Effect.never)),
+            });
+          }),
+        ).pipe(Layer.provide(ServerSettings.layerTest())),
+        // A standalone server still assembles the desktop receiver, with no desktop on it.
+        Layer.mock(DesktopTelemetryReceiver.DesktopTelemetryReceiver)({
+          cuaReadiness: Effect.succeedNone,
+          cuaSafety: Stream.empty,
+          setCuaWatch: () => Effect.void,
+        }),
+        Layer.succeed(
+          LinuxHelperHost.LinuxHelperHost,
+          LinuxHelperHost.LinuxHelperHost.of({
+            readiness: Effect.succeedNone,
+            liveReadiness: Effect.succeedNone,
+            safety: Stream.empty,
+            setWatch: (active) => Queue.offer(watched, active).pipe(Effect.asVoid),
+          }),
+        ),
+      ),
+    ),
+  );
+
+it.effect(
+  "an app approved between turns reaches the standalone driver's manifest before the next turn",
+  () =>
+    Effect.gen(function* () {
+      const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
+      const watched = yield* Queue.unbounded<boolean>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        assert.isFalse(yield* Queue.take(watched));
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(watched));
+        assert.isTrue(yield* leases.turnEnded(thread));
+        assert.isFalse(yield* Queue.take(watched));
+        yield* grant(thread, "handoff:between-turns", ["editor"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+      }).pipe(Effect.provide(standaloneLeases(refreshed, watched)));
+    }),
+);
+
+it.effect(
+  "refreshes a standalone driver for changed approvals without blocking the lease watcher",
+  () =>
+    Effect.gen(function* () {
+      const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
+      const watched = yield* Queue.unbounded<boolean>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        assert.isFalse(yield* Queue.take(watched));
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(watched));
+        yield* grant(thread, "handoff:standalone-first", ["editor"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+        assert.isTrue(yield* Queue.take(watched));
+        yield* leases.changed;
+        assert.isTrue(yield* Queue.take(watched));
+        assert.equal(yield* Queue.size(refreshed), 0);
+        yield* grant(thread, "handoff:standalone-second", ["browser"]);
+        yield* leases.changed;
+        assert.deepEqual(yield* Queue.take(refreshed), ["browser", "editor"]);
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(refreshed), []);
+      }).pipe(Effect.provide(standaloneLeases(refreshed, watched)));
+    }),
 );

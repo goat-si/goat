@@ -7,7 +7,7 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import { act, render as renderScreen } from "../../../test/render";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const actions = vi.hoisted(() => ({
@@ -210,6 +210,21 @@ function setup() {
 }
 
 describe("AddProviderInstanceDialog environment routing", () => {
+  it("explains separate accounts before adding another signed-in Claude provider", async () => {
+    await using fixture = setup();
+    actions.providers = [snapshot("claude", "claudeAgent", { auth: { status: "authenticated" } })];
+    await fixture.render(undefined, undefined, {
+      initialDriver: ProviderDriverKind.make("claudeAgent"),
+    });
+    await expect
+      .element(page.getByRole("note"))
+      .toHaveTextContent(
+        "GOAT supports separate Claude accounts. Before adding another, check which account is already signed in and keep each account's sign-in separate. Adding an account does not increase another account's usage limits. Multi-account guidance",
+      );
+    await userEvent.click(radio("Grok"));
+    expect(document.querySelector('[role="note"]')).toBeNull();
+  });
+
   it("shows each provider's install and sign-in state on the provider list", async () => {
     await using fixture = setup();
     const { render } = fixture;

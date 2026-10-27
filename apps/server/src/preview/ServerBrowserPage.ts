@@ -21,6 +21,8 @@ import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { readLayersHeader } from "./blockingLayers.ts";
 import { frameUrls, maskSecrets, maskTree, redactValue, tabCookies } from "./pageSecrets.ts";
+import { maskSnapshotRecords } from "./pageSecrets.ts";
+import { playwrightQuoted } from "./secretForms.ts";
 import { documentPlacement, screenTree, viewportPlacement } from "./ServerBrowserScreen.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
@@ -52,7 +54,7 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.reason,
+      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -451,12 +453,7 @@ const dottedPattern = (values: ReadonlyArray<string>) => {
   const sources = values
     .flatMap((value) => {
       const json = JSON.stringify(value).slice(1, -1);
-      // Playwright writes control characters like JSON does, with \xNN for the unnamed ones.
-      const quoted = value.replace(/[\\"\p{Cc}]/gu, (char) =>
-        '\\"\b\f\n\r\t'.includes(char)
-          ? JSON.stringify(char).slice(1, -1)
-          : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
-      );
+      const quoted = playwrightQuoted(value);
       const forms = [value, json, quoted].flatMap((form) => [form, form.replaceAll("'", "''")]);
       return [...new Set(forms)].map((form) => ({ form, word: value.length < 4 }));
     })
@@ -632,6 +629,8 @@ type SnapshotInput = {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** The tab's filled-secret mask, run before the text limits cut a value into a start. */
+  readonly diagnostics?: { readonly mask: (text: string, limit?: number) => string };
   /** What remains of the request's deadline, the one its timeout error names. */
   readonly timeoutMs: number;
 };
@@ -724,26 +723,25 @@ const capture = async (
   }
   const [page, layersLine, screenshot, cookies] = await pageAndScreenshot;
   if (state.generation !== generation) throw pageChanged();
-  const mask = maskSecrets(dotted, cookies);
+  const filled = input.diagnostics?.mask ?? ((text: string) => text);
+  const secrets = maskSecrets(dotted, cookies);
+  const mask = (text: string, limit?: number) => filled(secrets(text), limit).slice(0, limit);
   // Redacted before the cut, so a payload crossing it can't leave its start showing, and before
   // masking, which could hide the `data:` scheme behind a password value's dots.
   const redacted = withoutTreeDataPayloads(tree);
   const { accessibilityTree, ...treeFields } = screenTree(
-    `${mask(layersLine)}\n${maskSecrets(undefined, cookies)(dotted ? maskTree(redacted, dotted) : redacted)}`,
+    `${mask(layersLine)}\n${filled(maskTree(redacted, dotted, cookies), MAX_VISIBLE_TEXT_LENGTH)}`,
     { limit: MAX_VISIBLE_TEXT_LENGTH, unread, generation, refs: state.refs },
   );
-  const masked = <A>(value: A) => redactValue(value, mask) as A;
   return {
     ...page,
     url: mask(page.url),
     title: mask(page.title),
     // Mask text before truncating so a value crossing the cut cannot leak its prefix.
-    visibleText: mask(page.visibleText).slice(0, MAX_VISIBLE_TEXT_LENGTH),
+    visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
     accessibilityTree,
     ...treeFields,
-    consoleEntries: masked([...input.consoleEntries]),
-    networkEntries: masked([...input.networkEntries]),
-    actionTimeline: masked([...input.actionTimeline]),
+    ...maskSnapshotRecords(mask, input),
     ...(screenshot === undefined ? {} : { screenshot }),
   };
 };
@@ -1086,10 +1084,10 @@ export const evaluate = async (
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));
   if (result.exceptionDetails) {
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationExecutionError",
-      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-    );
+    const { exception, text } = result.exceptionDetails;
+    // The page writes its own exception's message, so it is masked like a result.
+    const message = await redactEvaluation(page, cdp, exception?.description ?? text, before);
+    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", String(message));
   }
   const value =
     "value" in result.result ? result.result.value : (result.result.description ?? null);

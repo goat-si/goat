@@ -144,6 +144,14 @@ The GOAT menu bar or taskbar menu offers the same stops, per app or all at
 once; its **Stop All Computer Use** also stops agents in browser tabs, like
 Stop all here.
 
+When an agent needs you for a step it cannot do, such as a sign-in, a second
+factor or a CAPTCHA, it asks: its tile reads **Waiting for you** with what it
+needs, and the request also appears in its thread on every device. The agent
+stays off that tab, or off this computer, until you finish the step and choose
+**Hand back**, or answer the request in the thread. Then the agent picks up
+where it stopped. If nobody answers within 30 minutes, the request expires and
+the agent hears that too.
+
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
@@ -165,11 +173,10 @@ thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
 
-Such work only gets the screen on a computer whose GOAT can tell when you enter
-a password or another secret; elsewhere the request is refused and says why.
-For now no computer qualifies: detecting secret fields in desktop apps is
-switched off while it is being fixed, so such work is refused everywhere and a
-secret field in a desktop app does not pause agents.
+In full access mode, a thread started from another computer's GOAT uses every
+app here beside the threads you run, rather than waiting for the screen.
+Detecting secret fields in desktop apps is switched off while it is being
+fixed, so a secret field in a desktop app does not pause agents.
 Admitted work keeps running while you use the keyboard and mouse. Approval lasts
 until the time shown and does not approve each action. If the agent already has
 the tools, it continues in the same turn; otherwise, GOAT wakes it in a new turn
@@ -232,8 +239,8 @@ keyboard but cannot read app controls.
 Window screenshots on Linux need a desktop that composites its windows (a bare
 Xvfb needs a compositor such as xcompmgr). In a Wayland session without
 XWayland, other than Hyprland, agents read app controls but get no window
-screenshots. Before each screenshot the app is asked to redraw its window, and
-an app that does not redraw all of it promptly gets no screenshot that time.
+screenshots. A screenshot shows the window as the desktop draws it; a part an
+app never painted can still show what was behind the window when it opened.
 
 ## Other computers
 

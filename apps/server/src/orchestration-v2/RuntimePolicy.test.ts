@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
+import { FX_SUPPORTED_RUNTIME_MODES } from "@goat/provider-fx/testing";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
@@ -61,8 +62,10 @@ function makeThread(input: {
 }
 
 const grokInstanceId = ProviderInstanceId.make("grok");
+const fxInstanceId = ProviderInstanceId.make("fx");
 const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArray<RuntimeMode>>([
   [grokInstanceId, ["approval-required", "auto", "full-access"]],
+  [fxInstanceId, FX_SUPPORTED_RUNTIME_MODES],
 ]);
 const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   ({
@@ -120,6 +123,10 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
       assert.equal(yield* modeFor(grokInstanceId, "auto-accept-edits"), "approval-required");
       assert.equal(yield* modeFor(grokInstanceId, "auto"), "auto");
       assert.equal(yield* modeFor(grokInstanceId, "full-access"), "full-access");
+      assert.equal(yield* modeFor(fxInstanceId, "auto-accept-edits"), "approval-required");
+      assert.equal(yield* modeFor(fxInstanceId, "full-access"), "approval-required");
+      assert.equal(yield* modeFor(fxInstanceId, "approval-required"), "approval-required");
+      assert.equal(yield* modeFor(fxInstanceId, "auto"), "auto");
       assert.equal(yield* modeFor(providerInstanceId, "auto-accept-edits"), "auto-accept-edits");
     }),
   );

@@ -32,6 +32,7 @@ const tab = {
   humanControls: false,
   private: false,
   agentStopped: false,
+  handoffReason: null,
 };
 const control = {
   controlId: "control:1",
@@ -236,6 +237,35 @@ describe("preview sessions", () => {
     }
     expect(browserSession(base, { ...tab, private: true, agentStopped: true })!.owner).toBe(
       "private",
+    );
+  });
+
+  it("shows an agent's request for a person as waiting for you, with its reason and Hand back (#1218)", () => {
+    const reason = "Sign in with the code from your phone.";
+    const browser = browserSession(base, { ...tab, handoffReason: reason })!;
+    // The desktop request holds the host, and its card stays between the agent's turns.
+    const idle = { ...control, idle: true } as const;
+    const desktop = desktopSession(
+      base,
+      idle,
+      { _tag: "paused", reason: "takeover" },
+      detected,
+      reason,
+    )!;
+    for (const session of [browser, desktop]) {
+      expect(session).toMatchObject({ status: "waiting-for-human", handoffReason: reason });
+      expect(session.capabilities.controls).toEqual(["handBack", "stop", "stopAll"]);
+      expect(previewSessionChip(session)).toBe("Waiting for you");
+    }
+    // A person who takes the tab over still sees what the agent is waiting for.
+    const taken = browserSession(base, { ...tab, handoffReason: reason, humanControls: true })!;
+    expect([taken.owner, previewSessionChip(taken), taken.handoffReason]).toEqual([
+      "human",
+      "Waiting for you",
+      reason,
+    ]);
+    expect(desktopSession(base, idle, { _tag: "paused", reason: "takeover" }, detected)).toBe(
+      undefined,
     );
   });
 

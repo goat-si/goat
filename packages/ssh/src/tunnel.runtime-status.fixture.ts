@@ -52,6 +52,10 @@ export const fixture = (
   let drainPending = false;
   let drainReplacement: "older" | "capability" = "older";
   let launchDefect = false;
+  // Launches that fail like a stalled SSH connection (exit 255) before the next one succeeds.
+  let launchConnectionFailures = 0;
+  const launchStarts: Array<Deferred.Deferred<void>> = [];
+  const launchStarted = (count: number) => (launchStarts[count] ??= Deferred.makeUnsafe<void>());
   // The version the server behind a forward reports; unset answers no descriptor.
   let descriptorVersion: string | undefined;
   let readinessGate:
@@ -120,7 +124,18 @@ export const fixture = (
         return makeSuccessfulProcess(typeof probe === "string" ? probe : JSON.stringify(probe));
       }
       calls.launches++;
+      yield* Deferred.succeed(launchStarted(calls.launches), undefined);
       if (launchDefect) return yield* Effect.die(new Error("launch defect"));
+      if (launchConnectionFailures > 0) {
+        launchConnectionFailures--;
+        return {
+          ...makeSuccessfulProcess(""),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+          stderr: Stream.make(
+            new TextEncoder().encode("Connection to devbox.example.com port 2222 timed out\n"),
+          ),
+        };
+      }
       return makeSuccessfulProcess(
         JSON.stringify({
           status: "ready",
@@ -164,6 +179,11 @@ export const fixture = (
     dieOnLaunch: () => {
       launchDefect = true;
     },
+    failLaunchConnections: (count: number) => {
+      launchConnectionFailures = count;
+    },
+    /** Completes when launch number `count` (1-based) has started. */
+    launchStarted: (count: number) => Deferred.await(launchStarted(count)),
     setDescriptorVersion: (value: string) => {
       descriptorVersion = value;
     },

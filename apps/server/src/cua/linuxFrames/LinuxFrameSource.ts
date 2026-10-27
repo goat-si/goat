@@ -20,6 +20,7 @@ import {
   type PreviewSessionNoPicture,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
@@ -61,9 +62,23 @@ export class LinuxFrameSource extends Context.Service<
 /** JPEG qualities tried in turn until a frame fits PREVIEW_SESSION_FRAME_LIMITS.maxBytes. */
 const QUALITIES = [70, 45] as const;
 
+/**
+ * Still-drawing refusals in a row before a viewer hears the capture failed. A change in the window
+ * tree spoils one capture and clears by the next; on a quiet desktop none were measured in 240.
+ */
+const STILL_DRAWING_TRIES = 3;
+
 /** One capture's outcome: a frame, a reason there is none, or nothing to say this time. */
 export type FrameOutcome =
-  | { readonly frame: { readonly width: number; readonly height: number; readonly data: string } }
+  | {
+      readonly frame: {
+        readonly width: number;
+        readonly height: number;
+        readonly data: string;
+        /** When the window's pixels were read, epoch ms: before encoding, not after. */
+        readonly capturedAt: number;
+      };
+    }
   | { readonly unavailable: PreviewSessionNoPicture }
   | { readonly skip: true };
 
@@ -159,6 +174,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
 ) {
   const hub = yield* PubSub.sliding<DesktopCuaFrame>(16);
   const loops = yield* FiberMap.make<string>();
+  const stillDrawing = new Map<string, number>();
 
   const supported: Effect.Effect<boolean> =
     platform !== "linux"
@@ -193,14 +209,24 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
       });
       if (verdict._tag !== "allow") return { unavailable: "appNotApproved" } satisfies FrameOutcome;
     }
+    const capturedAt = yield* Clock.currentTimeMillis;
     const shot = yield* Effect.promise(() => io.capture(env, target));
+    const tries =
+      "refused" in shot && shot.refused === STILL_DRAWING
+        ? (stillDrawing.get(target.key) ?? 0) + 1
+        : 0;
+    stillDrawing.set(target.key, tries);
+    if (tries >= STILL_DRAWING_TRIES)
+      return { unavailable: "captureFailed" } satisfies FrameOutcome;
     if ("refused" in shot) return refusalOutcome(shot.refused, shot.transient === true);
     const data = yield* frameJpeg(shot.rgb, shot.width, shot.height);
     if (data === undefined) return { unavailable: "captureFailed" } satisfies FrameOutcome;
     // A password field focused while the window was read or encoded keeps the frame back.
     if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
       return { unavailable: "private" } satisfies FrameOutcome;
-    return { frame: { width: shot.width, height: shot.height, data } } satisfies FrameOutcome;
+    return {
+      frame: { width: shot.width, height: shot.height, data, capturedAt },
+    } satisfies FrameOutcome;
   });
 
   const loop = (seq: number, target: Target) =>
@@ -222,6 +248,7 @@ export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function*
     targets: ReadonlyArray<Target>,
   ) {
     yield* FiberMap.clear(loops);
+    stillDrawing.clear();
     if (platform !== "linux") return;
     for (const target of targets) yield* FiberMap.run(loops, target.key, loop(seq, target));
   });
@@ -270,11 +297,21 @@ const make = Effect.gen(function* () {
     DISPLAY: env.DISPLAY ?? "",
     XAUTHORITY: env.XAUTHORITY,
   });
+  // One probe while the display stays the same, so it keeps the bus and app it already found.
+  let focusProbe:
+    | { readonly key: string; readonly probe: ReturnType<typeof makeSecureFocusProbe> }
+    | undefined;
+  const focus = (env: Readonly<Record<string, string>>, pid: number) => {
+    const key = JSON.stringify([env.DBUS_SESSION_BUS_ADDRESS, env.DISPLAY, env.XAUTHORITY]);
+    if (focusProbe?.key !== key)
+      focusProbe = { key, probe: makeSecureFocusProbe(gdbusRunner(env)) };
+    return focusProbe.probe(pid);
+  };
   return yield* makeLinuxFrameSource(platform, {
     session,
     placement: (env, target) =>
       makeX11WindowPlacement(display(env))([{ pid: target.pid, windowId: target.windowId }]),
-    focus: (env, pid) => makeSecureFocusProbe(gdbusRunner(env))(pid),
+    focus,
     listApps,
     capture: (env, target) =>
       captureX11Window(display(env), target.windowId, frameSize(target.maxWidth)),

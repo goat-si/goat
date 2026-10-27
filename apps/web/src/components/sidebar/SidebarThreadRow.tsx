@@ -116,7 +116,7 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getTriggerDisplayModelLabel } from "../chat/providerIconUtils";
+import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
@@ -478,6 +478,8 @@ type SidebarThreadRowProps = {
   openSubagent: EnvironmentThreadShell | null;
   // A pending approval or question from one of this row's subagents.
   childAttention: SidebarChildAttention | undefined;
+  // Threads this row launched, folded under it (SidebarLaunchGroup).
+  launchGroup?: ReactNode;
   onOpenDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onStopDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onDelegatedChildContextMenu: (
@@ -578,7 +580,7 @@ function ThreadRenameInput(props: {
   );
 }
 
-const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
+export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const {
     isRenaming,
     onCancelRename,
@@ -754,7 +756,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     (model) => model.slug === thread.modelSelection.model,
   );
   const modelLabel = selectedModel
-    ? getTriggerDisplayModelLabel(selectedModel)
+    ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
     : thread.modelSelection.model;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
@@ -1246,6 +1248,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           {detailsTooltip}
         </Tooltip>
         {delegatedChildrenGroup}
+        {props.launchGroup}
       </li>
     );
   }
@@ -1531,6 +1534,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {detailsTooltip}
       </Tooltip>
       {delegatedChildrenGroup}
+      {props.launchGroup}
     </li>
   );
 });
@@ -1601,7 +1605,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     (model) => model.slug === thread.modelSelection.model,
   );
   const modelLabel = selectedModel
-    ? getTriggerDisplayModelLabel(selectedModel)
+    ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
     : thread.modelSelection.model;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,

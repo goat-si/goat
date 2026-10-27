@@ -251,6 +251,7 @@ async function main(
       },
     ) => {
       const id = ++framesId;
+      const requestedAt = Date.now();
       const seen: Array<{ readonly at: number; readonly message: Record<string, unknown> }> = [];
       const unsubscribe = helper.onFrame((message) => {
         if (message.framesId === id) seen.push({ at: Date.now(), message });
@@ -275,7 +276,7 @@ async function main(
         return;
       }
       // Only frames, each a JPEG of exactly its reported size within the limits, each about
-      // one interval after the last.
+      // one interval after the last and stamped with when its capture began.
       if (seen.some(({ message }) => message.type !== "frame") || seen.length < 2)
         fail("frames " + label + " should be frames only, got " + JSON.stringify(seen));
       seen.forEach(({ at, message }, index) => {
@@ -283,11 +284,13 @@ async function main(
         const bytes = Buffer.from(data, "base64");
         const info = computerUseImageInfo(data);
         const gap = index === 0 ? undefined : at - (seen[index - 1]?.at ?? 0);
+        const capturedAt = message.capturedAt;
         record("frame " + label + " #" + (index + 1), {
           width: message.width,
           height: message.height,
           bytes: bytes.length,
           gap,
+          capturedAt,
         });
         if (index === 0) NodeFS.writeFileSync(NodePath.join(out, "frame-" + label + ".jpg"), bytes);
         if (
@@ -297,10 +300,17 @@ async function main(
           info.height !== message.height ||
           info.width > Math.min(PREVIEW_SESSION_FRAME_LIMITS.maxWidth, params.maxWidth) ||
           bytes.length > PREVIEW_SESSION_FRAME_LIMITS.maxBytes ||
-          (gap !== undefined && !(gap >= 450 && gap < 5_000))
+          (gap !== undefined && !(gap >= 450 && gap < 5_000)) ||
+          typeof capturedAt !== "number" ||
+          !(capturedAt >= requestedAt && capturedAt <= at)
         )
           fail(
-            "frames " + label + " #" + (index + 1) + " is wrong: " + JSON.stringify({ info, gap }),
+            "frames " +
+              label +
+              " #" +
+              (index + 1) +
+              " is wrong: " +
+              JSON.stringify({ info, gap, capturedAt, requestedAt, at }),
           );
       });
     };

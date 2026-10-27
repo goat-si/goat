@@ -27,7 +27,7 @@ describe("GitLab change request URLs", () => {
   });
 
   it("leaves issues and single-segment paths alone", () => {
-    expect(parse("https://gitlab.com/t3tools/t3code/-/issues/12")).toBeNull();
+    expect(parse("https://gitlab.com/sample-tools/goat/-/issues/12")).toBeNull();
     expect(parse("https://gitlab.com/t3code/-/merge_requests/12")).toBeNull();
   });
 

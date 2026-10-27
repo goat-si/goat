@@ -19,10 +19,10 @@ export type FloatPreviewRequest =
   | { readonly by: "agent"; readonly force?: boolean };
 
 /**
- * The one rule for showing a preview outside the panel. A browser tab an agent drives opens as the
- * large agents-on-screen card of its thread, like computer use, whoever asks. A device has no
- * agent card yet, so a device an agent started opens as a background panel tab; only a person's
- * own request floats one. Everything else floats in the thread's mini player.
+ * The one rule for showing a preview outside the panel. An agent's browser tab shows as its
+ * thread's small card, like computer use, whoever asks; only the person makes it large. A device
+ * has no agent card, so an agent's device opens as a background panel tab and only a person's
+ * request floats one. Everything else floats in the thread's mini player.
  */
 export function floatPreview(
   threadRef: ScopedThreadRef,
@@ -35,7 +35,6 @@ export function floatPreview(
       openPreviewSessionStack({
         environmentId: threadRef.environmentId,
         focus: { kind: "browser", threadId: threadRef.threadId, tabId: source.tabId },
-        expand: true,
         automatic: request.by === "agent" && request.force !== true,
         scope: request.by === "agent" ? "thread" : "window",
       });

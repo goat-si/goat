@@ -198,6 +198,8 @@ import {
   flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
+  mergeComposerDraftContent,
+  undoComposerDraftMerge,
   migrateLegacyNewTaskDraft,
   modelOptionMemoryAtom,
   releaseUnusedComposerAttachmentFiles,
@@ -944,8 +946,7 @@ describe("mobile composer drafts", () => {
     expect(getComposerDraftSnapshot(key).attachments).toEqual([file]);
     expect(getComposerDraftSnapshot(key).text).toBe(`replaced ${link}`);
   });
-
-  it("inserts context at the saved caret and retains its payload through persistence and restore", () => {
+  it("inserts context at its own saved caret after another draft moves and retains the payload", () => {
     const draftKey = "context-environment:context-thread";
     const record = {
       version: 1 as const,
@@ -961,6 +962,7 @@ describe("mobile composer drafts", () => {
     const reference = "[Build output](t3-context://v1/terminal/context-terminal)";
     setComposerDraftText(draftKey, "Fix this next");
     rememberComposerDraftSelection(draftKey, "Fix this next", { start: 4, end: 8 });
+    rememberComposerDraftSelection("other-draft", "Other", { start: 1, end: 1 });
     insertComposerDraftContext(draftKey, {
       text: reference,
       context: { version: 1, records: [record] },
@@ -2331,26 +2333,17 @@ describe("mobile composer drafts", () => {
     }
   });
 
-  it("restores the pre-merge snapshot when the draft is untouched since the merge", () => {
+  it.each(["typed before", ""])("restores an untouched pre-merge draft (%s)", (text) => {
     const draftKey = "environment-1:thread-1";
-    const snapshot: ComposerDraft = { text: "typed before", attachments: [] };
+    const snapshot: ComposerDraft = { text, attachments: [] };
     const merged: ComposerDraft = {
-      text: "typed before\n\nqueued text",
+      text: `${text}\n\nqueued text`,
       attachments: [],
       runtimeMode: "approval-required",
     };
-
     expect(undoComposerDraftMergeState({ [draftKey]: merged }, draftKey, snapshot, merged)).toEqual(
-      { [draftKey]: snapshot },
+      text ? { [draftKey]: snapshot } : {},
     );
-    expect(
-      undoComposerDraftMergeState(
-        { [draftKey]: merged },
-        draftKey,
-        { text: "", attachments: [] },
-        merged,
-      ),
-    ).toEqual({});
   });
 
   it("returns merge-written settings to the snapshot but keeps user-edited ones", () => {
@@ -2437,28 +2430,32 @@ describe("mobile composer drafts", () => {
     });
   });
 
-  it("keeps text appended after a merge when rolling it back", () => {
-    const draftKey = "environment-1:thread-1";
-    const snapshot: ComposerDraft = { text: "typed before", attachments: [] };
-    const content = { text: "queued text", attachments: [] };
-    const merged = mergeComposerDraftContentState({ [draftKey]: snapshot }, draftKey, content)[
-      draftKey
-    ]!;
-    const edited: ComposerDraft = {
-      ...merged,
-      text: `${merged.text}\n\nuser follow-up`,
-    };
-
-    const rolledBack = undoComposerDraftMergeState(
-      { [draftKey]: edited },
-      draftKey,
-      snapshot,
-      merged,
-    );
-
-    expect(rolledBack[draftKey]?.text).toBe("typed before\n\nuser follow-up");
-    const retried = mergeComposerDraftContentState(rolledBack, draftKey, content);
-    expect(retried[draftKey]?.text.match(/queued text/g)).toHaveLength(1);
+  it("cancels a failed share merge without discarding text appended during persistence", async () => {
+    const draftKey = "environment-1:thread-share-cancel";
+    setComposerDraftText(draftKey, "before");
+    const publication = Promise.withResolvers<{ before: ComposerDraft; merged: ComposerDraft }>();
+    composerDraftFileMocks.setWriteError(new Error("storage unavailable"));
+    try {
+      const saving = mergeComposerDraftContent(
+        draftKey,
+        {
+          text: "shared text",
+          attachments: [],
+          sourceShareId: "share-cancel",
+        },
+        { onMerge: (before, merged) => publication.resolve({ before, merged }) },
+      );
+      const failure = expect(saving).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+      const { before, merged } = await publication.promise;
+      setComposerDraftText(draftKey, `${merged.text}\nuser follow-up`);
+      await failure;
+      composerDraftFileMocks.setWriteError(null);
+      await undoComposerDraftMerge(draftKey, before, merged);
+      expect(getComposerDraftSnapshot(draftKey).text).toBe("before\nuser follow-up");
+      expect(getComposerDraftSnapshot(draftKey).importedShareIds).not.toContain("share-cancel");
+    } finally {
+      composerDraftFileMocks.setWriteError(null);
+    }
   });
 
   it("spares a file re-owned between the sweep's scan and its deletion", async () => {

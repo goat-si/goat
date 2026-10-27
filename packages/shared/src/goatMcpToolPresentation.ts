@@ -439,6 +439,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  goat_preview_request_handoff: tool(
+    ["Ask", "Asking", "Asked", "a person to finish a step"],
+    "browser",
+    "browser",
+  ),
   goat_preview_fetch: tool(
     ["Fetch", "Fetching", "Fetched", "from the preview page"],
     "browser",

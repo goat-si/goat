@@ -9,10 +9,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   BUSY_CAPTURE,
   SHARED_CAPTURE,
+  STILL_DRAWING,
   UNREDIRECTED_CAPTURE,
   type X11WindowCapture,
 } from "../linuxHelper/x11WindowCapture.ts";
@@ -121,6 +123,29 @@ describe("Linux live frames (#1370)", () => {
     }),
   );
 
+  it.effect(
+    "tells a viewer the capture failed once a window stays unreadable three tries in a row",
+    () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const { source, sent } = yield* sourceWith({
+          capture: async () => {
+            reads++;
+            return { refused: STILL_DRAWING, transient: true };
+          },
+        });
+        yield* source.setTargets(1, [TARGET]);
+        yield* TestClock.adjust(TARGET.intervalMs);
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          seq: 1,
+          reason: "captureFailed",
+        });
+        assert.strictEqual(reads, 3);
+      }),
+  );
+
   it.effect("sends no pixels when a check cannot be passed, and never reads the window", () =>
     Effect.gen(function* () {
       for (const [overrides, reason] of [
@@ -164,6 +189,34 @@ describe("Linux live frames (#1370)", () => {
         reason: "private",
       });
     }),
+  );
+
+  it.effect(
+    "keeps a frame back when a password field had focus before the read, even if it left before the check after it",
+    () =>
+      Effect.gen(function* () {
+        let secure = false;
+        let reads = 0;
+        const { source, sent } = yield* sourceWith({
+          focus: async () => ({ known: true, secure }),
+          capture: async () => {
+            reads++;
+            // Focus leaves the password field while the window is read.
+            secure = false;
+            return SHOT;
+          },
+        });
+        yield* source.setTargets(1, [TARGET]);
+        assert.include(yield* Queue.take(sent), { type: "cuaFrame" });
+        // Between frames, after the last frame's checks, a password field takes focus.
+        secure = true;
+        yield* TestClock.adjust(TARGET.intervalMs);
+        assert.deepInclude(yield* Queue.take(sent), {
+          type: "cuaFrameUnavailable",
+          reason: "private",
+        });
+        assert.strictEqual(reads, 1);
+      }),
   );
 
   it.effect("sends nothing from a capture still running when its targets are cleared", () =>

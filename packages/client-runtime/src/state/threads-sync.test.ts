@@ -28,7 +28,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { pendingBackgroundTurnItems } from "@goat/shared/orchestrationV2PendingBackgroundWork";
-
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -94,6 +93,7 @@ function testSession(
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
 }

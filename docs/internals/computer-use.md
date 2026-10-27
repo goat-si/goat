@@ -44,8 +44,14 @@ provider (Codex, Claude, ...)
   carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover. The
-  driver refuses its cursor tools there, so the proxy answers them from the helper's cursor: it
-  starts on, and turning it off hides only the on-screen cursor until the control ends.
+  driver refuses its cursor tools and a window-scoped `move_cursor` there, so the proxy answers
+  them from the helper's cursor: it starts on, and turning it off hides only the on-screen cursor
+  until the control ends. A desktop `move_cursor` moves the person's pointer and stays the
+  driver's, under the pointer policy.
+- Most macOS input answers `unverifiable`. When the agent has read that window's tree, the proxy
+  re-reads it as a `since: "latest"` diff with the same scope before answering, and a changed tree
+  upgrades the effect to `confirmed`. The re-read retires the agent's tokens, so the answer names
+  the new snapshot id.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
@@ -61,13 +67,18 @@ provider (Codex, Claude, ...)
   revoke do not stop an already-dispatched driver effect, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
+- Stop, stop all, lease end, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
   input that session holds, and sends a cleanup report over the control channel, which does not
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
+- A dropped lease stream between a live proxy and its server is not an end. The proxy
+  reconnects and keeps its driver, but until the server's next update it sends nothing that acts
+  on or shows the screen and cuts off such work in flight, because a Stop, pause or private field
+  cannot reach it meanwhile. Two minutes without the server end the control as `transport_lost`;
+  the proxy stays up and a fresh snapshot can start it again.
 - Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
   historical stop measurement is repeated through this topology before WS6 counts as
   done.
@@ -162,6 +173,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   back, so it reports `unverifiable` even when it landed. Some apps drop pid-posted mouse events
   entirely, KakaoTalk reportedly among them, so an unchanged window after such a click is an unknown
   outcome to observe, not a coordinate bug ([token first](../../apps/server/src/cua/ComputerUseTokenFirst.ts)).
+  Preview and native results share the optional
+  [action safety contract](../../packages/contracts/src/actionOutcomeSafety.ts): an unknown or
+  cancelled write may have committed and must never replay automatically. Missing safety from an
+  older peer is unclassified; it is not evidence that input was never sent.
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
 - Refusals name their cause. A person's Stop and a person's takeover have their own
@@ -198,7 +213,11 @@ A cell whose result has arrived returns it with its receipts even when a Stop la
 collected. When the agent did not ask for the reset itself, its next cell's result lists
 `context_reset` in `truncated`, so it rebinds instead of trusting values that are gone. A
 dispatched call whose result is lost or times out has an unknown outcome; another cell must
-observe again before deciding what to do. The cell never replays that input. Every effect needs a
+observe again before deciding what to do. The cell never replays that input. The first call that
+fails, or that answers partial, no-op or refused, stops the cell: calls already dispatched keep
+their outcome, and each later call gets its own `not_run` error and receipt without dispatching. An
+unverifiable write is a success whose receipt says it may have committed, because the macOS
+driver answers every background pixel click that way. Every effect needs a
 journal slot for its receipt, so once a cell's journal is full its next call is refused with
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.
@@ -281,9 +300,9 @@ PreviewSession {
 - Desktop private mode is switched off for now (#1695): `privateModeOn` in
   `apps/server/src/cua/ComputerUsePrivateMode.ts` and `HelperSafety.privateModeDisabled` in the
   macOS helper. While it is off the server counts no host as detecting secret fields, whatever
-  its helper advertises, so unattended computer use is refused on every platform. Turning it back
+  its helper advertises, and a desktop secret field pauses no agent. Turning it back
   on means flipping both switches and restoring the server's handling of private reports
-  (`privateHost` in `ComputerUseLeases.ts`); that lifts the refusal. Only a focused secure field
+  (`privateHost` in `ComputerUseLeases.ts`). Only a focused secure field
   may pause agents, because pausing on an unreadable focus stalled every agent on the host. Once
   the switch is on, the macOS helper keeps an unreadable focus out of frames and pauses nothing
   (`HelperSafety.pausingWindow`); the Windows (`Signals.cs`) and Linux (`linuxSignals.ts`)
@@ -413,7 +432,15 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   its card, Stop, or turning computer use off, and after its expiry the thread asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
-  ceiling unchanged.
+  ceiling unchanged. In full access, a thread launched from another environment, and turns it
+  launches or sends here (`launched_remotely`), use every app like a person's threads, beside
+  them rather than holding the screen alone, and wait in the same turn for a foreground approval
+  (`usesScreenLikePerson` in `ComputerUseOrigin.ts`; owner decision, Jun, 2026-10-28). This host
+  cannot read the turn that launched it, so it stays unattended for steering a person's turn and
+  outside full access, and asks for foreground like any run no person started. A user's own
+  `cua-driver` stays blocked for it whatever admission decides, since that driver would not hear
+  Stop. A message from an origin with less reach (a scheduled task, GOAT Bot, a channel) queues
+  behind a running remote full access turn instead of steering it (`gateUnattendedSteering`).
 - **Stop.** Per-thread Stop and `stopAll` kill the proxy transport at once. The helper then cancels
   queued input, releases anything held (mouse buttons up, modifiers cleared) and reports cleanup
   complete; a kill without that report is shown as stopped with cleanup unconfirmed. A replacement
@@ -425,8 +452,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - **Human input.** An agent with approved control keeps working while a person uses the same
   desktop: the person's keyboard and pointer input does not pause it (owner decision, Jun,
   2026-10-25, [#1550](https://github.com/goat-si/goat/pull/1550)). Stop, stop all, takeover and
-  hand-back, lease expiry and the private-field pause still apply. Unattended attachment requires
-  private-mode detection, not human-input detection. Human-input detection (#1426, #1477, #1504,
+  hand-back, lease expiry and the private-field pause still apply. No detection gates admission:
+  unattended work is admitted on a host that does not detect secret fields (owner decision, Jun,
+  2026-10-28). Human-input detection (#1426, #1477, #1504,
   #1512) tells a person's input from an agent's own for input arbitration and reports; it never
   gates admission or pauses work. On macOS each agent connection's helper reports
   every pointer event (moves, drags, scrolls, presses) to its lease proxy with its own time, from

@@ -218,3 +218,39 @@ it("evicting a target clears both its refs and diff base", () => {
   expect(after.mode).toBe("full");
   expect(after.resetReason).toBe("lineage_or_completeness_changed");
 });
+
+it("a Playwright-quoted tree line keeps its role, so its textbox is editable and found by role", () => {
+  const observations = new ScreenObservations();
+  const accessibilityTree =
+    '- generic [active] [ref=e1]:\n  - \'textbox "Email: required" [ref=e2]\'\n  - button "Go" [ref=e3]';
+  const draft = observations.normalizeTabSnapshot({
+    targetRef: tabDraft("").targetRef,
+    targetGeneration: 0,
+    connectionId: "connection",
+    controlGeneration: 1,
+    snapshot: {
+      url: "https://example.test/",
+      title: "Page",
+      loading: false,
+      visibleText: "",
+      interactiveElements: [],
+      accessibilityTree,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      treeComplete: true,
+      refGeneration: "1",
+    },
+  });
+  const full = observations.renderObservation({ draft, mode: "full", limits: { treeBytes: 4096 } });
+  const textbox = full.elements.find((element) => element.name.includes("Email: required"));
+  expect(textbox?.role).toBe("textbox");
+  expect(textbox && observations.index.isEditable(textbox.ref)).toBe(true);
+  const query = observations.renderObservation({
+    draft,
+    mode: "query",
+    query: { role: "textbox" },
+    limits: { treeBytes: 4096 },
+  });
+  expect(query.elements.map((element) => element.role)).toEqual(["textbox"]);
+});

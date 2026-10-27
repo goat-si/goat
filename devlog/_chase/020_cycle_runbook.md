@@ -101,10 +101,22 @@ git reset -q --soft "$MERGED"
 ## 6. 랜딩
 
 `chase/t3-<YYMMDD>`를 dev에 merge commit 또는 fast-forward로 넣는다. squash merge는 upstream parent를
-잃어 merge-base가 전진하지 않으므로 쓰지 않는다.
+잃어 merge-base가 전진하지 않으므로 쓰지 않는다. 수동 선별 사이클은 아래 절의 랜딩을 따른다.
 
 ## 7. 기록
 
 - [000](./000_baseline.md): 새 reviewed-through(`git merge-base origin/dev upstream/main`)와 사이클 로그 행.
 - 닫힌 카드는 `_fin/10/`으로 옮기고 MOC를 갱신한다.
 - 새 GOAT 분기가 생겼으면 [010](./010_fork_delta.md)에 영역을 추가한다.
+
+## 수동 선별 사이클
+
+사용자가 일괄 머지 대신 커밋별 선별을 정한 사이클(첫 사례 [10.017](./_fin/10/10.017_t3_chase_cycle_261028.md))은 위 3-7번 대신 이렇게 돈다.
+
+- 범위: 시작점은 `scan.sh`의 merge-base가 아니라 MOC의 reviewed-through(내용 기준)다. 끝점은 스캔한 upstream SHA로 고정한다.
+- 분류: 커밋마다 take(`cherry-pick -x`), adapt(의미만 GOAT 코드에 재구현), skip을 이유와 함께 카드 표에 적는다. UI 레이아웃·스타일·디자인 토큰은 따라가지 않고 그 의미만 adapt한다. 010 영역과 부딪히면 GOAT 동작을 지킨다.
+- 작업 단위: take/adapt를 주제 묶음으로 나눠 묶음마다 브랜치를 만들고 독립 리뷰를 받는다. 같은 파일을 건드리는 묶음의 순서는 카드에 적는다.
+- 랜딩: 묶음마다 PR을 따로 머지하지 않는다. 묶음 브랜치를 순서대로 하나의 `chase/t3-<YYMMDD>-combined` 브랜치에 합치고(충돌은 손으로 풀고 양쪽 동작을 지킨다), 그 PR 하나만 CI를 돌려 squash로 머지한다. 묶음 PR을 열었다면 CI를 돌리지 않고 합친 PR을 가리키며 닫는다. 261028에서 묶음 PR 40여 개가 CI 큐와 재리뷰를 끝없이 반복해 이렇게 정했다(사용자 결정).
+- 검증: 로컬 전체 스위트는 돌리지 않는다. 묶음 브랜치는 정적 검사(`goat-rename --check` 0, `vp fmt`, `vp lint`)와 독립 리뷰, 합친 PR은 goat-ci가 정본이다. 묶음 브랜치에 dev를 다시 합치거나 rebase하는 것은 실제 충돌이 났을 때만 한다.
+- 이름: 가져온 커밋이 더한 T3 이름은 규칙으로 덮거나 이유를 적고 남긴다. upstream 시뮬레이션에서 가져온 몫의 잔재가 늘지 않아야 한다.
+- 기록: 카드에 PR 목록을 적고, 모든 묶음이 랜딩하거나 남은 이유가 적히면 MOC와 [000](./000_baseline.md)의 내용 기준 reviewed-through를 끝점으로 옮긴다. merge-base는 그대로이므로 다음 일괄 머지 사이클은 이미 가져온 커밋을 다시 만나고, 그 카드가 이 표를 보고 충돌을 푼다.

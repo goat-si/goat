@@ -3,7 +3,12 @@ import {
   PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
-import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
+import type {
+  PreviewSession,
+  PreviewSessionFrameEvent,
+  PreviewSessionNoPicture,
+  PreviewSessionTarget,
+} from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   type RefObject,
@@ -137,9 +142,57 @@ const NO_PICTURE: Record<Exclude<PreviewSessionNoPicture, "private">, string> = 
   captureFailed: "Could not capture the window",
 };
 
+/** Frames come every half second while a window is watched; this long without one, the picture is old. */
+const FRAME_STALE_MS = 3_000;
+
+type DesktopTarget = Extract<PreviewSessionTarget, { kind: "desktop" }>;
+type DesktopFrame = Extract<PreviewSessionFrameEvent, { type: "frame" }>;
+
+/**
+ * The cursor to draw over a frame. A server that stamps capturedAt sends the cursor those pixels
+ * go with, so a cursor that moved on since is not drawn over a picture that does not show it yet;
+ * an older server's frames carry none, and the session's cursor is all there is.
+ * Either way the list has the last word on whether one shows: a cursor it has since hidden, or a
+ * person's turn, takes the frame's away at once.
+ */
+function frameCursor(target: DesktopTarget, frame: DesktopFrame) {
+  const paired = frame.capturedAt !== undefined;
+  const source = paired ? frame : target;
+  const cursorState = source.cursorState;
+  const listShows =
+    target.cursor !== undefined &&
+    target.cursorState?.phase !== "hidden" &&
+    target.cursorState?.phase !== "yielded";
+  const cursor =
+    listShows &&
+    (paired || source.cursor?.windowId === target.windowId) &&
+    cursorState?.phase !== "hidden" &&
+    cursorState?.phase !== "yielded"
+      ? source.cursor
+      : undefined;
+  return { cursor, cursorState };
+}
+
+/**
+ * True once the frame on show has been there well past the next one's due time while the window
+ * is still watched, or it was already that old when the server sent it: the helper or the
+ * connection stalled, and the picture is no longer live.
+ */
+function useFrameStale(frame: DesktopFrame | null) {
+  const [stale, setStale] = useState<DesktopFrame | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- a frame that is not followed by another is only noticed by a timer
+  useEffect(() => {
+    if (frame === null) return;
+    const timer = window.setTimeout(() => setStale(frame), FRAME_STALE_MS);
+    return () => window.clearTimeout(timer);
+  }, [frame]);
+  return frame !== null && (stale === frame || (frame.ageMs ?? 0) > FRAME_STALE_MS);
+}
+
 /**
  * The agent's window, captured on its own (#1404). Frames stream only while the card shows; a
- * stopped session keeps its last frame, dimmed, and a private one keeps nothing.
+ * stopped session keeps its last frame, dimmed, and a private one keeps nothing. A picture that
+ * stops updating while watched says so.
  */
 function DesktopThumbnail(props: {
   readonly session: PreviewSession;
@@ -150,13 +203,14 @@ function DesktopThumbnail(props: {
   const watching = props.live && !props.stopped && session.capabilities.frames;
   const { event } = useDesktopSessionFrame(session.environmentId, watching ? session.id : null);
   const [last, setLast] = useState<string | null>(null);
-  const frame = event?.type === "frame" ? `data:${event.mime};base64,${event.data}` : null;
+  const live = event?.type === "frame" ? event : null;
+  const frame = live === null ? null : `data:${live.mime};base64,${live.data}`;
   const reason = event?.type === "unavailable" ? event.reason : undefined;
   // Kept for a stopped session; adjusted while rendering, as the last event decides it.
   const kept = frame ?? (reason === "private" ? null : last);
   if (kept !== last) setLast(kept);
   const shown = frame ?? (props.stopped ? last : null);
-  const size = event?.type === "frame" ? { width: event.width, height: event.height } : null;
+  const stale = useFrameStale(watching ? live : null);
   if (shown !== null)
     return (
       <div className="relative size-full">
@@ -165,7 +219,18 @@ function DesktopThumbnail(props: {
           className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
           src={shown}
         />
-        {props.stopped || size === null ? null : <AgentCursor session={session} frame={size} />}
+        {props.stopped || live === null || session.target.kind !== "desktop" ? null : (
+          <AgentCursor
+            session={session}
+            frame={{ width: live.width, height: live.height }}
+            {...frameCursor(session.target, live)}
+          />
+        )}
+        {stale ? (
+          <span className="pointer-events-none absolute top-2 right-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
+            Picture not updating
+          </span>
+        ) : null}
         {session.target.kind === "desktop" &&
         (session.target.motionSupport ?? "unsupported") === "unsupported" ? (
           <span className="pointer-events-none absolute bottom-2 left-2 rounded bg-background/85 px-2 py-1 text-xs text-muted-foreground">
@@ -192,6 +257,8 @@ function DesktopThumbnail(props: {
 function AgentCursor(props: {
   readonly session: PreviewSession;
   readonly frame: { readonly width: number; readonly height: number };
+  readonly cursor: DesktopTarget["cursor"];
+  readonly cursorState: DesktopTarget["cursorState"];
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState({ width: 0, height: 0 });
@@ -202,15 +269,7 @@ function AgentCursor(props: {
       setMeasured({ width: element.clientWidth, height: element.clientHeight }),
     );
   }, []);
-  const target = props.session.target;
-  const cursorState = target.kind === "desktop" ? target.cursorState : undefined;
-  const cursor =
-    target.kind === "desktop" &&
-    target.cursor?.windowId === target.windowId &&
-    cursorState?.phase !== "hidden" &&
-    cursorState?.phase !== "yielded"
-      ? target.cursor
-      : undefined;
+  const { cursor, cursorState } = props;
   const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
   const ownerKey = cursorState
     ? `${cursorState.identity.runId}:${cursorState.identity.turnId}:${cursorState.identity.targetId}:${cursorState.identity.generation}:${cursorState.identity.sequence}:${cursorState.phase}`

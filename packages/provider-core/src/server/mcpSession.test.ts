@@ -7,6 +7,7 @@ import {
   carriesScreenCodeSkill,
   memoryToolAvailability,
   withAgentDeviceEnvironment,
+  withThreadAgentEnvironment,
   withThreadMcpEnvironment,
 } from "./mcpSession.ts";
 
@@ -116,5 +117,21 @@ describe("thread CLI environment", () => {
 
     expect(child.stdout).toBe(thread);
     expect(env.GOAT_SYSTEM_TMPDIR).toBe(system);
+  });
+});
+
+describe("thread URL opener", () => {
+  it("routes BROWSER to GOAT's opener only when no opener was chosen", () => {
+    const opener = {
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture",
+      urlOpener: "/tmp/goat-threads-fixture/goat-browser",
+    };
+    expect(withThreadAgentEnvironment({ PATH: "/usr/bin" }, opener).BROWSER).toBe(opener.urlOpener);
+    // A BROWSER the user set, even an empty one, is their choice to keep.
+    for (const chosen of ["firefox", ""]) {
+      expect(withThreadAgentEnvironment({ BROWSER: chosen }, opener).BROWSER).toBe(chosen);
+    }
+    expect(withThreadAgentEnvironment({ PATH: "/usr/bin" }, undefined).BROWSER).toBeUndefined();
   });
 });

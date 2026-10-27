@@ -145,6 +145,11 @@ export const DesktopCuaFrame = Schema.Union([
     height: Schema.Int,
     mime: Schema.Literal("image/jpeg"),
     data: Schema.String,
+    /**
+     * When the capture of these pixels began, epoch ms on the capturing host. A cursor that moved
+     * after it is not drawn over them. Absent from helpers that predate it.
+     */
+    capturedAt: Schema.optionalKey(Schema.Number),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -640,6 +645,13 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /**
+   * The proxy's connection to its GOAT server dropped and is reconnecting. Nothing was sent;
+   * the same call can be tried again in a few seconds.
+   */
+  "reconnecting",
+  /** The proxy could not reach its GOAT server for the reconnect window, so the control ended. */
+  "transport_lost",
   /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
   "helper_restarted",
   /**
@@ -820,8 +832,8 @@ export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Typ
  * The desktop host's computer use helper: each readiness step and which safety signals it
  * raises, sent when either changes and again for every helper launch. generation counts the
  * desktop's helper launches, so a report from an earlier launch that arrives late is dropped.
- * The signals here are the only word on what the host detects: unattended turns run only where
- * both are supported (#1235), and a host that never reports has neither.
+ * The signals here are the only word on what the host detects; a host that never reports has
+ * neither.
  */
 export const DesktopCuaReadinessReport = Schema.Struct({
   version: Schema.Literal(1),
@@ -938,6 +950,7 @@ export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
   "cursor",
+  "fx",
   "grok",
   "antigravity",
   "acpRegistry",

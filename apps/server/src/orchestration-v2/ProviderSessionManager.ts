@@ -1,3 +1,4 @@
+import { repairSchedule } from "../retryJitter.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
@@ -38,7 +39,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -75,6 +75,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
+import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -734,6 +735,11 @@ export const layerWithOptions = (
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
                 });
+                const withUrlOpener = yield* instanceUrlOpener(
+                  serverSettings,
+                  providerInstanceId,
+                  mcpSessionRegistry.urlOpener,
+                );
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.
@@ -768,7 +774,10 @@ export const layerWithOptions = (
                     )
                   ) {
                     yield* mcpSessions.set(
-                      yield* withNativeSubagentLimit(threadId, withTurnSkills(existing)),
+                      yield* withNativeSubagentLimit(
+                        threadId,
+                        withUrlOpener(withTurnSkills(existing)),
+                      ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -809,7 +818,10 @@ export const layerWithOptions = (
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
                 yield* mcpSessions.set(
-                  yield* withNativeSubagentLimit(threadId, withTurnSkills(credential.config)),
+                  yield* withNativeSubagentLimit(
+                    threadId,
+                    withUrlOpener(withTurnSkills(credential.config)),
+                  ),
                 );
                 yield* Ref.update(
                   sessions,
@@ -1270,13 +1282,7 @@ export const layerWithOptions = (
           return yield* Effect.fail(exit.cause);
         });
         return attempt.pipe(
-          Effect.retry({
-            schedule: Schedule.exponential("1 second").pipe(
-              Schedule.modifyDelay(({ duration }) =>
-                Effect.succeed(Duration.min(duration, Duration.seconds(30))),
-              ),
-            ),
-          }),
+          Effect.retry({ schedule: repairSchedule }),
           Effect.delay("1 second"),
           FiberSet.run(releaseRecordRetries),
         );

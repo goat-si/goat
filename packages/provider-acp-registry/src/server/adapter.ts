@@ -31,6 +31,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import {
@@ -161,7 +162,10 @@ function makeAcpRegistryRuntime(
               ? resolved.spawn
               : {
                   ...resolved.spawn,
-                  env: { ...resolved.spawn.env, ...processEnvironment },
+                  env: McpProviderSession.mergeThreadEnvironment(
+                    resolved.spawn.env,
+                    processEnvironment,
+                  ),
                 },
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(

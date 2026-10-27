@@ -1,4 +1,8 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
+import {
+  makeQueuedRunsAtom,
+  queuedRunEditBlockedReason,
+} from "@goat/client-runtime/queued-run-edit";
 import { useAtomValue } from "@effect/atom-react";
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
@@ -68,6 +72,10 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const workflow = useThreadQueueWorkflow(target);
   const threadKey = scopedThreadKey(target.environmentId, target.threadId);
   const editing = useQueuedRunEdit(threadKey);
+  const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(target));
+  const editBlockedReason = queuedRunEditBlockedReason({
+    openQuestionCount: pendingRequests?.userInputs.length ?? 0,
+  });
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun, "reorder queued message");
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
@@ -131,15 +139,27 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
       return;
     }
     if (action === "edit") {
+      if (editBlockedReason !== null) return;
       const entry = queuedRuns[index]!;
       void Haptics.selectionAsync();
-      beginQueuedRunEdit(threadKey, {
-        runId,
-        messageId: entry.messageId,
-        originalText: entry.text,
-        existingAttachments: entry.attachments,
-        ...(entry.context ? { context: entry.context } : {}),
-      });
+      beginQueuedRunEdit(
+        threadKey,
+        {
+          runId,
+          messageId: entry.messageId,
+          originalText: entry.text,
+          existingAttachments: entry.attachments,
+          ...(entry.context ? { context: entry.context } : {}),
+        },
+        makeQueuedRunsAtom({
+          threadId: target.threadId,
+          snapshot: threadEnvironment.snapshotAtom(target.environmentId),
+          detailStatus: environmentThreadDetails.statusAtom(target),
+          runs: Atom.make(
+            (get) => get(environmentThreadDetails.quietThreadAtom(target))?.projection.runs ?? null,
+          ),
+        }),
+      );
       navigation.goBack();
       return;
     }
@@ -224,6 +244,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           canPromoteToSteer: workflow?.canPromoteToSteer ?? false,
           canSendNow: workflow?.canSendNow ?? false,
           canReorder: workflow?.canReorder ?? false,
+          editBlocked: editBlockedReason !== null,
           index,
           isEditing: editing?.runId === run.id,
           isGuestMessage: context?.guest !== undefined,
@@ -368,7 +389,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       accessibilityHint={
                         controls.canEdit
                           ? "Opens this message in the composer for editing"
-                          : undefined
+                          : (editBlockedReason ?? undefined)
                       }
                       disabled={!controls.canEdit}
                       onPress={() => void act(run.id, "edit")}

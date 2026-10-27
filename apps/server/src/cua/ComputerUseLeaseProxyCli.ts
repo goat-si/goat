@@ -29,7 +29,6 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
-import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Cause from "effect/Cause";
@@ -44,6 +43,12 @@ import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { linuxScreenshotPolicy, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
+import {
+  LEASE_HEARTBEAT_HEADER,
+  type LeaseStreamAttempt,
+  type LeaseTransportUpdate,
+  followLeaseStream,
+} from "./ComputerUseLeaseStreamFollower.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
@@ -73,6 +78,9 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
     }
   }
 }
+
+const isNdjson = (response: Response) =>
+  response.headers.get("content-type")?.includes("application/x-ndjson") === true;
 
 /**
  * Tells the lease route which window the control acts on, or that a person used the keyboard or
@@ -149,8 +157,17 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
     const wake = yield* Queue.sliding<void>(1);
     let failed = false;
     let overflowWarned = false;
+    /** The registration of the lease stream open now; each reconnect brings a new one. */
+    let registrationId: string | undefined;
+    /** Drivers the server accepted as ready, announced again under a new registration. */
+    const bound = new Map<string, ReportIdentity>();
     const enqueue = (report: DriverReport) =>
       Ref.update(state, (current) => {
+        if (report.kind === "cutoff") {
+          const ready = bound.get(report.controlId);
+          if (ready !== undefined && ready.driverGeneration <= report.driverGeneration)
+            bound.delete(report.controlId);
+        }
         if (failed && (report.kind !== "cutoff" || !current.has(report.controlId))) return current;
         if (!current.has(report.controlId) && current.size >= 8) {
           failed = true;
@@ -184,13 +201,27 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
         }
         return next;
       }).pipe(Effect.andThen(Effect.sync(() => void Queue.offerUnsafe(wake, undefined))));
+    const rebind = (next: string) =>
+      Effect.suspend(() => {
+        if (next.length === 0) {
+          failed = true;
+          return Effect.void;
+        }
+        registrationId = next;
+        return Effect.forEach(
+          [...bound],
+          ([controlId, ready]) => enqueue({ kind: "ready", controlId, ...ready }),
+          { discard: true },
+        );
+      });
     const run = Effect.gen(function* () {
-      const registrationId = yield* Deferred.await(input.registration);
-      if (registrationId.length === 0) {
+      const first = yield* Deferred.await(input.registration);
+      if (first.length === 0) {
         failed = true;
         yield* Effect.logWarning("computer use primitive registration unavailable");
         return;
       }
+      registrationId ??= first;
       let backoff = 250;
       for (;;) {
         if (failed && !overflowWarned) {
@@ -220,12 +251,15 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
           next.kind === "cutoff"
             ? COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE
             : COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE;
+        const used = registrationId ?? first;
         const status = yield* postPrimitive(
           new URL(route, input.url).toString(),
           input.authorization,
           input.token,
-          { registrationId, controlId: next.controlId, ...next.item },
+          { registrationId: used, controlId: next.controlId, ...next.item },
         );
+        // A reconnect replaced the registration meanwhile; the report goes again under the new one.
+        if (used !== (registrationId ?? first)) continue;
         if (status === 401) {
           failed = true;
           yield* Effect.logWarning("computer use primitive report authorization ended");
@@ -241,6 +275,14 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
               item.connectionId !== next.item.connectionId
             )
               return current;
+            // Only the ready still pending, with no cutoff for its generation, is live to rebind. A
+            // 409 is the server already holding that generation, as after a lost acknowledgement.
+            if (
+              next.kind === "ready" &&
+              (latest.cutoff === undefined ||
+                latest.cutoff.driverGeneration < item.driverGeneration)
+            )
+              bound.set(next.controlId, item);
             const updated: PendingReports =
               next.kind === "cutoff"
                 ? latest.ready === undefined
@@ -264,6 +306,7 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
     });
     return {
       enqueue,
+      rebind,
       run,
       get failed() {
         return failed;
@@ -271,6 +314,16 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
     };
   },
 );
+
+/** The executable a Linux pid runs, as the driver attests it; a replaced binary names no file. */
+const linuxExecutable = (pid: number) => {
+  try {
+    const path = NodeFS.readlinkSync("/proc/" + pid + "/exe");
+    return path.startsWith("/") && !path.endsWith(" (deleted)") ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
@@ -324,6 +377,19 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const manifestFlag = descriptor.args.indexOf("--capability-manifest");
   const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
 
+  // Fire and forget: a lost report only delays the host's record, never this connection. One
+  // queue for every driver this proxy starts, so no working report, of this driver or a later
+  // one, can land before a crash reported ahead of it.
+  let reported = Promise.resolve();
+  const send = (body: DriverWatchReport | undefined) => {
+    if (body === undefined) return;
+    reported = reported
+      .then(() => report(url, authorization, body))
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  };
   const startDriver = (overlay: boolean) =>
     Effect.acquireRelease(
       Effect.sync(() => {
@@ -336,9 +402,6 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         );
         drivers.add(child);
         const watch = makeDriverWatch();
-        // Fire and forget: a lost report only delays the host's record, never this connection.
-        const send = (body: DriverWatchReport | undefined) =>
-          body === undefined ? undefined : void report(url, authorization, body);
         child.once("exit", (code) => {
           drivers.delete(child);
           send(watch.exited(code ?? undefined));
@@ -452,7 +515,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           });
     if (reporter !== undefined) yield* reporter.run.pipe(Effect.forkScoped);
     const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>();
-    const threadUpdates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
+    const threadUpdates = yield* Queue.unbounded<
+      ComputerUseLeaseThreadUpdate | LeaseTransportUpdate,
+      Cause.Done
+    >();
     const primitiveRequests = yield* Queue.dropping<ComputerUsePrimitiveRequest, Cause.Done>(16);
     const cursorEvents = yield* Queue.sliding<AgentCursorLeaseUpdate, Cause.Done>(1);
     const pendingPrimitives = new Set<string>();
@@ -474,100 +540,151 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     const decodeThread = Schema.decodeUnknownOption(
       Schema.fromJsonString(ComputerUseLeaseThreadUpdate),
     );
-    const lines = Stream.fromAsyncIterable(
-      (async function* () {
-        const response = await fetch(leaseUrl, {
-          headers: {
-            authorization,
-            ...(proxyChannelToken === undefined
-              ? {}
-              : { "x-goat-proxy-channel": proxyChannelToken }),
-          },
-          signal: abort.signal,
-        });
-        const header = response.headers.get("x-goat-primitive-registration");
-        if (proxyChannelToken !== undefined) {
-          if (response.ok && header !== null && header.length > 0 && header.length <= 200)
-            Deferred.doneUnsafe(registration, Exit.succeed(header));
-          else Deferred.doneUnsafe(registration, Exit.succeed(""));
-        }
-        yield* responseLines(response);
-      })(),
-      () => new Error("Lease stream failed"),
-    );
-    yield* lines.pipe(
-      Stream.runForEach((line) =>
-        Effect.gen(function* () {
-          if (line.trim().length === 0) return;
-          const offerPrimitive = Effect.fn("ComputerUseLeaseProxyCli.offerPrimitive")(function* (
-            update: ComputerUsePrimitiveRequest,
-          ) {
-            if (reporter !== undefined && !reporter.failed) {
-              pendingPrimitives.add(update.requestId);
-              if (earlyCancels.delete(update.requestId)) cancelledPrimitives.add(update.requestId);
-              if (yield* Queue.offer(primitiveRequests, update)) return;
-              pendingPrimitives.delete(update.requestId);
-            }
-            const {
-              requestId,
-              registrationId,
-              controlId,
-              connectionGeneration,
-              runId,
-              turnId,
-              callId,
-            } = update;
-            yield* postPrimitive(
-              new URL(COMPUTER_USE_PRIMITIVE_REPLY_ROUTE, url).toString(),
-              authorization,
-              proxyChannelToken ?? "",
-              {
-                requestId,
-                registrationId,
-                controlId,
-                connectionGeneration,
-                runId,
-                turnId,
-                callId,
-                status: "not_started",
-              },
-            );
-            cancelledPrimitives.delete(update.requestId);
-            earlyCancels.delete(update.requestId);
-          });
-          if (launch.mode === "control") {
-            const decoded = decodeControl(line);
-            if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
-            if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
-            else if (decoded.value.state === "primitive-cancel")
-              takeCancel(decoded.value.requestId);
-            else if (decoded.value.state === "cursor-state")
-              yield* Queue.offer(cursorEvents, decoded.value);
-            else yield* Queue.offer(updates, decoded.value);
-          } else {
-            const decoded = decodeThread(line);
-            if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
-            if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
-            else if (decoded.value.state === "primitive-cancel")
-              takeCancel(decoded.value.requestId);
-            else if (decoded.value.state === "cursor-state")
-              yield* Queue.offer(cursorEvents, decoded.value);
-            else yield* Queue.offer(threadUpdates, decoded.value);
+    // Dropped after the server refuses the primitive channel: computer use goes on without it.
+    let primitive = proxyChannelToken !== undefined;
+    const registered = Effect.fn("ComputerUseLeaseProxyCli.registered")(function* (
+      header: string | null,
+    ) {
+      const value = header !== null && header.length > 0 && header.length <= 200 ? header : "";
+      if (!(yield* Deferred.isDone(registration)))
+        return yield* Deferred.succeed(registration, value);
+      yield* reporter?.rebind(value) ?? Effect.void;
+    });
+    const connect = Effect.acquireRelease(
+      Effect.sync(() => new AbortController()),
+      (controller) => Effect.sync(() => controller.abort()),
+    ).pipe(
+      Effect.flatMap((controller) =>
+        Effect.tryPromise(() => {
+          const target = new URL(leaseUrl);
+          if (!primitive) {
+            target.searchParams.delete("primitive");
+            target.searchParams.delete("instance");
           }
+          return fetch(target, {
+            headers: {
+              authorization,
+              ...(primitive && proxyChannelToken !== undefined
+                ? { "x-goat-proxy-channel": proxyChannelToken }
+                : {}),
+            },
+            signal: AbortSignal.any([abort.signal, controller.signal]),
+          });
         }),
       ),
-      Effect.ignoreCause,
-      Effect.ensuring(
-        Effect.gen(function* () {
-          yield* Queue.end(updates);
-          yield* Queue.end(threadUpdates);
-          yield* Queue.end(primitiveRequests);
-          yield* Queue.end(cursorEvents);
-          if (!(yield* Deferred.isDone(registration))) yield* Deferred.succeed(registration, "");
+      Effect.flatMap(
+        Effect.fn("ComputerUseLeaseProxyCli.connected")(function* (
+          response: Response,
+        ): Effect.fn.Return<LeaseStreamAttempt> {
+          // An empty 401 is the primitive channel's; the stream itself answers 401 with ended.
+          if (primitive && response.status === 401 && !isNdjson(response)) {
+            primitive = false;
+            yield* registered(null);
+            return { _tag: "retry" };
+          }
+          if (response.status === 401)
+            return {
+              _tag: "open",
+              lines: Stream.make(JSON.stringify({ state: "ended", reason: "unauthorized" })),
+            };
+          if (!response.ok || response.body === null) return { _tag: "retry" };
+          if (primitive) yield* registered(response.headers.get("x-goat-primitive-registration"));
+          const heartbeat = Number(response.headers.get(LEASE_HEARTBEAT_HEADER) ?? "");
+          return {
+            _tag: "open",
+            lines: Stream.fromAsyncIterable(
+              responseLines(response),
+              (cause) => new Error("Lease stream failed", { cause }),
+            ),
+            ...(Number.isFinite(heartbeat) && heartbeat > 0 ? { heartbeatMs: heartbeat } : {}),
+          };
         }),
       ),
-      Effect.forkScoped,
+      Effect.orElseSucceed((): LeaseStreamAttempt => ({ _tag: "retry" })),
     );
+    const takeLine = Effect.fn("ComputerUseLeaseProxyCli.takeLine")(function* (
+      line: string,
+    ): Effect.fn.Return<"continue" | "end"> {
+      if (line.trim().length === 0) return "continue";
+      const offerPrimitive = Effect.fn("ComputerUseLeaseProxyCli.offerPrimitive")(function* (
+        update: ComputerUsePrimitiveRequest,
+      ) {
+        if (reporter !== undefined && !reporter.failed) {
+          pendingPrimitives.add(update.requestId);
+          if (earlyCancels.delete(update.requestId)) cancelledPrimitives.add(update.requestId);
+          if (yield* Queue.offer(primitiveRequests, update)) return;
+          pendingPrimitives.delete(update.requestId);
+        }
+        const {
+          requestId,
+          registrationId,
+          controlId,
+          connectionGeneration,
+          runId,
+          turnId,
+          callId,
+        } = update;
+        yield* postPrimitive(
+          new URL(COMPUTER_USE_PRIMITIVE_REPLY_ROUTE, url).toString(),
+          authorization,
+          proxyChannelToken ?? "",
+          {
+            requestId,
+            registrationId,
+            controlId,
+            connectionGeneration,
+            runId,
+            turnId,
+            callId,
+            status: "not_started",
+          },
+        );
+        cancelledPrimitives.delete(update.requestId);
+        earlyCancels.delete(update.requestId);
+      });
+      if (launch.mode === "control") {
+        const decoded = decodeControl(line);
+        if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
+        if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+        else if (decoded.value.state === "primitive-cancel") takeCancel(decoded.value.requestId);
+        else if (decoded.value.state === "cursor-state")
+          yield* Queue.offer(cursorEvents, decoded.value);
+        else yield* Queue.offer(updates, decoded.value);
+        return "continue";
+      } else {
+        const decoded = decodeThread(line);
+        if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
+        if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+        else if (decoded.value.state === "primitive-cancel") takeCancel(decoded.value.requestId);
+        else if (decoded.value.state === "cursor-state")
+          yield* Queue.offer(cursorEvents, decoded.value);
+        else yield* Queue.offer(threadUpdates, decoded.value);
+        return decoded.value.state === "ended" ? "end" : "continue";
+      }
+    });
+    const closeQueues = Effect.gen(function* () {
+      yield* Queue.end(updates);
+      yield* Queue.end(threadUpdates);
+      yield* Queue.end(primitiveRequests);
+      yield* Queue.end(cursorEvents);
+      if (!(yield* Deferred.isDone(registration))) yield* Deferred.succeed(registration, "");
+    });
+    // A control-mode proxy follows one stream as before; nothing current launches one.
+    const following =
+      launch.mode === "control"
+        ? Effect.scoped(
+            Effect.gen(function* () {
+              const opened = yield* connect;
+              if (opened._tag === "retry") return;
+              yield* opened.lines.pipe(Stream.runForEach(takeLine));
+            }),
+          )
+        : followLeaseStream({
+            connect,
+            onLine: takeLine,
+            onTransport: (update) => Queue.offer(threadUpdates, update).pipe(Effect.asVoid),
+          });
+    yield* following.pipe(Effect.ignoreCause, Effect.ensuring(closeQueues), Effect.forkScoped);
     const common = {
       primitiveCancelled: (requestId: string) => cancelledPrimitives.has(requestId),
       onPrimitiveSettled: (requestId: string) => {
@@ -607,6 +724,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           process.stdout.write(guide(listed, context) + "\n");
         }),
       answersCursorTools: drawsOverlay,
+      verifyInputByTreeDiff: platform === "darwin",
+      ...(platform === "linux" ? { executableOf: linuxExecutable } : {}),
       ...(automationHolder === undefined ? {} : { automationHolder }),
       startDriver: startDriver(drawsOverlay),
       // A handshake child never draws or watches input (#1604): on macOS the helper starts its

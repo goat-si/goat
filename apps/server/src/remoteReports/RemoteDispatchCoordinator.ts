@@ -1,3 +1,4 @@
+import { retryDelayMs } from "../retryJitter.ts";
 import * as AutomationHold from "../automationHold.ts";
 // @effect-diagnostics nodeBuiltinImport:off - generate private read keys and identify the origin machine.
 import * as NodeCrypto from "node:crypto";
@@ -595,8 +596,7 @@ const make = Effect.gen(function* () {
       const result = sent.success;
       if (result.delivery === "relayed")
         return outcome(`Handed on again to ${frameLiteral(result.via)}.`, false);
-      // As after the launcher's own send: a watch hears when this run ends, and a
-      // dispatch to that thread follows its reports again.
+      // Like a launch, a send wakes the run-end watch and resumes report observation.
       yield* launchWatches
         .rearm({
           launcherThreadId: r.origin_thread_id,
@@ -871,7 +871,7 @@ const make = Effect.gen(function* () {
             }
             yield* db(sql`UPDATE remote_dispatches SET last_error = 'Host unavailable',
             updated_at = ${yield* now} WHERE correlation_id = ${id}`);
-            yield* Effect.sleep(backoff);
+            yield* Effect.sleep(yield* retryDelayMs(backoff));
             backoff = Math.min(300_000, backoff * 2);
             return true;
           }
@@ -929,7 +929,7 @@ const make = Effect.gen(function* () {
           yield* db(
             sql`UPDATE remote_dispatches SET last_error = 'Task result import pending' WHERE correlation_id = ${id}`,
           );
-          yield* Effect.sleep(backoff);
+          yield* Effect.sleep(yield* retryDelayMs(backoff));
           backoff = Math.min(300_000, backoff * 2);
           return true;
         }
@@ -937,10 +937,10 @@ const make = Effect.gen(function* () {
           yield* db(
             sql`UPDATE remote_dispatches SET last_error = 'cancel pending: interrupt refused or unavailable' WHERE correlation_id = ${id} AND state = 'running'`,
           );
-          yield* Effect.sleep(backoff);
+          yield* Effect.sleep(yield* retryDelayMs(backoff));
           backoff = Math.min(300_000, backoff * 2);
         } else if (waitingForRun) {
-          yield* Effect.sleep(Math.min(backoff, runDeadline - (yield* Clock.currentTimeMillis)));
+          yield* Effect.sleep(yield* retryDelayMs(backoff, runDeadline));
           backoff = Math.min(300_000, backoff * 2);
         } else backoff = 5_000;
         return true;
@@ -956,7 +956,7 @@ const make = Effect.gen(function* () {
             updated_at = ${yield* now} WHERE correlation_id = ${id}`).pipe(
               Effect.catchCause(() => Effect.void),
             );
-            yield* Effect.sleep(backoff);
+            yield* Effect.sleep(yield* retryDelayMs(backoff));
             backoff = Math.min(300_000, backoff * 2);
             return true;
           });

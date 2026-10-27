@@ -52,6 +52,7 @@ import * as MemorySettingsService from "../memory/MemorySettingsService.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import * as PreviewHandoffs from "../preview/PreviewHandoffs.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SourceControlRepositoryService from "../sourceControl/SourceControlRepositoryService.ts";
 import * as ThreadLaunchMcpService from "./ThreadLaunchMcpService.ts";
@@ -219,6 +220,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
   Layer.mock(PreviewManager.PreviewManager)({}),
+  Layer.mock(PreviewHandoffs.PreviewHandoffs)({}),
   Layer.mock(ProjectService.ProjectService)({}),
   Layer.mock(ProviderDiagnosisRouting.ProviderDiagnosisRouting)({}),
   Layer.mock(CloudAgentService.CloudAgentService)({}),

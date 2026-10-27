@@ -172,6 +172,8 @@ final class FrameCapture {
 
   @available(macOS 14.0, *)
   private func capture(_ window: SCWindow, _ target: FrameTarget, framesId: Int) {
+    // Taken before the pixels are, so a cursor that moves during the capture counts as newer.
+    let capturedAt = Int((Date().timeIntervalSince1970 * 1000).rounded(.down))
     captureImage(window, maxWidth: target.maxWidth) { [weak self] image in
       guard let self else { return }
       let data = image.flatMap(jpeg)
@@ -188,6 +190,7 @@ final class FrameCapture {
         emit([
           "type": "frame", "framesId": framesId, "key": target.key,
           "width": image.width, "height": image.height, "data": data.base64EncodedString(),
+          "capturedAt": capturedAt,
         ])
       }
     }

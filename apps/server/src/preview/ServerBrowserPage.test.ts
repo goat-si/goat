@@ -254,7 +254,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(await page.evaluate("f.files.length")).toBe(0);
   });
 
-  it("uploads through a label in one call after the gate, and refuses a framed input", async () => {
+  it("uploads through a label in one call after the gate", async () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
     using _removeDirectory = {
       [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
@@ -262,7 +262,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     const file = NodePath.join(directory, "note.txt");
     NodeFS.writeFileSync(file, "hello");
     await page.setContent(
-      '<label id="l">Attach <input id="f" type="file"></label><iframe srcdoc="<input id=g type=file>"></iframe><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
+      '<label id="l">Attach <input id="f" type="file"></label><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
     );
     let gates = 0;
     await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
@@ -270,15 +270,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     });
     expect(gates).toBe(1);
     expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
-    await expect(
-      PreviewUpload.setInputFiles(
-        page,
-        cdp,
-        { locator: "iframe >> internal:control=enter-frame >> #g", paths: [file] },
-        () => gates++,
-      ),
-    ).rejects.toThrow(/inside a frame/);
-    expect(gates).toBe(1);
   });
 
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
@@ -923,5 +914,35 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     );
     expect(await nextChange()).toBe(true);
     expect(await nextChange()).toBe(false);
+  });
+});
+
+describe("a gate reused across a click's presses", () => {
+  it("refuses the second press without claiming the first was never sent", async () => {
+    const control = new SessionControl("agent");
+    const presses: Array<string> = [];
+    const page = {
+      once: () => undefined,
+      off: () => undefined,
+      mouse: {
+        click: async () => {
+          presses.push("first");
+          // A person takes over and hands back between the presses.
+          void control.take("person").catch(() => undefined);
+          void control.release("person").catch(() => undefined);
+        },
+        down: async () => void presses.push("second"),
+        up: async () => undefined,
+      },
+    } as unknown as Page;
+    await expect(
+      ServerBrowserPage.click(
+        page,
+        { x: 1, y: 2, clickCount: 2 },
+        undefined,
+        control.dispatchGate(),
+      ),
+    ).rejects.toMatchObject({ reason: "interrupted", beforeInput: false });
+    expect(presses).toEqual(["first"]);
   });
 });

@@ -15,6 +15,7 @@ import * as AcpError from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
 
+import { mockSessionNotices } from "./acpMockNotices.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
@@ -24,6 +25,7 @@ const emitToolCalls = process.env.GOAT_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.GOAT_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitV2Fidelity = process.env.GOAT_ACP_EMIT_V2_FIDELITY === "1";
+const emitNotice = process.env.GOAT_ACP_EMIT_NOTICE === "1";
 const vibeRetryOutcome = process.env.GOAT_ACP_VIBE_RETRY_OUTCOME;
 const emitGenericToolPlaceholders = process.env.GOAT_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitPostSettleMonitorFlow = process.env.GOAT_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
@@ -584,7 +586,7 @@ const program = Effect.gen(function* () {
       }
       parameterizedModelPicker = request.capabilities?._meta?.parameterizedModelPicker === true;
       return {
-        protocolVersion: 2,
+        protocolVersion: Number(process.env.GOAT_ACP_PROTOCOL_VERSION ?? "2"),
         info: { name: "t3-acp-mock-agent", version: "0.0.0" },
         ...(omitInitializeModelState ? {} : { _meta: { modelState: modelState() } }),
         capabilities: {
@@ -1177,6 +1179,24 @@ const program = Effect.gen(function* () {
             content: { type: "text", text: "Recovered answer" },
           },
         });
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
+      if (emitNotice) {
+        // A notice in fx 0.0.14's shape for a skipped skill, between two chunks of one message.
+        const chunk = (text: string) =>
+          writeJsonRpcNotification("session/update", {
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text },
+            },
+          });
+        chunk("before the notice, ");
+        for (const notice of mockSessionNotices) {
+          writeJsonRpcNotification("session/update", { sessionId: requestedSessionId, ...notice });
+        }
+        chunk("after the notice");
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 

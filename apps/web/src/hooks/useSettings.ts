@@ -181,7 +181,7 @@ export function subscribeClientSettings(listener: () => void): () => void {
   };
 }
 
-function getClientSettingsHydratedSnapshot(): boolean {
+export function getClientSettingsHydratedSnapshot(): boolean {
   return clientSettingsHydrationStatus === "ready";
 }
 
@@ -189,7 +189,7 @@ function getClientSettingsHydrationStatusSnapshot(): ClientSettingsHydrationStat
   return clientSettingsHydrationStatus;
 }
 
-function subscribeClientSettingsHydration(listener: () => void): () => void {
+export function subscribeClientSettingsHydration(listener: () => void): () => void {
   clientSettingsHydrationListeners.add(listener);
   void hydrateClientSettings().catch(() => undefined);
   return () => {
@@ -356,6 +356,10 @@ export function getClientSettings(): ClientSettings {
   return getClientSettingsSnapshot();
 }
 
+export function isClientSettingsHydrated(): boolean {
+  return getClientSettingsHydratedSnapshot();
+}
+
 /** Failed reads reject and remain retryable so defaults cannot overwrite saved preferences. */
 export function ensureClientSettingsHydrated(): Promise<void> {
   return hydrateClientSettings();
@@ -483,6 +487,14 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   const settingsHydrated = useClientSettingsHydrated();
   const mode = useClientSettings((settings) => settings.environmentIdentificationMode);
   return resolveEnvironmentIdentificationMode({ mode, settingsHydrated });
+}
+
+export function getLegacySidebarEnabled(): boolean | null {
+  return resolveSidebarViewIsProjects({
+    status: getClientSettingsHydrationStatusSnapshot(),
+    value: getClientSettings().projectsSidebarEnabled,
+    synchronousValue: getSidebarViewMirrorSnapshot(),
+  });
 }
 
 export function useLegacySidebarEnabled(): boolean | null {

@@ -1663,7 +1663,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       const launchHost = Effect.fnUntraced(function* () {
         const epoch = ++hostEpoch;
         const mcpSession = yield* mcpSessions.read(input.threadId);
-        const environment = McpProviderSession.withThreadMcpEnvironment(
+        const environment = McpProviderSession.withThreadAgentEnvironment(
           McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
           mcpSession,
         );

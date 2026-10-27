@@ -110,6 +110,28 @@ describe("agent cursor tools on a helper that draws the cursor", () => {
       assert.equal((yield* h.nextToDriver).id, 1);
     }),
   );
+
+  it.effect(
+    "moves GOAT's cursor for a window move_cursor the overlay-less driver would refuse",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true, answersCursorTools: true });
+        yield* h.push(active());
+        yield* h.applied;
+        yield* h.send(call(1, "move_cursor", { ...window, x: 40, y: 20 }));
+        const answer = yield* h.nextToProvider;
+        assert.deepInclude(structured(answer), {
+          effect: "confirmed",
+          drawn_by: "goat_helper",
+          pointer_moved: false,
+          pid: 4,
+          window_id: 9,
+        });
+        assert.isUndefined((answer.result as { isError?: boolean }).isError);
+        assert.deepEqual(h.log, [show("acting"), show("resting")]);
+        assert.equal(yield* h.driverQueued, 0);
+      }),
+  );
 });
 
 describe("tool listings on a helper that draws the cursor", () => {
