@@ -906,7 +906,10 @@ export const layer = Layer.effect(
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
             });
-            const manifest = yield* StandaloneCuaManifest.make(config.stateDir);
+            const manifest = yield* StandaloneCuaManifest.make(
+              config.stateDir,
+              STANDALONE_HOST_BUNDLE_ID,
+            );
             const factory = yield* makeStandaloneHostFactory(
               installation.executable,
               manifest.prepare,

@@ -36,7 +36,10 @@ export const refreshManifest = Effect.fn("CuaDriver.refreshManifestFile")(functi
   return stillMissing.length < missing.length;
 });
 
-export const make = Effect.fn("StandaloneCuaManifest.make")(function* (stateDir: string) {
+export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
+  stateDir: string,
+  hostBundleId: string,
+) {
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
   const fs = yield* FileSystem.FileSystem;
@@ -48,7 +51,7 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (stateDir:
         binaryPath,
         platform,
         environment: cuaDriverListingEnvironment(environment),
-        hostBundleIds: ["si.goat.server"],
+        hostBundleIds: [hostBundleId],
         path: manifestPath,
       }),
     ),
@@ -76,7 +79,7 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (stateDir:
                 binaryPath,
                 platform,
                 environment: cuaDriverSessionListingEnvironment(environment, display, platform),
-                hostBundleIds: ["si.goat.server"],
+                hostBundleIds: [hostBundleId],
                 signal,
               }),
             ),
