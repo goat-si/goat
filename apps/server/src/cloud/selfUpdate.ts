@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as HashSet from "effect/HashSet";
 import * as Layer from "effect/Layer";
@@ -485,24 +486,50 @@ export const layer = Layer.effect(ServerSelfUpdate, make()).pipe(
   Layer.provide(MaintenanceAudit.layer),
 );
 
+export const runUpdateProgressProducer = Effect.fn("cloud.server_self_update.progress_producer")(
+  function* (
+    queue: Queue.Enqueue<ServerSelfUpdateProgressEvent, ServerSelfUpdateError | Cause.Done>,
+    selfUpdate: ServerSelfUpdate["Service"],
+    input: ServerSelfUpdateInput,
+    actor?: MaintenanceAudit.MaintenanceActor,
+  ) {
+    const offer = (event: ServerSelfUpdateProgressEvent) =>
+      Queue.offer(queue, event).pipe(Effect.ignore);
+    return yield* Effect.suspend(() =>
+      selfUpdate.update(input, (stage) => offer({ type: "progress", stage }), undefined, actor),
+    ).pipe(
+      Effect.flatMap((result) => offer({ type: "complete", result })),
+      Effect.catchTags({
+        ServerSelfUpdateError: (error) => Queue.fail(queue, error).pipe(Effect.ignore),
+      }),
+    );
+  },
+  (effect, queue) =>
+    effect.pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit)
+          ? Queue.fail(
+              queue,
+              new ServerSelfUpdateError({
+                reason:
+                  "The update progress producer exited unexpectedly. Check update status before retrying.",
+              }),
+            ).pipe(Effect.ignore)
+          : Effect.void,
+      ),
+      Effect.ensuring(Queue.end(queue).pipe(Effect.ignore)),
+      Effect.catchCause(() =>
+        Effect.logWarning("Server update progress producer exited unexpectedly"),
+      ),
+    ),
+);
+
 // The update outlives client sockets; progress offers to a closed queue are ignored.
 export const updateProgressStream = (
   selfUpdate: ServerSelfUpdate["Service"],
   input: ServerSelfUpdateInput,
   actor?: MaintenanceAudit.MaintenanceActor,
 ) =>
-  Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) => {
-    const offer = (event: ServerSelfUpdateProgressEvent) =>
-      Queue.offer(queue, event).pipe(Effect.ignore);
-
-    return selfUpdate
-      .update(input, (stage) => offer({ type: "progress", stage }), undefined, actor)
-      .pipe(
-        Effect.flatMap((result) => offer({ type: "complete", result })),
-        Effect.catchTags({
-          ServerSelfUpdateError: (error) => Queue.fail(queue, error).pipe(Effect.ignore),
-        }),
-        Effect.andThen(Queue.end(queue).pipe(Effect.ignore)),
-        Effect.forkDetach,
-      );
-  });
+  Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) =>
+    runUpdateProgressProducer(queue, selfUpdate, input, actor).pipe(Effect.forkDetach),
+  );
