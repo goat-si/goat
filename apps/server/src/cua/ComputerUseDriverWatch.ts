@@ -1,13 +1,7 @@
-/**
- * What a lease proxy tells the server about each driver child it starts, for the host's record of
- * agent connections (ComputerUseAgentConnections): the first line a child writes proves the agent
- * route works, and a child that exits on its own before writing any line failed to start for this
- * connection. A child the proxy stopped itself (Stop, a pause, an expiry, a manifest refresh, the
- * proxy ending) says nothing about the route, and neither does one that exits after it answered.
- *
- * @module ComputerUseDriverWatch
- */
+/** @module ComputerUseDriverWatch */
 import type { ComputerUseDriverEndReason } from "@goat/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { exitReason } from "./ComputerUseDriverExit.ts";
 
@@ -20,34 +14,79 @@ export type DriverWatchReport =
       };
     };
 
-/**
- * One child's watch: feed it the child's events in order; each returns the report to send, if
- * any. At most one report per child.
- */
+const decodeMessage = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+const record = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const requestId = (value: unknown): value is string | number =>
+  typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
+const nonempty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/** Each child proves its route with its own initialize exchange, including replayed wire IDs. */
 export const makeDriverWatch = () => {
   let settled = false;
   let stopping = false;
+  const pending = new Map<string, string>();
   const settle = (report: DriverWatchReport) => {
-    if (settled) return undefined;
+    if (settled || stopping) return undefined;
     settled = true;
+    pending.clear();
     return report;
   };
   return {
-    /** The child wrote a line on stdout: it answers. */
-    answered: () => settle({ driverEnded: false }),
-    /** The proxy is about to stop this child; its exit no longer counts. */
+    sent: (line: string) => {
+      if (settled || stopping) return;
+      const decoded = decodeMessage(line);
+      if (Option.isNone(decoded)) return;
+      const message = decoded.value;
+      if (
+        message.jsonrpc !== "2.0" ||
+        message.method !== "initialize" ||
+        !requestId(message.id) ||
+        !record(message.params) ||
+        !nonempty(message.params.protocolVersion) ||
+        Object.hasOwn(message, "result") ||
+        Object.hasOwn(message, "error")
+      )
+        return;
+      pending.set(JSON.stringify(message.id), message.params.protocolVersion);
+    },
+    received: (line: string) => {
+      if (settled || stopping) return undefined;
+      const decoded = decodeMessage(line);
+      if (Option.isNone(decoded)) return undefined;
+      const message = decoded.value;
+      if (!requestId(message.id) || Object.hasOwn(message, "method")) return undefined;
+      const key = JSON.stringify(message.id);
+      const version = pending.get(key);
+      if (version === undefined) return undefined;
+      // A failed reply consumes the request too; a later success needs a new initialize send.
+      pending.delete(key);
+      const result = message.result;
+      if (
+        message.jsonrpc !== "2.0" ||
+        Object.hasOwn(message, "error") ||
+        !record(result) ||
+        result.protocolVersion !== version ||
+        !record(result.capabilities) ||
+        !record(result.serverInfo) ||
+        !nonempty(result.serverInfo.name) ||
+        !nonempty(result.serverInfo.version)
+      )
+        return undefined;
+      return settle({ driverEnded: false });
+    },
     stopping: () => {
       stopping = true;
+      pending.clear();
     },
-    /** The child exited, with its code when it had one. */
     exited: (code: number | undefined) =>
-      stopping
-        ? undefined
-        : settle({
-            driverEnded: {
-              reason: exitReason(code),
-              ...(code === undefined ? {} : { exitCode: code }),
-            },
-          }),
+      settle({
+        driverEnded: {
+          reason: exitReason(code),
+          ...(code === undefined ? {} : { exitCode: code }),
+        },
+      }),
   };
 };
