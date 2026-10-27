@@ -1,3 +1,4 @@
+import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
@@ -136,7 +137,7 @@ function HandoffEndpoint(props: {
   const provider = props.providers.find((candidate) => candidate.instanceId === props.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === props.model);
   const label =
-    model?.shortName ??
+    (model ? resolveModelShortName(model, provider?.driver) : undefined) ??
     model?.name ??
     props.model ??
     (provider ? resolveProviderInstanceDisplayName(provider) : props.instanceId);
@@ -144,7 +145,7 @@ function HandoffEndpoint(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={model?.name ?? label}
       accessibilityHint="Show provider account"
       className="min-h-6 max-w-full flex-row items-center justify-center gap-1.5"
       hitSlop={{ top: 8, bottom: 8 }}
