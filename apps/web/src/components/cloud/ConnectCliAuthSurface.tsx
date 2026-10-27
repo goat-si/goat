@@ -119,8 +119,11 @@ export function ConnectCliAuthorizeSurface() {
         headers: { "content-type": "text/plain" },
         body: JSON.stringify({ ...approval, state: request.state }),
       });
-      if (!delivered.ok)
-        throw new Error("The terminal did not accept this approval. Re-run goat connect.");
+      if (!delivered.ok) {
+        setError("The terminal did not accept this approval. Re-run goat connect.");
+        setPending(false);
+        return;
+      }
       redirecting.current = true;
       navigateConnectCliToOAuth(request);
     } catch (cause) {
